@@ -21,6 +21,45 @@ use crate::state::{
 };
 use crate::ui;
 
+/// Derive a worktree slug from a ticket's source_id and title.
+/// Format: `{source_id}-{slugified-title}`, e.g. `15-tui-create-worktree`.
+/// Title portion is truncated to keep the total slug under ~40 chars.
+fn derive_worktree_slug(source_id: &str, title: &str) -> String {
+    let slug: String = title
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    // Collapse consecutive dashes
+    let mut collapsed = String::with_capacity(slug.len());
+    let mut prev_dash = false;
+    for c in slug.chars() {
+        if c == '-' {
+            if !prev_dash {
+                collapsed.push('-');
+            }
+            prev_dash = true;
+        } else {
+            collapsed.push(c);
+            prev_dash = false;
+        }
+    }
+    let title_slug = collapsed.trim_matches('-');
+
+    // Budget: 40 chars total, minus source_id and separator
+    let budget = 40_usize.saturating_sub(source_id.len() + 1);
+    let truncated = if title_slug.len() <= budget {
+        title_slug
+    } else {
+        match title_slug[..budget].rfind('-') {
+            Some(pos) => &title_slug[..pos],
+            None => &title_slug[..budget],
+        }
+    };
+
+    format!("{}-{}", source_id, truncated)
+}
+
 pub struct App {
     state: AppState,
     conn: Connection,
@@ -457,12 +496,26 @@ impl App {
                 return;
             }
             match on_submit {
-                InputAction::CreateWorktree { repo_slug } => {
+                InputAction::CreateWorktree {
+                    repo_slug,
+                    ticket_id,
+                } => {
                     let wt_mgr = WorktreeManager::new(&self.conn, &self.config);
-                    match wt_mgr.create(&repo_slug, &value, None, None) {
+                    match wt_mgr.create(&repo_slug, &value, None, ticket_id.as_deref()) {
                         Ok(wt) => {
-                            self.state.status_message =
-                                Some(format!("Created worktree: {}", wt.slug));
+                            let msg = if let Some(ref tid) = ticket_id {
+                                let source_id = self
+                                    .state
+                                    .data
+                                    .ticket_map
+                                    .get(tid)
+                                    .map(|t| t.source_id.as_str())
+                                    .unwrap_or("?");
+                                format!("Created worktree: {} (linked to #{})", wt.slug, source_id)
+                            } else {
+                                format!("Created worktree: {}", wt.slug)
+                            };
+                            self.state.status_message = Some(msg);
                             self.refresh_data();
                         }
                         Err(e) => {
@@ -525,6 +578,49 @@ impl App {
     }
 
     fn handle_create(&mut self) {
+        // Try to detect ticket context based on current view and focus
+        let ticket_context = match self.state.view {
+            View::Dashboard if self.state.dashboard_focus == DashboardFocus::Tickets => self
+                .state
+                .data
+                .tickets
+                .get(self.state.ticket_index)
+                .cloned(),
+            View::RepoDetail if self.state.repo_detail_focus == RepoDetailFocus::Tickets => self
+                .state
+                .detail_tickets
+                .get(self.state.detail_ticket_index)
+                .cloned(),
+            View::Tickets => self
+                .state
+                .data
+                .tickets
+                .get(self.state.ticket_index)
+                .cloned(),
+            _ => None,
+        };
+
+        if let Some(ticket) = ticket_context {
+            // Ticket-aware path: derive repo and name from the ticket
+            let repo_slug = self.state.data.repo_slug_map.get(&ticket.repo_id).cloned();
+            if let Some(slug) = repo_slug {
+                let suggested = derive_worktree_slug(&ticket.source_id, &ticket.title);
+                self.state.modal = Modal::Input {
+                    title: "Create Worktree".to_string(),
+                    prompt: format!("Worktree for #{} ({}):", ticket.source_id, slug),
+                    value: suggested,
+                    on_submit: InputAction::CreateWorktree {
+                        repo_slug: slug,
+                        ticket_id: Some(ticket.id.clone()),
+                    },
+                };
+            } else {
+                self.state.status_message = Some("Repo not found for ticket".to_string());
+            }
+            return;
+        }
+
+        // Fallback: repo-only path (no ticket context)
         match self.state.view {
             View::Dashboard | View::RepoDetail => {
                 let repo_slug = self
@@ -540,7 +636,10 @@ impl App {
                         title: "Create Worktree".to_string(),
                         prompt: format!("Worktree name for {slug} (e.g., smart-playlists):"),
                         value: String::new(),
-                        on_submit: InputAction::CreateWorktree { repo_slug: slug },
+                        on_submit: InputAction::CreateWorktree {
+                            repo_slug: slug,
+                            ticket_id: None,
+                        },
                     };
                 } else {
                     self.state.status_message = Some("Select a repo first".to_string());
