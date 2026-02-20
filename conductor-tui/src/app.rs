@@ -474,13 +474,18 @@ impl App {
                 }
                 InputAction::LinkTicket { worktree_id } => {
                     let syncer = TicketSyncer::new(&self.conn);
-                    // Find ticket by source_id
-                    let ticket = self
+                    // Find ticket by source_id, scoped to the worktree's repo
+                    let wt_repo_id = self
                         .state
                         .data
-                        .tickets
+                        .worktrees
                         .iter()
-                        .find(|t| t.source_id == value);
+                        .find(|w| w.id == worktree_id)
+                        .map(|w| w.repo_id.as_str());
+                    let ticket =
+                        self.state.data.tickets.iter().find(|t| {
+                            t.source_id == value && Some(t.repo_id.as_str()) == wt_repo_id
+                        });
                     if let Some(t) = ticket {
                         match syncer.link_to_worktree(&t.id, &worktree_id) {
                             Ok(()) => {
