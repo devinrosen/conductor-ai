@@ -29,6 +29,7 @@ pub enum Action {
     LinkTicket,
     StartSession,
     EndSession,
+    StartWork,
 
     // Filter
     EnterFilter,

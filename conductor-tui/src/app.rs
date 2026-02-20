@@ -147,6 +147,7 @@ impl App {
             Action::LinkTicket => self.handle_link_ticket(),
             Action::StartSession => self.handle_start_session(),
             Action::EndSession => self.handle_end_session(),
+            Action::StartWork => self.handle_start_work(),
 
             // Background results
             Action::DataRefreshed {
@@ -726,6 +727,64 @@ impl App {
             };
         } else {
             self.state.status_message = Some("No active session".to_string());
+        }
+    }
+
+    fn handle_start_work(&mut self) {
+        // Resolve the selected worktree from the current view context
+        let wt = self
+            .state
+            .selected_worktree_id
+            .as_ref()
+            .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
+            .cloned()
+            .or_else(|| match self.state.view {
+                View::Dashboard if self.state.dashboard_focus == DashboardFocus::Worktrees => self
+                    .state
+                    .data
+                    .worktrees
+                    .get(self.state.worktree_index)
+                    .cloned(),
+                View::RepoDetail => self
+                    .state
+                    .detail_worktrees
+                    .get(self.state.detail_wt_index)
+                    .cloned(),
+                _ => None,
+            });
+
+        let Some(wt) = wt else {
+            self.state.status_message = Some("Select a worktree first".to_string());
+            return;
+        };
+
+        let editor = &self.config.general.editor;
+
+        let result = if editor == "terminal" {
+            // Open Terminal.app at the worktree path and run claude
+            Command::new("osascript")
+                .args([
+                    "-e",
+                    &format!(
+                        "tell application \"Terminal\" to do script \"cd '{}' && claude\"",
+                        wt.path
+                    ),
+                ])
+                .spawn()
+        } else {
+            // For code, cursor, or any custom editor command
+            Command::new(editor).arg(&wt.path).spawn()
+        };
+
+        match result {
+            Ok(_) => {
+                self.state.status_message = Some(format!("Opened {} at {}", editor, wt.slug));
+            }
+            Err(e) => {
+                self.state.modal = Modal::Error {
+                    message: format!("Failed to open {editor}: {e}"),
+                };
+            }
         }
     }
 }
