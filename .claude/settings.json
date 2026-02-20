@@ -6,6 +6,7 @@
       "Bash(cargo build)",
       "Bash(cargo build *)",
       "Bash(cargo clippy *)",
+      "Bash(cargo fmt)",
       "Bash(cargo fmt *)",
       "Bash(cargo run *)",
       "Bash(git status)",
