@@ -807,8 +807,11 @@ impl App {
             if let Some((owner, name)) = github::parse_github_remote(&repo.remote_url) {
                 match github::sync_github_issues(&owner, &name) {
                     Ok(tickets) => {
+                        let synced_ids: Vec<&str> =
+                            tickets.iter().map(|t| t.source_id.as_str()).collect();
                         if let Ok(count) = syncer.upsert_tickets(&repo.id, &tickets) {
                             total += count;
+                            let _ = syncer.close_missing_tickets(&repo.id, "github", &synced_ids);
                         }
                     }
                     Err(e) => {

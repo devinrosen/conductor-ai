@@ -203,8 +203,16 @@ fn main() -> Result<()> {
                     if let Some((owner, name)) = github::parse_github_remote(&r.remote_url) {
                         match github::sync_github_issues(&owner, &name) {
                             Ok(tickets) => {
+                                let synced_ids: Vec<&str> =
+                                    tickets.iter().map(|t| t.source_id.as_str()).collect();
                                 let count = syncer.upsert_tickets(&r.id, &tickets)?;
-                                println!("  {} — synced {count} GitHub issues", r.slug);
+                                let closed =
+                                    syncer.close_missing_tickets(&r.id, "github", &synced_ids)?;
+                                print!("  {} — synced {count} GitHub issues", r.slug);
+                                if closed > 0 {
+                                    print!(", {closed} marked closed");
+                                }
+                                println!();
                             }
                             Err(e) => {
                                 eprintln!("  {} — sync failed: {e}", r.slug);

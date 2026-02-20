@@ -75,16 +75,23 @@ fn sync_all_tickets(tx: &Sender<Event>) {
     for repo in repos {
         if let Some((owner, name)) = github::parse_github_remote(&repo.remote_url) {
             let action = match github::sync_github_issues(&owner, &name) {
-                Ok(tickets) => match syncer.upsert_tickets(&repo.id, &tickets) {
-                    Ok(count) => Action::TicketSyncComplete {
-                        repo_slug: repo.slug.clone(),
-                        count,
-                    },
-                    Err(e) => Action::TicketSyncFailed {
-                        repo_slug: repo.slug.clone(),
-                        error: e.to_string(),
-                    },
-                },
+                Ok(tickets) => {
+                    let synced_ids: Vec<&str> =
+                        tickets.iter().map(|t| t.source_id.as_str()).collect();
+                    match syncer.upsert_tickets(&repo.id, &tickets) {
+                        Ok(count) => {
+                            let _ = syncer.close_missing_tickets(&repo.id, "github", &synced_ids);
+                            Action::TicketSyncComplete {
+                                repo_slug: repo.slug.clone(),
+                                count,
+                            }
+                        }
+                        Err(e) => Action::TicketSyncFailed {
+                            repo_slug: repo.slug.clone(),
+                            error: e.to_string(),
+                        },
+                    }
+                }
                 Err(e) => Action::TicketSyncFailed {
                     repo_slug: repo.slug.clone(),
                     error: e.to_string(),
