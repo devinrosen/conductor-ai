@@ -84,6 +84,7 @@ pub enum ConfirmAction {
 pub enum InputAction {
     CreateWorktree {
         repo_slug: String,
+        ticket_id: Option<String>,
     },
     LinkTicket {
         worktree_id: String,
