@@ -72,6 +72,9 @@ pub enum Modal {
     Error {
         message: String,
     },
+    TicketInfo {
+        ticket: Box<Ticket>,
+    },
 }
 
 #[derive(Debug, Clone)]

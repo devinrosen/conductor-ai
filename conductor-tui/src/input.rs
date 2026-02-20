@@ -43,6 +43,13 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::TicketInfo { .. } => {
+            return match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => Action::DismissModal,
+                KeyCode::Char('o') => Action::OpenTicketUrl,
+                _ => Action::None,
+            };
+        }
         Modal::None => {}
     }
 

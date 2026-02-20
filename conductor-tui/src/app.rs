@@ -161,6 +161,7 @@ impl App {
             Action::DismissModal => {
                 self.state.modal = Modal::None;
             }
+            Action::OpenTicketUrl => self.handle_open_ticket_url(),
             Action::ConfirmYes => self.handle_confirm_yes(),
             Action::ConfirmNo => {
                 self.state.modal = Modal::None;
@@ -433,17 +434,63 @@ impl App {
                     }
                 }
                 DashboardFocus::Tickets => {
-                    // Tickets don't have a detail view from dashboard; show full ticket list
-                    self.state.view = View::Tickets;
+                    if let Some(ticket) = self.state.data.tickets.get(self.state.ticket_index) {
+                        self.state.modal = Modal::TicketInfo {
+                            ticket: Box::new(ticket.clone()),
+                        };
+                    }
                 }
             },
-            View::RepoDetail => {
-                if let Some(wt) = self.state.detail_worktrees.get(self.state.detail_wt_index) {
-                    self.state.selected_worktree_id = Some(wt.id.clone());
-                    self.state.view = View::WorktreeDetail;
+            View::RepoDetail => match self.state.repo_detail_focus {
+                RepoDetailFocus::Worktrees => {
+                    if let Some(wt) = self.state.detail_worktrees.get(self.state.detail_wt_index) {
+                        self.state.selected_worktree_id = Some(wt.id.clone());
+                        self.state.view = View::WorktreeDetail;
+                    }
+                }
+                RepoDetailFocus::Tickets => {
+                    if let Some(ticket) = self
+                        .state
+                        .detail_tickets
+                        .get(self.state.detail_ticket_index)
+                    {
+                        self.state.modal = Modal::TicketInfo {
+                            ticket: Box::new(ticket.clone()),
+                        };
+                    }
+                }
+            },
+            View::Tickets => {
+                if let Some(ticket) = self.state.data.tickets.get(self.state.ticket_index) {
+                    self.state.modal = Modal::TicketInfo {
+                        ticket: Box::new(ticket.clone()),
+                    };
                 }
             }
             _ => {}
+        }
+    }
+
+    fn handle_open_ticket_url(&mut self) {
+        if let Modal::TicketInfo { ref ticket } = self.state.modal {
+            let url = ticket.url.clone();
+            if url.is_empty() {
+                self.state.status_message = Some("No URL available".to_string());
+                return;
+            }
+            let result = Command::new("open").arg(&url).output();
+            match result {
+                Ok(o) if o.status.success() => {
+                    self.state.status_message = Some(format!("Opened {url}"));
+                }
+                Ok(o) => {
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    self.state.status_message = Some(format!("Failed to open URL: {stderr}"));
+                }
+                Err(e) => {
+                    self.state.status_message = Some(format!("Failed to open URL: {e}"));
+                }
+            }
         }
     }
 

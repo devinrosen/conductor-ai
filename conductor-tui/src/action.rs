@@ -39,6 +39,7 @@ pub enum Action {
     // Modal
     ShowHelp,
     DismissModal,
+    OpenTicketUrl,
     ConfirmYes,
     ConfirmNo,
     InputChar(char),
