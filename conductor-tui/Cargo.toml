@@ -1,0 +1,17 @@
+[package]
+name = "conductor-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "TUI for Conductor — multi-repo orchestration"
+
+[[bin]]
+name = "conductor-tui"
+path = "src/main.rs"
+
+[dependencies]
+conductor-core = { path = "../conductor-core" }
+ratatui = "0.29"
+crossterm = "0.28"
+anyhow = "1"

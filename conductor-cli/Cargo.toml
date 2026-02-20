@@ -1,0 +1,16 @@
+[package]
+name = "conductor-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI for Conductor — multi-repo orchestration"
+
+[[bin]]
+name = "conductor"
+path = "src/main.rs"
+
+[dependencies]
+conductor-core = { path = "../conductor-core" }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
