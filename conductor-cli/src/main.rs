@@ -179,10 +179,7 @@ fn main() -> Result<()> {
                     println!("No worktrees.");
                 } else {
                     for wt in worktrees {
-                        println!(
-                            "  {}  {}  [{}]",
-                            wt.slug, wt.branch, wt.status
-                        );
+                        println!("  {}  {}  [{}]", wt.slug, wt.branch, wt.status);
                     }
                 }
             }

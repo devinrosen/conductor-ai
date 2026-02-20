@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use crate::error::{ConductorError, Result};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub general: GeneralConfig,
@@ -64,15 +64,6 @@ impl Default for DefaultsConfig {
             default_branch: default_branch(),
             worktree_prefix_feat: default_feat_prefix(),
             worktree_prefix_fix: default_fix_prefix(),
-        }
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            defaults: DefaultsConfig::default(),
         }
     }
 }
