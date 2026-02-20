@@ -47,16 +47,14 @@ impl<'a> RepoManager<'a> {
 
         let id = ulid::Ulid::new().to_string();
         let now = Utc::now().to_rfc3339();
-        let ws_dir = workspace_dir
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                self.config
-                    .general
-                    .workspace_root
-                    .join(slug)
-                    .to_string_lossy()
-                    .to_string()
-            });
+        let ws_dir = workspace_dir.map(|s| s.to_string()).unwrap_or_else(|| {
+            self.config
+                .general
+                .workspace_root
+                .join(slug)
+                .to_string_lossy()
+                .to_string()
+        });
 
         let repo = Repo {
             id: id.clone(),

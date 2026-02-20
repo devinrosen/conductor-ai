@@ -99,21 +99,24 @@ mod tests {
 
     #[test]
     fn test_parse_ssh_remote() {
-        let (owner, repo) = parse_github_remote("git@github.com:devinrosen/conductor-ai.git").unwrap();
+        let (owner, repo) =
+            parse_github_remote("git@github.com:devinrosen/conductor-ai.git").unwrap();
         assert_eq!(owner, "devinrosen");
         assert_eq!(repo, "conductor-ai");
     }
 
     #[test]
     fn test_parse_https_remote() {
-        let (owner, repo) = parse_github_remote("https://github.com/devinrosen/conductor-ai.git").unwrap();
+        let (owner, repo) =
+            parse_github_remote("https://github.com/devinrosen/conductor-ai.git").unwrap();
         assert_eq!(owner, "devinrosen");
         assert_eq!(repo, "conductor-ai");
     }
 
     #[test]
     fn test_parse_https_no_suffix() {
-        let (owner, repo) = parse_github_remote("https://github.com/devinrosen/conductor-ai").unwrap();
+        let (owner, repo) =
+            parse_github_remote("https://github.com/devinrosen/conductor-ai").unwrap();
         assert_eq!(owner, "devinrosen");
         assert_eq!(repo, "conductor-ai");
     }

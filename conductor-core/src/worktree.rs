@@ -77,12 +77,7 @@ impl<'a> WorktreeManager<'a> {
 
         // Create git worktree
         let output = Command::new("git")
-            .args([
-                "worktree",
-                "add",
-                &wt_path.to_string_lossy(),
-                &branch,
-            ])
+            .args(["worktree", "add", &wt_path.to_string_lossy(), &branch])
             .current_dir(&repo.local_path)
             .output()?;
         if !output.status.success() {
@@ -180,10 +175,8 @@ impl<'a> WorktreeManager<'a> {
             .current_dir(&repo.local_path)
             .output();
 
-        self.conn.execute(
-            "DELETE FROM worktrees WHERE id = ?1",
-            params![worktree.id],
-        )?;
+        self.conn
+            .execute("DELETE FROM worktrees WHERE id = ?1", params![worktree.id])?;
 
         Ok(())
     }
@@ -206,7 +199,9 @@ fn map_worktree_row(row: &rusqlite::Row) -> rusqlite::Result<Worktree> {
 fn install_deps(worktree_path: &Path) {
     if worktree_path.join("package.json").exists() {
         // Detect lockfile to choose the right package manager
-        let pm = if worktree_path.join("bun.lockb").exists() || worktree_path.join("bun.lock").exists() {
+        let pm = if worktree_path.join("bun.lockb").exists()
+            || worktree_path.join("bun.lock").exists()
+        {
             "bun"
         } else if worktree_path.join("pnpm-lock.yaml").exists() {
             "pnpm"

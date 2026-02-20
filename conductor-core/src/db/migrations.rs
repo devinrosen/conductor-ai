@@ -11,15 +11,14 @@ pub fn run(conn: &Connection) -> Result<()> {
         );",
     )?;
 
-    let version: i64 = conn
-        .query_row(
-            "SELECT COALESCE(
+    let version: i64 = conn.query_row(
+        "SELECT COALESCE(
                 (SELECT CAST(value AS INTEGER) FROM _conductor_meta WHERE key = 'schema_version'),
                 0
             )",
-            [],
-            |row| row.get(0),
-        )?;
+        [],
+        |row| row.get(0),
+    )?;
 
     if version < 1 {
         conn.execute_batch(include_str!("migrations/001_initial.sql"))?;
