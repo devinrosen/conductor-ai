@@ -77,4 +77,28 @@ impl<'a> SessionTracker<'a> {
         )?;
         Ok(())
     }
+
+    pub fn get_worktrees(&self, session_id: &str) -> Result<Vec<crate::worktree::Worktree>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT w.id, w.repo_id, w.slug, w.branch, w.path, w.ticket_id, w.status, w.created_at
+             FROM worktrees w
+             JOIN session_worktrees sw ON sw.worktree_id = w.id
+             WHERE sw.session_id = ?1
+             ORDER BY w.created_at",
+        )?;
+        let rows = stmt.query_map(params![session_id], |row| {
+            Ok(crate::worktree::Worktree {
+                id: row.get(0)?,
+                repo_id: row.get(1)?,
+                slug: row.get(2)?,
+                branch: row.get(3)?,
+                path: row.get(4)?,
+                ticket_id: row.get(5)?,
+                status: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })?;
+        let worktrees = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(worktrees)
+    }
 }
