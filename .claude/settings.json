@@ -19,6 +19,7 @@
       "Bash(git branch *)",
       "Bash(git worktree *)",
       "Bash(gh issue *)",
+      "Bash(gh pr)",
       "Bash(gh pr *)"
     ]
   }
