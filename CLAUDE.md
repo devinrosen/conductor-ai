@@ -10,7 +10,7 @@ cargo build --release          # Release build
 cargo test                     # Run all tests
 cargo test --lib github        # Run specific module tests (e.g., github)
 cargo test -p conductor-core   # Test a single crate
-cargo clippy                   # Lint (no config file yet)
+cargo clippy -- -D warnings    # Lint (CI enforces -D warnings)
 cargo fmt --check              # Check formatting
 cargo build --bin conductor    # Build CLI only
 cargo build --bin conductor-tui # Build TUI only
@@ -66,10 +66,19 @@ SQLite at `~/.conductor/conductor.db` with WAL mode, foreign keys on, 5s busy ti
 └── workspaces/<repo-slug>/<worktree-slug>/
 ```
 
+## CI & Branch Rules
+
+GitHub Actions runs on PRs to `main` (`.github/workflows/ci.yml`):
+- **Format** — `cargo fmt --all --check`
+- **Clippy** — `cargo clippy --workspace --all-targets -- -D warnings`
+- **Test** — `cargo test --workspace`
+
+Branch ruleset on `main`: PRs required, linear history (squash/rebase only), `Clippy` + `Test` must pass. Tag ruleset: `v*` tags cannot be deleted or overwritten.
+
 ## Project Status (per docs/SPEC.md)
 
 - Phase 1 (done): Core library + CLI
-- Phase 2 (in progress): TUI with ratatui
+- Phase 2 (not started): TUI with ratatui (scaffold only)
 - Phase 3: Jira integration
 - Phase 4: AI orchestration hooks
 - Phase 5: Daemon extraction (v2, async with tokio)
