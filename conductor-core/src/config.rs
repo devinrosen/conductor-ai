@@ -17,6 +17,8 @@ pub struct GeneralConfig {
     pub workspace_root: PathBuf,
     #[serde(default = "default_sync_interval")]
     pub sync_interval_minutes: u32,
+    #[serde(default = "default_editor")]
+    pub editor: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,11 +51,16 @@ fn default_fix_prefix() -> String {
     "fix-".to_string()
 }
 
+fn default_editor() -> String {
+    "code".to_string()
+}
+
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
             workspace_root: default_workspace_root(),
             sync_interval_minutes: default_sync_interval(),
+            editor: default_editor(),
         }
     }
 }
