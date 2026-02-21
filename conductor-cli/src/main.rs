@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use conductor_core::config::{ensure_dirs, load_config};
 use conductor_core::db::open_database;
 use conductor_core::github;
+use conductor_core::issue_source::{GitHubConfig, IssueSourceManager};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::TicketSyncer;
 use conductor_core::worktree::WorktreeManager;
@@ -56,6 +57,39 @@ enum RepoCommands {
     Remove {
         /// Repo slug
         slug: String,
+    },
+    /// Manage issue sources for a repository
+    Sources {
+        #[command(subcommand)]
+        command: SourceCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum SourceCommands {
+    /// Add an issue source
+    Add {
+        /// Repo slug
+        slug: String,
+        /// Source type (github or jira)
+        #[arg(long = "type")]
+        source_type: String,
+        /// JSON config (auto-inferred for github from remote URL if omitted)
+        #[arg(long)]
+        config: Option<String>,
+    },
+    /// List issue sources for a repo
+    List {
+        /// Repo slug
+        slug: String,
+    },
+    /// Remove an issue source
+    Remove {
+        /// Repo slug
+        slug: String,
+        /// Source type to remove (github or jira)
+        #[arg(long = "type")]
+        source_type: String,
     },
 }
 
@@ -142,6 +176,83 @@ fn main() -> Result<()> {
                 mgr.remove(&slug)?;
                 println!("Removed repo: {slug}");
             }
+            RepoCommands::Sources { command } => {
+                let repo_mgr = RepoManager::new(&conn, &config);
+                let source_mgr = IssueSourceManager::new(&conn);
+
+                match command {
+                    SourceCommands::Add {
+                        slug,
+                        source_type,
+                        config: config_json,
+                    } => {
+                        let repo = repo_mgr.get_by_slug(&slug)?;
+
+                        let config_str = match (source_type.as_str(), config_json) {
+                            ("github", Some(json)) => {
+                                // Validate it's valid JSON
+                                let _: serde_json::Value = serde_json::from_str(&json)
+                                    .map_err(|e| anyhow::anyhow!("invalid JSON config: {e}"))?;
+                                json
+                            }
+                            ("github", None) => {
+                                // Auto-infer from remote URL
+                                let (owner, name) =
+                                    github::parse_github_remote(&repo.remote_url).ok_or_else(
+                                        || {
+                                            anyhow::anyhow!(
+                                            "cannot infer GitHub config from remote URL: {}. Use --config to specify manually.",
+                                            repo.remote_url
+                                        )
+                                        },
+                                    )?;
+                                serde_json::to_string(&GitHubConfig { owner, repo: name })?
+                            }
+                            ("jira", Some(json)) => {
+                                let _: serde_json::Value = serde_json::from_str(&json)
+                                    .map_err(|e| anyhow::anyhow!("invalid JSON config: {e}"))?;
+                                json
+                            }
+                            ("jira", None) => {
+                                anyhow::bail!(
+                                    "--config is required for jira sources (e.g. --config '{{\"project\":\"KEY\",\"url\":\"https://...\"}}')");
+                            }
+                            _ => {
+                                anyhow::bail!(
+                                    "unsupported source type: '{}'. Use 'github' or 'jira'.",
+                                    source_type
+                                );
+                            }
+                        };
+
+                        let source = source_mgr.add(&repo.id, &source_type, &config_str, &slug)?;
+                        println!(
+                            "Added {} source for {}: {}",
+                            source.source_type, slug, source.config_json
+                        );
+                    }
+                    SourceCommands::List { slug } => {
+                        let repo = repo_mgr.get_by_slug(&slug)?;
+                        let sources = source_mgr.list(&repo.id)?;
+                        if sources.is_empty() {
+                            println!("No issue sources configured for {slug}.");
+                        } else {
+                            for s in sources {
+                                println!("  {} — {}", s.source_type, s.config_json);
+                            }
+                        }
+                    }
+                    SourceCommands::Remove { slug, source_type } => {
+                        let repo = repo_mgr.get_by_slug(&slug)?;
+                        let removed = source_mgr.remove_by_type(&repo.id, &source_type)?;
+                        if removed {
+                            println!("Removed {source_type} source for {slug}");
+                        } else {
+                            println!("No {source_type} source found for {slug}");
+                        }
+                    }
+                }
+            }
         },
         Commands::Worktree { command } => match command {
             WorktreeCommands::Create {
@@ -182,23 +293,38 @@ fn main() -> Result<()> {
                 };
 
                 let syncer = TicketSyncer::new(&conn);
+                let source_mgr = IssueSourceManager::new(&conn);
+
                 for r in repos {
-                    if let Some((owner, name)) = github::parse_github_remote(&r.remote_url) {
-                        match github::sync_github_issues(&owner, &name) {
-                            Ok(tickets) => {
-                                let synced_ids: Vec<&str> =
-                                    tickets.iter().map(|t| t.source_id.as_str()).collect();
-                                let count = syncer.upsert_tickets(&r.id, &tickets)?;
-                                let closed =
-                                    syncer.close_missing_tickets(&r.id, "github", &synced_ids)?;
-                                print!("  {} — synced {count} GitHub issues", r.slug);
-                                if closed > 0 {
-                                    print!(", {closed} marked closed");
+                    let sources = source_mgr.list(&r.id)?;
+
+                    if sources.is_empty() {
+                        // Backward compat: auto-detect GitHub from remote_url
+                        if let Some((owner, name)) = github::parse_github_remote(&r.remote_url) {
+                            sync_github(&syncer, &r.id, &r.slug, &owner, &name);
+                        }
+                    } else {
+                        for source in sources {
+                            match source.source_type.as_str() {
+                                "github" => {
+                                    match serde_json::from_str::<GitHubConfig>(&source.config_json)
+                                    {
+                                        Ok(cfg) => {
+                                            sync_github(
+                                                &syncer, &r.id, &r.slug, &cfg.owner, &cfg.repo,
+                                            );
+                                        }
+                                        Err(e) => {
+                                            eprintln!("  {} — invalid github config: {e}", r.slug);
+                                        }
+                                    }
                                 }
-                                println!();
-                            }
-                            Err(e) => {
-                                eprintln!("  {} — sync failed: {e}", r.slug);
+                                "jira" => {
+                                    println!("  {} — Jira sync not yet implemented", r.slug);
+                                }
+                                other => {
+                                    eprintln!("  {} — unknown source type: {other}", r.slug);
+                                }
                             }
                         }
                     }
@@ -229,4 +355,31 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Sync GitHub issues for a single repo, printing results.
+fn sync_github(syncer: &TicketSyncer, repo_id: &str, repo_slug: &str, owner: &str, name: &str) {
+    match github::sync_github_issues(owner, name) {
+        Ok(tickets) => {
+            let synced_ids: Vec<&str> = tickets.iter().map(|t| t.source_id.as_str()).collect();
+            match syncer.upsert_tickets(repo_id, &tickets) {
+                Ok(count) => {
+                    let closed = syncer
+                        .close_missing_tickets(repo_id, "github", &synced_ids)
+                        .unwrap_or(0);
+                    print!("  {} — synced {count} GitHub issues", repo_slug);
+                    if closed > 0 {
+                        print!(", {closed} marked closed");
+                    }
+                    println!();
+                }
+                Err(e) => {
+                    eprintln!("  {} — sync failed: {e}", repo_slug);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("  {} — sync failed: {e}", repo_slug);
+        }
+    }
 }

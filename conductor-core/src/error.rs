@@ -28,6 +28,12 @@ pub enum ConductorError {
 
     #[error("ticket sync error: {0}")]
     TicketSync(String),
+
+    #[error("issue source already exists for repo '{repo_slug}' with type '{source_type}'")]
+    IssueSourceAlreadyExists {
+        repo_slug: String,
+        source_type: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, ConductorError>;
