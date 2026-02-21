@@ -4,7 +4,8 @@ use clap::{Parser, Subcommand};
 use conductor_core::config::{ensure_dirs, load_config};
 use conductor_core::db::open_database;
 use conductor_core::github;
-use conductor_core::issue_source::{GitHubConfig, IssueSourceManager};
+use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
+use conductor_core::jira_acli;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::TicketSyncer;
 use conductor_core::worktree::WorktreeManager;
@@ -215,7 +216,7 @@ fn main() -> Result<()> {
                             }
                             ("jira", None) => {
                                 anyhow::bail!(
-                                    "--config is required for jira sources (e.g. --config '{{\"project\":\"KEY\",\"url\":\"https://...\"}}')");
+                                    "--config is required for jira sources (e.g. --config '{{\"jql\":\"project = KEY AND status != Done\",\"url\":\"https://...\"}}')");
                             }
                             _ => {
                                 anyhow::bail!(
@@ -320,7 +321,14 @@ fn main() -> Result<()> {
                                     }
                                 }
                                 "jira" => {
-                                    println!("  {} — Jira sync not yet implemented", r.slug);
+                                    match serde_json::from_str::<JiraConfig>(&source.config_json) {
+                                        Ok(cfg) => {
+                                            sync_jira(&syncer, &r.id, &r.slug, &cfg.jql, &cfg.url);
+                                        }
+                                        Err(e) => {
+                                            eprintln!("  {} — invalid jira config: {e}", r.slug);
+                                        }
+                                    }
                                 }
                                 other => {
                                     eprintln!("  {} — unknown source type: {other}", r.slug);
@@ -355,6 +363,33 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Sync Jira issues for a single repo, printing results.
+fn sync_jira(syncer: &TicketSyncer, repo_id: &str, repo_slug: &str, jql: &str, base_url: &str) {
+    match jira_acli::sync_jira_issues_acli(jql, base_url) {
+        Ok(tickets) => {
+            let synced_ids: Vec<&str> = tickets.iter().map(|t| t.source_id.as_str()).collect();
+            match syncer.upsert_tickets(repo_id, &tickets) {
+                Ok(count) => {
+                    let closed = syncer
+                        .close_missing_tickets(repo_id, "jira", &synced_ids)
+                        .unwrap_or(0);
+                    print!("  {} — synced {count} Jira issues", repo_slug);
+                    if closed > 0 {
+                        print!(", {closed} marked closed");
+                    }
+                    println!();
+                }
+                Err(e) => {
+                    eprintln!("  {} — sync failed: {e}", repo_slug);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("  {} — sync failed: {e}", repo_slug);
+        }
+    }
 }
 
 /// Sync GitHub issues for a single repo, printing results.

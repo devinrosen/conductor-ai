@@ -18,6 +18,13 @@ pub struct GitHubConfig {
     pub repo: String,
 }
 
+/// Configuration for a Jira issue source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JiraConfig {
+    pub jql: String,
+    pub url: String,
+}
+
 pub struct IssueSourceManager<'a> {
     conn: &'a Connection,
 }
@@ -242,7 +249,7 @@ mod tests {
         mgr.add(
             "repo1",
             "jira",
-            r#"{"project":"TEST","url":"https://jira.example.com"}"#,
+            r#"{"jql":"project = TEST","url":"https://jira.example.com"}"#,
             "test-repo",
         )
         .unwrap();
