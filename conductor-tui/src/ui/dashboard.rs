@@ -91,7 +91,7 @@ fn render_worktrees(frame: &mut Frame, area: Rect, state: &AppState) {
                 "abandoned" => Color::Red,
                 _ => Color::White,
             };
-            ListItem::new(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     format!("{repo_slug}/"),
                     Style::default().fg(Color::DarkGray),
@@ -102,7 +102,25 @@ fn render_worktrees(frame: &mut Frame, area: Rect, state: &AppState) {
                     format!("[{}]", wt.status),
                     Style::default().fg(status_color),
                 ),
-            ]))
+            ];
+            if let Some(ticket) = wt
+                .ticket_id
+                .as_ref()
+                .and_then(|tid| state.data.ticket_map.get(tid))
+            {
+                let ticket_state_color = match ticket.state.as_str() {
+                    "open" => Color::Green,
+                    "closed" => Color::DarkGray,
+                    "in_progress" => Color::Yellow,
+                    _ => Color::White,
+                };
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(
+                    format!("#{} {}", ticket.source_id, ticket.state),
+                    Style::default().fg(ticket_state_color),
+                ));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 

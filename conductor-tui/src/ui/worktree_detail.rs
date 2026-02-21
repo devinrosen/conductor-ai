@@ -29,12 +29,32 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         .map(|s| s.as_str())
         .unwrap_or("?");
 
-    let ticket_info = wt
+    let ticket_line: Vec<Span> = if let Some(ticket) = wt
         .ticket_id
         .as_ref()
         .and_then(|tid| state.data.ticket_map.get(tid))
-        .map(|t| format!("#{} — {}", t.source_id, t.title))
-        .unwrap_or_else(|| "None (press l to link)".to_string());
+    {
+        let ticket_state_color = match ticket.state.as_str() {
+            "open" => Color::Green,
+            "closed" => Color::DarkGray,
+            "in_progress" => Color::Yellow,
+            _ => Color::White,
+        };
+        vec![
+            Span::styled("Ticket: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(format!("#{} — {}", ticket.source_id, ticket.title)),
+            Span::raw("  "),
+            Span::styled(
+                format!("[{}]", ticket.state),
+                Style::default().fg(ticket_state_color),
+            ),
+        ]
+    } else {
+        vec![
+            Span::styled("Ticket: ", Style::default().fg(Color::DarkGray)),
+            Span::raw("None (press l to link)"),
+        ]
+    };
 
     let status_color = match wt.status.as_str() {
         "active" => Color::Green,
@@ -68,10 +88,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             Span::raw(&wt.created_at),
         ]),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Ticket: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(ticket_info),
-        ]),
+        Line::from(ticket_line),
         Line::from(""),
         Line::from(Span::styled(
             "Actions: w=work  o=open ticket  p=push  P=PR  l=link ticket  d=delete  Esc=back",
