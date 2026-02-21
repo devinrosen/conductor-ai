@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use conductor_core::config::{ensure_dirs, load_config};
 use conductor_core::db::open_database;
 use conductor_core::github;
-use conductor_core::repo::RepoManager;
+use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::TicketSyncer;
 use conductor_core::worktree::WorktreeManager;
 
@@ -118,26 +118,9 @@ fn main() -> Result<()> {
                 local_path,
                 workspace,
             } => {
-                let slug = slug.unwrap_or_else(|| {
-                    // Derive slug from remote URL
-                    remote_url
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or("repo")
-                        .strip_suffix(".git")
-                        .unwrap_or("repo")
-                        .to_string()
-                });
+                let slug = slug.unwrap_or_else(|| derive_slug_from_url(&remote_url));
 
-                let local = local_path.unwrap_or_else(|| {
-                    config
-                        .general
-                        .workspace_root
-                        .join(&slug)
-                        .join("main")
-                        .to_string_lossy()
-                        .to_string()
-                });
+                let local = local_path.unwrap_or_else(|| derive_local_path(&config, &slug));
 
                 let mgr = RepoManager::new(&conn, &config);
                 let repo = mgr.add(&slug, &local, &remote_url, workspace.as_deref())?;

@@ -52,6 +52,12 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             value,
             ..
         } => modal::render_input(frame, area, title, prompt, value),
+        Modal::Form {
+            title,
+            fields,
+            active_field,
+            ..
+        } => modal::render_form(frame, area, title, fields, *active_field),
         Modal::Error { message } => modal::render_error(frame, area, message),
         Modal::TicketInfo { ticket } => modal::render_ticket_info(frame, area, ticket),
     }

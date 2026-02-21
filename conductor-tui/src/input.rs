@@ -37,6 +37,17 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::Form { .. } => {
+            return match key.code {
+                KeyCode::Enter => Action::FormSubmit,
+                KeyCode::Esc => Action::DismissModal,
+                KeyCode::Tab => Action::FormNextField,
+                KeyCode::BackTab => Action::FormPrevField,
+                KeyCode::Backspace => Action::FormBackspace,
+                KeyCode::Char(c) => Action::FormChar(c),
+                _ => Action::None,
+            };
+        }
         Modal::Error { .. } => {
             return match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => Action::DismissModal,
@@ -77,6 +88,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Enter => Action::Select,
 
         // CRUD actions (context-dependent)
+        KeyCode::Char('a') => Action::AddRepo,
         KeyCode::Char('c') => Action::Create,
         KeyCode::Char('d') => Action::Delete,
         KeyCode::Char('p') => Action::Push,

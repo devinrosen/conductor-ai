@@ -139,3 +139,20 @@ impl<'a> RepoManager<'a> {
         Ok(())
     }
 }
+
+/// Derive a repo slug from a remote URL (e.g. "https://github.com/org/repo.git" → "repo").
+pub fn derive_slug_from_url(remote_url: &str) -> String {
+    let last = remote_url.rsplit('/').next().unwrap_or("repo");
+    last.strip_suffix(".git").unwrap_or(last).to_string()
+}
+
+/// Derive a default local path for a repo from the config workspace root and slug.
+pub fn derive_local_path(config: &Config, slug: &str) -> String {
+    config
+        .general
+        .workspace_root
+        .join(slug)
+        .join("main")
+        .to_string_lossy()
+        .to_string()
+}

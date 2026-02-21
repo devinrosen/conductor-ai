@@ -21,6 +21,7 @@ pub enum Action {
     GoToSession,
 
     // CRUD triggers
+    AddRepo,
     Create,
     Delete,
     Push,
@@ -46,6 +47,11 @@ pub enum Action {
     InputChar(char),
     InputBackspace,
     InputSubmit,
+    FormChar(char),
+    FormBackspace,
+    FormNextField,
+    FormPrevField,
+    FormSubmit,
 
     // Background results
     DataRefreshed {

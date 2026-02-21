@@ -69,6 +69,12 @@ pub enum Modal {
         value: String,
         on_submit: InputAction,
     },
+    Form {
+        title: String,
+        fields: Vec<FormField>,
+        active_field: usize,
+        on_submit: FormAction,
+    },
     Error {
         message: String,
     },
@@ -81,6 +87,21 @@ pub enum Modal {
 pub enum ConfirmAction {
     DeleteWorktree { repo_slug: String, wt_slug: String },
     EndSession { session_id: String },
+    RemoveRepo { repo_slug: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct FormField {
+    pub label: String,
+    pub value: String,
+    pub placeholder: String,
+    pub manually_edited: bool,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum FormAction {
+    AddRepo,
 }
 
 #[derive(Debug, Clone)]
