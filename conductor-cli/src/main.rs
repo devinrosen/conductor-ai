@@ -1,6 +1,9 @@
+use std::process::Command;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+use conductor_core::agent::{AgentManager, ClaudeJsonResult};
 use conductor_core::config::{ensure_dirs, load_config};
 use conductor_core::db::open_database;
 use conductor_core::github;
@@ -33,6 +36,30 @@ enum Commands {
     Tickets {
         #[command(subcommand)]
         command: TicketCommands,
+    },
+    /// Run Claude agent (used internally by TUI tmux windows)
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentCommands {
+    /// Run a Claude agent for a worktree (spawned by TUI in tmux)
+    Run {
+        /// Agent run ID (from agent_runs table)
+        #[arg(long)]
+        run_id: String,
+        /// Path to the worktree directory
+        #[arg(long)]
+        worktree_path: String,
+        /// Prompt for Claude
+        #[arg(long)]
+        prompt: String,
+        /// Resume a previous Claude session
+        #[arg(long)]
+        resume: Option<String>,
     },
 }
 
@@ -284,6 +311,16 @@ fn main() -> Result<()> {
                 println!("Deleted worktree: {name}");
             }
         },
+        Commands::Agent { command } => match command {
+            AgentCommands::Run {
+                run_id,
+                worktree_path,
+                prompt,
+                resume,
+            } => {
+                run_agent(&conn, &run_id, &worktree_path, &prompt, resume.as_deref())?;
+            }
+        },
         Commands::Tickets { command } => match command {
             TicketCommands::Sync { repo } => {
                 let repo_mgr = RepoManager::new(&conn, &config);
@@ -360,6 +397,112 @@ fn main() -> Result<()> {
                 }
             }
         },
+    }
+
+    Ok(())
+}
+
+/// Run a Claude agent for a worktree. Called inside a tmux window by the TUI.
+///
+/// Uses `--output-format json` (single JSON result) since the tmux terminal IS the display.
+/// Claude's interactive output goes directly to the terminal; we only parse the final JSON result.
+fn run_agent(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    worktree_path: &str,
+    prompt: &str,
+    resume_session_id: Option<&str>,
+) -> Result<()> {
+    let mgr = AgentManager::new(conn);
+
+    // Verify the run exists
+    let run = mgr.get_run(run_id)?;
+    if run.is_none() {
+        anyhow::bail!("agent run not found: {run_id}");
+    }
+
+    // Build the claude command
+    let mut cmd = Command::new("claude");
+    cmd.arg("-p")
+        .arg(prompt)
+        .arg("--output-format")
+        .arg("json")
+        .arg("--verbose")
+        .arg("--permission-mode")
+        .arg("acceptEdits")
+        .current_dir(worktree_path);
+
+    if let Some(session_id) = resume_session_id {
+        cmd.arg("--resume").arg(session_id);
+    }
+
+    eprintln!(
+        "[conductor] Running agent for run_id={} in {}",
+        run_id, worktree_path
+    );
+
+    let output = cmd.output();
+
+    match output {
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let stderr = String::from_utf8_lossy(&o.stderr);
+
+            // Try to parse the JSON result from stdout
+            if let Ok(result) = serde_json::from_str::<ClaudeJsonResult>(&stdout) {
+                let is_error = result.is_error.unwrap_or(false);
+                if is_error {
+                    let error_msg = result
+                        .result
+                        .as_deref()
+                        .unwrap_or("Claude reported an error");
+                    mgr.update_run_failed(run_id, error_msg)?;
+                    eprintln!("[conductor] Agent failed: {}", error_msg);
+                } else {
+                    mgr.update_run_completed(
+                        run_id,
+                        result.session_id.as_deref(),
+                        result.result.as_deref(),
+                        result.cost_usd,
+                        result.num_turns,
+                        result.duration_ms,
+                    )?;
+                    eprintln!("[conductor] Agent completed successfully");
+                    if let Some(cost) = result.cost_usd {
+                        eprintln!(
+                            "[conductor] Cost: ${:.4}  Turns: {}  Duration: {:.1}s",
+                            cost,
+                            result.num_turns.unwrap_or(0),
+                            result
+                                .duration_ms
+                                .map(|ms| ms as f64 / 1000.0)
+                                .unwrap_or(0.0)
+                        );
+                    }
+                }
+            } else if o.status.success() {
+                // Process succeeded but no parseable JSON — treat as completed
+                mgr.update_run_completed(run_id, None, Some(stdout.trim()), None, None, None)?;
+                eprintln!("[conductor] Agent completed (no JSON result parsed)");
+            } else {
+                let error_msg = if stderr.trim().is_empty() {
+                    format!("Claude exited with status: {}", o.status)
+                } else {
+                    format!(
+                        "Claude exited with status: {} — {}",
+                        o.status,
+                        stderr.trim()
+                    )
+                };
+                mgr.update_run_failed(run_id, &error_msg)?;
+                eprintln!("[conductor] Agent failed: {}", error_msg);
+            }
+        }
+        Err(e) => {
+            let error_msg = format!("Failed to spawn claude: {e}");
+            mgr.update_run_failed(run_id, &error_msg)?;
+            eprintln!("[conductor] {}", error_msg);
+        }
     }
 
     Ok(())

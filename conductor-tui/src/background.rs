@@ -1,7 +1,7 @@
-use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 
+use conductor_core::agent::AgentManager;
 use conductor_core::config::{db_path, load_config};
 use conductor_core::db::open_database;
 use conductor_core::github;
@@ -13,14 +13,14 @@ use conductor_core::tickets::TicketSyncer;
 use conductor_core::worktree::WorktreeManager;
 
 use crate::action::Action;
-use crate::event::Event;
+use crate::event::BackgroundSender;
 
 /// Spawn the DB poller thread. Polls every `interval` and sends DataRefreshed events.
-pub fn spawn_db_poller(tx: Sender<Event>, interval: Duration) {
+pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
     thread::spawn(move || loop {
         thread::sleep(interval);
         if let Some(action) = poll_data() {
-            if tx.send(Event::Background(action)).is_err() {
+            if !tx.send(action) {
                 break;
             }
         }
@@ -37,6 +37,7 @@ pub fn poll_data() -> Option<Action> {
     let wt_mgr = WorktreeManager::new(&conn, &config);
     let ticket_syncer = TicketSyncer::new(&conn);
     let session_tracker = SessionTracker::new(&conn);
+    let agent_mgr = AgentManager::new(&conn);
 
     let repos = repo_mgr.list().ok()?;
     let worktrees = wt_mgr.list(None).ok()?;
@@ -47,6 +48,7 @@ pub fn poll_data() -> Option<Action> {
     } else {
         Vec::new()
     };
+    let latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
 
     Some(Action::DataRefreshed {
         repos,
@@ -54,18 +56,19 @@ pub fn poll_data() -> Option<Action> {
         tickets,
         session,
         session_worktrees,
+        latest_agent_runs,
     })
 }
 
 /// Spawn the ticket sync timer. Syncs all repos every `interval`.
-pub fn spawn_ticket_sync(tx: Sender<Event>, interval: Duration) {
+pub fn spawn_ticket_sync(tx: BackgroundSender, interval: Duration) {
     thread::spawn(move || loop {
         thread::sleep(interval);
         sync_all_tickets(&tx);
     });
 }
 
-fn sync_all_tickets(tx: &Sender<Event>) {
+fn sync_all_tickets(tx: &BackgroundSender) {
     let db = db_path();
     let Ok(conn) = open_database(&db) else { return };
     let Ok(config) = load_config() else { return };
@@ -83,7 +86,7 @@ fn sync_all_tickets(tx: &Sender<Event>) {
             // Backward compat: auto-detect GitHub from remote_url
             if let Some((owner, name)) = github::parse_github_remote(&repo.remote_url) {
                 let action = sync_github_repo(&syncer, &repo.id, &repo.slug, &owner, &name);
-                if tx.send(Event::Background(action)).is_err() {
+                if !tx.send(action) {
                     return;
                 }
             }
@@ -101,7 +104,7 @@ fn sync_all_tickets(tx: &Sender<Event>) {
                                 error: format!("invalid github config: {e}"),
                             },
                         };
-                        if tx.send(Event::Background(action)).is_err() {
+                        if !tx.send(action) {
                             return;
                         }
                     }
@@ -115,7 +118,7 @@ fn sync_all_tickets(tx: &Sender<Event>) {
                                 error: format!("invalid jira config: {e}"),
                             },
                         };
-                        if tx.send(Event::Background(action)).is_err() {
+                        if !tx.send(action) {
                             return;
                         }
                     }
@@ -192,9 +195,9 @@ fn sync_github_repo(
 
 /// Spawn a one-shot background operation for blocking tasks.
 #[allow(dead_code)]
-pub fn spawn_blocking(tx: Sender<Event>, f: impl FnOnce() -> Action + Send + 'static) {
+pub fn spawn_blocking(tx: BackgroundSender, f: impl FnOnce() -> Action + Send + 'static) {
     thread::spawn(move || {
         let action = f();
-        let _ = tx.send(Event::Background(action));
+        let _ = tx.send(action);
     });
 }

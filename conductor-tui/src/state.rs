@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use conductor_core::agent::AgentRun;
 use conductor_core::repo::Repo;
 use conductor_core::session::Session;
 use conductor_core::tickets::Ticket;
@@ -117,6 +118,12 @@ pub enum InputAction {
     SessionNotes {
         session_id: String,
     },
+    AgentPrompt {
+        worktree_id: String,
+        worktree_path: String,
+        worktree_slug: String,
+        resume_session_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -132,6 +139,8 @@ pub struct DataCache {
     pub ticket_map: HashMap<String, Ticket>,
     /// repo_id -> worktree count
     pub repo_worktree_count: HashMap<String, usize>,
+    /// worktree_id -> latest AgentRun (populated by DB poller)
+    pub latest_agent_runs: HashMap<String, AgentRun>,
 }
 
 impl DataCache {

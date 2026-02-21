@@ -75,6 +75,23 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         };
     }
 
+    // View-specific keybindings (WorktreeDetail agent controls)
+    if state.view == View::WorktreeDetail {
+        // Check if there's a running agent for this worktree
+        let has_running_agent = state
+            .selected_worktree_id
+            .as_ref()
+            .and_then(|wt_id| state.data.latest_agent_runs.get(wt_id))
+            .is_some_and(|run| run.status == "running");
+
+        match key.code {
+            KeyCode::Char('r') => return Action::LaunchAgent,
+            KeyCode::Char('a') if has_running_agent => return Action::AttachAgent,
+            KeyCode::Char('x') if has_running_agent => return Action::StopAgent,
+            _ => {}
+        }
+    }
+
     // Normal keybindings
     match key.code {
         KeyCode::Char('q') => Action::Quit,

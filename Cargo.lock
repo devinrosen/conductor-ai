@@ -215,6 +215,8 @@ dependencies = [
  "anyhow",
  "clap",
  "conductor-core",
+ "rusqlite",
+ "serde",
  "serde_json",
 ]
 

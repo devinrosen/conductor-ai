@@ -28,5 +28,21 @@ pub fn run(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 2 {
+        conn.execute_batch(include_str!("migrations/002_agent_runs.sql"))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '2')",
+            [],
+        )?;
+    }
+
+    if version < 3 {
+        conn.execute_batch(include_str!("migrations/003_agent_tmux.sql"))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '3')",
+            [],
+        )?;
+    }
+
     Ok(())
 }

@@ -62,7 +62,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         _ => Color::Red,
     };
 
-    let content = Paragraph::new(vec![
+    let mut lines = vec![
         Line::from(vec![
             Span::styled("Worktree: ", Style::default().fg(Color::DarkGray)),
             Span::styled(&wt.slug, Style::default().add_modifier(Modifier::BOLD)),
@@ -89,13 +89,21 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         ]),
         Line::from(""),
         Line::from(ticket_line),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Actions: w=work  o=open ticket  p=push  P=PR  l=link ticket  d=delete  Esc=back",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ])
-    .block(
+    ];
+
+    // Agent status line from DB poll
+    if let Some(run) = state.data.latest_agent_runs.get(&wt.id) {
+        lines.push(Line::from(""));
+        lines.push(render_agent_status_line(run));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Actions: r=agent  a=attach  x=stop  w=work  o=ticket  p=push  P=PR  l=link  d=delete  Esc=back",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let content = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
@@ -103,4 +111,61 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     );
 
     frame.render_widget(content, area);
+}
+
+/// Render a single agent status line from the latest AgentRun for this worktree.
+fn render_agent_status_line(run: &conductor_core::agent::AgentRun) -> Line<'static> {
+    match run.status.as_str() {
+        "running" => Line::from(vec![
+            Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[running]", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                " — press a to attach, x to stop",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+        "completed" => {
+            let mut spans = vec![
+                Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[completed]", Style::default().fg(Color::Green)),
+            ];
+            if let Some(cost) = run.cost_usd {
+                let turns = run.num_turns.unwrap_or(0);
+                let dur_secs = run.duration_ms.map(|ms| ms as f64 / 1000.0).unwrap_or(0.0);
+                spans.push(Span::styled(
+                    format!(" ${cost:.4}, {turns} turns, {dur_secs:.1}s"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            if let Some(ref sid) = run.claude_session_id {
+                spans.push(Span::styled(
+                    format!("  session: {}", &sid[..13.min(sid.len())]),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            Line::from(spans)
+        }
+        "failed" => {
+            let mut spans = vec![
+                Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[failed]", Style::default().fg(Color::Red)),
+            ];
+            if let Some(ref err) = run.result_text {
+                let truncated = if err.len() > 60 { &err[..60] } else { err };
+                spans.push(Span::styled(
+                    format!(" {truncated}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            Line::from(spans)
+        }
+        "cancelled" => Line::from(vec![
+            Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[cancelled]", Style::default().fg(Color::DarkGray)),
+        ]),
+        other => Line::from(vec![
+            Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(format!("[{other}]")),
+        ]),
+    }
 }
