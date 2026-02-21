@@ -74,7 +74,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            "Actions: w=work  p=push  P=PR  l=link ticket  d=delete  Esc=back",
+            "Actions: w=work  o=open ticket  p=push  P=PR  l=link ticket  d=delete  Esc=back",
             Style::default().fg(Color::DarkGray),
         )),
     ])

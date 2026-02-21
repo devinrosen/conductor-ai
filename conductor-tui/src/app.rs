@@ -473,24 +473,44 @@ impl App {
     }
 
     fn handle_open_ticket_url(&mut self) {
-        if let Modal::TicketInfo { ref ticket } = self.state.modal {
-            let url = ticket.url.clone();
-            if url.is_empty() {
-                self.state.status_message = Some("No URL available".to_string());
-                return;
+        // Resolve the ticket URL from either the TicketInfo modal or the WorktreeDetail view
+        let url = if let Modal::TicketInfo { ref ticket } = self.state.modal {
+            Some(ticket.url.clone())
+        } else if self.state.view == View::WorktreeDetail {
+            self.state
+                .selected_worktree_id
+                .as_ref()
+                .and_then(|wt_id| self.state.data.worktrees.iter().find(|w| &w.id == wt_id))
+                .and_then(|wt| wt.ticket_id.as_ref())
+                .and_then(|tid| self.state.data.ticket_map.get(tid))
+                .map(|t| t.url.clone())
+        } else {
+            None
+        };
+
+        let Some(url) = url else {
+            if self.state.view == View::WorktreeDetail {
+                self.state.status_message = Some("No ticket linked to this worktree".to_string());
             }
-            let result = Command::new("open").arg(&url).output();
-            match result {
-                Ok(o) if o.status.success() => {
-                    self.state.status_message = Some(format!("Opened {url}"));
-                }
-                Ok(o) => {
-                    let stderr = String::from_utf8_lossy(&o.stderr);
-                    self.state.status_message = Some(format!("Failed to open URL: {stderr}"));
-                }
-                Err(e) => {
-                    self.state.status_message = Some(format!("Failed to open URL: {e}"));
-                }
+            return;
+        };
+
+        if url.is_empty() {
+            self.state.status_message = Some("No URL available".to_string());
+            return;
+        }
+
+        let result = Command::new("open").arg(&url).output();
+        match result {
+            Ok(o) if o.status.success() => {
+                self.state.status_message = Some(format!("Opened {url}"));
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                self.state.status_message = Some(format!("Failed to open URL: {stderr}"));
+            }
+            Err(e) => {
+                self.state.status_message = Some(format!("Failed to open URL: {e}"));
             }
         }
     }

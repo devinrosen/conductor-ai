@@ -88,6 +88,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('S') => Action::StartSession,
         KeyCode::Char('l') => Action::LinkTicket,
         KeyCode::Char('w') => Action::StartWork,
+        KeyCode::Char('o') => Action::OpenTicketUrl,
 
         // Direct view navigation
         KeyCode::Char('t') => Action::GoToTickets,
