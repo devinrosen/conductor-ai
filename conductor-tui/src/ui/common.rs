@@ -54,9 +54,12 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     } else {
         match state.view {
             View::Dashboard => {
-                "Tab:panel  j/k:nav  Enter:select  c:create  s:sync  ?:help  q:quit".to_string()
+                "Tab:panel  j/k:nav  Enter:select  a:add repo  c:create  s:sync  ?:help  q:quit"
+                    .to_string()
             }
-            View::RepoDetail => "j/k:nav  Enter:select  c:create  Esc:back  ?:help".to_string(),
+            View::RepoDetail => {
+                "j/k:nav  Enter:select  c:create  d:remove repo  Esc:back  ?:help".to_string()
+            }
             View::WorktreeDetail => {
                 "o:open ticket  p:push  P:PR  l:link  d:delete  Esc:back  ?:help".to_string()
             }

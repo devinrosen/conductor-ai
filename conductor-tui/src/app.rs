@@ -7,7 +7,7 @@ use rusqlite::Connection;
 
 use conductor_core::config::Config;
 use conductor_core::github;
-use conductor_core::repo::RepoManager;
+use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::session::SessionTracker;
 use conductor_core::tickets::TicketSyncer;
 use conductor_core::worktree::WorktreeManager;
@@ -17,7 +17,8 @@ use crate::background;
 use crate::event::{Event, EventLoop};
 use crate::input;
 use crate::state::{
-    AppState, ConfirmAction, DashboardFocus, InputAction, Modal, RepoDetailFocus, View,
+    AppState, ConfirmAction, DashboardFocus, FormAction, FormField, InputAction, Modal,
+    RepoDetailFocus, View,
 };
 use crate::ui;
 
@@ -177,8 +178,14 @@ impl App {
                 }
             }
             Action::InputSubmit => self.handle_input_submit(),
+            Action::FormChar(c) => self.handle_form_char(c),
+            Action::FormBackspace => self.handle_form_backspace(),
+            Action::FormNextField => self.handle_form_next_field(),
+            Action::FormPrevField => self.handle_form_prev_field(),
+            Action::FormSubmit => self.handle_form_submit(),
 
             // CRUD
+            Action::AddRepo => self.handle_add_repo(),
             Action::Create => self.handle_create(),
             Action::Delete => self.handle_delete(),
             Action::Push => self.handle_push(),
@@ -536,6 +543,22 @@ impl App {
                         }
                     }
                 }
+                ConfirmAction::RemoveRepo { repo_slug } => {
+                    let mgr = RepoManager::new(&self.conn, &self.config);
+                    match mgr.remove(&repo_slug) {
+                        Ok(()) => {
+                            self.state.status_message = Some(format!("Removed repo: {repo_slug}"));
+                            self.state.view = View::Dashboard;
+                            self.state.selected_repo_id = None;
+                            self.refresh_data();
+                        }
+                        Err(e) => {
+                            self.state.modal = Modal::Error {
+                                message: format!("Remove failed: {e}"),
+                            };
+                        }
+                    }
+                }
                 ConfirmAction::EndSession { session_id } => {
                     let tracker = SessionTracker::new(&self.conn);
                     match tracker.end(&session_id, None) {
@@ -709,6 +732,11 @@ impl App {
                             ticket_id: None,
                         },
                     };
+                } else if self.state.view == View::Dashboard
+                    && self.state.dashboard_focus == DashboardFocus::Repos
+                {
+                    // No repo selected on repos panel — open add repo form instead
+                    self.handle_add_repo();
                 } else {
                     self.state.status_message = Some("Select a repo first".to_string());
                 }
@@ -717,30 +745,248 @@ impl App {
         }
     }
 
-    fn handle_delete(&mut self) {
-        if self.state.view == View::WorktreeDetail {
-            if let Some(ref wt_id) = self.state.selected_worktree_id {
-                if let Some(wt) = self.state.data.worktrees.iter().find(|w| &w.id == wt_id) {
-                    let repo_slug = self
-                        .state
-                        .data
-                        .repo_slug_map
-                        .get(&wt.repo_id)
-                        .cloned()
-                        .unwrap_or_else(|| "?".to_string());
-                    self.state.modal = Modal::Confirm {
-                        title: "Delete Worktree".to_string(),
-                        message: format!(
-                            "Delete worktree {}/{}? This removes the git worktree and branch.",
-                            repo_slug, wt.slug
-                        ),
-                        on_confirm: ConfirmAction::DeleteWorktree {
-                            repo_slug,
-                            wt_slug: wt.slug.clone(),
-                        },
-                    };
+    fn handle_add_repo(&mut self) {
+        if self.state.view != View::Dashboard {
+            return;
+        }
+        self.state.modal = Modal::Form {
+            title: "Add Repository".to_string(),
+            fields: vec![
+                FormField {
+                    label: "Remote URL".to_string(),
+                    value: String::new(),
+                    placeholder: "https://github.com/org/repo.git".to_string(),
+                    manually_edited: true,
+                    required: true,
+                },
+                FormField {
+                    label: "Slug".to_string(),
+                    value: String::new(),
+                    placeholder: "auto-derived from URL".to_string(),
+                    manually_edited: false,
+                    required: true,
+                },
+                FormField {
+                    label: "Local Path".to_string(),
+                    value: String::new(),
+                    placeholder: "auto-derived from slug".to_string(),
+                    manually_edited: false,
+                    required: false,
+                },
+            ],
+            active_field: 0,
+            on_submit: FormAction::AddRepo,
+        };
+    }
+
+    fn handle_form_char(&mut self, c: char) {
+        let config = &self.config;
+        if let Modal::Form {
+            ref mut fields,
+            active_field,
+            ref on_submit,
+            ..
+        } = self.state.modal
+        {
+            if let Some(field) = fields.get_mut(active_field) {
+                field.value.push(c);
+                field.manually_edited = true;
+            }
+            // Auto-derive dependent fields
+            match on_submit {
+                FormAction::AddRepo => {
+                    Self::auto_derive_add_repo_fields(fields, active_field, config)
                 }
             }
+        }
+    }
+
+    fn handle_form_backspace(&mut self) {
+        let config = &self.config;
+        if let Modal::Form {
+            ref mut fields,
+            active_field,
+            ref on_submit,
+            ..
+        } = self.state.modal
+        {
+            if let Some(field) = fields.get_mut(active_field) {
+                field.value.pop();
+                // If field emptied and it's a derived field, reset to auto-derive
+                if field.value.is_empty() && active_field > 0 {
+                    field.manually_edited = false;
+                }
+            }
+            match on_submit {
+                FormAction::AddRepo => {
+                    Self::auto_derive_add_repo_fields(fields, active_field, config)
+                }
+            }
+        }
+    }
+
+    fn handle_form_next_field(&mut self) {
+        if let Modal::Form {
+            ref fields,
+            ref mut active_field,
+            ..
+        } = self.state.modal
+        {
+            *active_field = (*active_field + 1) % fields.len();
+        }
+    }
+
+    fn handle_form_prev_field(&mut self) {
+        if let Modal::Form {
+            ref fields,
+            ref mut active_field,
+            ..
+        } = self.state.modal
+        {
+            if *active_field == 0 {
+                *active_field = fields.len() - 1;
+            } else {
+                *active_field -= 1;
+            }
+        }
+    }
+
+    fn auto_derive_add_repo_fields(
+        fields: &mut [FormField],
+        changed_field: usize,
+        config: &Config,
+    ) {
+        // When URL (field 0) changes, auto-update Slug (field 1) if not manually edited
+        if changed_field == 0 && fields.len() > 1 && !fields[1].manually_edited {
+            let url = &fields[0].value;
+            fields[1].value = if url.is_empty() {
+                String::new()
+            } else {
+                derive_slug_from_url(url)
+            };
+        }
+        // When Slug (field 1) changes (or was just auto-derived), auto-update Local Path (field 2)
+        if changed_field <= 1 && fields.len() > 2 && !fields[2].manually_edited {
+            let slug = &fields[1].value;
+            fields[2].value = if slug.is_empty() {
+                String::new()
+            } else {
+                derive_local_path(config, slug)
+            };
+        }
+    }
+
+    fn handle_form_submit(&mut self) {
+        let modal = std::mem::replace(&mut self.state.modal, Modal::None);
+        if let Modal::Form {
+            fields, on_submit, ..
+        } = modal
+        {
+            match on_submit {
+                FormAction::AddRepo => self.submit_add_repo(fields),
+            }
+        }
+    }
+
+    fn submit_add_repo(&mut self, fields: Vec<FormField>) {
+        let url = fields
+            .first()
+            .map(|f| f.value.trim().to_string())
+            .unwrap_or_default();
+        let slug = fields
+            .get(1)
+            .map(|f| f.value.trim().to_string())
+            .unwrap_or_default();
+        let local_path = fields
+            .get(2)
+            .map(|f| f.value.trim().to_string())
+            .unwrap_or_default();
+
+        if url.is_empty() || slug.is_empty() {
+            self.state.modal = Modal::Error {
+                message: "Remote URL and Slug are required".to_string(),
+            };
+            return;
+        }
+
+        let local = if local_path.is_empty() {
+            derive_local_path(&self.config, &slug)
+        } else {
+            local_path
+        };
+
+        let mgr = RepoManager::new(&self.conn, &self.config);
+        match mgr.add(&slug, &local, &url, None) {
+            Ok(repo) => {
+                self.state.status_message = Some(format!("Added repo: {}", repo.slug));
+                self.refresh_data();
+            }
+            Err(e) => {
+                self.state.modal = Modal::Error {
+                    message: format!("Add repo failed: {e}"),
+                };
+            }
+        }
+    }
+
+    fn handle_delete(&mut self) {
+        match self.state.view {
+            View::WorktreeDetail => {
+                if let Some(ref wt_id) = self.state.selected_worktree_id {
+                    if let Some(wt) = self.state.data.worktrees.iter().find(|w| &w.id == wt_id) {
+                        let repo_slug = self
+                            .state
+                            .data
+                            .repo_slug_map
+                            .get(&wt.repo_id)
+                            .cloned()
+                            .unwrap_or_else(|| "?".to_string());
+                        self.state.modal = Modal::Confirm {
+                            title: "Delete Worktree".to_string(),
+                            message: format!(
+                                "Delete worktree {}/{}? This removes the git worktree and branch.",
+                                repo_slug, wt.slug
+                            ),
+                            on_confirm: ConfirmAction::DeleteWorktree {
+                                repo_slug,
+                                wt_slug: wt.slug.clone(),
+                            },
+                        };
+                    }
+                }
+            }
+            View::RepoDetail => {
+                if let Some(ref repo_id) = self.state.selected_repo_id.clone() {
+                    if let Some(repo) = self.state.data.repos.iter().find(|r| &r.id == repo_id) {
+                        let wt_count = self
+                            .state
+                            .data
+                            .repo_worktree_count
+                            .get(repo_id)
+                            .copied()
+                            .unwrap_or(0);
+                        let warning = if wt_count > 0 {
+                            format!(
+                                " This repo has {wt_count} worktree{}.",
+                                if wt_count == 1 { "" } else { "s" }
+                            )
+                        } else {
+                            String::new()
+                        };
+                        self.state.modal = Modal::Confirm {
+                            title: "Remove Repository".to_string(),
+                            message: format!(
+                                "Remove repo '{}'?{} This unregisters it from Conductor.",
+                                repo.slug, warning
+                            ),
+                            on_confirm: ConfirmAction::RemoveRepo {
+                                repo_slug: repo.slug.clone(),
+                            },
+                        };
+                    }
+                }
+            }
+            _ => {}
         }
     }
 

@@ -202,6 +202,75 @@ pub fn render_ticket_info(frame: &mut Frame, area: Rect, ticket: &Ticket) {
     frame.render_widget(content, popup);
 }
 
+pub fn render_form(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    fields: &[crate::state::FormField],
+    active_field: usize,
+) {
+    let popup = centered_rect(60, 50, area);
+    frame.render_widget(Clear, popup);
+
+    let mut lines = vec![Line::from("")];
+
+    for (i, field) in fields.iter().enumerate() {
+        let is_active = i == active_field;
+        let label_style = if is_active {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        // Build label with required indicator and auto hint
+        let required_mark = if field.required { "*" } else { "" };
+        let auto_hint = if !field.required && !field.manually_edited {
+            " (auto)"
+        } else {
+            ""
+        };
+        let label_text = format!("  {}{}{}", field.label, required_mark, auto_hint);
+        lines.push(Line::from(Span::styled(label_text, label_style)));
+
+        // Value line
+        if is_active {
+            lines.push(Line::from(vec![
+                Span::styled("  > ", Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    &field.value,
+                    Style::default().add_modifier(Modifier::UNDERLINED),
+                ),
+                Span::styled("_", Style::default().fg(Color::Cyan)),
+            ]));
+        } else if field.value.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!("    {}", field.placeholder),
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            lines.push(Line::from(Span::raw(format!("    {}", field.value))));
+        }
+
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(Span::styled(
+        "  Tab next field  Enter submit  Esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let content = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(format!(" {title} ")),
+    );
+
+    frame.render_widget(content, popup);
+}
+
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let vertical = Layout::vertical([Constraint::Percentage(percent_y)])
         .flex(Flex::Center)
