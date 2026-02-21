@@ -215,6 +215,7 @@ dependencies = [
  "anyhow",
  "clap",
  "conductor-core",
+ "serde_json",
 ]
 
 [[package]]
@@ -241,6 +242,7 @@ dependencies = [
  "crossterm",
  "ratatui",
  "rusqlite",
+ "serde_json",
 ]
 
 [[package]]

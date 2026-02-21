@@ -2,6 +2,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod github;
+pub mod issue_source;
 pub mod repo;
 pub mod session;
 pub mod tickets;
