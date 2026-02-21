@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
+use conductor_core::config::WorkTarget;
 use conductor_core::tickets::Ticket;
 
 pub fn render_confirm(frame: &mut Frame, area: Rect, title: &str, message: &str) {
@@ -266,6 +267,150 @@ pub fn render_form(
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))
             .title(format!(" {title} ")),
+    );
+
+    frame.render_widget(content, popup);
+}
+
+pub fn render_work_target_picker(
+    frame: &mut Frame,
+    area: Rect,
+    targets: &[WorkTarget],
+    selected: usize,
+) {
+    let height = (targets.len() as u16 + 6).min(20);
+    let percent_y = ((height as f32 / area.height as f32) * 100.0) as u16;
+    let popup = centered_rect(50, percent_y.max(25), area);
+    frame.render_widget(Clear, popup);
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Select a work target:",
+            Style::default().fg(Color::Cyan),
+        )),
+        Line::from(""),
+    ];
+
+    for (i, target) in targets.iter().enumerate() {
+        let is_selected = i == selected;
+        let prefix = if is_selected { "▸ " } else { "  " };
+        let number = format!("{}. ", i + 1);
+        let type_hint = format!(" ({})", target.target_type);
+
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {prefix}{number}"), style),
+            Span::styled(&target.name, style),
+            Span::styled(type_hint, Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  1-9 select  Enter confirm  Esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let content = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" Work Targets "),
+    );
+
+    frame.render_widget(content, popup);
+}
+
+pub fn render_work_target_manager(
+    frame: &mut Frame,
+    area: Rect,
+    targets: &[WorkTarget],
+    selected: usize,
+) {
+    let popup = centered_rect(55, 60, area);
+    frame.render_widget(Clear, popup);
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Manage Work Targets",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    if targets.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (no targets configured)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for (i, target) in targets.iter().enumerate() {
+            let is_selected = i == selected;
+            let prefix = if is_selected { "▸ " } else { "  " };
+            let type_hint = format!(" [{}] cmd: {}", target.target_type, target.command);
+
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {prefix}"), style),
+                Span::styled(&target.name, style),
+                Span::styled(type_hint, Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  a",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" add  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "d",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" delete  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "K/J",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" reorder  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "Esc",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" close", Style::default().fg(Color::DarkGray)),
+    ]));
+
+    let content = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" Work Target Manager "),
     );
 
     frame.render_widget(content, popup);

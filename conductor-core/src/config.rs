@@ -3,6 +3,22 @@ use std::path::PathBuf;
 
 use crate::error::{ConductorError, Result};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkTarget {
+    pub name: String,
+    pub command: String,
+    #[serde(rename = "type")]
+    pub target_type: String,
+}
+
+fn default_work_targets() -> Vec<WorkTarget> {
+    vec![WorkTarget {
+        name: "VS Code".to_string(),
+        command: "code".to_string(),
+        target_type: "editor".to_string(),
+    }]
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -17,8 +33,11 @@ pub struct GeneralConfig {
     pub workspace_root: PathBuf,
     #[serde(default = "default_sync_interval")]
     pub sync_interval_minutes: u32,
-    #[serde(default = "default_editor")]
-    pub editor: String,
+    /// Deprecated: use `work_targets` instead. Kept for backward compatibility.
+    #[serde(default, skip_serializing)]
+    pub editor: Option<String>,
+    #[serde(default = "default_work_targets")]
+    pub work_targets: Vec<WorkTarget>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,16 +70,13 @@ fn default_fix_prefix() -> String {
     "fix-".to_string()
 }
 
-fn default_editor() -> String {
-    "code".to_string()
-}
-
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
             workspace_root: default_workspace_root(),
             sync_interval_minutes: default_sync_interval(),
-            editor: default_editor(),
+            editor: None,
+            work_targets: default_work_targets(),
         }
     }
 }
@@ -93,13 +109,48 @@ pub fn config_path() -> PathBuf {
 }
 
 /// Load config from disk, returning defaults if the file doesn't exist.
+/// Handles backward compatibility: if the old `editor` field is present
+/// and `work_targets` was not explicitly set, migrates the editor value
+/// into a single work target.
 pub fn load_config() -> Result<Config> {
     let path = config_path();
     if !path.exists() {
         return Ok(Config::default());
     }
     let contents = std::fs::read_to_string(&path)?;
-    toml::from_str(&contents).map_err(|e| ConductorError::Config(e.to_string()))
+    let mut config: Config =
+        toml::from_str(&contents).map_err(|e| ConductorError::Config(e.to_string()))?;
+
+    // Backward compat: migrate old `editor` field to `work_targets`
+    if let Some(ref editor) = config.general.editor {
+        // Check if the raw TOML has work_targets explicitly set
+        let raw: toml::Value =
+            toml::from_str(&contents).map_err(|e| ConductorError::Config(e.to_string()))?;
+        let has_work_targets = raw
+            .get("general")
+            .and_then(|g| g.get("work_targets"))
+            .is_some();
+
+        if !has_work_targets {
+            config.general.work_targets = vec![WorkTarget {
+                name: editor.clone(),
+                command: editor.clone(),
+                target_type: "editor".to_string(),
+            }];
+        }
+    }
+    config.general.editor = None;
+
+    Ok(config)
+}
+
+/// Save config to disk.
+pub fn save_config(config: &Config) -> Result<()> {
+    let path = config_path();
+    let contents = toml::to_string_pretty(config)
+        .map_err(|e| ConductorError::Config(format!("serialize config: {e}")))?;
+    std::fs::write(&path, contents)?;
+    Ok(())
 }
 
 /// Ensure the conductor data directory exists.

@@ -61,6 +61,35 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::WorkTargetPicker { targets, .. } => {
+            return match key.code {
+                KeyCode::Esc => Action::DismissModal,
+                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
+                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
+                KeyCode::Enter => Action::SelectWorkTarget(usize::MAX), // sentinel: use selected
+                KeyCode::Char(c) if c.is_ascii_digit() => {
+                    let n = c.to_digit(10).unwrap() as usize;
+                    if n >= 1 && n <= targets.len() {
+                        Action::SelectWorkTarget(n - 1)
+                    } else {
+                        Action::None
+                    }
+                }
+                _ => Action::None,
+            };
+        }
+        Modal::WorkTargetManager { .. } => {
+            return match key.code {
+                KeyCode::Esc => Action::DismissModal,
+                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
+                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
+                KeyCode::Char('K') => Action::WorkTargetMoveUp,
+                KeyCode::Char('J') => Action::WorkTargetMoveDown,
+                KeyCode::Char('a') => Action::WorkTargetAdd,
+                KeyCode::Char('d') => Action::WorkTargetDelete,
+                _ => Action::None,
+            };
+        }
         Modal::None => {}
     }
 
@@ -100,6 +129,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('S') => Action::StartSession,
         KeyCode::Char('l') => Action::LinkTicket,
         KeyCode::Char('w') => Action::StartWork,
+        KeyCode::Char('W') => Action::ManageWorkTargets,
         KeyCode::Char('o') => Action::OpenTicketUrl,
 
         // Direct view navigation

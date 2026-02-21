@@ -31,6 +31,12 @@ pub enum Action {
     StartSession,
     EndSession,
     StartWork,
+    SelectWorkTarget(usize),
+    ManageWorkTargets,
+    WorkTargetMoveUp,
+    WorkTargetMoveDown,
+    WorkTargetAdd,
+    WorkTargetDelete,
 
     // Filter
     EnterFilter,
