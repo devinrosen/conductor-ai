@@ -3,6 +3,7 @@ pub mod db;
 pub mod error;
 pub mod github;
 pub mod issue_source;
+pub mod jira_acli;
 pub mod repo;
 pub mod session;
 pub mod tickets;
