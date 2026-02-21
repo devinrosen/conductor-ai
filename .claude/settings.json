@@ -4,9 +4,9 @@
   ],
   "permissions": {
     "allow": [
-      "Bash(cargo *)",
-      "Bash(git *)",
-      "Bash(gh *)"
+      "Bash(cargo:*)",
+      "Bash(git:*)",
+      "Bash(gh:*)"
     ]
   }
 }
