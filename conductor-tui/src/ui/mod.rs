@@ -60,5 +60,11 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         } => modal::render_form(frame, area, title, fields, *active_field),
         Modal::Error { message } => modal::render_error(frame, area, message),
         Modal::TicketInfo { ticket } => modal::render_ticket_info(frame, area, ticket),
+        Modal::WorkTargetPicker { targets, selected } => {
+            modal::render_work_target_picker(frame, area, targets, *selected)
+        }
+        Modal::WorkTargetManager { targets, selected } => {
+            modal::render_work_target_manager(frame, area, targets, *selected)
+        }
     }
 }

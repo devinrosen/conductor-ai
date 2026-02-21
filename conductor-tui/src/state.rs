@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use conductor_core::config::WorkTarget;
 use conductor_core::repo::Repo;
 use conductor_core::session::Session;
 use conductor_core::tickets::Ticket;
@@ -81,6 +82,14 @@ pub enum Modal {
     TicketInfo {
         ticket: Box<Ticket>,
     },
+    WorkTargetPicker {
+        targets: Vec<WorkTarget>,
+        selected: usize,
+    },
+    WorkTargetManager {
+        targets: Vec<WorkTarget>,
+        selected: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +97,7 @@ pub enum ConfirmAction {
     DeleteWorktree { repo_slug: String, wt_slug: String },
     EndSession { session_id: String },
     RemoveRepo { repo_slug: String },
+    DeleteWorkTarget { index: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +112,7 @@ pub struct FormField {
 #[derive(Debug, Clone)]
 pub enum FormAction {
     AddRepo,
+    AddWorkTarget,
 }
 
 #[derive(Debug, Clone)]

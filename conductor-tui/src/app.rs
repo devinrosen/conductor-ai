@@ -5,7 +5,7 @@ use anyhow::Result;
 use ratatui::DefaultTerminal;
 use rusqlite::Connection;
 
-use conductor_core::config::Config;
+use conductor_core::config::{save_config, Config, WorkTarget};
 use conductor_core::github;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::session::SessionTracker;
@@ -195,6 +195,12 @@ impl App {
             Action::StartSession => self.handle_start_session(),
             Action::EndSession => self.handle_end_session(),
             Action::StartWork => self.handle_start_work(),
+            Action::SelectWorkTarget(index) => self.handle_select_work_target(index),
+            Action::ManageWorkTargets => self.handle_manage_work_targets(),
+            Action::WorkTargetMoveUp => self.handle_work_target_move_up(),
+            Action::WorkTargetMoveDown => self.handle_work_target_move_down(),
+            Action::WorkTargetAdd => self.handle_work_target_add(),
+            Action::WorkTargetDelete => self.handle_work_target_delete(),
 
             // Background results
             Action::DataRefreshed {
@@ -331,6 +337,31 @@ impl App {
     }
 
     fn move_up(&mut self) {
+        match self.state.modal {
+            Modal::WorkTargetPicker {
+                ref targets,
+                ref mut selected,
+            } => {
+                if *selected > 0 {
+                    *selected -= 1;
+                } else {
+                    *selected = targets.len().saturating_sub(1);
+                }
+                return;
+            }
+            Modal::WorkTargetManager {
+                ref targets,
+                ref mut selected,
+            } => {
+                if *selected > 0 {
+                    *selected -= 1;
+                } else {
+                    *selected = targets.len().saturating_sub(1);
+                }
+                return;
+            }
+            _ => {}
+        }
         match self.state.view {
             View::Dashboard => match self.state.dashboard_focus {
                 DashboardFocus::Repos => {
@@ -360,6 +391,31 @@ impl App {
     }
 
     fn move_down(&mut self) {
+        match self.state.modal {
+            Modal::WorkTargetPicker {
+                ref targets,
+                ref mut selected,
+            } => {
+                if *selected + 1 < targets.len() {
+                    *selected += 1;
+                } else {
+                    *selected = 0;
+                }
+                return;
+            }
+            Modal::WorkTargetManager {
+                ref targets,
+                ref mut selected,
+            } => {
+                if *selected + 1 < targets.len() {
+                    *selected += 1;
+                } else {
+                    *selected = 0;
+                }
+                return;
+            }
+            _ => {}
+        }
         match self.state.view {
             View::Dashboard => match self.state.dashboard_focus {
                 DashboardFocus::Repos => {
@@ -570,6 +626,28 @@ impl App {
                             self.state.modal = Modal::Error {
                                 message: format!("End session failed: {e}"),
                             };
+                        }
+                    }
+                }
+                ConfirmAction::DeleteWorkTarget { index } => {
+                    if index < self.config.general.work_targets.len() {
+                        let removed = self.config.general.work_targets.remove(index);
+                        match save_config(&self.config) {
+                            Ok(()) => {
+                                let new_selected = index
+                                    .min(self.config.general.work_targets.len().saturating_sub(1));
+                                self.state.modal = Modal::WorkTargetManager {
+                                    targets: self.config.general.work_targets.clone(),
+                                    selected: new_selected,
+                                };
+                                self.state.status_message =
+                                    Some(format!("Deleted work target: {}", removed.name));
+                            }
+                            Err(e) => {
+                                self.state.modal = Modal::Error {
+                                    message: format!("Failed to save config: {e}"),
+                                };
+                            }
                         }
                     }
                 }
@@ -797,6 +875,7 @@ impl App {
                 FormAction::AddRepo => {
                     Self::auto_derive_add_repo_fields(fields, active_field, config)
                 }
+                FormAction::AddWorkTarget => {}
             }
         }
     }
@@ -821,6 +900,7 @@ impl App {
                 FormAction::AddRepo => {
                     Self::auto_derive_add_repo_fields(fields, active_field, config)
                 }
+                FormAction::AddWorkTarget => {}
             }
         }
     }
@@ -884,6 +964,7 @@ impl App {
         {
             match on_submit {
                 FormAction::AddRepo => self.submit_add_repo(fields),
+                FormAction::AddWorkTarget => self.submit_add_work_target(fields),
             }
         }
     }
@@ -924,6 +1005,51 @@ impl App {
             Err(e) => {
                 self.state.modal = Modal::Error {
                     message: format!("Add repo failed: {e}"),
+                };
+            }
+        }
+    }
+
+    fn submit_add_work_target(&mut self, fields: Vec<FormField>) {
+        let name = fields
+            .first()
+            .map(|f| f.value.trim().to_string())
+            .unwrap_or_default();
+        let command = fields
+            .get(1)
+            .map(|f| f.value.trim().to_string())
+            .unwrap_or_default();
+        let target_type = fields
+            .get(2)
+            .map(|f| f.value.trim().to_string())
+            .unwrap_or_else(|| "editor".to_string());
+
+        if name.is_empty() || command.is_empty() {
+            self.state.modal = Modal::Error {
+                message: "Name and Command are required".to_string(),
+            };
+            return;
+        }
+
+        let target = WorkTarget {
+            name: name.clone(),
+            command,
+            target_type,
+        };
+        self.config.general.work_targets.push(target);
+
+        match save_config(&self.config) {
+            Ok(()) => {
+                let new_index = self.config.general.work_targets.len().saturating_sub(1);
+                self.state.modal = Modal::WorkTargetManager {
+                    targets: self.config.general.work_targets.clone(),
+                    selected: new_index,
+                };
+                self.state.status_message = Some(format!("Added work target: {name}"));
+            }
+            Err(e) => {
+                self.state.modal = Modal::Error {
+                    message: format!("Failed to save config: {e}"),
                 };
             }
         }
@@ -1147,8 +1273,60 @@ impl App {
 
     fn handle_start_work(&mut self) {
         // Resolve the selected worktree from the current view context
-        let wt = self
-            .state
+        let wt = self.resolve_selected_worktree();
+
+        let Some(wt) = wt else {
+            self.state.status_message = Some("Select a worktree first".to_string());
+            return;
+        };
+
+        let targets = self.config.general.work_targets.clone();
+        if targets.is_empty() {
+            self.state.status_message =
+                Some("No work targets configured. Press W to manage.".to_string());
+            return;
+        }
+
+        if targets.len() == 1 {
+            self.open_work_target(&targets[0], &wt);
+        } else {
+            self.state.modal = Modal::WorkTargetPicker {
+                targets,
+                selected: 0,
+            };
+        }
+    }
+
+    fn handle_select_work_target(&mut self, index: usize) {
+        let (targets, selected) = if let Modal::WorkTargetPicker {
+            ref targets,
+            selected,
+        } = self.state.modal
+        {
+            (targets.clone(), selected)
+        } else {
+            return;
+        };
+
+        // usize::MAX is sentinel for "use current selected"
+        let actual_index = if index == usize::MAX { selected } else { index };
+        if actual_index >= targets.len() {
+            return;
+        }
+
+        self.state.modal = Modal::None;
+
+        let wt = self.resolve_selected_worktree();
+        let Some(wt) = wt else {
+            self.state.status_message = Some("Select a worktree first".to_string());
+            return;
+        };
+
+        self.open_work_target(&targets[actual_index], &wt);
+    }
+
+    fn resolve_selected_worktree(&self) -> Option<conductor_core::worktree::Worktree> {
+        self.state
             .selected_worktree_id
             .as_ref()
             .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
@@ -1166,17 +1344,12 @@ impl App {
                     .get(self.state.detail_wt_index)
                     .cloned(),
                 _ => None,
-            });
+            })
+    }
 
-        let Some(wt) = wt else {
-            self.state.status_message = Some("Select a worktree first".to_string());
-            return;
-        };
-
-        let editor = &self.config.general.editor;
-
-        let result = if editor == "terminal" {
-            // Open Terminal.app at the worktree path and run claude
+    fn open_work_target(&mut self, target: &WorkTarget, wt: &conductor_core::worktree::Worktree) {
+        let result = if target.command == "terminal" {
+            // Legacy special case: open Terminal.app and run claude
             Command::new("osascript")
                 .args([
                     "-e",
@@ -1187,19 +1360,116 @@ impl App {
                 ])
                 .spawn()
         } else {
-            // For code, cursor, or any custom editor command
-            Command::new(editor).arg(&wt.path).spawn()
+            // Run through shell so multi-word commands like "open -a iTerm" work
+            let shell_cmd = format!("{} '{}'", target.command, wt.path);
+            Command::new("sh").args(["-c", &shell_cmd]).spawn()
         };
 
         match result {
             Ok(_) => {
-                self.state.status_message = Some(format!("Opened {} at {}", editor, wt.slug));
+                self.state.status_message = Some(format!("Opened {} at {}", target.name, wt.slug));
             }
             Err(e) => {
                 self.state.modal = Modal::Error {
-                    message: format!("Failed to open {editor}: {e}"),
+                    message: format!("Failed to open {}: {e}", target.name),
                 };
             }
+        }
+    }
+
+    fn handle_manage_work_targets(&mut self) {
+        self.state.modal = Modal::WorkTargetManager {
+            targets: self.config.general.work_targets.clone(),
+            selected: 0,
+        };
+    }
+
+    fn handle_work_target_move_up(&mut self) {
+        if let Modal::WorkTargetManager {
+            ref mut targets,
+            ref mut selected,
+        } = self.state.modal
+        {
+            if *selected > 0 {
+                targets.swap(*selected, *selected - 1);
+                *selected -= 1;
+                self.config.general.work_targets = targets.clone();
+                if let Err(e) = save_config(&self.config) {
+                    self.state.status_message = Some(format!("Failed to save config: {e}"));
+                }
+            }
+        }
+    }
+
+    fn handle_work_target_move_down(&mut self) {
+        if let Modal::WorkTargetManager {
+            ref mut targets,
+            ref mut selected,
+        } = self.state.modal
+        {
+            if *selected + 1 < targets.len() {
+                targets.swap(*selected, *selected + 1);
+                *selected += 1;
+                self.config.general.work_targets = targets.clone();
+                if let Err(e) = save_config(&self.config) {
+                    self.state.status_message = Some(format!("Failed to save config: {e}"));
+                }
+            }
+        }
+    }
+
+    fn handle_work_target_add(&mut self) {
+        if matches!(self.state.modal, Modal::WorkTargetManager { .. }) {
+            self.state.modal = Modal::Form {
+                title: "Add Work Target".to_string(),
+                fields: vec![
+                    FormField {
+                        label: "Name".to_string(),
+                        value: String::new(),
+                        placeholder: "e.g., VS Code, Cursor, Terminal".to_string(),
+                        manually_edited: true,
+                        required: true,
+                    },
+                    FormField {
+                        label: "Command".to_string(),
+                        value: String::new(),
+                        placeholder: "e.g., code, cursor, terminal".to_string(),
+                        manually_edited: true,
+                        required: true,
+                    },
+                    FormField {
+                        label: "Type".to_string(),
+                        value: "editor".to_string(),
+                        placeholder: "editor or terminal".to_string(),
+                        manually_edited: true,
+                        required: true,
+                    },
+                ],
+                active_field: 0,
+                on_submit: FormAction::AddWorkTarget,
+            };
+        }
+    }
+
+    fn handle_work_target_delete(&mut self) {
+        if let Modal::WorkTargetManager {
+            ref targets,
+            selected,
+        } = self.state.modal
+        {
+            if targets.is_empty() {
+                return;
+            }
+            if targets.len() == 1 {
+                self.state.status_message = Some("Cannot delete the last work target".to_string());
+                return;
+            }
+            let target_name = targets[selected].name.clone();
+            self.state.modal = Modal::Confirm {
+                title: "Delete Work Target".to_string(),
+                message: format!("Delete work target '{}'?", target_name),
+                on_confirm: ConfirmAction::DeleteWorkTarget { index: selected },
+            };
         }
     }
 }
