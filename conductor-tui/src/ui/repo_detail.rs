@@ -115,6 +115,12 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         .detail_tickets
         .iter()
         .map(|t| {
+            let state_color = match t.state.as_str() {
+                "open" => Color::Green,
+                "closed" => Color::Red,
+                "in_progress" => Color::Yellow,
+                _ => Color::White,
+            };
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("#{} ", t.source_id),
@@ -122,7 +128,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 ),
                 Span::raw(&t.title),
                 Span::raw("  "),
-                Span::styled(format!("[{}]", t.state), Style::default().fg(Color::Green)),
+                Span::styled(format!("[{}]", t.state), Style::default().fg(state_color)),
             ]))
         })
         .collect();
