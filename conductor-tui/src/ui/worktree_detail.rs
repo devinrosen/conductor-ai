@@ -62,7 +62,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         _ => Color::Red,
     };
 
-    let content = Paragraph::new(vec![
+    let mut lines = vec![
         Line::from(vec![
             Span::styled("Worktree: ", Style::default().fg(Color::DarkGray)),
             Span::styled(&wt.slug, Style::default().add_modifier(Modifier::BOLD)),
@@ -87,15 +87,30 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             Span::styled("Created: ", Style::default().fg(Color::DarkGray)),
             Span::raw(&wt.created_at),
         ]),
-        Line::from(""),
-        Line::from(ticket_line),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Actions: w=work  o=open ticket  p=push  P=PR  l=link ticket  d=delete  Esc=back",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ])
-    .block(
+    ];
+
+    if let Some(ref completed) = wt.completed_at {
+        lines.push(Line::from(vec![
+            Span::styled("Completed: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(completed),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(ticket_line));
+    lines.push(Line::from(""));
+
+    let actions_text = if wt.is_active() {
+        "Actions: w=work  o=open ticket  p=push  P=PR  l=link ticket  d=delete  Esc=back"
+    } else {
+        "Actions: o=open ticket  Esc=back  (archived)"
+    };
+    lines.push(Line::from(Span::styled(
+        actions_text,
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let content = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan))

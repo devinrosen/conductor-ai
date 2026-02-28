@@ -28,5 +28,21 @@ pub fn run(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Migration 002: add completed_at to worktrees.
+    // Check column existence rather than version number to handle DBs that jumped
+    // past version 1 via other feature branches.
+    let has_completed_at: bool = conn
+        .prepare("SELECT completed_at FROM worktrees LIMIT 0")
+        .is_ok();
+    if !has_completed_at {
+        conn.execute_batch(include_str!("migrations/002_worktree_completed_at.sql"))?;
+    }
+    if version < 2 {
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '2')",
+            [],
+        )?;
+    }
+
     Ok(())
 }

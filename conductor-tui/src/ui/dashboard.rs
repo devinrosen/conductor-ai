@@ -36,10 +36,27 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &AppState) {
         .repos
         .iter()
         .map(|r| {
-            let wt_count = state.data.repo_worktree_count.get(&r.id).unwrap_or(&0);
+            let active = state
+                .data
+                .worktrees
+                .iter()
+                .filter(|wt| wt.repo_id == r.id && wt.is_active())
+                .count();
+            let total = state
+                .data
+                .repo_worktree_count
+                .get(&r.id)
+                .copied()
+                .unwrap_or(0);
+            let done = total - active;
+            let count_text = if done > 0 {
+                format!("  ({active} active, {done} done)")
+            } else {
+                format!("  ({active} worktrees)")
+            };
             ListItem::new(Line::from(vec![
                 Span::styled(&r.slug, Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(format!("  ({wt_count} worktrees)")),
+                Span::raw(count_text),
             ]))
         })
         .collect();
@@ -85,18 +102,31 @@ fn render_worktrees(frame: &mut Frame, area: Rect, state: &AppState) {
                 .get(&wt.repo_id)
                 .map(|s| s.as_str())
                 .unwrap_or("?");
+            let is_active = wt.is_active();
             let status_color = match wt.status.as_str() {
                 "active" => Color::Green,
                 "merged" => Color::Blue,
                 "abandoned" => Color::Red,
                 _ => Color::White,
             };
+            let text_style = if is_active {
+                Style::default()
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
             let mut spans = vec![
                 Span::styled(
                     format!("{repo_slug}/"),
                     Style::default().fg(Color::DarkGray),
                 ),
-                Span::styled(&wt.slug, Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    &wt.slug,
+                    text_style.add_modifier(if is_active {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::DIM
+                    }),
+                ),
                 Span::raw("  "),
                 Span::styled(
                     format!("[{}]", wt.status),
