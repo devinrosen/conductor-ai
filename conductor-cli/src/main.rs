@@ -134,6 +134,23 @@ enum WorktreeCommands {
         /// Specific worktree slug (purges all completed if omitted)
         name: Option<String>,
     },
+    /// Push worktree branch to origin
+    Push {
+        /// Repo slug
+        repo: String,
+        /// Worktree slug
+        name: String,
+    },
+    /// Create a pull request for the worktree branch
+    Pr {
+        /// Repo slug
+        repo: String,
+        /// Worktree slug
+        name: String,
+        /// Create as draft PR
+        #[arg(long)]
+        draft: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -325,6 +342,16 @@ fn main() -> Result<()> {
                 } else {
                     println!("Purged {count} completed worktree record(s).");
                 }
+            }
+            WorktreeCommands::Push { repo, name } => {
+                let mgr = WorktreeManager::new(&conn, &config);
+                let msg = mgr.push(&repo, &name)?;
+                println!("{msg}");
+            }
+            WorktreeCommands::Pr { repo, name, draft } => {
+                let mgr = WorktreeManager::new(&conn, &config);
+                let url = mgr.create_pr(&repo, &name, draft)?;
+                println!("PR created: {url}");
             }
         },
         Commands::Session { command } => match command {

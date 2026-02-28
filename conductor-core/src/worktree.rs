@@ -258,6 +258,82 @@ impl<'a> WorktreeManager<'a> {
         Ok(())
     }
 
+    /// Push the worktree branch to origin.
+    pub fn push(&self, repo_slug: &str, name: &str) -> Result<String> {
+        let (_repo, worktree) = self.get_active_worktree(repo_slug, name)?;
+
+        let output = Command::new("git")
+            .args(["push", "-u", "origin", &worktree.branch])
+            .current_dir(&worktree.path)
+            .output()?;
+
+        if !output.status.success() {
+            return Err(ConductorError::Git(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+
+        Ok(format!(
+            "Pushed {} to origin/{}",
+            worktree.slug, worktree.branch
+        ))
+    }
+
+    /// Create a pull request for the worktree branch using `gh`.
+    pub fn create_pr(&self, repo_slug: &str, name: &str, draft: bool) -> Result<String> {
+        let (_repo, worktree) = self.get_active_worktree(repo_slug, name)?;
+
+        let mut args = vec!["pr", "create", "--fill", "--head", &worktree.branch];
+        if draft {
+            args.push("--draft");
+        }
+
+        let output = Command::new("gh")
+            .args(&args)
+            .current_dir(&worktree.path)
+            .output()?;
+
+        if !output.status.success() {
+            return Err(ConductorError::Git(
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ));
+        }
+
+        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Ok(url)
+    }
+
+    /// Look up a repo and its active worktree by slugs.
+    fn get_active_worktree(
+        &self,
+        repo_slug: &str,
+        wt_slug: &str,
+    ) -> Result<(crate::repo::Repo, Worktree)> {
+        let repo_mgr = RepoManager::new(self.conn, self.config);
+        let repo = repo_mgr.get_by_slug(repo_slug)?;
+
+        let worktree = self
+            .conn
+            .query_row(
+                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at
+                 FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
+                params![repo.id, wt_slug],
+                map_worktree_row,
+            )
+            .map_err(|_| ConductorError::WorktreeNotFound {
+                slug: wt_slug.to_string(),
+            })?;
+
+        if !worktree.is_active() {
+            return Err(ConductorError::Git(format!(
+                "worktree '{}' is not active (status: {})",
+                wt_slug, worktree.status
+            )));
+        }
+
+        Ok((repo, worktree))
+    }
+
     /// Permanently delete completed (merged/abandoned) worktree records from the database.
     pub fn purge(&self, repo_slug: &str, name: Option<&str>) -> Result<usize> {
         let repo_mgr = RepoManager::new(self.conn, self.config);

@@ -1214,24 +1214,18 @@ impl App {
             .cloned();
 
         if let Some(wt) = wt {
-            if !wt.is_active() {
-                self.state.status_message = Some("Cannot modify archived worktree".to_string());
-                return;
-            }
-            self.state.status_message = Some(format!("Pushing {}...", wt.slug));
-            let output = Command::new("git")
-                .args(["push", "-u", "origin", &wt.branch])
-                .current_dir(&wt.path)
-                .output();
-            match output {
-                Ok(o) if o.status.success() => {
-                    self.state.status_message = Some(format!("Pushed {}", wt.slug));
+            let repo_slug = match self.state.data.repo_slug_map.get(&wt.repo_id) {
+                Some(s) => s.clone(),
+                None => {
+                    self.state.status_message = Some("Cannot find repo for worktree".to_string());
+                    return;
                 }
-                Ok(o) => {
-                    let stderr = String::from_utf8_lossy(&o.stderr);
-                    self.state.modal = Modal::Error {
-                        message: format!("Push failed: {stderr}"),
-                    };
+            };
+            self.state.status_message = Some(format!("Pushing {}...", wt.slug));
+            let mgr = WorktreeManager::new(&self.conn, &self.config);
+            match mgr.push(&repo_slug, &wt.slug) {
+                Ok(msg) => {
+                    self.state.status_message = Some(msg);
                 }
                 Err(e) => {
                     self.state.modal = Modal::Error {
@@ -1253,25 +1247,18 @@ impl App {
             .cloned();
 
         if let Some(wt) = wt {
-            if !wt.is_active() {
-                self.state.status_message = Some("Cannot modify archived worktree".to_string());
-                return;
-            }
-            self.state.status_message = Some(format!("Creating PR for {}...", wt.slug));
-            let output = Command::new("gh")
-                .args(["pr", "create", "--fill", "--head", &wt.branch])
-                .current_dir(&wt.path)
-                .output();
-            match output {
-                Ok(o) if o.status.success() => {
-                    let url = String::from_utf8_lossy(&o.stdout);
-                    self.state.status_message = Some(format!("PR created: {}", url.trim()));
+            let repo_slug = match self.state.data.repo_slug_map.get(&wt.repo_id) {
+                Some(s) => s.clone(),
+                None => {
+                    self.state.status_message = Some("Cannot find repo for worktree".to_string());
+                    return;
                 }
-                Ok(o) => {
-                    let stderr = String::from_utf8_lossy(&o.stderr);
-                    self.state.modal = Modal::Error {
-                        message: format!("PR creation failed: {stderr}"),
-                    };
+            };
+            self.state.status_message = Some(format!("Creating PR for {}...", wt.slug));
+            let mgr = WorktreeManager::new(&self.conn, &self.config);
+            match mgr.create_pr(&repo_slug, &wt.slug, false) {
+                Ok(url) => {
+                    self.state.status_message = Some(format!("PR created: {url}"));
                 }
                 Err(e) => {
                     self.state.modal = Modal::Error {
