@@ -127,6 +127,20 @@ impl App {
 
     /// Handle an action by mutating state. Returns true if the UI needs a redraw.
     fn update(&mut self, action: Action) -> bool {
+        // Manage pending_g chord state
+        match &action {
+            Action::PendingG => {
+                self.state.pending_g = true;
+                return true;
+            }
+            Action::None | Action::Tick => {
+                // Don't affect pending_g on no-ops / ticks
+            }
+            _ => {
+                self.state.pending_g = false;
+            }
+        }
+
         match action {
             Action::None | Action::Tick => {
                 return false;
@@ -229,6 +243,28 @@ impl App {
             Action::AgentActivityUp => {
                 self.state.agent_event_index = self.state.agent_event_index.saturating_sub(1);
             }
+            // Scroll navigation (all views)
+            Action::GoToTop => {
+                self.state.set_focused_index(0);
+            }
+            Action::GoToBottom => {
+                let (_, len) = self.state.focused_index_and_len();
+                self.state.set_focused_index(len.saturating_sub(1));
+            }
+            Action::HalfPageDown => {
+                let (idx, len) = self.state.focused_index_and_len();
+                let half = self.half_page_size();
+                self.state
+                    .set_focused_index((idx + half).min(len.saturating_sub(1)));
+            }
+            Action::HalfPageUp => {
+                let (idx, _) = self.state.focused_index_and_len();
+                let half = self.half_page_size();
+                self.state.set_focused_index(idx.saturating_sub(half));
+            }
+
+            // PendingG is handled above before the match
+            Action::PendingG => unreachable!(),
 
             // Background results
             Action::DataRefreshed {
@@ -268,6 +304,14 @@ impl App {
             }
         }
         true
+    }
+
+    /// Approximate half-page size for the agent activity pane.
+    fn half_page_size(&self) -> usize {
+        let (_, height) = crossterm::terminal::size().unwrap_or((80, 24));
+        // Agent activity pane is roughly the bottom half of the terminal.
+        // Use terminal height / 3 as a reasonable half-page for that pane.
+        (height as usize / 3).max(1)
     }
 
     fn refresh_data(&mut self) {

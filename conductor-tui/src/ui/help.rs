@@ -18,6 +18,9 @@ pub fn render(frame: &mut Frame, area: Rect) {
         Line::from(""),
         help_line("Tab / Shift+Tab", "Cycle panel focus"),
         help_line("j / k", "Navigate within panel"),
+        help_line("G / End", "Jump to bottom of list"),
+        help_line("gg / Home", "Jump to top of list"),
+        help_line("Ctrl+d / Ctrl+u", "Half-page down / up"),
         help_line("Enter", "Drill into selected item"),
         help_line("Esc", "Back to previous view"),
         Line::from(""),
@@ -50,6 +53,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         help_line("r", "Run Claude agent (tmux)"),
         help_line("a", "Attach to running agent"),
         help_line("x", "Stop running agent"),
+        help_line("j / k", "Scroll activity line by line"),
         Line::from(""),
         Line::from(Span::styled(
             "Navigation",
