@@ -360,6 +360,16 @@ impl<'a> AgentManager<'a> {
         Ok(runs)
     }
 
+    /// Returns true if the worktree has any prior agent runs.
+    pub fn has_runs_for_worktree(&self, worktree_id: &str) -> Result<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM agent_runs WHERE worktree_id = ?1",
+            params![worktree_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
     pub fn latest_for_worktree(&self, worktree_id: &str) -> Result<Option<AgentRun>> {
         let result = self.conn.query_row(
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
@@ -578,6 +588,22 @@ mod tests {
 
         let result = mgr.latest_for_worktree("w1").unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_has_runs_for_worktree() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // No runs yet
+        assert!(!mgr.has_runs_for_worktree("w1").unwrap());
+
+        // Create a run
+        mgr.create_run("w1", "First prompt", None).unwrap();
+        assert!(mgr.has_runs_for_worktree("w1").unwrap());
+
+        // Different worktree still has no runs
+        assert!(!mgr.has_runs_for_worktree("w2").unwrap());
     }
 
     #[test]

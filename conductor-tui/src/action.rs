@@ -77,6 +77,7 @@ pub enum Action {
     InputBackspace,
     InputSubmit,
     TextAreaInput(KeyEvent),
+    TextAreaClear,
     FormChar(char),
     FormBackspace,
     FormNextField,
