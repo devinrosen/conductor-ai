@@ -163,7 +163,7 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
                 "in_progress" => Color::Yellow,
                 _ => Color::White,
             };
-            ListItem::new(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     format!("{repo_slug} "),
                     Style::default().fg(Color::DarkGray),
@@ -175,7 +175,12 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
                 Span::raw(&t.title),
                 Span::raw("  "),
                 Span::styled(format!("[{}]", t.state), Style::default().fg(state_color)),
-            ]))
+            ];
+            spans.extend(super::common::ticket_worktree_spans(state, &t.id, "  "));
+            spans.extend(super::common::ticket_agent_total_spans(
+                state, &t.id, "  ", false,
+            ));
+            ListItem::new(Line::from(spans))
         })
         .collect();
 

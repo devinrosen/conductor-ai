@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head><title>Conductor</title></head>
+<body>
+  <h1>Conductor Web</h1>
+  <p>Frontend not yet built. API available at <code>/api/</code>.</p>
+  <p>SSE stream: <code>GET /api/events</code></p>
+  <h2>Live Events</h2>
+  <ul id="events"></ul>
+  <script>
+    const eventSource = new EventSource('/api/events');
+    const eventTypes = [
+      'repo_created', 'repo_deleted',
+      'worktree_created', 'worktree_deleted',
+      'tickets_synced',
+      'session_started', 'session_ended',
+      'lagged'
+    ];
+    const list = document.getElementById('events');
+    eventTypes.forEach(function(type) {
+      eventSource.addEventListener(type, function(e) {
+        var li = document.createElement('li');
+        li.textContent = type + ': ' + e.data;
+        list.prepend(li);
+      });
+    });
+    eventSource.onerror = function() {
+      console.warn('[SSE] Connection error, will auto-reconnect');
+    };
+  </script>
+</body>
+</html>

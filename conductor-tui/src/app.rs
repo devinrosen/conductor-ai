@@ -205,6 +205,14 @@ impl App {
                 }
             }
             Action::InputSubmit => self.handle_input_submit(),
+            Action::TextAreaInput(key) => {
+                if let Modal::AgentPrompt {
+                    ref mut textarea, ..
+                } = self.state.modal
+                {
+                    textarea.input(key);
+                }
+            }
             Action::FormChar(c) => self.handle_form_char(c),
             Action::FormBackspace => self.handle_form_backspace(),
             Action::FormNextField => self.handle_form_next_field(),
@@ -267,20 +275,14 @@ impl App {
             Action::PendingG => unreachable!(),
 
             // Background results
-            Action::DataRefreshed {
-                repos,
-                worktrees,
-                tickets,
-                session,
-                session_worktrees,
-                latest_agent_runs,
-            } => {
-                self.state.data.repos = repos;
-                self.state.data.worktrees = worktrees;
-                self.state.data.tickets = tickets;
-                self.state.data.current_session = session;
-                self.state.data.session_worktrees = session_worktrees;
-                self.state.data.latest_agent_runs = latest_agent_runs;
+            Action::DataRefreshed(payload) => {
+                self.state.data.repos = payload.repos;
+                self.state.data.worktrees = payload.worktrees;
+                self.state.data.tickets = payload.tickets;
+                self.state.data.current_session = payload.session;
+                self.state.data.session_worktrees = payload.session_worktrees;
+                self.state.data.latest_agent_runs = payload.latest_agent_runs;
+                self.state.data.ticket_agent_totals = payload.ticket_agent_totals;
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();
                 self.clamp_indices();
@@ -868,138 +870,151 @@ impl App {
 
     fn handle_input_submit(&mut self) {
         let modal = std::mem::replace(&mut self.state.modal, Modal::None);
-        if let Modal::Input {
-            value, on_submit, ..
-        } = modal
-        {
-            // SessionNotes allows empty input (skip notes); others require a value
-            if value.is_empty() && !matches!(on_submit, InputAction::SessionNotes { .. }) {
-                return;
-            }
-            match on_submit {
-                InputAction::CreateWorktree {
-                    repo_slug,
-                    ticket_id,
-                } => {
-                    let wt_mgr = WorktreeManager::new(&self.conn, &self.config);
-                    match wt_mgr.create(&repo_slug, &value, None, ticket_id.as_deref()) {
-                        Ok(wt) => {
-                            let msg = if let Some(ref tid) = ticket_id {
-                                let source_id = self
-                                    .state
-                                    .data
-                                    .ticket_map
-                                    .get(tid)
-                                    .map(|t| t.source_id.as_str())
-                                    .unwrap_or("?");
-                                format!("Created worktree: {} (linked to #{})", wt.slug, source_id)
-                            } else {
-                                format!("Created worktree: {}", wt.slug)
-                            };
-                            self.state.status_message = Some(msg);
-                            self.refresh_data();
 
-                            if let Some(tid) = ticket_id {
-                                self.maybe_start_agent_for_worktree(wt.id, wt.path, wt.slug, tid);
-                            }
-                        }
-                        Err(e) => {
-                            self.state.modal = Modal::Error {
-                                message: format!("Create failed: {e}"),
-                            };
+        // Extract (value, on_submit) from either Input or AgentPrompt modals
+        let (value, on_submit) = match modal {
+            Modal::Input {
+                value, on_submit, ..
+            } => (value, on_submit),
+            Modal::AgentPrompt {
+                textarea,
+                on_submit,
+                ..
+            } => {
+                let value = textarea.lines().join("\n");
+                (value, on_submit)
+            }
+            _ => return,
+        };
+
+        // SessionNotes allows empty input (skip notes); others require a value
+        if value.is_empty() && !matches!(on_submit, InputAction::SessionNotes { .. }) {
+            return;
+        }
+        match on_submit {
+            InputAction::CreateWorktree {
+                repo_slug,
+                ticket_id,
+            } => {
+                let wt_mgr = WorktreeManager::new(&self.conn, &self.config);
+                match wt_mgr.create(&repo_slug, &value, None, ticket_id.as_deref()) {
+                    Ok(wt) => {
+                        let msg = if let Some(ref tid) = ticket_id {
+                            let source_id = self
+                                .state
+                                .data
+                                .ticket_map
+                                .get(tid)
+                                .map(|t| t.source_id.as_str())
+                                .unwrap_or("?");
+                            format!("Created worktree: {} (linked to #{})", wt.slug, source_id)
+                        } else {
+                            format!("Created worktree: {}", wt.slug)
+                        };
+                        self.state.status_message = Some(msg);
+                        self.refresh_data();
+
+                        if let Some(tid) = ticket_id {
+                            self.maybe_start_agent_for_worktree(wt.id, wt.path, wt.slug, tid);
                         }
                     }
-                }
-                InputAction::LinkTicket { worktree_id } => {
-                    let syncer = TicketSyncer::new(&self.conn);
-                    // Find ticket by source_id, scoped to the worktree's repo
-                    let wt_repo_id = self
-                        .state
-                        .data
-                        .worktrees
-                        .iter()
-                        .find(|w| w.id == worktree_id)
-                        .map(|w| w.repo_id.as_str());
-                    let ticket =
-                        self.state.data.tickets.iter().find(|t| {
-                            t.source_id == value && Some(t.repo_id.as_str()) == wt_repo_id
-                        });
-                    if let Some(t) = ticket {
-                        match syncer.link_to_worktree(&t.id, &worktree_id) {
-                            Ok(()) => {
-                                self.state.status_message =
-                                    Some(format!("Linked ticket #{}", t.source_id));
-                                self.refresh_data();
-                            }
-                            Err(e) => {
-                                self.state.modal = Modal::Error {
-                                    message: format!("Link failed: {e}"),
-                                };
-                            }
-                        }
-                    } else {
+                    Err(e) => {
                         self.state.modal = Modal::Error {
-                            message: format!("Ticket #{value} not found"),
+                            message: format!("Create failed: {e}"),
                         };
                     }
                 }
-                InputAction::SessionNotes { session_id } => {
-                    let tracker = SessionTracker::new(&self.conn);
-                    let notes = if value.is_empty() {
-                        None
-                    } else {
-                        Some(value.as_str())
-                    };
-                    match tracker.end(&session_id, notes) {
+            }
+            InputAction::LinkTicket { worktree_id } => {
+                let syncer = TicketSyncer::new(&self.conn);
+                // Find ticket by source_id, scoped to the worktree's repo
+                let wt_repo_id = self
+                    .state
+                    .data
+                    .worktrees
+                    .iter()
+                    .find(|w| w.id == worktree_id)
+                    .map(|w| w.repo_id.as_str());
+                let ticket = self
+                    .state
+                    .data
+                    .tickets
+                    .iter()
+                    .find(|t| t.source_id == value && Some(t.repo_id.as_str()) == wt_repo_id);
+                if let Some(t) = ticket {
+                    match syncer.link_to_worktree(&t.id, &worktree_id) {
                         Ok(()) => {
                             self.state.status_message =
-                                Some("Session ended with notes".to_string());
+                                Some(format!("Linked ticket #{}", t.source_id));
                             self.refresh_data();
                         }
                         Err(e) => {
                             self.state.modal = Modal::Error {
-                                message: format!("End session failed: {e}"),
+                                message: format!("Link failed: {e}"),
                             };
                         }
                     }
+                } else {
+                    self.state.modal = Modal::Error {
+                        message: format!("Ticket #{value} not found"),
+                    };
                 }
-                InputAction::AttachWorktree { session_id } => {
-                    // Look up worktree by slug
-                    let wt = self.state.data.worktrees.iter().find(|w| w.slug == value);
-                    if let Some(wt) = wt {
-                        let tracker = SessionTracker::new(&self.conn);
-                        match tracker.add_worktree(&session_id, &wt.id) {
-                            Ok(()) => {
-                                self.state.status_message =
-                                    Some(format!("Attached worktree '{}'", value));
-                                self.refresh_data();
-                            }
-                            Err(e) => {
-                                self.state.modal = Modal::Error {
-                                    message: format!("Attach failed: {e}"),
-                                };
-                            }
-                        }
-                    } else {
+            }
+            InputAction::SessionNotes { session_id } => {
+                let tracker = SessionTracker::new(&self.conn);
+                let notes = if value.is_empty() {
+                    None
+                } else {
+                    Some(value.as_str())
+                };
+                match tracker.end(&session_id, notes) {
+                    Ok(()) => {
+                        self.state.status_message = Some("Session ended with notes".to_string());
+                        self.refresh_data();
+                    }
+                    Err(e) => {
                         self.state.modal = Modal::Error {
-                            message: format!("Worktree '{value}' not found"),
+                            message: format!("End session failed: {e}"),
                         };
                     }
                 }
-                InputAction::AgentPrompt {
+            }
+            InputAction::AttachWorktree { session_id } => {
+                // Look up worktree by slug
+                let wt = self.state.data.worktrees.iter().find(|w| w.slug == value);
+                if let Some(wt) = wt {
+                    let tracker = SessionTracker::new(&self.conn);
+                    match tracker.add_worktree(&session_id, &wt.id) {
+                        Ok(()) => {
+                            self.state.status_message =
+                                Some(format!("Attached worktree '{}'", value));
+                            self.refresh_data();
+                        }
+                        Err(e) => {
+                            self.state.modal = Modal::Error {
+                                message: format!("Attach failed: {e}"),
+                            };
+                        }
+                    }
+                } else {
+                    self.state.modal = Modal::Error {
+                        message: format!("Worktree '{value}' not found"),
+                    };
+                }
+            }
+            InputAction::AgentPrompt {
+                worktree_id,
+                worktree_path,
+                worktree_slug,
+                resume_session_id,
+            } => {
+                self.start_agent_tmux(
+                    value,
                     worktree_id,
                     worktree_path,
                     worktree_slug,
                     resume_session_id,
-                } => {
-                    self.start_agent_tmux(
-                        value,
-                        worktree_id,
-                        worktree_path,
-                        worktree_slug,
-                        resume_session_id,
-                    );
-                }
+                );
             }
         }
     }
@@ -1829,10 +1844,19 @@ impl App {
             ("Claude Agent".to_string(), prefill)
         };
 
-        self.state.modal = Modal::Input {
+        let lines = if prefill.is_empty() {
+            vec![String::new()]
+        } else {
+            prefill.lines().map(String::from).collect()
+        };
+        let mut textarea = tui_textarea::TextArea::new(lines);
+        textarea.set_cursor_line_style(ratatui::style::Style::default());
+        textarea.set_placeholder_text("Type your prompt here...");
+
+        self.state.modal = Modal::AgentPrompt {
             title,
             prompt: "Enter prompt for Claude:".to_string(),
-            value: prefill,
+            textarea: Box::new(textarea),
             on_submit: InputAction::AgentPrompt {
                 worktree_id: wt.id.clone(),
                 worktree_path: wt.path.clone(),

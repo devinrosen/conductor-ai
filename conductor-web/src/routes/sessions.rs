@@ -6,6 +6,7 @@ use serde::Deserialize;
 use conductor_core::session::{Session, SessionTracker};
 
 use crate::error::ApiError;
+use crate::events::ConductorEvent;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -26,6 +27,9 @@ pub async fn start_session(
     let db = state.db.lock().await;
     let tracker = SessionTracker::new(&db);
     let session = tracker.start()?;
+    state.events.emit(ConductorEvent::SessionStarted {
+        id: session.id.clone(),
+    });
     Ok((StatusCode::CREATED, Json(session)))
 }
 
@@ -37,5 +41,6 @@ pub async fn end_session(
     let db = state.db.lock().await;
     let tracker = SessionTracker::new(&db);
     tracker.end(&id, body.notes.as_deref())?;
+    state.events.emit(ConductorEvent::SessionEnded { id });
     Ok(StatusCode::NO_CONTENT)
 }

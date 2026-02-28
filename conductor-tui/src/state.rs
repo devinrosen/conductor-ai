@@ -1,11 +1,13 @@
 use std::collections::HashMap;
+use std::fmt;
 
-use conductor_core::agent::{AgentEvent, AgentRun};
+use conductor_core::agent::{AgentEvent, AgentRun, TicketAgentTotals};
 use conductor_core::config::WorkTarget;
 use conductor_core::repo::Repo;
 use conductor_core::session::Session;
 use conductor_core::tickets::Ticket;
 use conductor_core::worktree::Worktree;
+use tui_textarea::TextArea;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -71,7 +73,7 @@ impl RepoDetailFocus {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Modal {
     None,
     Help,
@@ -84,6 +86,12 @@ pub enum Modal {
         title: String,
         prompt: String,
         value: String,
+        on_submit: InputAction,
+    },
+    AgentPrompt {
+        title: String,
+        prompt: String,
+        textarea: Box<TextArea<'static>>,
         on_submit: InputAction,
     },
     Form {
@@ -106,6 +114,27 @@ pub enum Modal {
         targets: Vec<WorkTarget>,
         selected: usize,
     },
+}
+
+impl fmt::Debug for Modal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Modal::None => write!(f, "Modal::None"),
+            Modal::Help => write!(f, "Modal::Help"),
+            Modal::Confirm { title, .. } => {
+                f.debug_struct("Confirm").field("title", title).finish()
+            }
+            Modal::Input { title, .. } => f.debug_struct("Input").field("title", title).finish(),
+            Modal::AgentPrompt { title, .. } => {
+                f.debug_struct("AgentPrompt").field("title", title).finish()
+            }
+            Modal::Form { title, .. } => f.debug_struct("Form").field("title", title).finish(),
+            Modal::Error { message } => f.debug_struct("Error").field("message", message).finish(),
+            Modal::TicketInfo { .. } => write!(f, "Modal::TicketInfo"),
+            Modal::WorkTargetPicker { .. } => write!(f, "Modal::WorkTargetPicker"),
+            Modal::WorkTargetManager { .. } => write!(f, "Modal::WorkTargetManager"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +221,10 @@ pub struct DataCache {
     pub agent_events: Vec<AgentEvent>,
     /// Aggregate stats across all agent runs for the currently viewed worktree
     pub agent_totals: AgentTotals,
+    /// ticket_id -> aggregated agent stats across all linked worktrees
+    pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
+    /// ticket_id -> linked worktrees (most recently created first)
+    pub ticket_worktrees: HashMap<String, Vec<Worktree>>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.
@@ -219,11 +252,18 @@ impl DataCache {
         }
 
         self.repo_worktree_count.clear();
+        self.ticket_worktrees.clear();
         for wt in &self.worktrees {
             *self
                 .repo_worktree_count
                 .entry(wt.repo_id.clone())
                 .or_insert(0) += 1;
+            if let Some(ref tid) = wt.ticket_id {
+                self.ticket_worktrees
+                    .entry(tid.clone())
+                    .or_default()
+                    .push(wt.clone());
+            }
         }
     }
 }

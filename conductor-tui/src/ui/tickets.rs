@@ -46,7 +46,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 
             let assignee = t.assignee.as_deref().unwrap_or("-");
 
-            ListItem::new(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     format!("{repo_slug:<12} "),
                     Style::default().fg(Color::DarkGray),
@@ -60,8 +60,16 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                     format!("{:<12} ", t.state),
                     Style::default().fg(state_color),
                 ),
-                Span::styled(assignee, Style::default().fg(Color::DarkGray)),
-            ]))
+                Span::styled(
+                    format!("{:<12}", assignee),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ];
+            spans.extend(super::common::ticket_worktree_spans(state, &t.id, " "));
+            spans.extend(super::common::ticket_agent_total_spans(
+                state, &t.id, " ", true,
+            ));
+            ListItem::new(Line::from(spans))
         })
         .collect();
 

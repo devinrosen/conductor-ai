@@ -1,11 +1,23 @@
+use std::collections::HashMap;
+
+use conductor_core::agent::{AgentRun, TicketAgentTotals};
 use conductor_core::repo::Repo;
 use conductor_core::session::Session;
 use conductor_core::tickets::Ticket;
 use conductor_core::worktree::Worktree;
+use crossterm::event::KeyEvent;
 
-use std::collections::HashMap;
-
-use conductor_core::agent::AgentRun;
+/// Payload for the DataRefreshed action (boxed to keep Action enum small).
+#[derive(Debug)]
+pub struct DataRefreshedPayload {
+    pub repos: Vec<Repo>,
+    pub worktrees: Vec<Worktree>,
+    pub tickets: Vec<Ticket>,
+    pub session: Option<Session>,
+    pub session_worktrees: Vec<Worktree>,
+    pub latest_agent_runs: HashMap<String, AgentRun>,
+    pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
+}
 
 /// Every user intent or background result flows through this enum.
 #[derive(Debug)]
@@ -72,6 +84,7 @@ pub enum Action {
     InputChar(char),
     InputBackspace,
     InputSubmit,
+    TextAreaInput(KeyEvent),
     FormChar(char),
     FormBackspace,
     FormNextField,
@@ -79,14 +92,7 @@ pub enum Action {
     FormSubmit,
 
     // Background results
-    DataRefreshed {
-        repos: Vec<Repo>,
-        worktrees: Vec<Worktree>,
-        tickets: Vec<Ticket>,
-        session: Option<Session>,
-        session_worktrees: Vec<Worktree>,
-        latest_agent_runs: HashMap<String, AgentRun>,
-    },
+    DataRefreshed(Box<DataRefreshedPayload>),
     TicketSyncComplete {
         repo_slug: String,
         count: usize,

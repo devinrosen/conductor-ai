@@ -12,7 +12,7 @@ use conductor_core::session::SessionTracker;
 use conductor_core::tickets::TicketSyncer;
 use conductor_core::worktree::WorktreeManager;
 
-use crate::action::Action;
+use crate::action::{Action, DataRefreshedPayload};
 use crate::event::BackgroundSender;
 
 /// Spawn the DB poller thread. Polls every `interval` and sends DataRefreshed events.
@@ -49,15 +49,17 @@ pub fn poll_data() -> Option<Action> {
         Vec::new()
     };
     let latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
+    let ticket_agent_totals = agent_mgr.totals_by_ticket_all().unwrap_or_default();
 
-    Some(Action::DataRefreshed {
+    Some(Action::DataRefreshed(Box::new(DataRefreshedPayload {
         repos,
         worktrees,
         tickets,
         session,
         session_worktrees,
         latest_agent_runs,
-    })
+        ticket_agent_totals,
+    })))
 }
 
 /// Spawn the ticket sync timer. Syncs all repos every `interval`.

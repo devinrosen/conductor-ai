@@ -52,6 +52,12 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             value,
             ..
         } => modal::render_input(frame, area, title, prompt, value),
+        Modal::AgentPrompt {
+            title,
+            prompt,
+            textarea,
+            ..
+        } => modal::render_agent_prompt(frame, area, title, prompt, textarea),
         Modal::Form {
             title,
             fields,
@@ -59,7 +65,11 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             ..
         } => modal::render_form(frame, area, title, fields, *active_field),
         Modal::Error { message } => modal::render_error(frame, area, message),
-        Modal::TicketInfo { ticket } => modal::render_ticket_info(frame, area, ticket),
+        Modal::TicketInfo { ticket } => {
+            let agent_totals = state.data.ticket_agent_totals.get(&ticket.id);
+            let worktrees = state.data.ticket_worktrees.get(&ticket.id);
+            modal::render_ticket_info(frame, area, ticket, agent_totals, worktrees);
+        }
         Modal::WorkTargetPicker { targets, selected } => {
             modal::render_work_target_picker(frame, area, targets, *selected)
         }

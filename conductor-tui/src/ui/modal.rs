@@ -1,11 +1,14 @@
-use ratatui::layout::{Constraint, Flex, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
+use tui_textarea::TextArea;
 
+use conductor_core::agent::TicketAgentTotals;
 use conductor_core::config::WorkTarget;
 use conductor_core::tickets::Ticket;
+use conductor_core::worktree::Worktree;
 
 pub fn render_confirm(frame: &mut Frame, area: Rect, title: &str, message: &str) {
     let popup = centered_rect(50, 30, area);
@@ -92,7 +95,13 @@ pub fn render_error(frame: &mut Frame, area: Rect, message: &str) {
     frame.render_widget(content, popup);
 }
 
-pub fn render_ticket_info(frame: &mut Frame, area: Rect, ticket: &Ticket) {
+pub fn render_ticket_info(
+    frame: &mut Frame,
+    area: Rect,
+    ticket: &Ticket,
+    agent_totals: Option<&TicketAgentTotals>,
+    worktrees: Option<&Vec<Worktree>>,
+) {
     let popup = centered_rect(60, 70, area);
     frame.render_widget(Clear, popup);
 
@@ -155,8 +164,59 @@ pub fn render_ticket_info(frame: &mut Frame, area: Rect, ticket: &Ticket) {
             Span::styled(&ticket.url, Style::default().fg(Color::Blue)),
         ]),
         Line::from(""),
-        Line::from(Span::styled("  Description:", label_style)),
     ];
+
+    if let Some(totals) = agent_totals {
+        let dur_secs = totals.total_duration_ms as f64 / 1000.0;
+        let mins = (dur_secs / 60.0) as i64;
+        let secs = (dur_secs % 60.0) as i64;
+        lines.push(Line::from(Span::styled("  Agent Totals:", label_style)));
+        lines.push(Line::from(vec![
+            Span::styled("    Cost:  ", dim_style),
+            Span::styled(
+                format!("${:.4}", totals.total_cost),
+                Style::default().fg(Color::Magenta),
+            ),
+            Span::styled("   Turns: ", dim_style),
+            Span::styled(
+                format!("{}", totals.total_turns),
+                Style::default().fg(Color::Magenta),
+            ),
+            Span::styled("   Time: ", dim_style),
+            Span::styled(
+                format!("{}m{:02}s", mins, secs),
+                Style::default().fg(Color::Magenta),
+            ),
+            Span::styled("   Runs: ", dim_style),
+            Span::styled(
+                format!("{}", totals.total_runs),
+                Style::default().fg(Color::Magenta),
+            ),
+        ]));
+        lines.push(Line::from(""));
+    }
+
+    if let Some(wts) = worktrees {
+        if !wts.is_empty() {
+            lines.push(Line::from(Span::styled("  Worktrees:", label_style)));
+            for wt in wts {
+                let (indicator, color) = if wt.is_active() {
+                    ("●", Color::Green)
+                } else {
+                    ("○", Color::DarkGray)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("    {indicator} "), Style::default().fg(color)),
+                    Span::styled(&wt.slug, value_style),
+                    Span::styled(format!("  [{}]", wt.status), Style::default().fg(color)),
+                    Span::styled(format!("  {}", wt.branch), dim_style),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+    }
+
+    lines.push(Line::from(Span::styled("  Description:", label_style)));
 
     // Add body lines with word wrapping (indented)
     for body_line in body_text.lines() {
@@ -414,6 +474,55 @@ pub fn render_work_target_manager(
     );
 
     frame.render_widget(content, popup);
+}
+
+pub fn render_agent_prompt(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    prompt: &str,
+    textarea: &TextArea<'_>,
+) {
+    let popup = centered_rect(70, 50, area);
+    frame.render_widget(Clear, popup);
+
+    // Outer block for the modal border
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(format!(" {title} "));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    // Split inner area: prompt line + textarea + hint line
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // prompt text
+            Constraint::Min(3),    // textarea
+            Constraint::Length(1), // hint
+        ])
+        .split(inner);
+
+    // Prompt label
+    let prompt_widget = Paragraph::new(vec![
+        Line::from(Span::styled(
+            format!(" {prompt}"),
+            Style::default().fg(Color::Cyan),
+        )),
+        Line::from(""),
+    ]);
+    frame.render_widget(prompt_widget, chunks[0]);
+
+    // Textarea (renders itself with cursor)
+    frame.render_widget(textarea, chunks[1]);
+
+    // Hint line
+    let hint = Paragraph::new(Line::from(Span::styled(
+        " Enter for newline, Ctrl+S to submit, Esc to cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    frame.render_widget(hint, chunks[2]);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
