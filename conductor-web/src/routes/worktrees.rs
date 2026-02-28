@@ -37,7 +37,7 @@ pub async fn create_worktree(
     let db = state.db.lock().await;
     let repo = RepoManager::new(&db, &state.config).get_by_id(&repo_id)?;
     let mgr = WorktreeManager::new(&db, &state.config);
-    let wt = mgr.create(
+    let (wt, _warnings) = mgr.create(
         &repo.slug,
         &body.name,
         body.from_branch.as_deref(),
