@@ -1,11 +1,11 @@
+use std::collections::HashMap;
+
+use conductor_core::agent::{AgentRun, TicketAgentTotals};
 use conductor_core::repo::Repo;
 use conductor_core::session::Session;
 use conductor_core::tickets::Ticket;
 use conductor_core::worktree::Worktree;
-
-use std::collections::HashMap;
-
-use conductor_core::agent::{AgentRun, TicketAgentTotals};
+use crossterm::event::KeyEvent;
 
 /// Payload for the DataRefreshed action (boxed to keep Action enum small).
 #[derive(Debug)]
@@ -84,6 +84,7 @@ pub enum Action {
     InputChar(char),
     InputBackspace,
     InputSubmit,
+    TextAreaInput(KeyEvent),
     FormChar(char),
     FormBackspace,
     FormNextField,

@@ -37,6 +37,16 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::AgentPrompt { .. } => {
+            // Ctrl+S submits; Enter inserts a newline; Esc cancels
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+                return Action::InputSubmit;
+            }
+            return match key.code {
+                KeyCode::Esc => Action::DismissModal,
+                _ => Action::TextAreaInput(key),
+            };
+        }
         Modal::Form { .. } => {
             return match key.code {
                 KeyCode::Enter => Action::FormSubmit,
