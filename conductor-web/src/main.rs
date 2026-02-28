@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 
 use conductor_web::assets::static_handler;
+use conductor_web::events::EventBus;
 use conductor_web::routes::api_router;
 use conductor_web::state::AppState;
 
@@ -21,6 +22,7 @@ async fn main() -> Result<()> {
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         config: Arc::new(config),
+        events: EventBus::new(64),
     };
 
     let cors = CorsLayer::new()

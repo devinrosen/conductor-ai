@@ -9,6 +9,7 @@ use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{Ticket, TicketSyncer};
 
 use crate::error::ApiError;
+use crate::events::ConductorEvent;
 use crate::state::AppState;
 
 #[derive(Serialize)]
@@ -86,6 +87,9 @@ pub async fn sync_tickets(
         }
     }
 
+    state.events.emit(ConductorEvent::TicketsSynced {
+        repo_id: repo.id.clone(),
+    });
     Ok(Json(SyncResult {
         synced: total_synced,
         closed: total_closed,
