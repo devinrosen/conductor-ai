@@ -2,3 +2,5 @@
 *.swp
 *.swo
 .DS_Store
+conductor-web/frontend/node_modules/
+conductor-web/frontend/dist/
