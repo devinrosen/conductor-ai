@@ -143,6 +143,37 @@ impl<'a> WorktreeManager<'a> {
         Ok(worktree)
     }
 
+    pub fn get_by_id(&self, id: &str) -> Result<Worktree> {
+        self.conn
+            .query_row(
+                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at
+                 FROM worktrees WHERE id = ?1",
+                params![id],
+                map_worktree_row,
+            )
+            .map_err(|_| ConductorError::WorktreeNotFound {
+                slug: id.to_string(),
+            })
+    }
+
+    pub fn list_by_repo_id(&self, repo_id: &str, active_only: bool) -> Result<Vec<Worktree>> {
+        let status_filter = if active_only {
+            " AND status = 'active'"
+        } else {
+            ""
+        };
+        let query = format!(
+            "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at
+             FROM worktrees WHERE repo_id = ?1{}
+             ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at",
+            status_filter
+        );
+        let mut stmt = self.conn.prepare(&query)?;
+        let rows = stmt.query_map(params![repo_id], map_worktree_row)?;
+        let worktrees = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(worktrees)
+    }
+
     pub fn list(&self, repo_slug: Option<&str>, active_only: bool) -> Result<Vec<Worktree>> {
         let status_filter = if active_only {
             " AND status = 'active'"
@@ -199,6 +230,17 @@ impl<'a> WorktreeManager<'a> {
                 slug: name.to_string(),
             })?;
 
+        self.delete_internal(&repo, worktree)
+    }
+
+    pub fn delete_by_id(&self, worktree_id: &str) -> Result<Worktree> {
+        let worktree = self.get_by_id(worktree_id)?;
+        let repo_mgr = RepoManager::new(self.conn, self.config);
+        let repo = repo_mgr.get_by_id(&worktree.repo_id)?;
+        self.delete_internal(&repo, worktree)
+    }
+
+    fn delete_internal(&self, repo: &crate::repo::Repo, worktree: Worktree) -> Result<Worktree> {
         // Determine merged vs abandoned:
         // 1. Check if the linked ticket is closed (covers squash merges that git can't detect)
         // 2. Fall back to git branch --merged (covers cases without a linked ticket)

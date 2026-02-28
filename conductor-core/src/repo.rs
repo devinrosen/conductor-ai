@@ -104,6 +104,29 @@ impl<'a> RepoManager<'a> {
         Ok(repos)
     }
 
+    pub fn get_by_id(&self, id: &str) -> Result<Repo> {
+        self.conn
+            .query_row(
+                "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, created_at
+                 FROM repos WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok(Repo {
+                        id: row.get(0)?,
+                        slug: row.get(1)?,
+                        local_path: row.get(2)?,
+                        remote_url: row.get(3)?,
+                        default_branch: row.get(4)?,
+                        workspace_dir: row.get(5)?,
+                        created_at: row.get(6)?,
+                    })
+                },
+            )
+            .map_err(|_| ConductorError::RepoNotFound {
+                slug: id.to_string(),
+            })
+    }
+
     pub fn get_by_slug(&self, slug: &str) -> Result<Repo> {
         self.conn
             .query_row(
@@ -134,6 +157,18 @@ impl<'a> RepoManager<'a> {
         if affected == 0 {
             return Err(ConductorError::RepoNotFound {
                 slug: slug.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn remove_by_id(&self, id: &str) -> Result<()> {
+        let affected = self
+            .conn
+            .execute("DELETE FROM repos WHERE id = ?1", params![id])?;
+        if affected == 0 {
+            return Err(ConductorError::RepoNotFound {
+                slug: id.to_string(),
             });
         }
         Ok(())
