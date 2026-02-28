@@ -143,23 +143,36 @@ impl<'a> WorktreeManager<'a> {
         Ok(worktree)
     }
 
-    pub fn list(&self, repo_slug: Option<&str>) -> Result<Vec<Worktree>> {
+    pub fn list(&self, repo_slug: Option<&str>, active_only: bool) -> Result<Vec<Worktree>> {
+        let status_filter = if active_only {
+            " AND status = 'active'"
+        } else {
+            ""
+        };
+
         let query = match repo_slug {
             Some(_) => {
-                "SELECT w.id, w.repo_id, w.slug, w.branch, w.path, w.ticket_id, w.status, w.created_at, w.completed_at
-                 FROM worktrees w
-                 JOIN repos r ON r.id = w.repo_id
-                 WHERE r.slug = ?1
-                 ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at"
+                format!(
+                    "SELECT w.id, w.repo_id, w.slug, w.branch, w.path, w.ticket_id, w.status, w.created_at, w.completed_at
+                     FROM worktrees w
+                     JOIN repos r ON r.id = w.repo_id
+                     WHERE r.slug = ?1{}
+                     ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
+                    status_filter
+                )
             }
             None => {
-                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at
-                 FROM worktrees
-                 ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at"
+                format!(
+                    "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at
+                     FROM worktrees
+                     WHERE 1=1{}
+                     ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at",
+                    status_filter
+                )
             }
         };
 
-        let mut stmt = self.conn.prepare(query)?;
+        let mut stmt = self.conn.prepare(&query)?;
         let rows = if let Some(slug) = repo_slug {
             stmt.query_map(params![slug], map_worktree_row)?
         } else {

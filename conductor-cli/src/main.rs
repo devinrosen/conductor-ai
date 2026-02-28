@@ -303,7 +303,7 @@ fn main() -> Result<()> {
             }
             WorktreeCommands::List { repo } => {
                 let mgr = WorktreeManager::new(&conn, &config);
-                let worktrees = mgr.list(repo.as_deref())?;
+                let worktrees = mgr.list(repo.as_deref(), false)?;
                 if worktrees.is_empty() {
                     println!("No worktrees.");
                 } else {
