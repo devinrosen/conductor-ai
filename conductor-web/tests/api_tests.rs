@@ -5,6 +5,7 @@ use conductor_core::db::migrations;
 use rusqlite::Connection;
 use tokio::sync::Mutex;
 
+use conductor_web::events::EventBus;
 use conductor_web::routes::api_router;
 use conductor_web::state::AppState;
 
@@ -17,6 +18,7 @@ async fn spawn_test_server() -> String {
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         config: Arc::new(Config::default()),
+        events: EventBus::new(64),
     };
 
     let app = api_router().with_state(state);
@@ -305,4 +307,25 @@ async fn test_session_lifecycle() {
     assert_eq!(sessions.len(), 1);
     assert!(!sessions[0]["ended_at"].is_null());
     assert_eq!(sessions[0]["notes"], "test session");
+}
+
+#[tokio::test]
+async fn test_sse_endpoint_returns_event_stream() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/api/events"))
+        .header("Accept", "text/event-stream")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("text/event-stream"));
 }

@@ -7,6 +7,7 @@ use conductor_core::repo::RepoManager;
 use conductor_core::worktree::{Worktree, WorktreeManager};
 
 use crate::error::ApiError;
+use crate::events::ConductorEvent;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -42,6 +43,10 @@ pub async fn create_worktree(
         body.from_branch.as_deref(),
         body.ticket_id.as_deref(),
     )?;
+    state.events.emit(ConductorEvent::WorktreeCreated {
+        id: wt.id.clone(),
+        repo_id: wt.repo_id.clone(),
+    });
     Ok((StatusCode::CREATED, Json(wt)))
 }
 
@@ -52,5 +57,9 @@ pub async fn delete_worktree(
     let db = state.db.lock().await;
     let mgr = WorktreeManager::new(&db, &state.config);
     let wt = mgr.delete_by_id(&id)?;
+    state.events.emit(ConductorEvent::WorktreeDeleted {
+        id: wt.id.clone(),
+        repo_id: wt.repo_id.clone(),
+    });
     Ok(Json(wt))
 }

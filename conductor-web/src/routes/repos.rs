@@ -6,6 +6,7 @@ use serde::Deserialize;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, Repo, RepoManager};
 
 use crate::error::ApiError;
+use crate::events::ConductorEvent;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -41,6 +42,9 @@ pub async fn create_repo(
         &body.remote_url,
         body.workspace_dir.as_deref(),
     )?;
+    state.events.emit(ConductorEvent::RepoCreated {
+        id: repo.id.clone(),
+    });
     Ok((StatusCode::CREATED, Json(repo)))
 }
 
@@ -51,5 +55,6 @@ pub async fn delete_repo(
     let db = state.db.lock().await;
     let mgr = RepoManager::new(&db, &state.config);
     mgr.remove_by_id(&id)?;
+    state.events.emit(ConductorEvent::RepoDeleted { id });
     Ok(StatusCode::NO_CONTENT)
 }

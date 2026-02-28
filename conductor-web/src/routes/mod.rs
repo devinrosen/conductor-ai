@@ -1,3 +1,4 @@
+pub mod events;
 pub mod repos;
 pub mod sessions;
 pub mod tickets;
@@ -10,6 +11,8 @@ use crate::state::AppState;
 
 pub fn api_router() -> Router<AppState> {
     Router::new()
+        // SSE event stream
+        .route("/api/events", get(events::event_stream))
         // Repos
         .route(
             "/api/repos",
