@@ -211,7 +211,7 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
                 "in_progress" => Color::Yellow,
                 _ => Color::White,
             };
-            ListItem::new(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     format!("{repo_slug} "),
                     Style::default().fg(Color::DarkGray),
@@ -223,7 +223,14 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
                 Span::raw(&t.title),
                 Span::raw("  "),
                 Span::styled(format!("[{}]", t.state), Style::default().fg(state_color)),
-            ]))
+            ];
+            if let Some(totals) = state.data.ticket_agent_totals.get(&t.id) {
+                spans.push(Span::styled(
+                    format!("  ${:.2} {}t", totals.total_cost, totals.total_turns),
+                    Style::default().fg(Color::Magenta),
+                ));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 

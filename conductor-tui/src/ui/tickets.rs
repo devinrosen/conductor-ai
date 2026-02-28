@@ -46,7 +46,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 
             let assignee = t.assignee.as_deref().unwrap_or("-");
 
-            ListItem::new(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     format!("{repo_slug:<12} "),
                     Style::default().fg(Color::DarkGray),
@@ -60,8 +60,24 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                     format!("{:<12} ", t.state),
                     Style::default().fg(state_color),
                 ),
-                Span::styled(assignee, Style::default().fg(Color::DarkGray)),
-            ]))
+                Span::styled(
+                    format!("{:<12}", assignee),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ];
+            if let Some(totals) = state.data.ticket_agent_totals.get(&t.id) {
+                let dur_secs = totals.total_duration_ms as f64 / 1000.0;
+                let mins = (dur_secs / 60.0) as i64;
+                let secs = (dur_secs % 60.0) as i64;
+                spans.push(Span::styled(
+                    format!(
+                        " ${:.2}  {}t  {}m{:02}s",
+                        totals.total_cost, totals.total_turns, mins, secs
+                    ),
+                    Style::default().fg(Color::Magenta),
+                ));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 

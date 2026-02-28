@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use conductor_core::agent::{AgentEvent, AgentRun};
+use conductor_core::agent::{AgentEvent, AgentRun, TicketAgentTotals};
 use conductor_core::config::WorkTarget;
 use conductor_core::repo::Repo;
 use conductor_core::session::Session;
@@ -177,6 +177,8 @@ pub struct DataCache {
     pub agent_events: Vec<AgentEvent>,
     /// Aggregate stats across all agent runs for the currently viewed worktree
     pub agent_totals: AgentTotals,
+    /// ticket_id -> aggregated agent stats across all linked worktrees
+    pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.
