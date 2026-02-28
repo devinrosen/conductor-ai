@@ -110,10 +110,25 @@ pub enum Modal {
 
 #[derive(Debug, Clone)]
 pub enum ConfirmAction {
-    DeleteWorktree { repo_slug: String, wt_slug: String },
-    EndSession { session_id: String },
-    RemoveRepo { repo_slug: String },
-    DeleteWorkTarget { index: usize },
+    DeleteWorktree {
+        repo_slug: String,
+        wt_slug: String,
+    },
+    EndSession {
+        session_id: String,
+    },
+    RemoveRepo {
+        repo_slug: String,
+    },
+    DeleteWorkTarget {
+        index: usize,
+    },
+    StartAgentForWorktree {
+        worktree_id: String,
+        worktree_path: String,
+        worktree_slug: String,
+        ticket_id: String,
+    },
 }
 
 #[derive(Debug, Clone)]

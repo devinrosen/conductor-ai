@@ -11,6 +11,19 @@ pub struct WorkTarget {
     pub target_type: String,
 }
 
+/// Controls whether an agent is auto-started after creating a worktree from a ticket.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoStartAgent {
+    /// Prompt the user to confirm (default)
+    #[default]
+    Ask,
+    /// Always start the agent automatically
+    Always,
+    /// Never auto-start
+    Never,
+}
+
 fn default_work_targets() -> Vec<WorkTarget> {
     vec![WorkTarget {
         name: "VS Code".to_string(),
@@ -38,6 +51,8 @@ pub struct GeneralConfig {
     pub editor: Option<String>,
     #[serde(default = "default_work_targets")]
     pub work_targets: Vec<WorkTarget>,
+    #[serde(default)]
+    pub auto_start_agent: AutoStartAgent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +92,7 @@ impl Default for GeneralConfig {
             sync_interval_minutes: default_sync_interval(),
             editor: None,
             work_targets: default_work_targets(),
+            auto_start_agent: AutoStartAgent::default(),
         }
     }
 }
@@ -158,4 +174,39 @@ pub fn ensure_dirs(config: &Config) -> Result<()> {
     std::fs::create_dir_all(conductor_dir())?;
     std::fs::create_dir_all(&config.general.workspace_root)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_auto_start_agent_default() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.general.auto_start_agent, AutoStartAgent::Ask);
+    }
+
+    #[test]
+    fn test_auto_start_agent_always() {
+        let config: Config = toml::from_str(
+            r#"
+            [general]
+            auto_start_agent = "always"
+        "#,
+        )
+        .unwrap();
+        assert_eq!(config.general.auto_start_agent, AutoStartAgent::Always);
+    }
+
+    #[test]
+    fn test_auto_start_agent_never() {
+        let config: Config = toml::from_str(
+            r#"
+            [general]
+            auto_start_agent = "never"
+        "#,
+        )
+        .unwrap();
+        assert_eq!(config.general.auto_start_agent, AutoStartAgent::Never);
+    }
 }
