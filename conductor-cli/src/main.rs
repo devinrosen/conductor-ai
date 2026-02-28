@@ -148,6 +148,15 @@ enum TicketCommands {
         /// Filter by repo slug
         repo: Option<String>,
     },
+    /// Link a ticket to a worktree
+    Link {
+        /// Ticket source ID (e.g., GitHub issue number)
+        ticket: String,
+        /// Repo slug
+        repo: String,
+        /// Worktree slug
+        worktree: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -515,6 +524,34 @@ fn main() -> Result<()> {
                         );
                     }
                 }
+            }
+            TicketCommands::Link {
+                ticket,
+                repo,
+                worktree,
+            } => {
+                let repo_mgr = RepoManager::new(&conn, &config);
+                let r = repo_mgr.get_by_slug(&repo)?;
+
+                let ticket_id: String = conn
+                    .query_row(
+                        "SELECT id FROM tickets WHERE repo_id = ?1 AND source_id = ?2",
+                        rusqlite::params![r.id, ticket],
+                        |row| row.get(0),
+                    )
+                    .map_err(|_| anyhow::anyhow!("Ticket not found: #{ticket}"))?;
+
+                let worktree_id: String = conn
+                    .query_row(
+                        "SELECT id FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
+                        rusqlite::params![r.id, worktree],
+                        |row| row.get(0),
+                    )
+                    .map_err(|_| anyhow::anyhow!("Worktree not found: {worktree}"))?;
+
+                let syncer = TicketSyncer::new(&conn);
+                syncer.link_to_worktree(&ticket_id, &worktree_id)?;
+                println!("Linked ticket #{ticket} to worktree '{worktree}'");
             }
         },
     }
