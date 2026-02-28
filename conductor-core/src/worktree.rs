@@ -1,5 +1,5 @@
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
@@ -18,6 +18,13 @@ pub struct Worktree {
     pub ticket_id: Option<String>,
     pub status: String,
     pub created_at: String,
+    pub completed_at: Option<String>,
+}
+
+impl Worktree {
+    pub fn is_active(&self) -> bool {
+        self.status == "active"
+    }
 }
 
 pub struct WorktreeManager<'a> {
@@ -49,16 +56,30 @@ impl<'a> WorktreeManager<'a> {
             (format!("feat-{clean}"), format!("feat/{clean}"))
         };
 
-        // Check for duplicate
-        let exists: bool = self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM worktrees WHERE repo_id = ?1 AND slug = ?2)",
-            params![repo.id, wt_slug],
-            |row| row.get(0),
-        )?;
-        if exists {
-            return Err(ConductorError::WorktreeAlreadyExists {
-                slug: wt_slug.clone(),
-            });
+        // Check for existing worktree with same slug
+        let existing_status: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT status FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
+                params![repo.id, wt_slug],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        match existing_status {
+            Some(ref s) if s == "active" => {
+                return Err(ConductorError::WorktreeAlreadyExists {
+                    slug: wt_slug.clone(),
+                });
+            }
+            Some(_) => {
+                // Purge the completed record to allow slug reuse
+                self.conn.execute(
+                    "DELETE FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
+                    params![repo.id, wt_slug],
+                )?;
+            }
+            None => {}
         }
 
         let base = from_branch.unwrap_or(&repo.default_branch);
@@ -101,6 +122,7 @@ impl<'a> WorktreeManager<'a> {
             ticket_id: ticket_id.map(|s| s.to_string()),
             status: "active".to_string(),
             created_at: now,
+            completed_at: None,
         };
 
         self.conn.execute(
@@ -124,15 +146,16 @@ impl<'a> WorktreeManager<'a> {
     pub fn list(&self, repo_slug: Option<&str>) -> Result<Vec<Worktree>> {
         let query = match repo_slug {
             Some(_) => {
-                "SELECT w.id, w.repo_id, w.slug, w.branch, w.path, w.ticket_id, w.status, w.created_at
+                "SELECT w.id, w.repo_id, w.slug, w.branch, w.path, w.ticket_id, w.status, w.created_at, w.completed_at
                  FROM worktrees w
                  JOIN repos r ON r.id = w.repo_id
                  WHERE r.slug = ?1
-                 ORDER BY w.created_at"
+                 ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at"
             }
             None => {
-                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at
-                 FROM worktrees ORDER BY created_at"
+                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at
+                 FROM worktrees
+                 ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at"
             }
         };
 
@@ -147,14 +170,14 @@ impl<'a> WorktreeManager<'a> {
         Ok(worktrees)
     }
 
-    pub fn delete(&self, repo_slug: &str, name: &str) -> Result<()> {
+    pub fn delete(&self, repo_slug: &str, name: &str) -> Result<Worktree> {
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
 
         let worktree = self
             .conn
             .query_row(
-                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at
+                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at
                  FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
                 params![repo.id, name],
                 map_worktree_row,
@@ -162,6 +185,11 @@ impl<'a> WorktreeManager<'a> {
             .map_err(|_| ConductorError::WorktreeNotFound {
                 slug: name.to_string(),
             })?;
+
+        // Detect if the branch was merged into the default branch (before removing it)
+        let is_merged = is_branch_merged(&repo.local_path, &worktree.branch, &repo.default_branch);
+        let new_status = if is_merged { "merged" } else { "abandoned" };
+        let now = Utc::now().to_rfc3339();
 
         // Remove git worktree
         let _ = Command::new("git")
@@ -175,10 +203,50 @@ impl<'a> WorktreeManager<'a> {
             .current_dir(&repo.local_path)
             .output();
 
-        self.conn
-            .execute("DELETE FROM worktrees WHERE id = ?1", params![worktree.id])?;
+        // Soft-delete: update status + completed_at instead of deleting the row
+        self.conn.execute(
+            "UPDATE worktrees SET status = ?1, completed_at = ?2 WHERE id = ?3",
+            params![new_status, now, worktree.id],
+        )?;
 
+        Ok(Worktree {
+            status: new_status.to_string(),
+            completed_at: Some(now),
+            ..worktree
+        })
+    }
+
+    pub fn update_status(&self, worktree_id: &str, status: &str) -> Result<()> {
+        let completed_at = if status != "active" {
+            Some(Utc::now().to_rfc3339())
+        } else {
+            None
+        };
+        self.conn.execute(
+            "UPDATE worktrees SET status = ?1, completed_at = ?2 WHERE id = ?3",
+            params![status, completed_at, worktree_id],
+        )?;
         Ok(())
+    }
+
+    /// Permanently delete completed (merged/abandoned) worktree records from the database.
+    pub fn purge(&self, repo_slug: &str, name: Option<&str>) -> Result<usize> {
+        let repo_mgr = RepoManager::new(self.conn, self.config);
+        let repo = repo_mgr.get_by_slug(repo_slug)?;
+
+        let count = if let Some(slug) = name {
+            self.conn.execute(
+                "DELETE FROM worktrees WHERE repo_id = ?1 AND slug = ?2 AND status != 'active'",
+                params![repo.id, slug],
+            )?
+        } else {
+            self.conn.execute(
+                "DELETE FROM worktrees WHERE repo_id = ?1 AND status != 'active'",
+                params![repo.id],
+            )?
+        };
+
+        Ok(count)
     }
 }
 
@@ -192,7 +260,25 @@ fn map_worktree_row(row: &rusqlite::Row) -> rusqlite::Result<Worktree> {
         ticket_id: row.get(5)?,
         status: row.get(6)?,
         created_at: row.get(7)?,
+        completed_at: row.get(8)?,
     })
+}
+
+/// Check if a branch has been merged into the default branch.
+fn is_branch_merged(repo_path: &str, branch: &str, default_branch: &str) -> bool {
+    let output = Command::new("git")
+        .args(["branch", "--merged", default_branch])
+        .current_dir(repo_path)
+        .output();
+    match output {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            stdout
+                .lines()
+                .any(|line| line.trim().trim_start_matches("* ") == branch)
+        }
+        _ => false,
+    }
 }
 
 /// Detect package manager and install dependencies if applicable.

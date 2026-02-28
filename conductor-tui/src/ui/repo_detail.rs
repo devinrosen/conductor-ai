@@ -67,14 +67,27 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         .detail_worktrees
         .iter()
         .map(|wt| {
+            let is_active = wt.is_active();
             let status_color = match wt.status.as_str() {
                 "active" => Color::Green,
                 "merged" => Color::Blue,
                 _ => Color::Red,
             };
+            let text_style = if is_active {
+                Style::default()
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
             let mut spans = vec![
-                Span::styled(&wt.slug, Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(format!("  {}", wt.branch)),
+                Span::styled(
+                    &wt.slug,
+                    text_style.add_modifier(if is_active {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::DIM
+                    }),
+                ),
+                Span::styled(format!("  {}", wt.branch), text_style),
                 Span::raw("  "),
                 Span::styled(
                     format!("[{}]", wt.status),

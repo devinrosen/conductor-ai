@@ -646,9 +646,9 @@ impl App {
                 ConfirmAction::DeleteWorktree { repo_slug, wt_slug } => {
                     let wt_mgr = WorktreeManager::new(&self.conn, &self.config);
                     match wt_mgr.delete(&repo_slug, &wt_slug) {
-                        Ok(()) => {
+                        Ok(wt) => {
                             self.state.status_message =
-                                Some(format!("Deleted worktree: {wt_slug}"));
+                                Some(format!("Worktree {} marked as {}", wt_slug, wt.status));
                             self.state.view = View::Dashboard;
                             self.state.selected_worktree_id = None;
                             self.refresh_data();
@@ -1144,6 +1144,11 @@ impl App {
             View::WorktreeDetail => {
                 if let Some(ref wt_id) = self.state.selected_worktree_id {
                     if let Some(wt) = self.state.data.worktrees.iter().find(|w| &w.id == wt_id) {
+                        if !wt.is_active() {
+                            self.state.status_message =
+                                Some("Cannot modify archived worktree".to_string());
+                            return;
+                        }
                         let repo_slug = self
                             .state
                             .data
@@ -1209,6 +1214,10 @@ impl App {
             .cloned();
 
         if let Some(wt) = wt {
+            if !wt.is_active() {
+                self.state.status_message = Some("Cannot modify archived worktree".to_string());
+                return;
+            }
             self.state.status_message = Some(format!("Pushing {}...", wt.slug));
             let output = Command::new("git")
                 .args(["push", "-u", "origin", &wt.branch])
@@ -1244,6 +1253,10 @@ impl App {
             .cloned();
 
         if let Some(wt) = wt {
+            if !wt.is_active() {
+                self.state.status_message = Some("Cannot modify archived worktree".to_string());
+                return;
+            }
             self.state.status_message = Some(format!("Creating PR for {}...", wt.slug));
             let output = Command::new("gh")
                 .args(["pr", "create", "--fill", "--head", &wt.branch])
@@ -1304,6 +1317,12 @@ impl App {
 
     fn handle_link_ticket(&mut self) {
         if let Some(ref wt_id) = self.state.selected_worktree_id.clone() {
+            if let Some(wt) = self.state.data.worktrees.iter().find(|w| &w.id == wt_id) {
+                if !wt.is_active() {
+                    self.state.status_message = Some("Cannot modify archived worktree".to_string());
+                    return;
+                }
+            }
             self.state.modal = Modal::Input {
                 title: "Link Ticket".to_string(),
                 prompt: "Enter ticket number (e.g., 42):".to_string(),
@@ -1401,6 +1420,11 @@ impl App {
             self.state.status_message = Some("Select a worktree first".to_string());
             return;
         };
+
+        if !wt.is_active() {
+            self.state.status_message = Some("Cannot modify archived worktree".to_string());
+            return;
+        }
 
         let targets = self.config.general.work_targets.clone();
         if targets.is_empty() {

@@ -120,12 +120,19 @@ enum WorktreeCommands {
         /// Filter by repo slug
         repo: Option<String>,
     },
-    /// Delete a worktree
+    /// Delete a worktree (soft-delete: marks as merged or abandoned)
     Delete {
         /// Repo slug
         repo: String,
         /// Worktree slug
         name: String,
+    },
+    /// Permanently remove completed worktree records
+    Purge {
+        /// Repo slug
+        repo: String,
+        /// Specific worktree slug (purges all completed if omitted)
+        name: Option<String>,
     },
 }
 
@@ -307,8 +314,17 @@ fn main() -> Result<()> {
             }
             WorktreeCommands::Delete { repo, name } => {
                 let mgr = WorktreeManager::new(&conn, &config);
-                mgr.delete(&repo, &name)?;
-                println!("Deleted worktree: {name}");
+                let wt = mgr.delete(&repo, &name)?;
+                println!("Worktree {name} marked as {} ✓", wt.status);
+            }
+            WorktreeCommands::Purge { repo, name } => {
+                let mgr = WorktreeManager::new(&conn, &config);
+                let count = mgr.purge(&repo, name.as_deref())?;
+                if count == 0 {
+                    println!("No completed worktrees to purge.");
+                } else {
+                    println!("Purged {count} completed worktree record(s).");
+                }
             }
         },
         Commands::Session { command } => match command {

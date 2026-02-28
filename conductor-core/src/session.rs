@@ -96,7 +96,7 @@ impl<'a> SessionTracker<'a> {
 
     pub fn get_worktrees(&self, session_id: &str) -> Result<Vec<crate::worktree::Worktree>> {
         let mut stmt = self.conn.prepare(
-            "SELECT w.id, w.repo_id, w.slug, w.branch, w.path, w.ticket_id, w.status, w.created_at
+            "SELECT w.id, w.repo_id, w.slug, w.branch, w.path, w.ticket_id, w.status, w.created_at, w.completed_at
              FROM worktrees w
              JOIN session_worktrees sw ON sw.worktree_id = w.id
              WHERE sw.session_id = ?1
@@ -112,6 +112,7 @@ impl<'a> SessionTracker<'a> {
                 ticket_id: row.get(5)?,
                 status: row.get(6)?,
                 created_at: row.get(7)?,
+                completed_at: row.get(8)?,
             })
         })?;
         let worktrees = rows.collect::<std::result::Result<Vec<_>, _>>()?;
