@@ -209,6 +209,16 @@ impl App {
                     textarea.input(key);
                 }
             }
+            Action::TextAreaClear => {
+                if let Modal::AgentPrompt {
+                    ref mut textarea, ..
+                } = self.state.modal
+                {
+                    **textarea = tui_textarea::TextArea::new(vec![String::new()]);
+                    textarea.set_cursor_line_style(ratatui::style::Style::default());
+                    textarea.set_placeholder_text("Type your prompt here...");
+                }
+            }
             Action::FormChar(c) => self.handle_form_char(c),
             Action::FormBackspace => self.handle_form_backspace(),
             Action::FormNextField => self.handle_form_next_field(),
@@ -1632,8 +1642,15 @@ impl App {
             .get(&wt.id)
             .and_then(|run| run.claude_session_id.clone());
 
+        let has_prior_runs = AgentManager::new(&self.conn)
+            .has_runs_for_worktree(&wt.id)
+            .unwrap_or(false);
+
         let (title, prefill) = if resume_session_id.is_some() {
             ("Claude Agent (Resume)".to_string(), String::new())
+        } else if has_prior_runs {
+            // Skip pre-fill when worktree has prior agent activity
+            ("Claude Agent".to_string(), String::new())
         } else {
             // Pre-fill prompt with rich ticket context if available
             let prefill = wt
@@ -1730,13 +1747,20 @@ impl App {
         worktree_slug: String,
         ticket_id: String,
     ) {
-        let prefill = self
-            .state
-            .data
-            .ticket_map
-            .get(&ticket_id)
-            .map(build_agent_prompt)
-            .unwrap_or_default();
+        let has_prior_runs = AgentManager::new(&self.conn)
+            .has_runs_for_worktree(&worktree_id)
+            .unwrap_or(false);
+
+        let prefill = if has_prior_runs {
+            String::new()
+        } else {
+            self.state
+                .data
+                .ticket_map
+                .get(&ticket_id)
+                .map(build_agent_prompt)
+                .unwrap_or_default()
+        };
 
         self.open_agent_prompt_modal(
             "Agent Prompt".to_string(),

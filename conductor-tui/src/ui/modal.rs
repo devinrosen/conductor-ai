@@ -519,7 +519,7 @@ pub fn render_agent_prompt(
 
     // Hint line
     let hint = Paragraph::new(Line::from(Span::styled(
-        " Enter for newline, Ctrl+S to submit, Esc to cancel",
+        " Enter for newline, Ctrl+S to submit, Ctrl+D to clear, Esc to cancel",
         Style::default().fg(Color::DarkGray),
     )));
     frame.render_widget(hint, chunks[2]);
