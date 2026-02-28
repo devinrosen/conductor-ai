@@ -1,4 +1,5 @@
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -421,7 +422,8 @@ fn run_agent(
         anyhow::bail!("agent run not found: {run_id}");
     }
 
-    // Build the claude command
+    // Build the claude command.
+    // stdout is piped (captures JSON result), stderr is inherited (visible in tmux terminal).
     let mut cmd = Command::new("claude");
     cmd.arg("-p")
         .arg(prompt)
@@ -430,6 +432,8 @@ fn run_agent(
         .arg("--verbose")
         .arg("--permission-mode")
         .arg("acceptEdits")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
         .current_dir(worktree_path);
 
     if let Some(session_id) = resume_session_id {
@@ -441,15 +445,28 @@ fn run_agent(
         run_id, worktree_path
     );
 
-    let output = cmd.output();
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            let error_msg = format!("Failed to spawn claude: {e}");
+            mgr.update_run_failed(run_id, &error_msg)?;
+            eprintln!("[conductor] {}", error_msg);
+            return Ok(());
+        }
+    };
 
-    match output {
-        Ok(o) => {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            let stderr = String::from_utf8_lossy(&o.stderr);
+    // Read all of stdout (the JSON result blob)
+    let mut stdout_buf = String::new();
+    if let Some(ref mut stdout) = child.stdout {
+        let _ = stdout.read_to_string(&mut stdout_buf);
+    }
 
+    let status = child.wait();
+
+    match status {
+        Ok(s) => {
             // Try to parse the JSON result from stdout
-            if let Ok(result) = serde_json::from_str::<ClaudeJsonResult>(&stdout) {
+            if let Ok(result) = serde_json::from_str::<ClaudeJsonResult>(&stdout_buf) {
                 let is_error = result.is_error.unwrap_or(false);
                 if is_error {
                     let error_msg = result
@@ -480,26 +497,17 @@ fn run_agent(
                         );
                     }
                 }
-            } else if o.status.success() {
-                // Process succeeded but no parseable JSON — treat as completed
-                mgr.update_run_completed(run_id, None, Some(stdout.trim()), None, None, None)?;
+            } else if s.success() {
+                mgr.update_run_completed(run_id, None, Some(stdout_buf.trim()), None, None, None)?;
                 eprintln!("[conductor] Agent completed (no JSON result parsed)");
             } else {
-                let error_msg = if stderr.trim().is_empty() {
-                    format!("Claude exited with status: {}", o.status)
-                } else {
-                    format!(
-                        "Claude exited with status: {} — {}",
-                        o.status,
-                        stderr.trim()
-                    )
-                };
+                let error_msg = format!("Claude exited with status: {}", s);
                 mgr.update_run_failed(run_id, &error_msg)?;
                 eprintln!("[conductor] Agent failed: {}", error_msg);
             }
         }
         Err(e) => {
-            let error_msg = format!("Failed to spawn claude: {e}");
+            let error_msg = format!("Error waiting for claude: {e}");
             mgr.update_run_failed(run_id, &error_msg)?;
             eprintln!("[conductor] {}", error_msg);
         }
