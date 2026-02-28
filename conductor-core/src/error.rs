@@ -34,6 +34,9 @@ pub enum ConductorError {
         repo_slug: String,
         source_type: String,
     },
+
+    #[error("agent error: {0}")]
+    Agent(String),
 }
 
 pub type Result<T> = std::result::Result<T, ConductorError>;

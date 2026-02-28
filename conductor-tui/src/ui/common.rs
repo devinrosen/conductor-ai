@@ -61,7 +61,17 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
                 "j/k:nav  Enter:select  c:create  d:remove repo  Esc:back  ?:help".to_string()
             }
             View::WorktreeDetail => {
-                "o:open ticket  p:push  P:PR  l:link  d:delete  Esc:back  ?:help".to_string()
+                let has_running = state
+                    .selected_worktree_id
+                    .as_ref()
+                    .and_then(|wt_id| state.data.latest_agent_runs.get(wt_id))
+                    .is_some_and(|run| run.status == "running");
+                if has_running {
+                    "r:agent  x:stop  o:ticket  Esc:back  ?:help".to_string()
+                } else {
+                    "r:agent  o:ticket  p:push  P:PR  l:link  d:delete  Esc:back  ?:help"
+                        .to_string()
+                }
             }
             View::Tickets => "j/k:nav  /:filter  Esc:back  ?:help".to_string(),
             View::Session => "s:end session  Esc:back  ?:help".to_string(),

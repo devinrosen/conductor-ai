@@ -41,6 +41,17 @@ pub fn render(frame: &mut Frame, area: Rect) {
         help_line("/", "Filter/search"),
         Line::from(""),
         Line::from(Span::styled(
+            "Agent (Worktree Detail)",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        help_line("r", "Run Claude agent (tmux)"),
+        help_line("a", "Attach to running agent"),
+        help_line("x", "Stop running agent"),
+        Line::from(""),
+        Line::from(Span::styled(
             "Navigation",
             Style::default()
                 .fg(Color::Cyan)

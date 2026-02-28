@@ -44,5 +44,42 @@ pub fn run(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if version < 3 {
+        conn.execute_batch(include_str!("migrations/003_agent_runs.sql"))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '3')",
+            [],
+        )?;
+    }
+
+    // Migration 004: add tmux_window to agent_runs.
+    // Check column existence to handle DBs that already have it from feature branches.
+    let has_tmux_window: bool = conn
+        .prepare("SELECT tmux_window FROM agent_runs LIMIT 0")
+        .is_ok();
+    if !has_tmux_window {
+        conn.execute_batch(include_str!("migrations/004_agent_tmux.sql"))?;
+    }
+    if version < 4 {
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '4')",
+            [],
+        )?;
+    }
+
+    // Migration 005: add log_file to agent_runs.
+    let has_log_file: bool = conn
+        .prepare("SELECT log_file FROM agent_runs LIMIT 0")
+        .is_ok();
+    if !has_log_file {
+        conn.execute_batch(include_str!("migrations/005_agent_log_file.sql"))?;
+    }
+    if version < 5 {
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '5')",
+            [],
+        )?;
+    }
+
     Ok(())
 }
