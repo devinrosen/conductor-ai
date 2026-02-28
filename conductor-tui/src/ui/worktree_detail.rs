@@ -203,11 +203,28 @@ fn render_agent_status_line(
     };
 
     match run.status.as_str() {
-        "running" => Line::from(vec![
-            Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[running]", Style::default().fg(Color::Yellow)),
-            Span::styled(" — press x to stop", Style::default().fg(Color::DarkGray)),
-        ]),
+        "running" => {
+            let turns = totals.live_turns;
+            let elapsed = chrono::DateTime::parse_from_rfc3339(&run.started_at)
+                .ok()
+                .map(|start| {
+                    let now = chrono::Utc::now();
+                    (now - start.with_timezone(&chrono::Utc))
+                        .num_milliseconds()
+                        .max(0) as f64
+                        / 1000.0
+                });
+            let stats = match elapsed {
+                Some(secs) => format!(" {turns} turns, {secs:.1}s"),
+                None => format!(" {turns} turns"),
+            };
+            Line::from(vec![
+                Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[running]", Style::default().fg(Color::Yellow)),
+                Span::styled(stats, Style::default().fg(Color::DarkGray)),
+                Span::styled(" — press x to stop", Style::default().fg(Color::DarkGray)),
+            ])
+        }
         "completed" => {
             let mut spans = vec![
                 Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),

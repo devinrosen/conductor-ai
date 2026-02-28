@@ -156,6 +156,29 @@ pub fn parse_agent_log(path: &str) -> Vec<AgentEvent> {
     events
 }
 
+/// Count the number of assistant turns in a stream-json agent log file.
+/// Each JSON line with `"type": "assistant"` counts as one turn.
+pub fn count_turns_in_log(path: &str) -> i64 {
+    let Ok(contents) = fs::read_to_string(Path::new(path)) else {
+        return 0;
+    };
+
+    let mut count: i64 = 0;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(|v| v.as_str()) == Some("assistant") {
+            count += 1;
+        }
+    }
+    count
+}
+
 /// Extract a human-readable summary for a tool_use event.
 fn tool_summary(tool_name: &str, input: Option<&serde_json::Value>) -> String {
     let input = match input {

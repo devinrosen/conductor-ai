@@ -334,7 +334,7 @@ impl App {
     }
 
     fn reload_agent_events(&mut self) {
-        use conductor_core::agent::{parse_agent_log, AgentManager};
+        use conductor_core::agent::{count_turns_in_log, parse_agent_log, AgentManager};
 
         use crate::state::AgentTotals;
 
@@ -359,6 +359,16 @@ impl App {
             totals.total_turns += run.num_turns.unwrap_or(0);
             totals.total_duration_ms += run.duration_ms.unwrap_or(0);
         }
+
+        // For running agents, count live turns from the log file
+        if let Some(run) = runs.last() {
+            if run.status == "running" {
+                if let Some(ref path) = run.log_file {
+                    totals.live_turns = count_turns_in_log(path);
+                }
+            }
+        }
+
         self.state.data.agent_totals = totals;
 
         let mut all_events = Vec::new();
