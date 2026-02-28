@@ -1336,9 +1336,12 @@ impl App {
             Ok(o) if o.status.success() => {
                 self.state.status_message = Some(format!("Attached to {tmux_window}"));
             }
-            Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                self.state.status_message = Some(format!("Failed to attach: {stderr}"));
+            Ok(_) => {
+                // Window not found — agent likely already finished or crashed.
+                // Refresh data so the DB poller picks up the actual status.
+                self.refresh_data();
+                self.state.status_message =
+                    Some("Agent window not found — it may have already finished".to_string());
             }
             Err(e) => {
                 self.state.status_message = Some(format!("Failed to attach: {e}"));
@@ -1413,13 +1416,25 @@ impl App {
             args.push(session_id.clone());
         }
 
+        // Resolve the conductor binary path — look next to the current executable first,
+        // then fall back to bare "conductor" on PATH.
+        let conductor_bin = std::env::current_exe()
+            .ok()
+            .and_then(|p| {
+                let sibling = p.parent()?.join("conductor");
+                sibling
+                    .exists()
+                    .then(|| sibling.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "conductor".to_string());
+
         // Spawn tmux window: tmux new-window -n <slug> -- conductor agent run ...
         let mut tmux_args = vec![
             "new-window".to_string(),
             "-n".to_string(),
             worktree_slug.clone(),
             "--".to_string(),
-            "conductor".to_string(),
+            conductor_bin,
         ];
         tmux_args.extend(args);
 
