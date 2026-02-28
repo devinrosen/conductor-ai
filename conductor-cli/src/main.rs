@@ -356,7 +356,11 @@ fn main() -> Result<()> {
                 ticket,
             } => {
                 let mgr = WorktreeManager::new(&conn, &config);
-                let wt = mgr.create(&repo, &name, from.as_deref(), ticket.as_deref())?;
+                let (wt, warnings) =
+                    mgr.create(&repo, &name, from.as_deref(), ticket.as_deref())?;
+                for warning in &warnings {
+                    eprintln!("warning: {warning}");
+                }
                 println!("Created worktree: {} ({})", wt.slug, wt.branch);
                 println!("  Path: {}", wt.path);
             }

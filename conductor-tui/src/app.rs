@@ -885,8 +885,8 @@ impl App {
             } => {
                 let wt_mgr = WorktreeManager::new(&self.conn, &self.config);
                 match wt_mgr.create(&repo_slug, &value, None, ticket_id.as_deref()) {
-                    Ok(wt) => {
-                        let msg = if let Some(ref tid) = ticket_id {
+                    Ok((wt, warnings)) => {
+                        let mut msg = if let Some(ref tid) = ticket_id {
                             let source_id = self
                                 .state
                                 .data
@@ -898,6 +898,9 @@ impl App {
                         } else {
                             format!("Created worktree: {}", wt.slug)
                         };
+                        if !warnings.is_empty() {
+                            msg.push_str(&format!(" [{}]", warnings.join("; ")));
+                        }
                         self.state.status_message = Some(msg);
                         self.refresh_data();
                     }
