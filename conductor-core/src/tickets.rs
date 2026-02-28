@@ -423,11 +423,9 @@ mod tests {
         let tickets = vec![make_ticket("1", "Issue 1")];
         syncer.upsert_tickets("repo1", &tickets).unwrap();
         let ticket_id: String = conn
-            .query_row(
-                "SELECT id FROM tickets WHERE source_id = '1'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         insert_worktree(&conn, "wt1", "repo1", Some(&ticket_id), "active");
 
@@ -435,9 +433,7 @@ mod tests {
             .close_missing_tickets("repo1", "github", &["999"])
             .unwrap();
 
-        let count = syncer
-            .mark_worktrees_for_closed_tickets("repo1")
-            .unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("repo1").unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
     }
@@ -450,20 +446,16 @@ mod tests {
         let tickets = vec![make_ticket("1", "Issue 1")];
         syncer.upsert_tickets("repo1", &tickets).unwrap();
         let ticket_id: String = conn
-            .query_row(
-                "SELECT id FROM tickets WHERE source_id = '1'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         insert_worktree(&conn, "wt1", "repo1", Some(&ticket_id), "abandoned");
         syncer
             .close_missing_tickets("repo1", "github", &["999"])
             .unwrap();
 
-        let count = syncer
-            .mark_worktrees_for_closed_tickets("repo1")
-            .unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("repo1").unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
     }
@@ -475,9 +467,7 @@ mod tests {
 
         insert_worktree(&conn, "wt1", "repo1", None, "active");
 
-        let count = syncer
-            .mark_worktrees_for_closed_tickets("repo1")
-            .unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("repo1").unwrap();
         assert_eq!(count, 0);
         assert_eq!(get_worktree_status(&conn, "wt1"), "active");
     }
@@ -490,20 +480,16 @@ mod tests {
         let tickets = vec![make_ticket("1", "Issue 1")];
         syncer.upsert_tickets("repo1", &tickets).unwrap();
         let ticket_id: String = conn
-            .query_row(
-                "SELECT id FROM tickets WHERE source_id = '1'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         insert_worktree(&conn, "wt1", "repo1", Some(&ticket_id), "merged");
         syncer
             .close_missing_tickets("repo1", "github", &["999"])
             .unwrap();
 
-        let count = syncer
-            .mark_worktrees_for_closed_tickets("repo1")
-            .unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("repo1").unwrap();
         assert_eq!(count, 0);
     }
 
@@ -548,9 +534,7 @@ mod tests {
             .close_missing_tickets("repo2", "github", &["999"])
             .unwrap();
 
-        let count = syncer
-            .mark_worktrees_for_closed_tickets("repo1")
-            .unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("repo1").unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
         assert_eq!(get_worktree_status(&conn, "wt2"), "active");
