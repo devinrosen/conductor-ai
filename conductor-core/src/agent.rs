@@ -219,6 +219,16 @@ fn tool_summary(tool_name: &str, input: Option<&serde_json::Value>) -> String {
     }
 }
 
+/// Aggregated agent stats for a ticket (across all linked worktrees).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TicketAgentTotals {
+    pub ticket_id: String,
+    pub total_runs: i64,
+    pub total_cost: f64,
+    pub total_turns: i64,
+    pub total_duration_ms: i64,
+}
+
 pub struct AgentManager<'a> {
     conn: &'a Connection,
 }
@@ -364,6 +374,39 @@ impl<'a> AgentManager<'a> {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Returns aggregated agent stats per ticket (across all linked worktrees).
+    /// Only includes completed runs with recorded metrics.
+    pub fn totals_by_ticket_all(&self) -> Result<HashMap<String, TicketAgentTotals>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT w.ticket_id, \
+                    COUNT(*) AS total_runs, \
+                    COALESCE(SUM(a.cost_usd), 0.0) AS total_cost, \
+                    COALESCE(SUM(a.num_turns), 0) AS total_turns, \
+                    COALESCE(SUM(a.duration_ms), 0) AS total_duration_ms \
+             FROM agent_runs a \
+             JOIN worktrees w ON a.worktree_id = w.id \
+             WHERE w.ticket_id IS NOT NULL AND a.status = 'completed' \
+             GROUP BY w.ticket_id",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(TicketAgentTotals {
+                ticket_id: row.get(0)?,
+                total_runs: row.get(1)?,
+                total_cost: row.get(2)?,
+                total_turns: row.get(3)?,
+                total_duration_ms: row.get(4)?,
+            })
+        })?;
+
+        let mut map = HashMap::new();
+        for totals in rows {
+            let totals = totals?;
+            map.insert(totals.ticket_id.clone(), totals);
+        }
+        Ok(map)
     }
 
     /// Returns the latest agent run for each worktree, keyed by worktree_id.
@@ -571,6 +614,55 @@ mod tests {
             fetched.log_file.as_deref(),
             Some("/tmp/agent-logs/test.log")
         );
+    }
+
+    #[test]
+    fn test_totals_by_ticket_all() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a ticket and link w1 to it
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES ('t1', 'r1', 'github', '42', 'Test ticket', '', 'open', '', 'https://example.com', '2024-01-01T00:00:00Z', '{}')",
+            [],
+        ).unwrap();
+        conn.execute("UPDATE worktrees SET ticket_id = 't1' WHERE id = 'w1'", [])
+            .unwrap();
+        conn.execute("UPDATE worktrees SET ticket_id = 't1' WHERE id = 'w2'", [])
+            .unwrap();
+
+        // Create completed runs on both worktrees
+        let run1 = mgr.create_run("w1", "First task", None).unwrap();
+        mgr.update_run_completed(&run1.id, None, None, Some(0.10), Some(5), Some(30000))
+            .unwrap();
+        let run2 = mgr.create_run("w1", "Second task", None).unwrap();
+        mgr.update_run_completed(&run2.id, None, None, Some(0.05), Some(3), Some(15000))
+            .unwrap();
+        let run3 = mgr.create_run("w2", "Third task", None).unwrap();
+        mgr.update_run_completed(&run3.id, None, None, Some(0.08), Some(4), Some(20000))
+            .unwrap();
+
+        // Create a running run (should NOT be included)
+        let _run4 = mgr.create_run("w1", "In progress", None).unwrap();
+
+        let totals = mgr.totals_by_ticket_all().unwrap();
+        assert_eq!(totals.len(), 1);
+
+        let t1 = totals.get("t1").unwrap();
+        assert_eq!(t1.total_runs, 3);
+        assert!((t1.total_cost - 0.23).abs() < 0.001);
+        assert_eq!(t1.total_turns, 12);
+        assert_eq!(t1.total_duration_ms, 65000);
+    }
+
+    #[test]
+    fn test_totals_by_ticket_empty() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let totals = mgr.totals_by_ticket_all().unwrap();
+        assert!(totals.is_empty());
     }
 
     #[test]
