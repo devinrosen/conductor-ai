@@ -176,12 +176,10 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
                 Span::raw("  "),
                 Span::styled(format!("[{}]", t.state), Style::default().fg(state_color)),
             ];
-            if let Some(totals) = state.data.ticket_agent_totals.get(&t.id) {
-                spans.push(Span::styled(
-                    format!("  ${:.2} {}t", totals.total_cost, totals.total_turns),
-                    Style::default().fg(Color::Magenta),
-                ));
-            }
+            spans.extend(super::common::ticket_worktree_spans(state, &t.id, "  "));
+            spans.extend(super::common::ticket_agent_total_spans(
+                state, &t.id, "  ", false,
+            ));
             ListItem::new(Line::from(spans))
         })
         .collect();

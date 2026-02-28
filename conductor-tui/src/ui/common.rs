@@ -172,6 +172,70 @@ pub fn worktree_list_item(
     ListItem::new(Line::from(spans))
 }
 
+/// Build optional worktree-indicator spans for a ticket row.
+///
+/// Returns spans like `  ● feat-auth` (green, active) or `  ○ fix-bug`
+/// (gray, merged/abandoned).  When multiple worktrees are linked the
+/// label shows the count instead, e.g. `  ● 3 worktrees`.
+///
+/// Pass `leading_space` to control the whitespace before the indicator
+/// (single space for the padded Tickets view, double for compact views).
+pub fn ticket_worktree_spans(
+    state: &AppState,
+    ticket_id: &str,
+    leading: &str,
+) -> Vec<Span<'static>> {
+    let Some(wts) = state.data.ticket_worktrees.get(ticket_id) else {
+        return Vec::new();
+    };
+    let Some(best) = wts.iter().find(|w| w.is_active()).or(wts.first()) else {
+        return Vec::new();
+    };
+
+    let (indicator, color) = if best.is_active() {
+        ("●", Color::Green)
+    } else {
+        ("○", Color::DarkGray)
+    };
+    let label = if wts.len() > 1 {
+        format!("{indicator} {} worktrees", wts.len())
+    } else {
+        format!("{indicator} {}", best.slug)
+    };
+    vec![Span::styled(
+        format!("{leading}{label}"),
+        Style::default().fg(color),
+    )]
+}
+
+/// Build optional agent-totals spans for a ticket row.
+///
+/// Compact views (dashboard, repo-detail) pass `show_duration: false`
+/// to get `$X.XX Xt`.  The full Tickets view passes `true` to also
+/// show `Xm XXs`.
+pub fn ticket_agent_total_spans(
+    state: &AppState,
+    ticket_id: &str,
+    leading: &str,
+    show_duration: bool,
+) -> Vec<Span<'static>> {
+    let Some(totals) = state.data.ticket_agent_totals.get(ticket_id) else {
+        return Vec::new();
+    };
+    let text = if show_duration {
+        let dur_secs = totals.total_duration_ms as f64 / 1000.0;
+        let mins = (dur_secs / 60.0) as i64;
+        let secs = (dur_secs % 60.0) as i64;
+        format!(
+            "{leading}${:.2}  {}t  {}m{:02}s",
+            totals.total_cost, totals.total_turns, mins, secs
+        )
+    } else {
+        format!("{leading}${:.2} {}t", totals.total_cost, totals.total_turns)
+    };
+    vec![Span::styled(text, Style::default().fg(Color::Magenta))]
+}
+
 /// Calculate elapsed time from an ISO 8601 timestamp to now.
 fn session_elapsed(started_at: &str) -> String {
     let Ok(start) = chrono::DateTime::parse_from_rfc3339(started_at) else {

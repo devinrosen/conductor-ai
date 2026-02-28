@@ -65,18 +65,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                     Style::default().fg(Color::DarkGray),
                 ),
             ];
-            if let Some(totals) = state.data.ticket_agent_totals.get(&t.id) {
-                let dur_secs = totals.total_duration_ms as f64 / 1000.0;
-                let mins = (dur_secs / 60.0) as i64;
-                let secs = (dur_secs % 60.0) as i64;
-                spans.push(Span::styled(
-                    format!(
-                        " ${:.2}  {}t  {}m{:02}s",
-                        totals.total_cost, totals.total_turns, mins, secs
-                    ),
-                    Style::default().fg(Color::Magenta),
-                ));
-            }
+            spans.extend(super::common::ticket_worktree_spans(state, &t.id, " "));
+            spans.extend(super::common::ticket_agent_total_spans(
+                state, &t.id, " ", true,
+            ));
             ListItem::new(Line::from(spans))
         })
         .collect();

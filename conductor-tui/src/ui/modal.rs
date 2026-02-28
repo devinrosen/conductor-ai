@@ -7,6 +7,7 @@ use ratatui::Frame;
 use conductor_core::agent::TicketAgentTotals;
 use conductor_core::config::WorkTarget;
 use conductor_core::tickets::Ticket;
+use conductor_core::worktree::Worktree;
 
 pub fn render_confirm(frame: &mut Frame, area: Rect, title: &str, message: &str) {
     let popup = centered_rect(50, 30, area);
@@ -98,6 +99,7 @@ pub fn render_ticket_info(
     area: Rect,
     ticket: &Ticket,
     agent_totals: Option<&TicketAgentTotals>,
+    worktrees: Option<&Vec<Worktree>>,
 ) {
     let popup = centered_rect(60, 70, area);
     frame.render_widget(Clear, popup);
@@ -191,6 +193,26 @@ pub fn render_ticket_info(
             ),
         ]));
         lines.push(Line::from(""));
+    }
+
+    if let Some(wts) = worktrees {
+        if !wts.is_empty() {
+            lines.push(Line::from(Span::styled("  Worktrees:", label_style)));
+            for wt in wts {
+                let (indicator, color) = if wt.is_active() {
+                    ("●", Color::Green)
+                } else {
+                    ("○", Color::DarkGray)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("    {indicator} "), Style::default().fg(color)),
+                    Span::styled(&wt.slug, value_style),
+                    Span::styled(format!("  [{}]", wt.status), Style::default().fg(color)),
+                    Span::styled(format!("  {}", wt.branch), dim_style),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
     }
 
     lines.push(Line::from(Span::styled("  Description:", label_style)));

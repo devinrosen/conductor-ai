@@ -61,7 +61,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         Modal::Error { message } => modal::render_error(frame, area, message),
         Modal::TicketInfo { ticket } => {
             let agent_totals = state.data.ticket_agent_totals.get(&ticket.id);
-            modal::render_ticket_info(frame, area, ticket, agent_totals);
+            let worktrees = state.data.ticket_worktrees.get(&ticket.id);
+            modal::render_ticket_info(frame, area, ticket, agent_totals, worktrees);
         }
         Modal::WorkTargetPicker { targets, selected } => {
             modal::render_work_target_picker(frame, area, targets, *selected)

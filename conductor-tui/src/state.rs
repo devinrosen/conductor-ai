@@ -179,6 +179,8 @@ pub struct DataCache {
     pub agent_totals: AgentTotals,
     /// ticket_id -> aggregated agent stats across all linked worktrees
     pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
+    /// ticket_id -> linked worktrees (most recently created first)
+    pub ticket_worktrees: HashMap<String, Vec<Worktree>>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.
@@ -206,11 +208,18 @@ impl DataCache {
         }
 
         self.repo_worktree_count.clear();
+        self.ticket_worktrees.clear();
         for wt in &self.worktrees {
             *self
                 .repo_worktree_count
                 .entry(wt.repo_id.clone())
                 .or_insert(0) += 1;
+            if let Some(ref tid) = wt.ticket_id {
+                self.ticket_worktrees
+                    .entry(tid.clone())
+                    .or_default()
+                    .push(wt.clone());
+            }
         }
     }
 }
