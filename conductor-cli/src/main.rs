@@ -693,6 +693,14 @@ fn run_agent(
     let log_path = log_dir.join(format!("{run_id}.log"));
     let mut log_file = std::fs::File::create(&log_path).ok();
 
+    // Store log file path in DB immediately so the TUI can read streaming events.
+    if log_file.is_some() {
+        let path_str = log_path.to_string_lossy().to_string();
+        if let Err(e) = mgr.update_run_log_file(run_id, &path_str) {
+            eprintln!("[conductor] Warning: could not save log path to DB: {e}");
+        }
+    }
+
     // Parse stream-json events from stdout to extract result metadata.
     let mut session_id_parsed: Option<String> = None;
     let mut result_text: Option<String> = None;
@@ -779,15 +787,10 @@ fn run_agent(
         }
     }
 
-    // Store log file path in DB (best-effort)
-    if log_file.is_some() {
-        let path_str = log_path.to_string_lossy().to_string();
-        if let Err(e) = mgr.update_run_log_file(run_id, &path_str) {
-            eprintln!("[conductor] Warning: could not save log path to DB: {e}");
-        } else {
-            eprintln!("[conductor] Agent log saved to {path_str}");
-        }
-    }
+    eprintln!(
+        "[conductor] Agent log saved to {}",
+        log_path.to_string_lossy()
+    );
 
     Ok(())
 }
