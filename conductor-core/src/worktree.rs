@@ -186,8 +186,24 @@ impl<'a> WorktreeManager<'a> {
                 slug: name.to_string(),
             })?;
 
-        // Detect if the branch was merged into the default branch (before removing it)
-        let is_merged = is_branch_merged(&repo.local_path, &worktree.branch, &repo.default_branch);
+        // Determine merged vs abandoned:
+        // 1. Check if the linked ticket is closed (covers squash merges that git can't detect)
+        // 2. Fall back to git branch --merged (covers cases without a linked ticket)
+        let ticket_closed = worktree
+            .ticket_id
+            .as_ref()
+            .map(|tid| {
+                self.conn
+                    .query_row(
+                        "SELECT state = 'closed' FROM tickets WHERE id = ?1",
+                        params![tid],
+                        |row| row.get::<_, bool>(0),
+                    )
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        let is_merged = ticket_closed
+            || is_branch_merged(&repo.local_path, &worktree.branch, &repo.default_branch);
         let new_status = if is_merged { "merged" } else { "abandoned" };
         let now = Utc::now().to_rfc3339();
 
