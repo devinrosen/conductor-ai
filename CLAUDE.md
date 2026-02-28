@@ -12,23 +12,28 @@ cargo test --lib github        # Run specific module tests (e.g., github)
 cargo test -p conductor-core   # Test a single crate
 cargo clippy -- -D warnings    # Lint (CI enforces -D warnings)
 cargo fmt --check              # Check formatting
-cargo build --bin conductor    # Build CLI only
+cargo build --bin conductor     # Build CLI only
 cargo build --bin conductor-tui # Build TUI only
+cargo build --bin conductor-web # Build web UI (requires frontend built first)
+
+# Web frontend (must be built before cargo build --bin conductor-web)
+cd conductor-web/frontend && npm install && npm run build
 ```
 
 No Makefile/justfile — use `cargo` directly.
 
 ## Architecture
 
-**Conductor** is a multi-repo orchestration tool: manages git repos, worktrees, tickets, and sessions locally with SQLite.
+**Conductor** is a multi-repo orchestration tool: manages git repos, worktrees, tickets, and AI agent runs locally with SQLite.
 
 ### Workspace Layout
 
-Three crates in a Cargo workspace:
+Four crates in a Cargo workspace:
 
 - **conductor-core** — Library crate with all domain logic. Everything lives here.
 - **conductor-cli** — Thin binary wrapping core with clap subcommands.
-- **conductor-tui** — TUI binary (Phase 2, scaffold only). Will use ratatui + crossterm.
+- **conductor-tui** — TUI binary using ratatui + crossterm.
+- **conductor-web** — Web UI binary using axum + React (Vite + Tailwind frontend embedded via `rust_embed`).
 
 ### Library-First (v1)
 
@@ -40,7 +45,8 @@ Domain logic is organized into manager structs that take `&Connection` + `&Confi
 - `RepoManager` — CRUD for registered repos
 - `WorktreeManager` — Git worktree lifecycle (branch, create worktree, auto-install JS deps)
 - `TicketSyncer` — Upsert/list tickets, link to worktrees
-- `SessionTracker` — Start/end sessions, attach worktrees
+- `IssueSourceManager` — Configure per-repo issue sources (GitHub, Jira)
+- `AgentManager` — Launch/stop Claude agents in tmux, track runs and events
 
 ### Error Handling
 
@@ -55,7 +61,7 @@ All git operations and GitHub sync use `std::process::Command` (synchronous subp
 
 ### Database
 
-SQLite at `~/.conductor/conductor.db` with WAL mode, foreign keys on, 5s busy timeout. Schema managed via versioned migrations in `conductor-core/src/db/migrations/`. Tables: `repos`, `repo_issue_sources`, `worktrees`, `tickets`, `sessions`, `session_worktrees`, `_conductor_meta`.
+SQLite at `~/.conductor/conductor.db` with WAL mode, foreign keys on, 5s busy timeout. Schema managed via versioned migrations in `conductor-core/src/db/migrations/`. Tables: `repos`, `repo_issue_sources`, `worktrees`, `tickets`, `agent_runs`, `sessions`, `session_worktrees`, `_conductor_meta`. (Sessions are slated for removal — see #76.)
 
 ### Data Directory
 
@@ -78,10 +84,11 @@ Branch ruleset on `main`: PRs required, linear history (squash/rebase only), `Cl
 ## Project Status (per docs/SPEC.md)
 
 - Phase 1 (done): Core library + CLI
-- Phase 2 (not started): TUI with ratatui (scaffold only)
+- Phase 2 (done): TUI with ratatui
 - Phase 3: Jira integration
-- Phase 4: AI orchestration hooks
+- Phase 4 (in progress): AI agent orchestration (agent launch/stop, runs, events)
 - Phase 5: Daemon extraction (v2, async with tokio)
+- Phase 6: Web UI (in progress — basic CRUD done, agent features missing)
 
 ## Key Conventions
 
