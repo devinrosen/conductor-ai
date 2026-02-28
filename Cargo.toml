@@ -1,5 +1,5 @@
 [workspace]
-members = ["conductor-core", "conductor-cli", "conductor-tui"]
+members = ["conductor-core", "conductor-cli", "conductor-tui", "conductor-web"]
 resolver = "2"
 
 [workspace.package]

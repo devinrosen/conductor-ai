@@ -1,0 +1,34 @@
+pub mod repos;
+pub mod sessions;
+pub mod tickets;
+pub mod worktrees;
+
+use axum::routing::{delete, get, post};
+use axum::Router;
+
+use crate::state::AppState;
+
+pub fn api_router() -> Router<AppState> {
+    Router::new()
+        // Repos
+        .route(
+            "/api/repos",
+            get(repos::list_repos).post(repos::create_repo),
+        )
+        .route("/api/repos/{id}", delete(repos::delete_repo))
+        // Worktrees
+        .route(
+            "/api/repos/{id}/worktrees",
+            get(worktrees::list_worktrees).post(worktrees::create_worktree),
+        )
+        .route("/api/worktrees/{id}", delete(worktrees::delete_worktree))
+        // Tickets
+        .route("/api/repos/{id}/tickets", get(tickets::list_tickets))
+        .route("/api/repos/{id}/tickets/sync", post(tickets::sync_tickets))
+        // Sessions
+        .route(
+            "/api/sessions",
+            get(sessions::list_sessions).post(sessions::start_session),
+        )
+        .route("/api/sessions/{id}/end", post(sessions::end_session))
+}
