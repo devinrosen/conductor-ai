@@ -52,6 +52,12 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             value,
             ..
         } => modal::render_input(frame, area, title, prompt, value),
+        Modal::AgentPrompt {
+            title,
+            prompt,
+            textarea,
+            ..
+        } => modal::render_agent_prompt(frame, area, title, prompt, textarea),
         Modal::Form {
             title,
             fields,

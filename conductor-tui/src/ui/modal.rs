@@ -1,8 +1,9 @@
-use ratatui::layout::{Constraint, Flex, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
+use tui_textarea::TextArea;
 
 use conductor_core::agent::TicketAgentTotals;
 use conductor_core::config::WorkTarget;
@@ -473,6 +474,55 @@ pub fn render_work_target_manager(
     );
 
     frame.render_widget(content, popup);
+}
+
+pub fn render_agent_prompt(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    prompt: &str,
+    textarea: &TextArea<'_>,
+) {
+    let popup = centered_rect(70, 50, area);
+    frame.render_widget(Clear, popup);
+
+    // Outer block for the modal border
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(format!(" {title} "));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    // Split inner area: prompt line + textarea + hint line
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // prompt text
+            Constraint::Min(3),    // textarea
+            Constraint::Length(1), // hint
+        ])
+        .split(inner);
+
+    // Prompt label
+    let prompt_widget = Paragraph::new(vec![
+        Line::from(Span::styled(
+            format!(" {prompt}"),
+            Style::default().fg(Color::Cyan),
+        )),
+        Line::from(""),
+    ]);
+    frame.render_widget(prompt_widget, chunks[0]);
+
+    // Textarea (renders itself with cursor)
+    frame.render_widget(textarea, chunks[1]);
+
+    // Hint line
+    let hint = Paragraph::new(Line::from(Span::styled(
+        " Enter for newline, Ctrl+S to submit, Esc to cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    frame.render_widget(hint, chunks[2]);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
