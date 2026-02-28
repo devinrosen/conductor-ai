@@ -50,6 +50,13 @@ pub enum Action {
     AgentActivityDown,
     AgentActivityUp,
 
+    // Scroll navigation (all views)
+    GoToTop,
+    GoToBottom,
+    HalfPageDown,
+    HalfPageUp,
+    PendingG,
+
     // Filter
     EnterFilter,
     FilterChar(char),

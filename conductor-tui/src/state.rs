@@ -238,6 +238,8 @@ pub struct AppState {
 
     // Agent activity scroll
     pub agent_event_index: usize,
+    /// Tracks pending `g` keypress for `gg` chord (go to top)
+    pub pending_g: bool,
 
     // Filter
     pub filter_active: bool,
@@ -270,10 +272,57 @@ impl AppState {
             detail_wt_index: 0,
             detail_ticket_index: 0,
             agent_event_index: 0,
+            pending_g: false,
             filter_active: false,
             filter_text: String::new(),
             status_message: None,
             should_quit: false,
+        }
+    }
+
+    /// Returns (current_index, list_length) for the currently focused pane.
+    pub fn focused_index_and_len(&self) -> (usize, usize) {
+        match self.view {
+            View::Dashboard => match self.dashboard_focus {
+                DashboardFocus::Repos => (self.repo_index, self.data.repos.len()),
+                DashboardFocus::Worktrees => (self.worktree_index, self.data.worktrees.len()),
+                DashboardFocus::Tickets => (self.ticket_index, self.data.tickets.len()),
+            },
+            View::RepoDetail => match self.repo_detail_focus {
+                RepoDetailFocus::Worktrees => (self.detail_wt_index, self.detail_worktrees.len()),
+                RepoDetailFocus::Tickets => (self.detail_ticket_index, self.detail_tickets.len()),
+            },
+            View::WorktreeDetail => (self.agent_event_index, self.data.agent_events.len()),
+            View::Tickets => (self.ticket_index, self.data.tickets.len()),
+            View::Session => match self.session_focus {
+                SessionFocus::Worktrees => {
+                    (self.session_wt_index, self.data.session_worktrees.len())
+                }
+                SessionFocus::History => {
+                    (self.session_history_index, self.data.session_history.len())
+                }
+            },
+        }
+    }
+
+    /// Sets the index for the currently focused pane.
+    pub fn set_focused_index(&mut self, index: usize) {
+        match self.view {
+            View::Dashboard => match self.dashboard_focus {
+                DashboardFocus::Repos => self.repo_index = index,
+                DashboardFocus::Worktrees => self.worktree_index = index,
+                DashboardFocus::Tickets => self.ticket_index = index,
+            },
+            View::RepoDetail => match self.repo_detail_focus {
+                RepoDetailFocus::Worktrees => self.detail_wt_index = index,
+                RepoDetailFocus::Tickets => self.detail_ticket_index = index,
+            },
+            View::WorktreeDetail => self.agent_event_index = index,
+            View::Tickets => self.ticket_index = index,
+            View::Session => match self.session_focus {
+                SessionFocus::Worktrees => self.session_wt_index = index,
+                SessionFocus::History => self.session_history_index = index,
+            },
         }
     }
 

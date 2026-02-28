@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::action::Action;
-use crate::state::{AppState, DashboardFocus, Modal, SessionFocus, View};
+use crate::state::{AppState, Modal, View};
 
 /// Map a key event to an action based on the current app state.
 /// Priority: Modal > Filter > Normal keybindings.
@@ -104,6 +104,22 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         };
     }
 
+    // Vim-style scroll bindings (all views)
+    // Handle `gg` chord: pending g + g → jump to top
+    if state.pending_g && key.code == KeyCode::Char('g') {
+        return Action::GoToTop;
+    }
+
+    // Ctrl+d / Ctrl+u for half-page scroll (must precede normal match to avoid
+    // Ctrl+d matching 'd' → Delete)
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('d') => return Action::HalfPageDown,
+            KeyCode::Char('u') => return Action::HalfPageUp,
+            _ => {}
+        }
+    }
+
     // View-specific keybindings (WorktreeDetail agent controls)
     if state.view == View::WorktreeDetail {
         let agent_run = state
@@ -118,8 +134,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('r') => return Action::LaunchAgent,
             KeyCode::Char('x') if has_running_agent => return Action::StopAgent,
             KeyCode::Char('L') if has_log => return Action::ViewAgentLog,
-            KeyCode::Char('J') => return Action::AgentActivityDown,
-            KeyCode::Char('K') => return Action::AgentActivityUp,
+            KeyCode::Char('j') => return Action::AgentActivityDown,
+            KeyCode::Char('k') => return Action::AgentActivityUp,
             _ => {}
         }
     }
@@ -135,6 +151,11 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
         KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
         KeyCode::Enter => Action::Select,
+
+        // Scroll navigation
+        KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
+        KeyCode::Char('g') => Action::PendingG,
+        KeyCode::Home => Action::GoToTop,
 
         // CRUD actions (context-dependent)
         KeyCode::Char('a') => match state.view {
@@ -162,24 +183,5 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('3') => Action::GoToSession,
 
         _ => Action::None,
-    }
-}
-
-/// Get the current list length for the focused panel (used for bounds-checking navigation).
-#[allow(dead_code)]
-pub fn focused_list_len(state: &AppState) -> usize {
-    match state.view {
-        View::Dashboard => match state.dashboard_focus {
-            DashboardFocus::Repos => state.data.repos.len(),
-            DashboardFocus::Worktrees => state.data.worktrees.len(),
-            DashboardFocus::Tickets => state.data.tickets.len(),
-        },
-        View::RepoDetail => state.detail_worktrees.len().max(state.detail_tickets.len()),
-        View::WorktreeDetail => 0,
-        View::Tickets => state.data.tickets.len(),
-        View::Session => match state.session_focus {
-            SessionFocus::Worktrees => state.data.session_worktrees.len(),
-            SessionFocus::History => state.data.session_history.len(),
-        },
     }
 }

@@ -114,9 +114,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             .get(&wt.id)
             .is_some_and(|run| run.log_file.is_some());
         if has_log {
-            "Actions: r=agent  x=stop  L=log  J/K=scroll  w=work  o=ticket  p=push  P=PR  l=link  d=del  Esc=back"
+            "Actions: r=agent  x=stop  L=log  j/k=scroll  gg/G=top/bot  ^d/^u=½pg  w=work  p=push  P=PR  l=link  d=del  Esc=back"
         } else {
-            "Actions: r=agent  x=stop  w=work  o=ticket  p=push  P=PR  l=link  d=delete  Esc=back"
+            "Actions: r=agent  x=stop  j/k=scroll  gg/G=top/bot  ^d/^u=½pg  w=work  p=push  P=PR  l=link  d=del  Esc=back"
         }
     } else {
         "Actions: o=open ticket  Esc=back  (archived)"
