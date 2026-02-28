@@ -39,7 +39,7 @@ pub fn poll_data() -> Option<Action> {
     let session_tracker = SessionTracker::new(&conn);
 
     let repos = repo_mgr.list().ok()?;
-    let worktrees = wt_mgr.list(None).ok()?;
+    let worktrees = wt_mgr.list(None, true).ok()?;
     let tickets = ticket_syncer.list(None).ok()?;
     let session = session_tracker.current().ok()?;
     let session_worktrees = if let Some(ref s) = session {

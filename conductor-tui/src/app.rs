@@ -243,7 +243,7 @@ impl App {
         let session_tracker = SessionTracker::new(&self.conn);
 
         self.state.data.repos = repo_mgr.list().unwrap_or_default();
-        self.state.data.worktrees = wt_mgr.list(None).unwrap_or_default();
+        self.state.data.worktrees = wt_mgr.list(None, true).unwrap_or_default();
         self.state.data.tickets = ticket_syncer.list(None).unwrap_or_default();
         self.state.data.current_session = session_tracker.current().unwrap_or(None);
         self.state.data.session_worktrees = if let Some(ref s) = self.state.data.current_session {
