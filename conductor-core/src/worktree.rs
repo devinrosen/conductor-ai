@@ -639,9 +639,9 @@ mod tests {
         let remote_path = tmp.path().join("remote.git");
         let local_path = tmp.path().join("local");
 
-        // Create bare remote
+        // Create bare remote with explicit main branch
         fs::create_dir_all(&remote_path).unwrap();
-        git(&["init", "--bare"], &remote_path);
+        git(&["init", "--bare", "-b", "main"], &remote_path);
 
         // Clone it
         git(
@@ -657,12 +657,15 @@ mod tests {
         git(&["config", "user.email", "test@test.com"], &local_path);
         git(&["config", "user.name", "Test"], &local_path);
 
+        // Ensure we're on the main branch (CI may not have init.defaultBranch=main)
+        git(&["checkout", "-b", "main"], &local_path);
+
         // Create initial commit on main
         let file = local_path.join("README.md");
         fs::write(&file, "initial").unwrap();
         git(&["add", "README.md"], &local_path);
         git(&["commit", "-m", "initial"], &local_path);
-        git(&["push", "origin", "main"], &local_path);
+        git(&["push", "-u", "origin", "main"], &local_path);
 
         (tmp, remote_path, local_path)
     }
