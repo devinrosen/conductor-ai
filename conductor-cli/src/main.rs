@@ -526,9 +526,15 @@ fn sync_jira(syncer: &TicketSyncer, repo_id: &str, repo_slug: &str, jql: &str, b
                     let closed = syncer
                         .close_missing_tickets(repo_id, "jira", &synced_ids)
                         .unwrap_or(0);
+                    let merged = syncer
+                        .mark_worktrees_for_closed_tickets(repo_id)
+                        .unwrap_or(0);
                     print!("  {} — synced {count} Jira issues", repo_slug);
                     if closed > 0 {
                         print!(", {closed} marked closed");
+                    }
+                    if merged > 0 {
+                        print!(", {merged} worktrees merged");
                     }
                     println!();
                 }
@@ -553,9 +559,15 @@ fn sync_github(syncer: &TicketSyncer, repo_id: &str, repo_slug: &str, owner: &st
                     let closed = syncer
                         .close_missing_tickets(repo_id, "github", &synced_ids)
                         .unwrap_or(0);
+                    let merged = syncer
+                        .mark_worktrees_for_closed_tickets(repo_id)
+                        .unwrap_or(0);
                     print!("  {} — synced {count} GitHub issues", repo_slug);
                     if closed > 0 {
                         print!(", {closed} marked closed");
+                    }
+                    if merged > 0 {
+                        print!(", {merged} worktrees merged");
                     }
                     println!();
                 }
