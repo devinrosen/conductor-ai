@@ -35,6 +35,9 @@ pub enum ConductorError {
         source_type: String,
     },
 
+    #[error("ticket not found: {id}")]
+    TicketNotFound { id: String },
+
     #[error("agent error: {0}")]
     Agent(String),
 }

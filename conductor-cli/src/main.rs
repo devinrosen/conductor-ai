@@ -12,7 +12,7 @@ use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig}
 use conductor_core::jira_acli;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::session::SessionTracker;
-use conductor_core::tickets::TicketSyncer;
+use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
 
 #[derive(Parser)]
@@ -142,6 +142,9 @@ enum WorktreeCommands {
         /// Link to a ticket ID
         #[arg(long)]
         ticket: Option<String>,
+        /// Auto-start an agent after creation (requires --ticket)
+        #[arg(long)]
+        auto_agent: bool,
     },
     /// List worktrees
     List {
@@ -354,11 +357,32 @@ fn main() -> Result<()> {
                 name,
                 from,
                 ticket,
+                auto_agent,
             } => {
                 let mgr = WorktreeManager::new(&conn, &config);
                 let wt = mgr.create(&repo, &name, from.as_deref(), ticket.as_deref())?;
                 println!("Created worktree: {} ({})", wt.slug, wt.branch);
                 println!("  Path: {}", wt.path);
+
+                if auto_agent {
+                    if let Some(ref tid) = ticket {
+                        let syncer = TicketSyncer::new(&conn);
+                        match syncer.get_by_id(tid) {
+                            Ok(t) => {
+                                let prompt = build_agent_prompt(&t);
+                                println!("Starting agent...");
+                                let agent_mgr = AgentManager::new(&conn);
+                                let run = agent_mgr.create_run(&wt.id, &prompt, Some(&wt.slug))?;
+                                run_agent(&conn, &run.id, &wt.path, &prompt, None)?;
+                            }
+                            Err(e) => {
+                                eprintln!("Warning: could not load ticket for agent prompt: {e}");
+                            }
+                        }
+                    } else {
+                        eprintln!("Warning: --auto-agent requires --ticket to be set");
+                    }
+                }
             }
             WorktreeCommands::List { repo } => {
                 let mgr = WorktreeManager::new(&conn, &config);

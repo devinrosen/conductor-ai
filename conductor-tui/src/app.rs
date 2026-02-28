@@ -6,11 +6,11 @@ use ratatui::DefaultTerminal;
 use rusqlite::Connection;
 
 use conductor_core::agent::AgentManager;
-use conductor_core::config::{save_config, Config, WorkTarget};
+use conductor_core::config::{save_config, AutoStartAgent, Config, WorkTarget};
 use conductor_core::github;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::session::SessionTracker;
-use conductor_core::tickets::TicketSyncer;
+use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
 
 use crate::action::Action;
@@ -829,6 +829,19 @@ impl App {
                         on_submit: InputAction::SessionNotes { session_id },
                     };
                 }
+                ConfirmAction::StartAgentForWorktree {
+                    worktree_id,
+                    worktree_path,
+                    worktree_slug,
+                    ticket_id,
+                } => {
+                    self.show_agent_prompt_for_ticket(
+                        worktree_id,
+                        worktree_path,
+                        worktree_slug,
+                        ticket_id,
+                    );
+                }
                 ConfirmAction::DeleteWorkTarget { index } => {
                     if index < self.config.general.work_targets.len() {
                         let removed = self.config.general.work_targets.remove(index);
@@ -900,6 +913,10 @@ impl App {
                         };
                         self.state.status_message = Some(msg);
                         self.refresh_data();
+
+                        if let Some(tid) = ticket_id {
+                            self.maybe_start_agent_for_worktree(wt.id, wt.path, wt.slug, tid);
+                        }
                     }
                     Err(e) => {
                         self.state.modal = Modal::Error {
@@ -1817,13 +1834,12 @@ impl App {
         let (title, prefill) = if resume_session_id.is_some() {
             ("Claude Agent (Resume)".to_string(), String::new())
         } else {
-            // Pre-fill prompt with ticket URL if available
+            // Pre-fill prompt with rich ticket context if available
             let prefill = wt
                 .ticket_id
                 .as_ref()
                 .and_then(|tid| self.state.data.ticket_map.get(tid))
-                .filter(|t| !t.url.is_empty())
-                .map(|t| format!("can we work on {}", t.url))
+                .map(build_agent_prompt)
                 .unwrap_or_default();
             ("Claude Agent".to_string(), prefill)
         };
@@ -1884,6 +1900,66 @@ impl App {
 
         self.state.status_message = Some("Agent cancelled".to_string());
         self.refresh_data();
+    }
+
+    fn maybe_start_agent_for_worktree(
+        &mut self,
+        worktree_id: String,
+        worktree_path: String,
+        worktree_slug: String,
+        ticket_id: String,
+    ) {
+        match self.config.general.auto_start_agent {
+            AutoStartAgent::Never => {}
+            AutoStartAgent::Ask => {
+                self.state.modal = Modal::Confirm {
+                    title: "Start Agent".to_string(),
+                    message: "Start an AI agent for this ticket?".to_string(),
+                    on_confirm: ConfirmAction::StartAgentForWorktree {
+                        worktree_id,
+                        worktree_path,
+                        worktree_slug,
+                        ticket_id,
+                    },
+                };
+            }
+            AutoStartAgent::Always => {
+                self.show_agent_prompt_for_ticket(
+                    worktree_id,
+                    worktree_path,
+                    worktree_slug,
+                    ticket_id,
+                );
+            }
+        }
+    }
+
+    fn show_agent_prompt_for_ticket(
+        &mut self,
+        worktree_id: String,
+        worktree_path: String,
+        worktree_slug: String,
+        ticket_id: String,
+    ) {
+        let prompt_text = self
+            .state
+            .data
+            .ticket_map
+            .get(&ticket_id)
+            .map(build_agent_prompt)
+            .unwrap_or_default();
+
+        self.state.modal = Modal::Input {
+            title: "Agent Prompt".to_string(),
+            prompt: "Edit prompt for Claude (Enter to launch):".to_string(),
+            value: prompt_text,
+            on_submit: InputAction::AgentPrompt {
+                worktree_id,
+                worktree_path,
+                worktree_slug,
+                resume_session_id: None,
+            },
+        };
     }
 
     fn start_agent_tmux(

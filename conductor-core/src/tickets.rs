@@ -2,7 +2,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::error::{ConductorError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ticket {
@@ -159,6 +159,20 @@ impl<'a> TicketSyncer<'a> {
         Ok(())
     }
 
+    /// Fetch a single ticket by its internal (ULID) ID.
+    pub fn get_by_id(&self, ticket_id: &str) -> Result<Ticket> {
+        self.conn
+            .query_row(
+                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json
+                 FROM tickets WHERE id = ?1",
+                params![ticket_id],
+                map_ticket_row,
+            )
+            .map_err(|_| ConductorError::TicketNotFound {
+                id: ticket_id.to_string(),
+            })
+    }
+
     /// After syncing tickets for a repo, update any linked worktrees whose
     /// ticket is now closed: set worktree status to 'merged'.
     /// Returns the number of worktrees updated.
@@ -173,6 +187,39 @@ impl<'a> TicketSyncer<'a> {
         )?;
         Ok(count)
     }
+}
+
+/// Build a rich agent prompt from a ticket's context.
+pub fn build_agent_prompt(ticket: &Ticket) -> String {
+    let labels_display = if ticket.labels.is_empty() || ticket.labels == "[]" {
+        "None".to_string()
+    } else {
+        ticket.labels.clone()
+    };
+
+    let body_display = if ticket.body.is_empty() {
+        "(No description provided)".to_string()
+    } else {
+        ticket.body.clone()
+    };
+
+    format!(
+        "Work on the following GitHub issue in this repository.\n\
+         \n\
+         Issue: #{source_id} — {title}\n\
+         State: {state}\n\
+         Labels: {labels}\n\
+         \n\
+         Description:\n\
+         {body}\n\
+         \n\
+         Implement the changes described in the issue. Follow existing code conventions and patterns. Write tests if appropriate.",
+        source_id = ticket.source_id,
+        title = ticket.title,
+        state = ticket.state,
+        labels = labels_display,
+        body = body_display,
+    )
 }
 
 fn map_ticket_row(row: &rusqlite::Row) -> rusqlite::Result<Ticket> {
@@ -538,5 +585,81 @@ mod tests {
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
         assert_eq!(get_worktree_status(&conn, "wt2"), "active");
+    }
+
+    #[test]
+    fn test_get_by_id_success() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let tickets = vec![make_ticket("1", "Issue 1")];
+        syncer.upsert_tickets("repo1", &tickets).unwrap();
+
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        let ticket = syncer.get_by_id(&ticket_id).unwrap();
+        assert_eq!(ticket.source_id, "1");
+        assert_eq!(ticket.title, "Issue 1");
+    }
+
+    #[test]
+    fn test_get_by_id_not_found() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let result = syncer.get_by_id("nonexistent-id");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_agent_prompt_full_ticket() {
+        let ticket = Ticket {
+            id: "01ABCDEF".to_string(),
+            repo_id: "repo1".to_string(),
+            source_type: "github".to_string(),
+            source_id: "42".to_string(),
+            title: "Add dark mode support".to_string(),
+            body: "We need dark mode for the settings page.".to_string(),
+            state: "open".to_string(),
+            labels: "enhancement, ui".to_string(),
+            assignee: Some("dev1".to_string()),
+            priority: None,
+            url: "https://github.com/org/repo/issues/42".to_string(),
+            synced_at: "2026-01-01T00:00:00Z".to_string(),
+            raw_json: "{}".to_string(),
+        };
+
+        let prompt = build_agent_prompt(&ticket);
+        assert!(prompt.contains("Issue: #42 — Add dark mode support"));
+        assert!(prompt.contains("State: open"));
+        assert!(prompt.contains("Labels: enhancement, ui"));
+        assert!(prompt.contains("We need dark mode for the settings page."));
+        assert!(prompt.contains("Implement the changes described in the issue."));
+    }
+
+    #[test]
+    fn test_build_agent_prompt_empty_body_and_labels() {
+        let ticket = Ticket {
+            id: "01ABCDEF".to_string(),
+            repo_id: "repo1".to_string(),
+            source_type: "github".to_string(),
+            source_id: "7".to_string(),
+            title: "Fix typo".to_string(),
+            body: String::new(),
+            state: "open".to_string(),
+            labels: "[]".to_string(),
+            assignee: None,
+            priority: None,
+            url: String::new(),
+            synced_at: "2026-01-01T00:00:00Z".to_string(),
+            raw_json: "{}".to_string(),
+        };
+
+        let prompt = build_agent_prompt(&ticket);
+        assert!(prompt.contains("Issue: #7 — Fix typo"));
+        assert!(prompt.contains("Labels: None"));
+        assert!(prompt.contains("(No description provided)"));
     }
 }
