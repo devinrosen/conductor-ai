@@ -1645,26 +1645,14 @@ impl App {
             ("Claude Agent".to_string(), prefill)
         };
 
-        let lines = if prefill.is_empty() {
-            vec![String::new()]
-        } else {
-            prefill.lines().map(String::from).collect()
-        };
-        let mut textarea = tui_textarea::TextArea::new(lines);
-        textarea.set_cursor_line_style(ratatui::style::Style::default());
-        textarea.set_placeholder_text("Type your prompt here...");
-
-        self.state.modal = Modal::AgentPrompt {
+        self.open_agent_prompt_modal(
             title,
-            prompt: "Enter prompt for Claude:".to_string(),
-            textarea: Box::new(textarea),
-            on_submit: InputAction::AgentPrompt {
-                worktree_id: wt.id.clone(),
-                worktree_path: wt.path.clone(),
-                worktree_slug: wt.slug.clone(),
-                resume_session_id,
-            },
-        };
+            prefill,
+            wt.id.clone(),
+            wt.path.clone(),
+            wt.slug.clone(),
+            resume_session_id,
+        );
     }
 
     fn handle_stop_agent(&mut self) {
@@ -1742,7 +1730,7 @@ impl App {
         worktree_slug: String,
         ticket_id: String,
     ) {
-        let prompt_text = self
+        let prefill = self
             .state
             .data
             .ticket_map
@@ -1750,15 +1738,44 @@ impl App {
             .map(build_agent_prompt)
             .unwrap_or_default();
 
-        self.state.modal = Modal::Input {
-            title: "Agent Prompt".to_string(),
-            prompt: "Edit prompt for Claude (Enter to launch):".to_string(),
-            value: prompt_text,
+        self.open_agent_prompt_modal(
+            "Agent Prompt".to_string(),
+            prefill,
+            worktree_id,
+            worktree_path,
+            worktree_slug,
+            None,
+        );
+    }
+
+    /// Shared helper to open the multiline agent prompt modal.
+    fn open_agent_prompt_modal(
+        &mut self,
+        title: String,
+        prefill: String,
+        worktree_id: String,
+        worktree_path: String,
+        worktree_slug: String,
+        resume_session_id: Option<String>,
+    ) {
+        let lines = if prefill.is_empty() {
+            vec![String::new()]
+        } else {
+            prefill.lines().map(String::from).collect()
+        };
+        let mut textarea = tui_textarea::TextArea::new(lines);
+        textarea.set_cursor_line_style(ratatui::style::Style::default());
+        textarea.set_placeholder_text("Type your prompt here...");
+
+        self.state.modal = Modal::AgentPrompt {
+            title,
+            prompt: "Enter prompt for Claude:".to_string(),
+            textarea: Box::new(textarea),
             on_submit: InputAction::AgentPrompt {
                 worktree_id,
                 worktree_path,
                 worktree_slug,
-                resume_session_id: None,
+                resume_session_id,
             },
         };
     }
