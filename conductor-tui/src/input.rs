@@ -167,20 +167,13 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('g') => Action::PendingG,
         KeyCode::Home => Action::GoToTop,
 
-        // CRUD actions (context-dependent)
-        KeyCode::Char('a') => match state.view {
-            View::Session => Action::AttachWorktree,
-            _ => Action::AddRepo,
-        },
+        // CRUD actions
+        KeyCode::Char('a') => Action::AddRepo,
         KeyCode::Char('c') => Action::Create,
         KeyCode::Char('d') => Action::Delete,
         KeyCode::Char('p') => Action::Push,
         KeyCode::Char('P') => Action::CreatePr,
-        KeyCode::Char('s') => match state.view {
-            View::Session => Action::EndSession,
-            _ => Action::SyncTickets,
-        },
-        KeyCode::Char('S') => Action::StartSession,
+        KeyCode::Char('s') => Action::SyncTickets,
         KeyCode::Char('l') => Action::LinkTicket,
         KeyCode::Char('w') => Action::StartWork,
         KeyCode::Char('W') => Action::ManageWorkTargets,
@@ -190,7 +183,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('t') => Action::GoToTickets,
         KeyCode::Char('1') => Action::GoToDashboard,
         KeyCode::Char('2') => Action::GoToTickets,
-        KeyCode::Char('3') => Action::GoToSession,
 
         _ => Action::None,
     }

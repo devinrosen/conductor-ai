@@ -81,5 +81,14 @@ pub fn run(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Migration 006: drop sessions and session_worktrees tables.
+    if version < 6 {
+        conn.execute_batch(include_str!("migrations/006_drop_sessions.sql"))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '6')",
+            [],
+        )?;
+    }
+
     Ok(())
 }

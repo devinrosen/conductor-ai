@@ -15,10 +15,6 @@ pub enum ConductorEvent {
     WorktreeDeleted { id: String, repo_id: String },
     #[serde(rename = "tickets_synced")]
     TicketsSynced { repo_id: String },
-    #[serde(rename = "session_started")]
-    SessionStarted { id: String },
-    #[serde(rename = "session_ended")]
-    SessionEnded { id: String },
 }
 
 impl ConductorEvent {
@@ -30,8 +26,6 @@ impl ConductorEvent {
             Self::WorktreeCreated { .. } => "worktree_created",
             Self::WorktreeDeleted { .. } => "worktree_deleted",
             Self::TicketsSynced { .. } => "tickets_synced",
-            Self::SessionStarted { .. } => "session_started",
-            Self::SessionEnded { .. } => "session_ended",
         }
     }
 }
@@ -120,14 +114,6 @@ mod tests {
             (
                 ConductorEvent::TicketsSynced { repo_id: "".into() },
                 "tickets_synced",
-            ),
-            (
-                ConductorEvent::SessionStarted { id: "".into() },
-                "session_started",
-            ),
-            (
-                ConductorEvent::SessionEnded { id: "".into() },
-                "session_ended",
             ),
         ];
         for (event, expected) in cases {

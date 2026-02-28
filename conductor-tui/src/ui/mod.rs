@@ -3,7 +3,6 @@ mod dashboard;
 mod help;
 mod modal;
 mod repo_detail;
-mod session;
 mod tickets;
 mod worktree_detail;
 
@@ -36,7 +35,6 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         View::RepoDetail => repo_detail::render(frame, body_area, state),
         View::WorktreeDetail => worktree_detail::render(frame, body_area, state),
         View::Tickets => tickets::render(frame, body_area, state),
-        View::Session => session::render(frame, body_area, state),
     }
 
     common::render_status_bar(frame, status_area, state);

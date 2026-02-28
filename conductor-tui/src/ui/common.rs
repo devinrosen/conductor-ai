@@ -13,18 +13,6 @@ pub fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
         View::RepoDetail => "Repo Detail",
         View::WorktreeDetail => "Worktree Detail",
         View::Tickets => "Tickets",
-        View::Session => "Session",
-    };
-
-    let session_info = if let Some(ref session) = state.data.current_session {
-        if session.ended_at.is_none() {
-            let elapsed = session_elapsed(&session.started_at);
-            format!(" | Session: {elapsed}")
-        } else {
-            String::new()
-        }
-    } else {
-        String::new()
     };
 
     let header = Line::from(vec![
@@ -41,7 +29,6 @@ pub fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(session_info, Style::default().fg(Color::Yellow)),
     ]);
 
     frame.render_widget(Paragraph::new(header), area);
@@ -75,7 +62,6 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
                 }
             }
             View::Tickets => "j/k:nav  /:filter  Esc:back  ?:help".to_string(),
-            View::Session => "s:end session  Esc:back  ?:help".to_string(),
         }
     };
 
@@ -234,20 +220,4 @@ pub fn ticket_agent_total_spans(
         format!("{leading}${:.2} {}t", totals.total_cost, totals.total_turns)
     };
     vec![Span::styled(text, Style::default().fg(Color::Magenta))]
-}
-
-/// Calculate elapsed time from an ISO 8601 timestamp to now.
-fn session_elapsed(started_at: &str) -> String {
-    let Ok(start) = chrono::DateTime::parse_from_rfc3339(started_at) else {
-        return "??:??".to_string();
-    };
-    let elapsed = chrono::Utc::now().signed_duration_since(start);
-    let hours = elapsed.num_hours();
-    let minutes = elapsed.num_minutes() % 60;
-    let seconds = elapsed.num_seconds() % 60;
-    if hours > 0 {
-        format!("{hours}h{minutes:02}m{seconds:02}s")
-    } else {
-        format!("{minutes}m{seconds:02}s")
-    }
 }

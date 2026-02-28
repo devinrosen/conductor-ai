@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use conductor_core::agent::{AgentRun, TicketAgentTotals};
 use conductor_core::repo::Repo;
-use conductor_core::session::Session;
 use conductor_core::tickets::Ticket;
 use conductor_core::worktree::Worktree;
 use crossterm::event::KeyEvent;
@@ -13,8 +12,6 @@ pub struct DataRefreshedPayload {
     pub repos: Vec<Repo>,
     pub worktrees: Vec<Worktree>,
     pub tickets: Vec<Ticket>,
-    pub session: Option<Session>,
-    pub session_worktrees: Vec<Worktree>,
     pub latest_agent_runs: HashMap<String, AgentRun>,
     pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
 }
@@ -34,8 +31,6 @@ pub enum Action {
     // Views
     GoToDashboard,
     GoToTickets,
-    GoToSession,
-
     // CRUD triggers
     AddRepo,
     Create,
@@ -44,9 +39,6 @@ pub enum Action {
     CreatePr,
     SyncTickets,
     LinkTicket,
-    StartSession,
-    EndSession,
-    AttachWorktree,
     StartWork,
     SelectWorkTarget(usize),
     ManageWorkTargets,

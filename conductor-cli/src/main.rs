@@ -11,7 +11,6 @@ use conductor_core::github;
 use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
 use conductor_core::jira_acli;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
-use conductor_core::session::SessionTracker;
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
 
@@ -38,11 +37,6 @@ enum Commands {
     Tickets {
         #[command(subcommand)]
         command: TicketCommands,
-    },
-    /// Manage sessions
-    Session {
-        #[command(subcommand)]
-        command: SessionCommands,
     },
     /// Run Claude agent (used internally by TUI tmux windows)
     Agent {
@@ -210,27 +204,6 @@ enum TicketCommands {
         /// Filter by repo slug
         repo: Option<String>,
     },
-}
-
-#[derive(Subcommand)]
-enum SessionCommands {
-    /// Start a new session
-    Start,
-    /// End the current session
-    End {
-        /// Postmortem notes
-        #[arg(long)]
-        notes: Option<String>,
-    },
-    /// Attach a worktree to the current session
-    Attach {
-        /// Worktree slug
-        worktree: String,
-    },
-    /// Show the current active session
-    Current,
-    /// List past sessions
-    List,
 }
 
 fn main() -> Result<()> {
@@ -424,120 +397,6 @@ fn main() -> Result<()> {
                 println!("PR created: {url}");
             }
         },
-        Commands::Session { command } => match command {
-            SessionCommands::Start => {
-                let tracker = SessionTracker::new(&conn);
-                if let Some(existing) = tracker.current()? {
-                    anyhow::bail!(
-                        "Session already active: {} (started {})",
-                        existing.id,
-                        existing.started_at
-                    );
-                }
-                let session = tracker.start()?;
-                println!("Started session: {}", session.id);
-            }
-            SessionCommands::End { notes } => {
-                let tracker = SessionTracker::new(&conn);
-                let session = tracker
-                    .current()?
-                    .ok_or_else(|| anyhow::anyhow!("No active session"))?;
-                tracker.end(&session.id, notes.as_deref())?;
-                println!("Ended session: {}", session.id);
-                if let Some(n) = &notes {
-                    println!("  Notes: {n}");
-                }
-            }
-            SessionCommands::Attach { worktree } => {
-                let tracker = SessionTracker::new(&conn);
-                let session = tracker
-                    .current()?
-                    .ok_or_else(|| anyhow::anyhow!("No active session"))?;
-
-                // Look up the worktree by slug
-                let wt_id: String = conn
-                    .query_row(
-                        "SELECT id FROM worktrees WHERE slug = ?1",
-                        rusqlite::params![worktree],
-                        |row| row.get(0),
-                    )
-                    .map_err(|_| anyhow::anyhow!("Worktree not found: {worktree}"))?;
-
-                tracker.add_worktree(&session.id, &wt_id)?;
-                println!("Attached worktree '{worktree}' to session {}", session.id);
-            }
-            SessionCommands::Current => {
-                let tracker = SessionTracker::new(&conn);
-                match tracker.current()? {
-                    Some(session) => {
-                        println!("Session: {}", session.id);
-                        println!("  Started: {}", session.started_at);
-                        let worktrees = tracker.get_worktrees(&session.id)?;
-                        if worktrees.is_empty() {
-                            println!("  Worktrees: (none)");
-                        } else {
-                            println!("  Worktrees:");
-                            for wt in worktrees {
-                                println!("    {} [{}]", wt.slug, wt.branch);
-                            }
-                        }
-                    }
-                    None => {
-                        println!("No active session.");
-                    }
-                }
-            }
-            SessionCommands::List => {
-                let tracker = SessionTracker::new(&conn);
-                let sessions = tracker.list()?;
-                if sessions.is_empty() {
-                    println!("No sessions.");
-                } else {
-                    for s in sessions {
-                        let status = if s.ended_at.is_some() {
-                            "ended"
-                        } else {
-                            "active"
-                        };
-                        let worktrees = tracker.get_worktrees(&s.id)?;
-                        let duration = match &s.ended_at {
-                            Some(end) => {
-                                if let (Ok(start_dt), Ok(end_dt)) = (
-                                    chrono::DateTime::parse_from_rfc3339(&s.started_at),
-                                    chrono::DateTime::parse_from_rfc3339(end),
-                                ) {
-                                    let dur = end_dt - start_dt;
-                                    format_duration(dur)
-                                } else {
-                                    "?".to_string()
-                                }
-                            }
-                            None => {
-                                if let Ok(start_dt) =
-                                    chrono::DateTime::parse_from_rfc3339(&s.started_at)
-                                {
-                                    let dur =
-                                        chrono::Utc::now() - start_dt.with_timezone(&chrono::Utc);
-                                    format!("{} (ongoing)", format_duration(dur))
-                                } else {
-                                    "?".to_string()
-                                }
-                            }
-                        };
-                        print!(
-                            "  {}  [{status}]  {}  worktrees: {}",
-                            &s.id[..13],
-                            duration,
-                            worktrees.len(),
-                        );
-                        if let Some(notes) = &s.notes {
-                            print!("  — {notes}");
-                        }
-                        println!();
-                    }
-                }
-            }
-        },
         Commands::Agent { command } => match command {
             AgentCommands::Run {
                 run_id,
@@ -698,17 +557,6 @@ fn truncate_str(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         format!("{}...", &s[..max.saturating_sub(3)])
-    }
-}
-
-fn format_duration(dur: chrono::Duration) -> String {
-    let total_secs = dur.num_seconds();
-    let hours = total_secs / 3600;
-    let mins = (total_secs % 3600) / 60;
-    if hours > 0 {
-        format!("{hours}h {mins}m")
-    } else {
-        format!("{mins}m")
     }
 }
 

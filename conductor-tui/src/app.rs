@@ -9,7 +9,6 @@ use conductor_core::agent::AgentManager;
 use conductor_core::config::{save_config, AutoStartAgent, Config, WorkTarget};
 use conductor_core::github;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
-use conductor_core::session::SessionTracker;
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
 
@@ -19,7 +18,7 @@ use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
 use crate::state::{
     AppState, ConfirmAction, DashboardFocus, FormAction, FormField, InputAction, Modal,
-    RepoDetailFocus, SessionFocus, View,
+    RepoDetailFocus, View,
 };
 use crate::ui;
 
@@ -163,9 +162,6 @@ impl App {
                 self.state.view = View::Tickets;
                 self.state.ticket_index = 0;
             }
-            Action::GoToSession => {
-                self.state.view = View::Session;
-            }
 
             // Filter
             Action::EnterFilter => {
@@ -227,9 +223,6 @@ impl App {
             Action::CreatePr => self.handle_create_pr(),
             Action::SyncTickets => self.handle_sync_tickets(),
             Action::LinkTicket => self.handle_link_ticket(),
-            Action::StartSession => self.handle_start_session(),
-            Action::EndSession => self.handle_end_session(),
-            Action::AttachWorktree => self.handle_attach_worktree(),
             Action::StartWork => self.handle_start_work(),
             Action::SelectWorkTarget(index) => self.handle_select_work_target(index),
             Action::ManageWorkTargets => self.handle_manage_work_targets(),
@@ -279,8 +272,6 @@ impl App {
                 self.state.data.repos = payload.repos;
                 self.state.data.worktrees = payload.worktrees;
                 self.state.data.tickets = payload.tickets;
-                self.state.data.current_session = payload.session;
-                self.state.data.session_worktrees = payload.session_worktrees;
                 self.state.data.latest_agent_runs = payload.latest_agent_runs;
                 self.state.data.ticket_agent_totals = payload.ticket_agent_totals;
                 self.state.data.rebuild_maps();
@@ -320,38 +311,11 @@ impl App {
         let repo_mgr = RepoManager::new(&self.conn, &self.config);
         let wt_mgr = WorktreeManager::new(&self.conn, &self.config);
         let ticket_syncer = TicketSyncer::new(&self.conn);
-        let session_tracker = SessionTracker::new(&self.conn);
         let agent_mgr = AgentManager::new(&self.conn);
 
         self.state.data.repos = repo_mgr.list().unwrap_or_default();
         self.state.data.worktrees = wt_mgr.list(None, true).unwrap_or_default();
         self.state.data.tickets = ticket_syncer.list(None).unwrap_or_default();
-        self.state.data.current_session = session_tracker.current().unwrap_or(None);
-        self.state.data.session_worktrees = if let Some(ref s) = self.state.data.current_session {
-            session_tracker.get_worktrees(&s.id).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
-        // Load session history (ended sessions only)
-        let all_sessions = session_tracker.list().unwrap_or_default();
-        self.state.data.session_history = all_sessions
-            .into_iter()
-            .filter(|s| s.ended_at.is_some())
-            .collect();
-
-        // Pre-compute worktree counts for history
-        self.state.data.session_wt_counts.clear();
-        for s in &self.state.data.session_history {
-            let count = session_tracker
-                .get_worktrees(&s.id)
-                .map(|wts| wts.len())
-                .unwrap_or(0);
-            self.state
-                .data
-                .session_wt_counts
-                .insert(s.id.clone(), count);
-        }
 
         self.state.data.latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
         self.state.data.rebuild_maps();
@@ -450,16 +414,6 @@ impl App {
         if t_len > 0 && self.state.ticket_index >= t_len {
             self.state.ticket_index = t_len - 1;
         }
-
-        let swt_len = self.state.data.session_worktrees.len();
-        if swt_len > 0 && self.state.session_wt_index >= swt_len {
-            self.state.session_wt_index = swt_len - 1;
-        }
-
-        let hist_len = self.state.data.session_history.len();
-        if hist_len > 0 && self.state.session_history_index >= hist_len {
-            self.state.session_history_index = hist_len - 1;
-        }
     }
 
     fn go_back(&mut self) {
@@ -477,7 +431,7 @@ impl App {
                 }
                 self.state.selected_worktree_id = None;
             }
-            View::Tickets | View::Session => {
+            View::Tickets => {
                 self.state.view = View::Dashboard;
             }
         }
@@ -491,9 +445,6 @@ impl App {
             View::RepoDetail => {
                 self.state.repo_detail_focus = self.state.repo_detail_focus.toggle();
             }
-            View::Session => {
-                self.state.session_focus = self.state.session_focus.toggle();
-            }
             _ => {}
         }
     }
@@ -505,9 +456,6 @@ impl App {
             }
             View::RepoDetail => {
                 self.state.repo_detail_focus = self.state.repo_detail_focus.toggle();
-            }
-            View::Session => {
-                self.state.session_focus = self.state.session_focus.toggle();
             }
             _ => {}
         }
@@ -563,15 +511,6 @@ impl App {
             View::Tickets => {
                 self.state.ticket_index = self.state.ticket_index.saturating_sub(1);
             }
-            View::Session => match self.state.session_focus {
-                SessionFocus::Worktrees => {
-                    self.state.session_wt_index = self.state.session_wt_index.saturating_sub(1);
-                }
-                SessionFocus::History => {
-                    self.state.session_history_index =
-                        self.state.session_history_index.saturating_sub(1);
-                }
-            },
             _ => {}
         }
     }
@@ -643,20 +582,6 @@ impl App {
                     self.state.ticket_index += 1;
                 }
             }
-            View::Session => match self.state.session_focus {
-                SessionFocus::Worktrees => {
-                    let max = self.state.data.session_worktrees.len().saturating_sub(1);
-                    if self.state.session_wt_index < max {
-                        self.state.session_wt_index += 1;
-                    }
-                }
-                SessionFocus::History => {
-                    let max = self.state.data.session_history.len().saturating_sub(1);
-                    if self.state.session_history_index < max {
-                        self.state.session_history_index += 1;
-                    }
-                }
-            },
             _ => {}
         }
     }
@@ -821,14 +746,6 @@ impl App {
                         }
                     }
                 }
-                ConfirmAction::EndSession { session_id } => {
-                    self.state.modal = Modal::Input {
-                        title: "Session Notes".to_string(),
-                        prompt: "Postmortem notes (leave empty to skip):".to_string(),
-                        value: String::new(),
-                        on_submit: InputAction::SessionNotes { session_id },
-                    };
-                }
                 ConfirmAction::StartAgentForWorktree {
                     worktree_id,
                     worktree_path,
@@ -887,8 +804,7 @@ impl App {
             _ => return,
         };
 
-        // SessionNotes allows empty input (skip notes); others require a value
-        if value.is_empty() && !matches!(on_submit, InputAction::SessionNotes { .. }) {
+        if value.is_empty() {
             return;
         }
         match on_submit {
@@ -960,48 +876,6 @@ impl App {
                 } else {
                     self.state.modal = Modal::Error {
                         message: format!("Ticket #{value} not found"),
-                    };
-                }
-            }
-            InputAction::SessionNotes { session_id } => {
-                let tracker = SessionTracker::new(&self.conn);
-                let notes = if value.is_empty() {
-                    None
-                } else {
-                    Some(value.as_str())
-                };
-                match tracker.end(&session_id, notes) {
-                    Ok(()) => {
-                        self.state.status_message = Some("Session ended with notes".to_string());
-                        self.refresh_data();
-                    }
-                    Err(e) => {
-                        self.state.modal = Modal::Error {
-                            message: format!("End session failed: {e}"),
-                        };
-                    }
-                }
-            }
-            InputAction::AttachWorktree { session_id } => {
-                // Look up worktree by slug
-                let wt = self.state.data.worktrees.iter().find(|w| w.slug == value);
-                if let Some(wt) = wt {
-                    let tracker = SessionTracker::new(&self.conn);
-                    match tracker.add_worktree(&session_id, &wt.id) {
-                        Ok(()) => {
-                            self.state.status_message =
-                                Some(format!("Attached worktree '{}'", value));
-                            self.refresh_data();
-                        }
-                        Err(e) => {
-                            self.state.modal = Modal::Error {
-                                message: format!("Attach failed: {e}"),
-                            };
-                        }
-                    }
-                } else {
-                    self.state.modal = Modal::Error {
-                        message: format!("Worktree '{value}' not found"),
                     };
                 }
             }
@@ -1513,82 +1387,6 @@ impl App {
         } else {
             self.state.status_message = Some("Select a worktree first".to_string());
         }
-    }
-
-    fn handle_start_session(&mut self) {
-        if self.state.data.current_session.is_some() {
-            self.state.status_message = Some("Session already active".to_string());
-            return;
-        }
-
-        let tracker = SessionTracker::new(&self.conn);
-        match tracker.start() {
-            Ok(session) => {
-                self.state.status_message = Some(format!(
-                    "Session started: {}",
-                    &session.id[..13.min(session.id.len())]
-                ));
-                self.refresh_data();
-                self.state.view = View::Session;
-            }
-            Err(e) => {
-                self.state.modal = Modal::Error {
-                    message: format!("Start session failed: {e}"),
-                };
-            }
-        }
-    }
-
-    fn handle_end_session(&mut self) {
-        if let Some(ref session) = self.state.data.current_session {
-            self.state.modal = Modal::Confirm {
-                title: "End Session".to_string(),
-                message: "End the current session?".to_string(),
-                on_confirm: ConfirmAction::EndSession {
-                    session_id: session.id.clone(),
-                },
-            };
-        } else {
-            self.state.status_message = Some("No active session".to_string());
-        }
-    }
-
-    fn handle_attach_worktree(&mut self) {
-        let Some(ref session) = self.state.data.current_session else {
-            self.state.status_message = Some("No active session".to_string());
-            return;
-        };
-
-        // Collect worktrees not already attached
-        let attached_ids: std::collections::HashSet<&str> = self
-            .state
-            .data
-            .session_worktrees
-            .iter()
-            .map(|wt| wt.id.as_str())
-            .collect();
-
-        let available: Vec<&conductor_core::worktree::Worktree> = self
-            .state
-            .data
-            .worktrees
-            .iter()
-            .filter(|wt| !attached_ids.contains(wt.id.as_str()))
-            .collect();
-
-        if available.is_empty() {
-            self.state.status_message = Some("No unattached worktrees available".to_string());
-            return;
-        }
-
-        self.state.modal = Modal::Input {
-            title: "Attach Worktree".to_string(),
-            prompt: "Enter worktree slug:".to_string(),
-            value: String::new(),
-            on_submit: InputAction::AttachWorktree {
-                session_id: session.id.clone(),
-            },
-        };
     }
 
     fn handle_start_work(&mut self) {

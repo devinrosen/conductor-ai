@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { api } from "../api/client";
-import type { Worktree, Session } from "../api/types";
+import type { Worktree } from "../api/types";
 import { RepoCard } from "../components/repos/RepoCard";
 import { CreateRepoForm } from "../components/repos/CreateRepoForm";
 import { StatusBadge } from "../components/shared/StatusBadge";
@@ -18,16 +18,6 @@ export function DashboardPage() {
   const [activeWorktrees, setActiveWorktrees] = useState<
     (Worktree & { repoSlug: string })[]
   >([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-
-  useEffect(() => {
-    api.listSessions().then((s) => {
-      setSessions(s);
-      setSessionsLoading(false);
-    });
-  }, []);
-
   useEffect(() => {
     if (repos.length === 0) return;
     Promise.all(
@@ -51,8 +41,6 @@ export function DashboardPage() {
   }, [repos]);
 
   if (reposLoading) return <LoadingSpinner />;
-
-  const recentSessions = sessions.slice(0, 5);
 
   return (
     <div className="space-y-8">
@@ -125,52 +113,6 @@ export function DashboardPage() {
         )}
       </section>
 
-      {/* Recent Sessions */}
-      <section>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
-            Recent Sessions
-          </h3>
-          <Link
-            to="/sessions"
-            className="text-sm text-indigo-600 hover:underline"
-          >
-            View all
-          </Link>
-        </div>
-        {sessionsLoading ? (
-          <LoadingSpinner />
-        ) : recentSessions.length === 0 ? (
-          <EmptyState message="No sessions yet" />
-        ) : (
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
-                <tr>
-                  <th className="px-4 py-2">Started</th>
-                  <th className="px-4 py-2">Status</th>
-                  <th className="px-4 py-2">Notes</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {recentSessions.map((s) => (
-                  <tr key={s.id}>
-                    <td className="px-4 py-2 text-gray-600">
-                      <TimeAgo date={s.started_at} />
-                    </td>
-                    <td className="px-4 py-2">
-                      <StatusBadge status={s.ended_at ? "closed" : "active"} />
-                    </td>
-                    <td className="px-4 py-2 text-gray-500 truncate max-w-xs">
-                      {s.notes ?? "-"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
     </div>
   );
 }

@@ -249,67 +249,6 @@ async fn test_list_tickets_empty() {
 }
 
 #[tokio::test]
-async fn test_session_lifecycle() {
-    let base = spawn_test_server().await;
-    let client = reqwest::Client::new();
-
-    // List sessions (empty)
-    let sessions: Vec<serde_json::Value> = client
-        .get(format!("{base}/api/sessions"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert!(sessions.is_empty());
-
-    // Start a session
-    let resp = client
-        .post(format!("{base}/api/sessions"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 201);
-    let session: serde_json::Value = resp.json().await.unwrap();
-    let session_id = session["id"].as_str().unwrap().to_string();
-    assert!(session["ended_at"].is_null());
-
-    // List sessions (one active)
-    let sessions: Vec<serde_json::Value> = client
-        .get(format!("{base}/api/sessions"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(sessions.len(), 1);
-
-    // End the session
-    let resp = client
-        .post(format!("{base}/api/sessions/{session_id}/end"))
-        .json(&serde_json::json!({ "notes": "test session" }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 204);
-
-    // List sessions (one ended)
-    let sessions: Vec<serde_json::Value> = client
-        .get(format!("{base}/api/sessions"))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(sessions.len(), 1);
-    assert!(!sessions[0]["ended_at"].is_null());
-    assert_eq!(sessions[0]["notes"], "test session");
-}
-
-#[tokio::test]
 async fn test_sse_endpoint_returns_event_stream() {
     let base = spawn_test_server().await;
     let client = reqwest::Client::new();
