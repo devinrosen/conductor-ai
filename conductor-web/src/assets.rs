@@ -3,7 +3,7 @@ use axum::response::{Html, IntoResponse, Response};
 use rust_embed::Embed;
 
 #[derive(Embed)]
-#[folder = "static/"]
+#[folder = "frontend/dist/"]
 struct Assets;
 
 pub async fn static_handler(uri: Uri) -> Response {

@@ -102,55 +102,7 @@ fn render_worktrees(frame: &mut Frame, area: Rect, state: &AppState) {
                 .get(&wt.repo_id)
                 .map(|s| s.as_str())
                 .unwrap_or("?");
-            let is_active = wt.is_active();
-            let status_color = match wt.status.as_str() {
-                "active" => Color::Green,
-                "merged" => Color::Blue,
-                "abandoned" => Color::Red,
-                _ => Color::White,
-            };
-            let text_style = if is_active {
-                Style::default()
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-            let mut spans = vec![
-                Span::styled(
-                    format!("{repo_slug}/"),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    &wt.slug,
-                    text_style.add_modifier(if is_active {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::DIM
-                    }),
-                ),
-                Span::raw("  "),
-                Span::styled(
-                    format!("[{}]", wt.status),
-                    Style::default().fg(status_color),
-                ),
-            ];
-            if let Some(ticket) = wt
-                .ticket_id
-                .as_ref()
-                .and_then(|tid| state.data.ticket_map.get(tid))
-            {
-                let ticket_state_color = match ticket.state.as_str() {
-                    "open" => Color::Green,
-                    "closed" => Color::DarkGray,
-                    "in_progress" => Color::Yellow,
-                    _ => Color::White,
-                };
-                spans.push(Span::raw("  "));
-                spans.push(Span::styled(
-                    format!("#{} {}", ticket.source_id, ticket.state),
-                    Style::default().fg(ticket_state_color),
-                ));
-            }
-            ListItem::new(Line::from(spans))
+            super::common::worktree_list_item(wt, state, Some(repo_slug), false)
         })
         .collect();
 
@@ -211,7 +163,7 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
                 "in_progress" => Color::Yellow,
                 _ => Color::White,
             };
-            ListItem::new(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     format!("{repo_slug} "),
                     Style::default().fg(Color::DarkGray),
@@ -223,7 +175,14 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
                 Span::raw(&t.title),
                 Span::raw("  "),
                 Span::styled(format!("[{}]", t.state), Style::default().fg(state_color)),
-            ]))
+            ];
+            if let Some(totals) = state.data.ticket_agent_totals.get(&t.id) {
+                spans.push(Span::styled(
+                    format!("  ${:.2} {}t", totals.total_cost, totals.total_turns),
+                    Style::default().fg(Color::Magenta),
+                ));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 

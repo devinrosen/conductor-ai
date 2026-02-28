@@ -59,7 +59,10 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             ..
         } => modal::render_form(frame, area, title, fields, *active_field),
         Modal::Error { message } => modal::render_error(frame, area, message),
-        Modal::TicketInfo { ticket } => modal::render_ticket_info(frame, area, ticket),
+        Modal::TicketInfo { ticket } => {
+            let agent_totals = state.data.ticket_agent_totals.get(&ticket.id);
+            modal::render_ticket_info(frame, area, ticket, agent_totals);
+        }
         Modal::WorkTargetPicker { targets, selected } => {
             modal::render_work_target_picker(frame, area, targets, *selected)
         }

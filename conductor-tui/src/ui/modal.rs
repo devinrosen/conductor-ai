@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
+use conductor_core::agent::TicketAgentTotals;
 use conductor_core::config::WorkTarget;
 use conductor_core::tickets::Ticket;
 
@@ -92,7 +93,12 @@ pub fn render_error(frame: &mut Frame, area: Rect, message: &str) {
     frame.render_widget(content, popup);
 }
 
-pub fn render_ticket_info(frame: &mut Frame, area: Rect, ticket: &Ticket) {
+pub fn render_ticket_info(
+    frame: &mut Frame,
+    area: Rect,
+    ticket: &Ticket,
+    agent_totals: Option<&TicketAgentTotals>,
+) {
     let popup = centered_rect(60, 70, area);
     frame.render_widget(Clear, popup);
 
@@ -155,8 +161,39 @@ pub fn render_ticket_info(frame: &mut Frame, area: Rect, ticket: &Ticket) {
             Span::styled(&ticket.url, Style::default().fg(Color::Blue)),
         ]),
         Line::from(""),
-        Line::from(Span::styled("  Description:", label_style)),
     ];
+
+    if let Some(totals) = agent_totals {
+        let dur_secs = totals.total_duration_ms as f64 / 1000.0;
+        let mins = (dur_secs / 60.0) as i64;
+        let secs = (dur_secs % 60.0) as i64;
+        lines.push(Line::from(Span::styled("  Agent Totals:", label_style)));
+        lines.push(Line::from(vec![
+            Span::styled("    Cost:  ", dim_style),
+            Span::styled(
+                format!("${:.4}", totals.total_cost),
+                Style::default().fg(Color::Magenta),
+            ),
+            Span::styled("   Turns: ", dim_style),
+            Span::styled(
+                format!("{}", totals.total_turns),
+                Style::default().fg(Color::Magenta),
+            ),
+            Span::styled("   Time: ", dim_style),
+            Span::styled(
+                format!("{}m{:02}s", mins, secs),
+                Style::default().fg(Color::Magenta),
+            ),
+            Span::styled("   Runs: ", dim_style),
+            Span::styled(
+                format!("{}", totals.total_runs),
+                Style::default().fg(Color::Magenta),
+            ),
+        ]));
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(Span::styled("  Description:", label_style)));
 
     // Add body lines with word wrapping (indented)
     for body_line in body_text.lines() {

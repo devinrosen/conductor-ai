@@ -66,53 +66,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let wt_items: Vec<ListItem> = state
         .detail_worktrees
         .iter()
-        .map(|wt| {
-            let is_active = wt.is_active();
-            let status_color = match wt.status.as_str() {
-                "active" => Color::Green,
-                "merged" => Color::Blue,
-                _ => Color::Red,
-            };
-            let text_style = if is_active {
-                Style::default()
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-            let mut spans = vec![
-                Span::styled(
-                    &wt.slug,
-                    text_style.add_modifier(if is_active {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::DIM
-                    }),
-                ),
-                Span::styled(format!("  {}", wt.branch), text_style),
-                Span::raw("  "),
-                Span::styled(
-                    format!("[{}]", wt.status),
-                    Style::default().fg(status_color),
-                ),
-            ];
-            if let Some(ticket) = wt
-                .ticket_id
-                .as_ref()
-                .and_then(|tid| state.data.ticket_map.get(tid))
-            {
-                let ticket_state_color = match ticket.state.as_str() {
-                    "open" => Color::Green,
-                    "closed" => Color::DarkGray,
-                    "in_progress" => Color::Yellow,
-                    _ => Color::White,
-                };
-                spans.push(Span::raw("  "));
-                spans.push(Span::styled(
-                    format!("#{} {}", ticket.source_id, ticket.state),
-                    Style::default().fg(ticket_state_color),
-                ));
-            }
-            ListItem::new(Line::from(spans))
-        })
+        .map(|wt| super::common::worktree_list_item(wt, state, None, true))
         .collect();
 
     let wt_list = List::new(wt_items)

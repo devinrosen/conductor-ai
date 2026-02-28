@@ -202,6 +202,11 @@ enum TicketCommands {
         /// Worktree slug
         worktree: String,
     },
+    /// Show aggregate agent cost/turns/time per ticket
+    Stats {
+        /// Filter by repo slug
+        repo: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -618,10 +623,54 @@ fn main() -> Result<()> {
                 syncer.link_to_worktree(&ticket_id, &worktree_id)?;
                 println!("Linked ticket #{ticket} to worktree '{worktree}'");
             }
+            TicketCommands::Stats { repo } => {
+                let repo_mgr = RepoManager::new(&conn, &config);
+                let repo_id = if let Some(slug) = &repo {
+                    Some(repo_mgr.get_by_slug(slug)?.id)
+                } else {
+                    None
+                };
+
+                let syncer = TicketSyncer::new(&conn);
+                let tickets = syncer.list(repo_id.as_deref())?;
+                let agent_mgr = AgentManager::new(&conn);
+                let totals = agent_mgr.totals_by_ticket_all()?;
+
+                let mut found = false;
+                for t in &tickets {
+                    if let Some(stats) = totals.get(&t.id) {
+                        found = true;
+                        let dur_secs = stats.total_duration_ms as f64 / 1000.0;
+                        let mins = (dur_secs / 60.0) as i64;
+                        let secs = (dur_secs % 60.0) as i64;
+                        println!(
+                            "  #{:<6} {:<40} ${:.4}  {} turns  {}m{:02}s  ({} runs)",
+                            t.source_id,
+                            truncate_str(&t.title, 40),
+                            stats.total_cost,
+                            stats.total_turns,
+                            mins,
+                            secs,
+                            stats.total_runs,
+                        );
+                    }
+                }
+                if !found {
+                    println!("No agent stats. Run agents on ticket-linked worktrees first.");
+                }
+            }
         },
     }
 
     Ok(())
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max.saturating_sub(3)])
+    }
 }
 
 fn format_duration(dur: chrono::Duration) -> String {

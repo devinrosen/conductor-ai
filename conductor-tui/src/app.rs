@@ -267,20 +267,14 @@ impl App {
             Action::PendingG => unreachable!(),
 
             // Background results
-            Action::DataRefreshed {
-                repos,
-                worktrees,
-                tickets,
-                session,
-                session_worktrees,
-                latest_agent_runs,
-            } => {
-                self.state.data.repos = repos;
-                self.state.data.worktrees = worktrees;
-                self.state.data.tickets = tickets;
-                self.state.data.current_session = session;
-                self.state.data.session_worktrees = session_worktrees;
-                self.state.data.latest_agent_runs = latest_agent_runs;
+            Action::DataRefreshed(payload) => {
+                self.state.data.repos = payload.repos;
+                self.state.data.worktrees = payload.worktrees;
+                self.state.data.tickets = payload.tickets;
+                self.state.data.current_session = payload.session;
+                self.state.data.session_worktrees = payload.session_worktrees;
+                self.state.data.latest_agent_runs = payload.latest_agent_runs;
+                self.state.data.ticket_agent_totals = payload.ticket_agent_totals;
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();
                 self.clamp_indices();
