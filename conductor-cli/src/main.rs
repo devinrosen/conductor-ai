@@ -1,6 +1,10 @@
+use std::io::{BufRead, Write};
+use std::process::{Command, Stdio};
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
+use conductor_core::agent::AgentManager;
 use conductor_core::config::{ensure_dirs, load_config};
 use conductor_core::db::open_database;
 use conductor_core::github;
@@ -39,6 +43,30 @@ enum Commands {
     Session {
         #[command(subcommand)]
         command: SessionCommands,
+    },
+    /// Run Claude agent (used internally by TUI tmux windows)
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentCommands {
+    /// Run a Claude agent for a worktree (spawned by TUI in tmux)
+    Run {
+        /// Agent run ID (from agent_runs table)
+        #[arg(long)]
+        run_id: String,
+        /// Path to the worktree directory
+        #[arg(long)]
+        worktree_path: String,
+        /// Prompt for Claude
+        #[arg(long)]
+        prompt: String,
+        /// Resume a previous Claude session
+        #[arg(long)]
+        resume: Option<String>,
     },
 }
 
@@ -441,6 +469,16 @@ fn main() -> Result<()> {
                 }
             }
         },
+        Commands::Agent { command } => match command {
+            AgentCommands::Run {
+                run_id,
+                worktree_path,
+                prompt,
+                resume,
+            } => {
+                run_agent(&conn, &run_id, &worktree_path, &prompt, resume.as_deref())?;
+            }
+        },
         Commands::Tickets { command } => match command {
             TicketCommands::Sync { repo } => {
                 let repo_mgr = RepoManager::new(&conn, &config);
@@ -530,6 +568,213 @@ fn format_duration(dur: chrono::Duration) -> String {
         format!("{hours}h {mins}m")
     } else {
         format!("{mins}m")
+    }
+}
+
+/// Run a Claude agent for a worktree. Called inside a tmux window by the TUI.
+///
+/// Uses `--output-format json` (single JSON result) since the tmux terminal IS the display.
+/// Claude's interactive output goes directly to the terminal; we only parse the final JSON result.
+fn run_agent(
+    conn: &rusqlite::Connection,
+    run_id: &str,
+    worktree_path: &str,
+    prompt: &str,
+    resume_session_id: Option<&str>,
+) -> Result<()> {
+    let mgr = AgentManager::new(conn);
+
+    // Verify the run exists
+    let run = mgr.get_run(run_id)?;
+    if run.is_none() {
+        anyhow::bail!("agent run not found: {run_id}");
+    }
+
+    // Build the claude command in print mode with stream-json output.
+    // stdout: stream-json events (piped, parsed for result metadata)
+    // stderr: verbose turn-by-turn output (inherited, visible in tmux)
+    let mut cmd = Command::new("claude");
+    cmd.arg("-p")
+        .arg(prompt)
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--verbose")
+        .arg("--dangerously-skip-permissions")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .current_dir(worktree_path);
+
+    if let Some(session_id) = resume_session_id {
+        cmd.arg("--resume").arg(session_id);
+    }
+
+    eprintln!(
+        "[conductor] Running agent for run_id={} in {}",
+        run_id, worktree_path
+    );
+
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            let error_msg = format!("Failed to spawn claude: {e}");
+            mgr.update_run_failed(run_id, &error_msg)?;
+            eprintln!("[conductor] {}", error_msg);
+            return Ok(());
+        }
+    };
+
+    // Set up log file to capture stream-json events as they arrive.
+    let log_dir = conductor_core::config::conductor_dir().join("agent-logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join(format!("{run_id}.log"));
+    let mut log_file = std::fs::File::create(&log_path).ok();
+
+    // Parse stream-json events from stdout to extract result metadata.
+    let mut session_id_parsed: Option<String> = None;
+    let mut result_text: Option<String> = None;
+    let mut cost_usd: Option<f64> = None;
+    let mut num_turns: Option<i64> = None;
+    let mut duration_ms: Option<i64> = None;
+    let mut is_error = false;
+
+    if let Some(stdout) = child.stdout.take() {
+        let reader = std::io::BufReader::new(stdout);
+        for line in reader.lines() {
+            let Ok(line) = line else { continue };
+
+            // Write every line to the log file
+            if let Some(ref mut f) = log_file {
+                let _ = writeln!(f, "{line}");
+            }
+
+            let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+
+            // Display human-readable activity in the tmux terminal
+            print_event_summary(&event);
+
+            // Capture session_id from init message
+            if let Some(sid) = event.get("session_id").and_then(|v| v.as_str()) {
+                session_id_parsed = Some(sid.to_string());
+            }
+
+            // Capture result from final message
+            if event.get("result").is_some() {
+                result_text = event
+                    .get("result")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                cost_usd = event.get("total_cost_usd").and_then(|v| v.as_f64());
+                num_turns = event.get("num_turns").and_then(|v| v.as_i64());
+                duration_ms = event.get("duration_ms").and_then(|v| v.as_i64());
+                is_error = event
+                    .get("is_error")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+            }
+        }
+    }
+
+    let status = child.wait();
+
+    match status {
+        Ok(s) if s.success() && !is_error => {
+            mgr.update_run_completed(
+                run_id,
+                session_id_parsed.as_deref(),
+                result_text.as_deref(),
+                cost_usd,
+                num_turns,
+                duration_ms,
+            )?;
+            eprintln!("[conductor] Agent completed successfully");
+            if let Some(cost) = cost_usd {
+                eprintln!(
+                    "[conductor] Cost: ${:.4}  Turns: {}  Duration: {:.1}s",
+                    cost,
+                    num_turns.unwrap_or(0),
+                    duration_ms.map(|ms| ms as f64 / 1000.0).unwrap_or(0.0)
+                );
+            }
+        }
+        Ok(s) if is_error => {
+            let error_msg = result_text.as_deref().unwrap_or("Claude reported an error");
+            mgr.update_run_failed(run_id, error_msg)?;
+            eprintln!("[conductor] Agent failed: {}", error_msg);
+        }
+        Ok(s) => {
+            let error_msg = format!("Claude exited with status: {}", s);
+            mgr.update_run_failed(run_id, &error_msg)?;
+            eprintln!("[conductor] Agent failed: {}", error_msg);
+        }
+        Err(e) => {
+            let error_msg = format!("Error waiting for claude: {e}");
+            mgr.update_run_failed(run_id, &error_msg)?;
+            eprintln!("[conductor] {}", error_msg);
+        }
+    }
+
+    // Store log file path in DB (best-effort)
+    if log_file.is_some() {
+        let path_str = log_path.to_string_lossy().to_string();
+        if let Err(e) = mgr.update_run_log_file(run_id, &path_str) {
+            eprintln!("[conductor] Warning: could not save log path to DB: {e}");
+        } else {
+            eprintln!("[conductor] Agent log saved to {path_str}");
+        }
+    }
+
+    Ok(())
+}
+
+/// Print a human-readable summary of a stream-json event to stderr (visible in tmux).
+fn print_event_summary(event: &serde_json::Value) {
+    let msg_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+    match msg_type {
+        // Assistant text message
+        "assistant" => {
+            if let Some(content) = event.get("message").and_then(|m| m.get("content")) {
+                if let Some(arr) = content.as_array() {
+                    for block in arr {
+                        if block.get("type").and_then(|v| v.as_str()) == Some("text") {
+                            if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                                eprintln!("{text}");
+                            }
+                        }
+                        if block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                            let tool = block.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                            eprintln!("[tool: {tool}]");
+                        }
+                    }
+                }
+            }
+            // Also check top-level content (varies by event shape)
+            if let Some(content) = event.get("content") {
+                if let Some(arr) = content.as_array() {
+                    for block in arr {
+                        if block.get("type").and_then(|v| v.as_str()) == Some("text") {
+                            if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                                eprintln!("{text}");
+                            }
+                        }
+                        if block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                            let tool = block.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                            eprintln!("[tool: {tool}]");
+                        }
+                    }
+                }
+            }
+        }
+        // Result message
+        "result" => {
+            if let Some(text) = event.get("result").and_then(|v| v.as_str()) {
+                let truncated = if text.len() > 200 { &text[..200] } else { text };
+                eprintln!("[result] {truncated}");
+            }
+        }
+        _ => {}
     }
 }
 

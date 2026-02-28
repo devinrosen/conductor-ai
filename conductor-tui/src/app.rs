@@ -5,6 +5,7 @@ use anyhow::Result;
 use ratatui::DefaultTerminal;
 use rusqlite::Connection;
 
+use conductor_core::agent::AgentManager;
 use conductor_core::config::{save_config, Config, WorkTarget};
 use conductor_core::github;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
@@ -14,7 +15,7 @@ use conductor_core::worktree::WorktreeManager;
 
 use crate::action::Action;
 use crate::background;
-use crate::event::{Event, EventLoop};
+use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
 use crate::state::{
     AppState, ConfirmAction, DashboardFocus, FormAction, FormField, InputAction, Modal,
@@ -65,6 +66,7 @@ pub struct App {
     state: AppState,
     conn: Connection,
     config: Config,
+    bg_tx: Option<BackgroundSender>,
 }
 
 impl App {
@@ -73,6 +75,7 @@ impl App {
             state: AppState::new(),
             conn,
             config,
+            bg_tx: None,
         }
     }
 
@@ -85,25 +88,33 @@ impl App {
 
         // Spawn background workers
         let bg_tx = events.bg_sender();
-        background::spawn_db_poller(bg_tx.clone(), Duration::from_secs(2));
+        self.bg_tx = Some(bg_tx.clone());
+        background::spawn_db_poller(bg_tx.clone(), Duration::from_secs(5));
         let sync_mins = self.config.general.sync_interval_minutes as u64;
         background::spawn_ticket_sync(bg_tx, Duration::from_secs(sync_mins * 60));
 
-        loop {
-            terminal.draw(|frame| ui::render(frame, &self.state))?;
+        let mut dirty = true; // tracks whether state changed since last draw
 
-            match events.next() {
-                Ok(Event::Key(key)) => {
-                    let action = input::map_key(key, &self.state);
-                    self.update(action);
-                }
-                Ok(Event::Tick) => {
-                    // Tick: just re-render (for timer updates etc.)
-                }
-                Ok(Event::Background(action)) => {
-                    self.update(action);
-                }
-                Err(_) => break,
+        loop {
+            // Only redraw when state has actually changed.
+            if dirty {
+                terminal.draw(|frame| ui::render(frame, &self.state))?;
+                dirty = false;
+            }
+
+            // Block until at least one event is available
+            events.wait();
+
+            // PRIORITY 1: Drain all key events first — input is never starved
+            for key in events.drain_input() {
+                let action = input::map_key(key, &self.state);
+                dirty |= self.update(action);
+            }
+
+            // PRIORITY 2: Drain all background events
+            let bg_actions = events.drain_background();
+            for action in bg_actions {
+                dirty |= self.update(action);
             }
 
             if self.state.should_quit {
@@ -114,10 +125,12 @@ impl App {
         Ok(())
     }
 
-    /// Handle an action by mutating state.
-    fn update(&mut self, action: Action) {
+    /// Handle an action by mutating state. Returns true if the UI needs a redraw.
+    fn update(&mut self, action: Action) -> bool {
         match action {
-            Action::None => {}
+            Action::None | Action::Tick => {
+                return false;
+            }
             Action::Quit => self.state.should_quit = true,
 
             // Navigation
@@ -203,6 +216,20 @@ impl App {
             Action::WorkTargetAdd => self.handle_work_target_add(),
             Action::WorkTargetDelete => self.handle_work_target_delete(),
 
+            // Agent (tmux-based)
+            Action::LaunchAgent => self.handle_launch_agent(),
+            Action::StopAgent => self.handle_stop_agent(),
+            Action::ViewAgentLog => self.handle_view_agent_log(),
+            Action::AgentActivityDown => {
+                let max = self.state.data.agent_events.len().saturating_sub(1);
+                if self.state.agent_event_index < max {
+                    self.state.agent_event_index += 1;
+                }
+            }
+            Action::AgentActivityUp => {
+                self.state.agent_event_index = self.state.agent_event_index.saturating_sub(1);
+            }
+
             // Background results
             Action::DataRefreshed {
                 repos,
@@ -210,14 +237,20 @@ impl App {
                 tickets,
                 session,
                 session_worktrees,
+                latest_agent_runs,
             } => {
                 self.state.data.repos = repos;
                 self.state.data.worktrees = worktrees;
                 self.state.data.tickets = tickets;
                 self.state.data.current_session = session;
                 self.state.data.session_worktrees = session_worktrees;
+                self.state.data.latest_agent_runs = latest_agent_runs;
                 self.state.data.rebuild_maps();
+                self.reload_agent_events();
                 self.clamp_indices();
+                // Redraw when viewing worktree detail so the activity pane
+                // updates live; other views refresh silently.
+                return self.state.view == View::WorktreeDetail;
             }
             Action::TicketSyncComplete { repo_slug, count } => {
                 self.state.status_message = Some(format!("Synced {count} tickets for {repo_slug}"));
@@ -234,6 +267,7 @@ impl App {
                 self.refresh_data();
             }
         }
+        true
     }
 
     fn refresh_data(&mut self) {
@@ -241,6 +275,7 @@ impl App {
         let wt_mgr = WorktreeManager::new(&self.conn, &self.config);
         let ticket_syncer = TicketSyncer::new(&self.conn);
         let session_tracker = SessionTracker::new(&self.conn);
+        let agent_mgr = AgentManager::new(&self.conn);
 
         self.state.data.repos = repo_mgr.list().unwrap_or_default();
         self.state.data.worktrees = wt_mgr.list(None, true).unwrap_or_default();
@@ -272,7 +307,9 @@ impl App {
                 .insert(s.id.clone(), count);
         }
 
+        self.state.data.latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
         self.state.data.rebuild_maps();
+        self.reload_agent_events();
         self.clamp_indices();
 
         // If in repo detail, refresh scoped data
@@ -293,6 +330,52 @@ impl App {
                 .filter(|t| &t.repo_id == repo_id)
                 .cloned()
                 .collect();
+        }
+    }
+
+    fn reload_agent_events(&mut self) {
+        use conductor_core::agent::{parse_agent_log, AgentManager};
+
+        use crate::state::AgentTotals;
+
+        let Some(ref wt_id) = self.state.selected_worktree_id else {
+            self.state.data.agent_events = Vec::new();
+            self.state.data.agent_totals = AgentTotals::default();
+            return;
+        };
+
+        let mgr = AgentManager::new(&self.conn);
+        // list_for_worktree returns DESC order; reverse for chronological
+        let mut runs = mgr.list_for_worktree(wt_id).unwrap_or_default();
+        runs.reverse();
+
+        // Compute aggregate stats
+        let mut totals = AgentTotals {
+            run_count: runs.len(),
+            ..Default::default()
+        };
+        for run in &runs {
+            totals.total_cost += run.cost_usd.unwrap_or(0.0);
+            totals.total_turns += run.num_turns.unwrap_or(0);
+            totals.total_duration_ms += run.duration_ms.unwrap_or(0);
+        }
+        self.state.data.agent_totals = totals;
+
+        let mut all_events = Vec::new();
+        for run in &runs {
+            if let Some(ref path) = run.log_file {
+                let events = parse_agent_log(path);
+                if !events.is_empty() {
+                    all_events.extend(events);
+                }
+            }
+        }
+
+        self.state.data.agent_events = all_events;
+        // Clamp scroll index
+        let max = self.state.data.agent_events.len().saturating_sub(1);
+        if self.state.agent_event_index > max {
+            self.state.agent_event_index = max;
         }
     }
 
@@ -553,9 +636,12 @@ impl App {
                 }
                 DashboardFocus::Worktrees => {
                     if let Some(wt) = self.state.selected_worktree() {
-                        self.state.selected_worktree_id = Some(wt.id.clone());
+                        let wt_id = wt.id.clone();
+                        self.state.selected_worktree_id = Some(wt_id);
                         self.state.selected_repo_id = None;
                         self.state.view = View::WorktreeDetail;
+                        self.state.agent_event_index = 0;
+                        self.reload_agent_events();
                     }
                 }
                 DashboardFocus::Tickets => {
@@ -569,8 +655,11 @@ impl App {
             View::RepoDetail => match self.state.repo_detail_focus {
                 RepoDetailFocus::Worktrees => {
                     if let Some(wt) = self.state.detail_worktrees.get(self.state.detail_wt_index) {
-                        self.state.selected_worktree_id = Some(wt.id.clone());
+                        let wt_id = wt.id.clone();
+                        self.state.selected_worktree_id = Some(wt_id);
                         self.state.view = View::WorktreeDetail;
+                        self.state.agent_event_index = 0;
+                        self.reload_agent_events();
                     }
                 }
                 RepoDetailFocus::Tickets => {
@@ -825,6 +914,20 @@ impl App {
                             message: format!("Worktree '{value}' not found"),
                         };
                     }
+                }
+                InputAction::AgentPrompt {
+                    worktree_id,
+                    worktree_path,
+                    worktree_slug,
+                    resume_session_id,
+                } => {
+                    self.start_agent_tmux(
+                        value,
+                        worktree_id,
+                        worktree_path,
+                        worktree_slug,
+                        resume_session_id,
+                    );
                 }
             }
         }
@@ -1617,5 +1720,253 @@ impl App {
                 on_confirm: ConfirmAction::DeleteWorkTarget { index: selected },
             };
         }
+    }
+
+    // ── Agent handlers (tmux-based) ────────────────────────────────────
+
+    fn handle_launch_agent(&mut self) {
+        let wt = self
+            .state
+            .selected_worktree_id
+            .as_ref()
+            .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
+            .cloned();
+
+        let Some(wt) = wt else {
+            self.state.status_message = Some("Select a worktree first".to_string());
+            return;
+        };
+
+        // Check if there's already a running agent for this worktree
+        let has_running = self
+            .state
+            .data
+            .latest_agent_runs
+            .get(&wt.id)
+            .is_some_and(|run| run.status == "running");
+
+        if has_running {
+            self.state.status_message = Some("Agent already running — press x to stop".to_string());
+            return;
+        }
+
+        // Check for existing session to resume (from DB)
+        let resume_session_id = self
+            .state
+            .data
+            .latest_agent_runs
+            .get(&wt.id)
+            .and_then(|run| run.claude_session_id.clone());
+
+        let (title, prefill) = if resume_session_id.is_some() {
+            ("Claude Agent (Resume)".to_string(), String::new())
+        } else {
+            // Pre-fill prompt with ticket URL if available
+            let prefill = wt
+                .ticket_id
+                .as_ref()
+                .and_then(|tid| self.state.data.ticket_map.get(tid))
+                .filter(|t| !t.url.is_empty())
+                .map(|t| format!("can we work on {}", t.url))
+                .unwrap_or_default();
+            ("Claude Agent".to_string(), prefill)
+        };
+
+        self.state.modal = Modal::Input {
+            title,
+            prompt: "Enter prompt for Claude:".to_string(),
+            value: prefill,
+            on_submit: InputAction::AgentPrompt {
+                worktree_id: wt.id.clone(),
+                worktree_path: wt.path.clone(),
+                worktree_slug: wt.slug.clone(),
+                resume_session_id,
+            },
+        };
+    }
+
+    fn handle_stop_agent(&mut self) {
+        let wt_id = self.state.selected_worktree_id.as_ref();
+        let run = wt_id.and_then(|id| self.state.data.latest_agent_runs.get(id));
+
+        let Some(run) = run else {
+            return;
+        };
+
+        if run.status != "running" {
+            return;
+        }
+
+        let run_id = run.id.clone();
+        let tmux_window = run.tmux_window.clone();
+
+        let mgr = AgentManager::new(&self.conn);
+
+        // Best-effort: capture tmux scrollback before killing
+        if let Some(ref window) = tmux_window {
+            capture_agent_log(&mgr, &run_id, window);
+        }
+
+        // Kill the tmux window
+        if let Some(ref window) = tmux_window {
+            let _ = Command::new("tmux")
+                .args(["kill-window", "-t", &format!(":{window}")])
+                .output();
+        }
+
+        // Update DB record to cancelled
+        let _ = mgr.update_run_cancelled(&run_id);
+
+        self.state.status_message = Some("Agent cancelled".to_string());
+        self.refresh_data();
+    }
+
+    fn start_agent_tmux(
+        &mut self,
+        prompt: String,
+        worktree_id: String,
+        worktree_path: String,
+        worktree_slug: String,
+        resume_session_id: Option<String>,
+    ) {
+        // Create DB record with tmux window name
+        let mgr = AgentManager::new(&self.conn);
+        let run = match mgr.create_run(&worktree_id, &prompt, Some(&worktree_slug)) {
+            Ok(run) => run,
+            Err(e) => {
+                self.state.modal = Modal::Error {
+                    message: format!("Failed to create agent run: {e}"),
+                };
+                return;
+            }
+        };
+
+        // Build the conductor agent run command
+        let mut args = vec![
+            "agent".to_string(),
+            "run".to_string(),
+            "--run-id".to_string(),
+            run.id.clone(),
+            "--worktree-path".to_string(),
+            worktree_path,
+            "--prompt".to_string(),
+            prompt,
+        ];
+
+        if let Some(ref session_id) = resume_session_id {
+            args.push("--resume".to_string());
+            args.push(session_id.clone());
+        }
+
+        // Resolve the conductor binary path — look next to the current executable first,
+        // then fall back to bare "conductor" on PATH.
+        let conductor_bin = std::env::current_exe()
+            .ok()
+            .and_then(|p| {
+                let sibling = p.parent()?.join("conductor");
+                sibling
+                    .exists()
+                    .then(|| sibling.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "conductor".to_string());
+
+        // Spawn tmux window in background: tmux new-window -d -n <slug> -- conductor agent run ...
+        let mut tmux_args = vec![
+            "new-window".to_string(),
+            "-d".to_string(),
+            "-n".to_string(),
+            worktree_slug.clone(),
+            "--".to_string(),
+            conductor_bin,
+        ];
+        tmux_args.extend(args);
+
+        let result = Command::new("tmux").args(&tmux_args).output();
+
+        match result {
+            Ok(o) if o.status.success() => {
+                self.state.status_message =
+                    Some(format!("Agent launched in tmux window: {worktree_slug}"));
+                self.refresh_data();
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                // Clean up the DB record since tmux failed
+                let _ = mgr.update_run_failed(&run.id, &format!("tmux failed: {stderr}"));
+                self.state.modal = Modal::Error {
+                    message: format!("Failed to spawn tmux window: {stderr}"),
+                };
+            }
+            Err(e) => {
+                let _ = mgr.update_run_failed(&run.id, &format!("tmux error: {e}"));
+                self.state.modal = Modal::Error {
+                    message: format!("Failed to spawn tmux: {e}"),
+                };
+            }
+        }
+    }
+
+    fn handle_view_agent_log(&mut self) {
+        let wt_id = self.state.selected_worktree_id.as_ref();
+        let run = wt_id.and_then(|id| self.state.data.latest_agent_runs.get(id));
+
+        let log_path = run.and_then(|r| r.log_file.as_deref());
+        let Some(log_path) = log_path else {
+            self.state.status_message = Some("No agent log available".to_string());
+            return;
+        };
+
+        let viewer = std::env::var("EDITOR").unwrap_or_else(|_| "less".to_string());
+
+        let result = Command::new("tmux")
+            .args(["new-window", "--", &viewer, log_path])
+            .output();
+
+        match result {
+            Ok(o) if o.status.success() => {
+                self.state.status_message = Some("Opened agent log".to_string());
+            }
+            Ok(_) => {
+                self.state.status_message = Some("Failed to open log viewer".to_string());
+            }
+            Err(e) => {
+                self.state.status_message = Some(format!("Failed to open log: {e}"));
+            }
+        }
+    }
+}
+
+/// Best-effort capture of tmux scrollback to `~/.conductor/agent-logs/<run_id>.log`.
+fn capture_agent_log(mgr: &AgentManager, run_id: &str, tmux_window: &str) {
+    let log_dir = conductor_core::config::conductor_dir().join("agent-logs");
+
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!("[conductor] Warning: could not create agent-logs dir: {e}");
+        return;
+    }
+
+    let log_path = log_dir.join(format!("{run_id}.log"));
+
+    let output = Command::new("tmux")
+        .args([
+            "capture-pane",
+            "-t",
+            &format!(":{tmux_window}"),
+            "-p",
+            "-S",
+            "-",
+        ])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            if let Err(e) = std::fs::write(&log_path, &o.stdout) {
+                eprintln!("[conductor] Warning: could not write agent log: {e}");
+                return;
+            }
+            let path_str = log_path.to_string_lossy().to_string();
+            let _ = mgr.update_run_log_file(run_id, &path_str);
+        }
+        _ => {}
     }
 }

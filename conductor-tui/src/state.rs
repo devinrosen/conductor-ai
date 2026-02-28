@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use conductor_core::agent::{AgentEvent, AgentRun};
 use conductor_core::config::WorkTarget;
 use conductor_core::repo::Repo;
 use conductor_core::session::Session;
@@ -145,6 +146,12 @@ pub enum InputAction {
     AttachWorktree {
         session_id: String,
     },
+    AgentPrompt {
+        worktree_id: String,
+        worktree_path: String,
+        worktree_slug: String,
+        resume_session_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -164,6 +171,21 @@ pub struct DataCache {
     pub ticket_map: HashMap<String, Ticket>,
     /// repo_id -> worktree count
     pub repo_worktree_count: HashMap<String, usize>,
+    /// worktree_id -> latest AgentRun (populated by DB poller)
+    pub latest_agent_runs: HashMap<String, AgentRun>,
+    /// Parsed agent events for the currently viewed worktree
+    pub agent_events: Vec<AgentEvent>,
+    /// Aggregate stats across all agent runs for the currently viewed worktree
+    pub agent_totals: AgentTotals,
+}
+
+/// Aggregated stats across all agent runs for a worktree.
+#[derive(Debug, Clone, Default)]
+pub struct AgentTotals {
+    pub total_cost: f64,
+    pub total_turns: i64,
+    pub total_duration_ms: i64,
+    pub run_count: usize,
 }
 
 impl DataCache {
@@ -214,6 +236,9 @@ pub struct AppState {
     pub detail_wt_index: usize,
     pub detail_ticket_index: usize,
 
+    // Agent activity scroll
+    pub agent_event_index: usize,
+
     // Filter
     pub filter_active: bool,
     pub filter_text: String,
@@ -244,6 +269,7 @@ impl AppState {
             detail_tickets: Vec::new(),
             detail_wt_index: 0,
             detail_ticket_index: 0,
+            agent_event_index: 0,
             filter_active: false,
             filter_text: String::new(),
             status_message: None,

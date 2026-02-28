@@ -3,6 +3,10 @@ use conductor_core::session::Session;
 use conductor_core::tickets::Ticket;
 use conductor_core::worktree::Worktree;
 
+use std::collections::HashMap;
+
+use conductor_core::agent::AgentRun;
+
 /// Every user intent or background result flows through this enum.
 #[derive(Debug)]
 pub enum Action {
@@ -39,6 +43,13 @@ pub enum Action {
     WorkTargetAdd,
     WorkTargetDelete,
 
+    // Agent triggers (tmux-based)
+    LaunchAgent,
+    StopAgent,
+    ViewAgentLog,
+    AgentActivityDown,
+    AgentActivityUp,
+
     // Filter
     EnterFilter,
     FilterChar(char),
@@ -67,6 +78,7 @@ pub enum Action {
         tickets: Vec<Ticket>,
         session: Option<Session>,
         session_worktrees: Vec<Worktree>,
+        latest_agent_runs: HashMap<String, AgentRun>,
     },
     TicketSyncComplete {
         repo_slug: String,
@@ -84,6 +96,9 @@ pub enum Action {
     BackgroundSuccess {
         message: String,
     },
+
+    // Timer tick (no-op, just wakes the main loop)
+    Tick,
 
     // No-op (unhandled key)
     None,
