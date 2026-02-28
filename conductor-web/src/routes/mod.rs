@@ -1,6 +1,5 @@
 pub mod events;
 pub mod repos;
-pub mod sessions;
 pub mod tickets;
 pub mod worktrees;
 
@@ -28,10 +27,4 @@ pub fn api_router() -> Router<AppState> {
         // Tickets
         .route("/api/repos/{id}/tickets", get(tickets::list_tickets))
         .route("/api/repos/{id}/tickets/sync", post(tickets::sync_tickets))
-        // Sessions
-        .route(
-            "/api/sessions",
-            get(sessions::list_sessions).post(sessions::start_session),
-        )
-        .route("/api/sessions/{id}/end", post(sessions::end_session))
 }

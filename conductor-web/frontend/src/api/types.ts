@@ -36,13 +36,6 @@ export interface Ticket {
   raw_json: string;
 }
 
-export interface Session {
-  id: string;
-  started_at: string;
-  ended_at: string | null;
-  notes: string | null;
-}
-
 export interface CreateRepoRequest {
   remote_url: string;
   slug?: string;
@@ -54,10 +47,6 @@ export interface CreateWorktreeRequest {
   name: string;
   from_branch?: string;
   ticket_id?: string;
-}
-
-export interface EndSessionRequest {
-  notes?: string;
 }
 
 export interface SyncResult {

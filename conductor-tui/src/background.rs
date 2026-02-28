@@ -8,7 +8,6 @@ use conductor_core::github;
 use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
-use conductor_core::session::SessionTracker;
 use conductor_core::tickets::TicketSyncer;
 use conductor_core::worktree::WorktreeManager;
 
@@ -36,18 +35,11 @@ pub fn poll_data() -> Option<Action> {
     let repo_mgr = RepoManager::new(&conn, &config);
     let wt_mgr = WorktreeManager::new(&conn, &config);
     let ticket_syncer = TicketSyncer::new(&conn);
-    let session_tracker = SessionTracker::new(&conn);
     let agent_mgr = AgentManager::new(&conn);
 
     let repos = repo_mgr.list().ok()?;
     let worktrees = wt_mgr.list(None, true).ok()?;
     let tickets = ticket_syncer.list(None).ok()?;
-    let session = session_tracker.current().ok()?;
-    let session_worktrees = if let Some(ref s) = session {
-        session_tracker.get_worktrees(&s.id).unwrap_or_default()
-    } else {
-        Vec::new()
-    };
     let latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
     let ticket_agent_totals = agent_mgr.totals_by_ticket_all().unwrap_or_default();
 
@@ -55,8 +47,6 @@ pub fn poll_data() -> Option<Action> {
         repos,
         worktrees,
         tickets,
-        session,
-        session_worktrees,
         latest_agent_runs,
         ticket_agent_totals,
     })))

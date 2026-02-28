@@ -2,10 +2,8 @@ import type {
   Repo,
   Worktree,
   Ticket,
-  Session,
   CreateRepoRequest,
   CreateWorktreeRequest,
-  EndSessionRequest,
   SyncResult,
 } from "./types";
 
@@ -49,13 +47,4 @@ export const api = {
   syncTickets: (repoId: string) =>
     request<SyncResult>(`/repos/${repoId}/tickets/sync`, { method: "POST" }),
 
-  // Sessions
-  listSessions: () => request<Session[]>("/sessions"),
-  startSession: () =>
-    request<Session>("/sessions", { method: "POST" }),
-  endSession: (id: string, data: EndSessionRequest) =>
-    request<void>(`/sessions/${id}/end`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
 };

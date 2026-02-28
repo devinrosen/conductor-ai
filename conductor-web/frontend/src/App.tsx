@@ -3,7 +3,6 @@ import { AppShell } from "./components/layout/AppShell";
 import { DashboardPage } from "./pages/DashboardPage";
 import { RepoDetailPage } from "./pages/RepoDetailPage";
 import { WorktreeDetailPage } from "./pages/WorktreeDetailPage";
-import { SessionsPage } from "./pages/SessionsPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 
 const router = createBrowserRouter([
@@ -16,7 +15,6 @@ const router = createBrowserRouter([
         path: "repos/:repoId/worktrees/:worktreeId",
         element: <WorktreeDetailPage />,
       },
-      { path: "sessions", element: <SessionsPage /> },
       { path: "*", element: <NotFoundPage /> },
     ],
   },
