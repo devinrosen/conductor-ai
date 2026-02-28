@@ -78,6 +78,22 @@ impl<'a> SessionTracker<'a> {
         Ok(())
     }
 
+    pub fn list(&self) -> Result<Vec<Session>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, started_at, ended_at, notes FROM sessions ORDER BY started_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Session {
+                id: row.get(0)?,
+                started_at: row.get(1)?,
+                ended_at: row.get(2)?,
+                notes: row.get(3)?,
+            })
+        })?;
+        let sessions = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(sessions)
+    }
+
     pub fn get_worktrees(&self, session_id: &str) -> Result<Vec<crate::worktree::Worktree>> {
         let mut stmt = self.conn.prepare(
             "SELECT w.id, w.repo_id, w.slug, w.branch, w.path, w.ticket_id, w.status, w.created_at

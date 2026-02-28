@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::action::Action;
-use crate::state::{AppState, DashboardFocus, Modal, View};
+use crate::state::{AppState, DashboardFocus, Modal, SessionFocus, View};
 
 /// Map a key event to an action based on the current app state.
 /// Priority: Modal > Filter > Normal keybindings.
@@ -88,7 +88,10 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Enter => Action::Select,
 
         // CRUD actions (context-dependent)
-        KeyCode::Char('a') => Action::AddRepo,
+        KeyCode::Char('a') => match state.view {
+            View::Session => Action::AttachWorktree,
+            _ => Action::AddRepo,
+        },
         KeyCode::Char('c') => Action::Create,
         KeyCode::Char('d') => Action::Delete,
         KeyCode::Char('p') => Action::Push,
@@ -124,6 +127,9 @@ pub fn focused_list_len(state: &AppState) -> usize {
         View::RepoDetail => state.detail_worktrees.len().max(state.detail_tickets.len()),
         View::WorktreeDetail => 0,
         View::Tickets => state.data.tickets.len(),
-        View::Session => state.data.session_worktrees.len(),
+        View::Session => match state.session_focus {
+            SessionFocus::Worktrees => state.data.session_worktrees.len(),
+            SessionFocus::History => state.data.session_history.len(),
+        },
     }
 }

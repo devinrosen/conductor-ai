@@ -18,7 +18,7 @@ use crate::event::{Event, EventLoop};
 use crate::input;
 use crate::state::{
     AppState, ConfirmAction, DashboardFocus, FormAction, FormField, InputAction, Modal,
-    RepoDetailFocus, View,
+    RepoDetailFocus, SessionFocus, View,
 };
 use crate::ui;
 
@@ -194,6 +194,7 @@ impl App {
             Action::LinkTicket => self.handle_link_ticket(),
             Action::StartSession => self.handle_start_session(),
             Action::EndSession => self.handle_end_session(),
+            Action::AttachWorktree => self.handle_attach_worktree(),
             Action::StartWork => self.handle_start_work(),
 
             // Background results
@@ -244,6 +245,27 @@ impl App {
         } else {
             Vec::new()
         };
+
+        // Load session history (ended sessions only)
+        let all_sessions = session_tracker.list().unwrap_or_default();
+        self.state.data.session_history = all_sessions
+            .into_iter()
+            .filter(|s| s.ended_at.is_some())
+            .collect();
+
+        // Pre-compute worktree counts for history
+        self.state.data.session_wt_counts.clear();
+        for s in &self.state.data.session_history {
+            let count = session_tracker
+                .get_worktrees(&s.id)
+                .map(|wts| wts.len())
+                .unwrap_or(0);
+            self.state
+                .data
+                .session_wt_counts
+                .insert(s.id.clone(), count);
+        }
+
         self.state.data.rebuild_maps();
         self.clamp_indices();
 
@@ -283,6 +305,16 @@ impl App {
         if t_len > 0 && self.state.ticket_index >= t_len {
             self.state.ticket_index = t_len - 1;
         }
+
+        let swt_len = self.state.data.session_worktrees.len();
+        if swt_len > 0 && self.state.session_wt_index >= swt_len {
+            self.state.session_wt_index = swt_len - 1;
+        }
+
+        let hist_len = self.state.data.session_history.len();
+        if hist_len > 0 && self.state.session_history_index >= hist_len {
+            self.state.session_history_index = hist_len - 1;
+        }
     }
 
     fn go_back(&mut self) {
@@ -314,6 +346,9 @@ impl App {
             View::RepoDetail => {
                 self.state.repo_detail_focus = self.state.repo_detail_focus.toggle();
             }
+            View::Session => {
+                self.state.session_focus = self.state.session_focus.toggle();
+            }
             _ => {}
         }
     }
@@ -325,6 +360,9 @@ impl App {
             }
             View::RepoDetail => {
                 self.state.repo_detail_focus = self.state.repo_detail_focus.toggle();
+            }
+            View::Session => {
+                self.state.session_focus = self.state.session_focus.toggle();
             }
             _ => {}
         }
@@ -355,6 +393,15 @@ impl App {
             View::Tickets => {
                 self.state.ticket_index = self.state.ticket_index.saturating_sub(1);
             }
+            View::Session => match self.state.session_focus {
+                SessionFocus::Worktrees => {
+                    self.state.session_wt_index = self.state.session_wt_index.saturating_sub(1);
+                }
+                SessionFocus::History => {
+                    self.state.session_history_index =
+                        self.state.session_history_index.saturating_sub(1);
+                }
+            },
             _ => {}
         }
     }
@@ -401,6 +448,20 @@ impl App {
                     self.state.ticket_index += 1;
                 }
             }
+            View::Session => match self.state.session_focus {
+                SessionFocus::Worktrees => {
+                    let max = self.state.data.session_worktrees.len().saturating_sub(1);
+                    if self.state.session_wt_index < max {
+                        self.state.session_wt_index += 1;
+                    }
+                }
+                SessionFocus::History => {
+                    let max = self.state.data.session_history.len().saturating_sub(1);
+                    if self.state.session_history_index < max {
+                        self.state.session_history_index += 1;
+                    }
+                }
+            },
             _ => {}
         }
     }
@@ -560,18 +621,12 @@ impl App {
                     }
                 }
                 ConfirmAction::EndSession { session_id } => {
-                    let tracker = SessionTracker::new(&self.conn);
-                    match tracker.end(&session_id, None) {
-                        Ok(()) => {
-                            self.state.status_message = Some("Session ended".to_string());
-                            self.refresh_data();
-                        }
-                        Err(e) => {
-                            self.state.modal = Modal::Error {
-                                message: format!("End session failed: {e}"),
-                            };
-                        }
-                    }
+                    self.state.modal = Modal::Input {
+                        title: "Session Notes".to_string(),
+                        prompt: "Postmortem notes (leave empty to skip):".to_string(),
+                        value: String::new(),
+                        on_submit: InputAction::SessionNotes { session_id },
+                    };
                 }
             }
         }
@@ -583,7 +638,8 @@ impl App {
             value, on_submit, ..
         } = modal
         {
-            if value.is_empty() {
+            // SessionNotes allows empty input (skip notes); others require a value
+            if value.is_empty() && !matches!(on_submit, InputAction::SessionNotes { .. }) {
                 return;
             }
             match on_submit {
@@ -651,7 +707,12 @@ impl App {
                 }
                 InputAction::SessionNotes { session_id } => {
                     let tracker = SessionTracker::new(&self.conn);
-                    match tracker.end(&session_id, Some(&value)) {
+                    let notes = if value.is_empty() {
+                        None
+                    } else {
+                        Some(value.as_str())
+                    };
+                    match tracker.end(&session_id, notes) {
                         Ok(()) => {
                             self.state.status_message =
                                 Some("Session ended with notes".to_string());
@@ -662,6 +723,29 @@ impl App {
                                 message: format!("End session failed: {e}"),
                             };
                         }
+                    }
+                }
+                InputAction::AttachWorktree { session_id } => {
+                    // Look up worktree by slug
+                    let wt = self.state.data.worktrees.iter().find(|w| w.slug == value);
+                    if let Some(wt) = wt {
+                        let tracker = SessionTracker::new(&self.conn);
+                        match tracker.add_worktree(&session_id, &wt.id) {
+                            Ok(()) => {
+                                self.state.status_message =
+                                    Some(format!("Attached worktree '{}'", value));
+                                self.refresh_data();
+                            }
+                            Err(e) => {
+                                self.state.modal = Modal::Error {
+                                    message: format!("Attach failed: {e}"),
+                                };
+                            }
+                        }
+                    } else {
+                        self.state.modal = Modal::Error {
+                            message: format!("Worktree '{value}' not found"),
+                        };
                     }
                 }
             }
@@ -1143,6 +1227,44 @@ impl App {
         } else {
             self.state.status_message = Some("No active session".to_string());
         }
+    }
+
+    fn handle_attach_worktree(&mut self) {
+        let Some(ref session) = self.state.data.current_session else {
+            self.state.status_message = Some("No active session".to_string());
+            return;
+        };
+
+        // Collect worktrees not already attached
+        let attached_ids: std::collections::HashSet<&str> = self
+            .state
+            .data
+            .session_worktrees
+            .iter()
+            .map(|wt| wt.id.as_str())
+            .collect();
+
+        let available: Vec<&conductor_core::worktree::Worktree> = self
+            .state
+            .data
+            .worktrees
+            .iter()
+            .filter(|wt| !attached_ids.contains(wt.id.as_str()))
+            .collect();
+
+        if available.is_empty() {
+            self.state.status_message = Some("No unattached worktrees available".to_string());
+            return;
+        }
+
+        self.state.modal = Modal::Input {
+            title: "Attach Worktree".to_string(),
+            prompt: "Enter worktree slug:".to_string(),
+            value: String::new(),
+            on_submit: InputAction::AttachWorktree {
+                session_id: session.id.clone(),
+            },
+        };
     }
 
     fn handle_start_work(&mut self) {

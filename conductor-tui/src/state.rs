@@ -40,6 +40,21 @@ impl DashboardFocus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionFocus {
+    Worktrees,
+    History,
+}
+
+impl SessionFocus {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Worktrees => Self::History,
+            Self::History => Self::Worktrees,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepoDetailFocus {
     Worktrees,
     Tickets,
@@ -113,8 +128,10 @@ pub enum InputAction {
     LinkTicket {
         worktree_id: String,
     },
-    #[allow(dead_code)]
     SessionNotes {
+        session_id: String,
+    },
+    AttachWorktree {
         session_id: String,
     },
 }
@@ -126,6 +143,10 @@ pub struct DataCache {
     pub tickets: Vec<Ticket>,
     pub current_session: Option<Session>,
     pub session_worktrees: Vec<Worktree>,
+    /// Past sessions (ended), most recent first
+    pub session_history: Vec<Session>,
+    /// session_id -> worktree count for history display
+    pub session_wt_counts: HashMap<String, usize>,
     /// repo_id -> slug for display
     pub repo_slug_map: HashMap<String, String>,
     /// ticket_id -> Ticket for lookups
@@ -161,6 +182,7 @@ pub struct AppState {
     pub view: View,
     pub dashboard_focus: DashboardFocus,
     pub repo_detail_focus: RepoDetailFocus,
+    pub session_focus: SessionFocus,
     pub modal: Modal,
     pub data: DataCache,
 
@@ -168,6 +190,8 @@ pub struct AppState {
     pub repo_index: usize,
     pub worktree_index: usize,
     pub ticket_index: usize,
+    pub session_wt_index: usize,
+    pub session_history_index: usize,
 
     // Detail view context
     pub selected_repo_id: Option<String>,
@@ -195,11 +219,14 @@ impl AppState {
             view: View::Dashboard,
             dashboard_focus: DashboardFocus::Repos,
             repo_detail_focus: RepoDetailFocus::Worktrees,
+            session_focus: SessionFocus::Worktrees,
             modal: Modal::None,
             data: DataCache::default(),
             repo_index: 0,
             worktree_index: 0,
             ticket_index: 0,
+            session_wt_index: 0,
+            session_history_index: 0,
             selected_repo_id: None,
             selected_worktree_id: None,
             detail_worktrees: Vec::new(),

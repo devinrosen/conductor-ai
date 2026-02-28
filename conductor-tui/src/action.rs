@@ -30,6 +30,7 @@ pub enum Action {
     LinkTicket,
     StartSession,
     EndSession,
+    AttachWorktree,
     StartWork,
 
     // Filter
