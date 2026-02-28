@@ -140,6 +140,7 @@ fn sync_jira_repo(
             match syncer.upsert_tickets(repo_id, &tickets) {
                 Ok(count) => {
                     let _ = syncer.close_missing_tickets(repo_id, "jira", &synced_ids);
+                    let _ = syncer.mark_worktrees_for_closed_tickets(repo_id);
                     Action::TicketSyncComplete {
                         repo_slug: repo_slug.to_string(),
                         count,
@@ -172,6 +173,7 @@ fn sync_github_repo(
             match syncer.upsert_tickets(repo_id, &tickets) {
                 Ok(count) => {
                     let _ = syncer.close_missing_tickets(repo_id, "github", &synced_ids);
+                    let _ = syncer.mark_worktrees_for_closed_tickets(repo_id);
                     Action::TicketSyncComplete {
                         repo_slug: repo_slug.to_string(),
                         count,

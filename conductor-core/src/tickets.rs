@@ -158,6 +158,21 @@ impl<'a> TicketSyncer<'a> {
         )?;
         Ok(())
     }
+
+    /// After syncing tickets for a repo, update any linked worktrees whose
+    /// ticket is now closed: set worktree status to 'merged'.
+    /// Returns the number of worktrees updated.
+    pub fn mark_worktrees_for_closed_tickets(&self, repo_id: &str) -> Result<usize> {
+        let count = self.conn.execute(
+            "UPDATE worktrees SET status = 'merged'
+             WHERE repo_id = ?1
+             AND status != 'merged'
+             AND ticket_id IS NOT NULL
+             AND ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')",
+            params![repo_id],
+        )?;
+        Ok(count)
+    }
 }
 
 fn map_ticket_row(row: &rusqlite::Row) -> rusqlite::Result<Ticket> {
@@ -210,6 +225,18 @@ mod tests {
                 synced_at TEXT NOT NULL,
                 raw_json TEXT NOT NULL DEFAULT '{}',
                 UNIQUE(repo_id, source_type, source_id)
+            );
+            CREATE TABLE worktrees (
+                id TEXT PRIMARY KEY,
+                repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+                slug TEXT NOT NULL,
+                branch TEXT NOT NULL,
+                path TEXT NOT NULL,
+                ticket_id TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+                status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'merged', 'abandoned')),
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                UNIQUE(repo_id, slug)
             );
             INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
             VALUES ('repo1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo', '/tmp/ws', '2024-01-01T00:00:00Z');",
@@ -353,5 +380,179 @@ mod tests {
             )
             .unwrap();
         assert_eq!(repo2_state, "open");
+    }
+
+    fn insert_worktree(
+        conn: &Connection,
+        id: &str,
+        repo_id: &str,
+        ticket_id: Option<&str>,
+        status: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, ticket_id, status, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                id,
+                repo_id,
+                format!("wt-{id}"),
+                format!("feat/{id}"),
+                format!("/tmp/wt-{id}"),
+                ticket_id,
+                status,
+                "2024-01-01T00:00:00Z",
+            ],
+        )
+        .unwrap();
+    }
+
+    fn get_worktree_status(conn: &Connection, id: &str) -> String {
+        conn.query_row(
+            "SELECT status FROM worktrees WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_mark_worktrees_active_to_merged() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![make_ticket("1", "Issue 1")];
+        syncer.upsert_tickets("repo1", &tickets).unwrap();
+        let ticket_id: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE source_id = '1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        insert_worktree(&conn, "wt1", "repo1", Some(&ticket_id), "active");
+
+        syncer
+            .close_missing_tickets("repo1", "github", &["999"])
+            .unwrap();
+
+        let count = syncer
+            .mark_worktrees_for_closed_tickets("repo1")
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
+    }
+
+    #[test]
+    fn test_mark_worktrees_abandoned_to_merged() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![make_ticket("1", "Issue 1")];
+        syncer.upsert_tickets("repo1", &tickets).unwrap();
+        let ticket_id: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE source_id = '1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        insert_worktree(&conn, "wt1", "repo1", Some(&ticket_id), "abandoned");
+        syncer
+            .close_missing_tickets("repo1", "github", &["999"])
+            .unwrap();
+
+        let count = syncer
+            .mark_worktrees_for_closed_tickets("repo1")
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
+    }
+
+    #[test]
+    fn test_mark_worktrees_skips_unlinked() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        insert_worktree(&conn, "wt1", "repo1", None, "active");
+
+        let count = syncer
+            .mark_worktrees_for_closed_tickets("repo1")
+            .unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(get_worktree_status(&conn, "wt1"), "active");
+    }
+
+    #[test]
+    fn test_mark_worktrees_idempotent() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![make_ticket("1", "Issue 1")];
+        syncer.upsert_tickets("repo1", &tickets).unwrap();
+        let ticket_id: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE source_id = '1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        insert_worktree(&conn, "wt1", "repo1", Some(&ticket_id), "merged");
+        syncer
+            .close_missing_tickets("repo1", "github", &["999"])
+            .unwrap();
+
+        let count = syncer
+            .mark_worktrees_for_closed_tickets("repo1")
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_mark_worktrees_scoped_to_repo() {
+        let conn = setup_db();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+             VALUES ('repo2', 'other-repo', '/tmp/repo2', 'https://github.com/test/other', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let syncer = TicketSyncer::new(&conn);
+
+        let t1 = vec![make_ticket("1", "Repo1 Issue")];
+        let t2 = vec![make_ticket("1", "Repo2 Issue")];
+        syncer.upsert_tickets("repo1", &t1).unwrap();
+        syncer.upsert_tickets("repo2", &t2).unwrap();
+
+        let tid1: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE repo_id = 'repo1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let tid2: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE repo_id = 'repo2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        insert_worktree(&conn, "wt1", "repo1", Some(&tid1), "active");
+        insert_worktree(&conn, "wt2", "repo2", Some(&tid2), "active");
+
+        syncer
+            .close_missing_tickets("repo1", "github", &["999"])
+            .unwrap();
+        syncer
+            .close_missing_tickets("repo2", "github", &["999"])
+            .unwrap();
+
+        let count = syncer
+            .mark_worktrees_for_closed_tickets("repo1")
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
+        assert_eq!(get_worktree_status(&conn, "wt2"), "active");
     }
 }
