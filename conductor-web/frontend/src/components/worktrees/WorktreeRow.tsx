@@ -8,13 +8,17 @@ export function WorktreeRow({
   worktree,
   latestRun,
   onDelete,
+  selected,
+  index,
 }: {
   worktree: Worktree;
   latestRun?: AgentRun;
   onDelete: (id: string) => void;
+  selected?: boolean;
+  index?: number;
 }) {
   return (
-    <tr>
+    <tr className={selected ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""} data-list-index={index}>
       <td className="px-4 py-2">
         <Link
           to={`/repos/${worktree.repo_id}/worktrees/${worktree.id}`}

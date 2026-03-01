@@ -1,5 +1,5 @@
-import { useState, useMemo } from "react";
-import { useParams, Link } from "react-router";
+import { useState, useMemo, useCallback } from "react";
+import { useParams, Link, useNavigate } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
@@ -16,6 +16,8 @@ import {
   type ConductorEventType,
   type ConductorEventData,
 } from "../hooks/useConductorEvents";
+import { useHotkeys } from "../hooks/useHotkeys";
+import { useListNav } from "../hooks/useListNav";
 
 export function RepoDetailPage() {
   const { repoId } = useParams<{ repoId: string }>();
@@ -68,11 +70,13 @@ export function RepoDetailPage() {
 
   useConductorEvents(sseHandlers);
 
+  const navigate = useNavigate();
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleteRepoConfirm, setDeleteRepoConfirm] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
+  const [createWtOpen, setCreateWtOpen] = useState(false);
 
   async function handleSyncTickets() {
     setSyncing(true);
@@ -103,6 +107,40 @@ export function RepoDetailPage() {
     refreshRepos();
     window.location.href = "/";
   }
+
+  const wtCount = worktrees?.length ?? 0;
+  const { selectedIndex, moveDown, moveUp, reset } = useListNav(wtCount);
+
+  const openSelectedWt = useCallback(() => {
+    const wt = worktrees?.[selectedIndex];
+    if (wt) navigate(`/repos/${repoId}/worktrees/${wt.id}`);
+  }, [worktrees, selectedIndex, navigate, repoId]);
+
+  const openCreateWt = useCallback(() => setCreateWtOpen(true), []);
+
+  const deleteSelectedWt = useCallback(() => {
+    const wt = worktrees?.[selectedIndex];
+    if (wt) setDeleteTarget(wt.id);
+  }, [worktrees, selectedIndex]);
+
+  const handleEscape = useCallback(() => {
+    if (selectedTicket) {
+      setSelectedTicket(null);
+    } else if (selectedIndex >= 0) {
+      reset();
+    }
+  }, [selectedTicket, selectedIndex, reset]);
+
+  const noModalOpen = !selectedTicket && deleteTarget === null && !deleteRepoConfirm;
+
+  useHotkeys([
+    { key: "j", handler: moveDown, description: "Next worktree", enabled: noModalOpen },
+    { key: "k", handler: moveUp, description: "Previous worktree", enabled: noModalOpen },
+    { key: "Enter", handler: openSelectedWt, description: "Open selected", enabled: selectedIndex >= 0 && noModalOpen },
+    { key: "c", handler: openCreateWt, description: "Create worktree", enabled: noModalOpen },
+    { key: "d", handler: deleteSelectedWt, description: "Delete selected worktree", enabled: selectedIndex >= 0 && noModalOpen },
+    { key: "Escape", handler: handleEscape, description: "Close / deselect" },
+  ]);
 
   if (!repo) {
     return (
@@ -144,7 +182,7 @@ export function RepoDetailPage() {
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
             Worktrees
           </h3>
-          <CreateWorktreeForm repoId={repoId!} onCreated={refetchWorktrees} />
+          <CreateWorktreeForm repoId={repoId!} onCreated={refetchWorktrees} open={createWtOpen} onOpenChange={setCreateWtOpen} />
         </div>
         {wtLoading ? (
           <LoadingSpinner />
@@ -164,12 +202,14 @@ export function RepoDetailPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {worktrees.map((wt) => (
+                {worktrees.map((wt, index) => (
                   <WorktreeRow
                     key={wt.id}
                     worktree={wt}
                     latestRun={latestRuns?.[wt.id]}
                     onDelete={setDeleteTarget}
+                    selected={index === selectedIndex}
+                    index={index}
                   />
                 ))}
               </tbody>

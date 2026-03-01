@@ -4,11 +4,17 @@ import { api } from "../../api/client";
 export function CreateWorktreeForm({
   repoId,
   onCreated,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   repoId: string;
   onCreated: () => void;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = onOpenChange ?? setInternalOpen;
   const [name, setName] = useState("");
   const [fromBranch, setFromBranch] = useState("");
   const [error, setError] = useState<string | null>(null);

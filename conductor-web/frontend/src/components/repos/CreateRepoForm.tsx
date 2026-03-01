@@ -1,8 +1,18 @@
 import { useState } from "react";
 import { api } from "../../api/client";
 
-export function CreateRepoForm({ onCreated }: { onCreated: () => void }) {
-  const [open, setOpen] = useState(false);
+export function CreateRepoForm({
+  onCreated,
+  open: controlledOpen,
+  onOpenChange,
+}: {
+  onCreated: () => void;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = onOpenChange ?? setInternalOpen;
   const [remoteUrl, setRemoteUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);

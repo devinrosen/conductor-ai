@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef, useCallback } from "react";
 import { useRepos } from "../components/layout/AppShell";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
@@ -8,6 +8,8 @@ import { TicketRow } from "../components/tickets/TicketRow";
 import { TicketDetailModal } from "../components/tickets/TicketDetailModal";
 import type { Ticket, Repo } from "../api/types";
 import { parseLabels } from "../utils/ticketUtils";
+import { useHotkeys } from "../hooks/useHotkeys";
+import { useListNav } from "../hooks/useListNav";
 
 function matchesFilter(ticket: Ticket, filter: string): boolean {
   const lower = filter.toLowerCase();
@@ -24,6 +26,7 @@ export function TicketsPage() {
   const { data: ticketTotals } = useApi(() => api.ticketAgentTotals(), []);
   const [filter, setFilter] = useState("");
   const [selected, setSelected] = useState<Ticket | null>(null);
+  const filterRef = useRef<HTMLInputElement>(null);
 
   const repoMap = useMemo(() => {
     const map: Record<string, Repo> = {};
@@ -37,11 +40,41 @@ export function TicketsPage() {
     return tickets.filter((t) => matchesFilter(t, filter.trim()));
   }, [tickets, filter]);
 
+  const { selectedIndex, moveDown, moveUp, reset } = useListNav(filtered.length);
+
+  const focusFilter = useCallback(() => filterRef.current?.focus(), []);
+
+  const openSelected = useCallback(() => {
+    if (selectedIndex >= 0 && filtered[selectedIndex]) {
+      setSelected(filtered[selectedIndex]);
+    }
+  }, [selectedIndex, filtered]);
+
+  const handleEscape = useCallback(() => {
+    if (selected) {
+      setSelected(null);
+    } else if (filter) {
+      setFilter("");
+      filterRef.current?.blur();
+    } else if (selectedIndex >= 0) {
+      reset();
+    }
+  }, [selected, filter, selectedIndex, reset]);
+
+  useHotkeys([
+    { key: "/", handler: focusFilter, description: "Focus search" },
+    { key: "j", handler: moveDown, description: "Next ticket" },
+    { key: "k", handler: moveUp, description: "Previous ticket" },
+    { key: "Enter", handler: openSelected, description: "Open selected ticket", enabled: selectedIndex >= 0 && !selected },
+    { key: "Escape", handler: handleEscape, description: "Close / clear" },
+  ]);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold text-gray-900">Tickets</h2>
         <input
+          ref={filterRef}
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
@@ -73,13 +106,15 @@ export function TicketsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filtered.map((t) => (
+              {filtered.map((t, index) => (
                 <TicketRow
                   key={t.id}
                   ticket={t}
                   repoSlug={repoMap[t.repo_id]?.slug ?? "—"}
                   agentTotals={ticketTotals?.[t.id]}
                   onClick={setSelected}
+                  selected={index === selectedIndex}
+                  index={index}
                 />
               ))}
             </tbody>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
 import type { WorkTarget } from "../api/types";
@@ -20,6 +20,20 @@ export function SettingsPage() {
   const [deleteIndex, setDeleteIndex] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!showAdd) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setShowAdd(false);
+        setName("");
+        setCommand("");
+        setTargetType("editor");
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [showAdd]);
 
   async function handleAdd(e: React.FormEvent) {
     e.preventDefault();

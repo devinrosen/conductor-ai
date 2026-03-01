@@ -25,6 +25,15 @@ export function AgentPromptModal({
     setUseResume(!!resumeSessionId);
   }, [initialPrompt, resumeSessionId]);
 
+  useEffect(() => {
+    if (!open) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onCancel();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open, onCancel]);
+
   if (!open) return null;
 
   function handleSubmit() {
