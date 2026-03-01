@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { api } from "../api/client";
 import type { Worktree, AgentRun } from "../api/types";
@@ -15,9 +15,12 @@ import {
   type ConductorEventType,
   type ConductorEventData,
 } from "../hooks/useConductorEvents";
+import { useHotkeys } from "../hooks/useHotkeys";
+import { useListNav } from "../hooks/useListNav";
 
 export function DashboardPage() {
   const { repos, loading: reposLoading, refreshRepos } = useRepos();
+  const navigate = useNavigate();
   const [worktreeCounts, setWorktreeCounts] = useState<Record<string, number>>(
     {},
   );
@@ -26,6 +29,7 @@ export function DashboardPage() {
   >([]);
   const [latestRuns, setLatestRuns] = useState<Record<string, AgentRun>>({});
   const [wtTick, setWtTick] = useState(0);
+  const [createRepoOpen, setCreateRepoOpen] = useState(false);
 
   const refreshWorktrees = useCallback(() => setWtTick((n) => n + 1), []);
 
@@ -73,13 +77,34 @@ export function DashboardPage() {
 
   useConductorEvents(handlers);
 
+  const { selectedIndex, moveDown, moveUp, reset } = useListNav(activeWorktrees.length);
+
+  const openSelected = useCallback(() => {
+    const wt = activeWorktrees[selectedIndex];
+    if (wt) navigate(`/repos/${wt.repo_id}/worktrees/${wt.id}`);
+  }, [activeWorktrees, selectedIndex, navigate]);
+
+  const openCreateRepo = useCallback(() => setCreateRepoOpen(true), []);
+
+  const handleEscape = useCallback(() => {
+    if (selectedIndex >= 0) reset();
+  }, [selectedIndex, reset]);
+
+  useHotkeys([
+    { key: "j", handler: moveDown, description: "Next worktree" },
+    { key: "k", handler: moveUp, description: "Previous worktree" },
+    { key: "Enter", handler: openSelected, description: "Open selected", enabled: selectedIndex >= 0 },
+    { key: "c", handler: openCreateRepo, description: "Add repo" },
+    { key: "Escape", handler: handleEscape, description: "Deselect", enabled: selectedIndex >= 0 },
+  ]);
+
   if (reposLoading) return <LoadingSpinner />;
 
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold text-gray-900">Dashboard</h2>
-        <CreateRepoForm onCreated={refreshRepos} />
+        <CreateRepoForm onCreated={refreshRepos} open={createRepoOpen} onOpenChange={setCreateRepoOpen} />
       </div>
 
       {/* Repos */}
@@ -122,10 +147,10 @@ export function DashboardPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {activeWorktrees.map((wt) => {
+                {activeWorktrees.map((wt, index) => {
                   const run = latestRuns[wt.id];
                   return (
-                    <tr key={wt.id}>
+                    <tr key={wt.id} data-list-index={index} className={selectedIndex === index ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""}>
                       <td className="px-4 py-2">
                         <Link
                           to={`/repos/${wt.repo_id}/worktrees/${wt.id}`}

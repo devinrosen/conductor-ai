@@ -53,6 +53,9 @@ export function Sidebar() {
         <NavLink to="/settings" className={linkClass}>
           Settings
         </NavLink>
+        <div className="mt-2 px-3 text-xs text-gray-400">
+          Press <kbd className="px-1 py-0.5 bg-gray-100 rounded text-gray-500 font-mono text-[10px]">?</kbd> for shortcuts
+        </div>
       </div>
     </aside>
   );

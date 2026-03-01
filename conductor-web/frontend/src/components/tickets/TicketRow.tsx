@@ -8,14 +8,17 @@ interface TicketRowProps {
   agentTotals?: TicketAgentTotals;
   repoSlug?: string;
   onClick: (ticket: Ticket) => void;
+  selected?: boolean;
+  index?: number;
 }
 
-export function TicketRow({ ticket, agentTotals, repoSlug, onClick }: TicketRowProps) {
+export function TicketRow({ ticket, agentTotals, repoSlug, onClick, selected, index }: TicketRowProps) {
   const labels = parseLabels(ticket.labels);
   return (
     <tr
-      className="cursor-pointer hover:bg-gray-50"
+      className={`cursor-pointer hover:bg-gray-50 ${selected ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""}`}
       onClick={() => onClick(ticket)}
+      data-list-index={index}
     >
       {repoSlug !== undefined && (
         <td className="px-4 py-2 text-gray-500">{repoSlug}</td>

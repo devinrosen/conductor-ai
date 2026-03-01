@@ -15,6 +15,7 @@ import {
   type ConductorEventType,
   type ConductorEventData,
 } from "../hooks/useConductorEvents";
+import { useHotkeys } from "../hooks/useHotkeys";
 
 export function WorktreeDetailPage() {
   const { repoId, worktreeId } = useParams<{
@@ -54,6 +55,10 @@ export function WorktreeDetailPage() {
   });
   const [agentLoading, setAgentLoading] = useState(false);
   const [stopConfirm, setStopConfirm] = useState(false);
+
+  useHotkeys([
+    { key: "d", handler: () => setDeleteConfirm(true), description: "Delete worktree", enabled: !deleteConfirm && !promptModalOpen && !stopConfirm },
+  ]);
 
   const worktree = worktrees?.find((w) => w.id === worktreeId);
   const linkedTicket = worktree?.ticket_id
