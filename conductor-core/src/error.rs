@@ -40,6 +40,9 @@ pub enum ConductorError {
 
     #[error("agent error: {0}")]
     Agent(String),
+
+    #[error("worktree already has a linked ticket")]
+    TicketAlreadyLinked,
 }
 
 pub type Result<T> = std::result::Result<T, ConductorError>;

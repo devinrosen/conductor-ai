@@ -113,9 +113,12 @@ pub async fn link_ticket(
 ) -> Result<Json<Worktree>, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
-    // Verify worktree exists
+    // Verify worktree exists and has no linked ticket
     let mgr = WorktreeManager::new(&db, &config);
-    mgr.get_by_id(&id)?;
+    let wt = mgr.get_by_id(&id)?;
+    if wt.ticket_id.is_some() {
+        return Err(conductor_core::error::ConductorError::TicketAlreadyLinked.into());
+    }
     // Verify ticket exists
     let syncer = TicketSyncer::new(&db);
     syncer.get_by_id(&body.ticket_id)?;
