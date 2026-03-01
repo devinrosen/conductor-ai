@@ -18,6 +18,15 @@ pub struct SyncResult {
     pub closed: usize,
 }
 
+pub async fn list_all_tickets(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<Ticket>>, ApiError> {
+    let db = state.db.lock().await;
+    let syncer = TicketSyncer::new(&db);
+    let tickets = syncer.list(None)?;
+    Ok(Json(tickets))
+}
+
 pub async fn list_tickets(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,

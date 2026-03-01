@@ -42,6 +42,7 @@ export const api = {
     request<Worktree>(`/worktrees/${id}`, { method: "DELETE" }),
 
   // Tickets
+  listAllTickets: () => request<Ticket[]>("/tickets"),
   listTickets: (repoId: string) =>
     request<Ticket[]>(`/repos/${repoId}/tickets`),
   syncTickets: (repoId: string) =>
