@@ -46,6 +46,9 @@ pub enum Action {
     WorkTargetMoveDown,
     WorkTargetAdd,
     WorkTargetDelete,
+    ManageIssueSources,
+    IssueSourceAdd,
+    IssueSourceDelete,
 
     // Agent triggers (tmux-based)
     LaunchAgent,

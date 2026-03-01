@@ -3,6 +3,7 @@ use std::fmt;
 
 use conductor_core::agent::{AgentEvent, AgentRun, TicketAgentTotals};
 use conductor_core::config::WorkTarget;
+use conductor_core::issue_source::IssueSource;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::Ticket;
 use conductor_core::worktree::Worktree;
@@ -97,6 +98,13 @@ pub enum Modal {
         targets: Vec<WorkTarget>,
         selected: usize,
     },
+    IssueSourceManager {
+        repo_id: String,
+        repo_slug: String,
+        remote_url: String,
+        sources: Vec<IssueSource>,
+        selected: usize,
+    },
 }
 
 impl fmt::Debug for Modal {
@@ -116,6 +124,7 @@ impl fmt::Debug for Modal {
             Modal::TicketInfo { .. } => write!(f, "Modal::TicketInfo"),
             Modal::WorkTargetPicker { .. } => write!(f, "Modal::WorkTargetPicker"),
             Modal::WorkTargetManager { .. } => write!(f, "Modal::WorkTargetManager"),
+            Modal::IssueSourceManager { .. } => write!(f, "Modal::IssueSourceManager"),
         }
     }
 }
@@ -138,6 +147,12 @@ pub enum ConfirmAction {
         worktree_slug: String,
         ticket_id: String,
     },
+    DeleteIssueSource {
+        source_id: String,
+        repo_id: String,
+        repo_slug: String,
+        remote_url: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -150,9 +165,15 @@ pub struct FormField {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::enum_variant_names)]
 pub enum FormAction {
     AddRepo,
     AddWorkTarget,
+    AddIssueSource {
+        repo_id: String,
+        repo_slug: String,
+        remote_url: String,
+    },
 }
 
 #[derive(Debug, Clone)]

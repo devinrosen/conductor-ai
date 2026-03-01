@@ -7,6 +7,7 @@ use tui_textarea::TextArea;
 
 use conductor_core::agent::TicketAgentTotals;
 use conductor_core::config::WorkTarget;
+use conductor_core::issue_source::IssueSource;
 use conductor_core::tickets::Ticket;
 use conductor_core::worktree::Worktree;
 
@@ -523,6 +524,117 @@ pub fn render_agent_prompt(
         Style::default().fg(Color::DarkGray),
     )));
     frame.render_widget(hint, chunks[2]);
+}
+
+pub fn render_issue_source_manager(
+    frame: &mut Frame,
+    area: Rect,
+    repo_slug: &str,
+    sources: &[IssueSource],
+    selected: usize,
+) {
+    let popup = centered_rect(55, 50, area);
+    frame.render_widget(Clear, popup);
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  Issue Sources for {repo_slug}"),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    if sources.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (no sources configured)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for (i, source) in sources.iter().enumerate() {
+            let is_selected = i == selected;
+            let prefix = if is_selected { "▸ " } else { "  " };
+
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let config_style = Style::default().fg(Color::DarkGray);
+
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {prefix}"), style),
+                Span::styled(&source.source_type, style),
+            ]));
+
+            // Show config details on indented lines below the source type
+            for detail in format_source_config_lines(source) {
+                lines.push(Line::from(Span::styled(
+                    format!("      {detail}"),
+                    config_style,
+                )));
+            }
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  a",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" add  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "d",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" delete  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "Esc",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" close", Style::default().fg(Color::DarkGray)),
+    ]));
+
+    let content = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(" Issue Source Manager "),
+        )
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(content, popup);
+}
+
+fn format_source_config_lines(source: &IssueSource) -> Vec<String> {
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&source.config_json) {
+        match source.source_type.as_str() {
+            "github" => {
+                let owner = val["owner"].as_str().unwrap_or("?");
+                let repo = val["repo"].as_str().unwrap_or("?");
+                vec![format!("{owner}/{repo}")]
+            }
+            "jira" => {
+                let url = val["url"].as_str().unwrap_or("?");
+                let jql = val["jql"].as_str().unwrap_or("?");
+                vec![format!("URL: {url}"), format!("JQL: {jql}")]
+            }
+            _ => vec![source.config_json.clone()],
+        }
+    } else {
+        vec![source.config_json.clone()]
+    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

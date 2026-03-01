@@ -11,6 +11,7 @@ export type ConductorEventType =
   | "agent_stopped"
   | "agent_event"
   | "work_targets_changed"
+  | "issue_sources_changed"
   | "lagged";
 
 export interface ConductorEventData {
@@ -59,6 +60,7 @@ export function useConductorEvents(
       "agent_stopped",
       "agent_event",
       "work_targets_changed",
+      "issue_sources_changed",
       "lagged",
     ];
 
