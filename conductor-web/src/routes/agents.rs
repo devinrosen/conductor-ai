@@ -6,7 +6,9 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
-use conductor_core::agent::{parse_agent_log, AgentEvent, AgentManager, AgentRun, TicketAgentTotals};
+use conductor_core::agent::{
+    parse_agent_log, AgentEvent, AgentManager, AgentRun, TicketAgentTotals,
+};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
 
