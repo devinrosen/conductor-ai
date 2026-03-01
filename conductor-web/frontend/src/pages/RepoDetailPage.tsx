@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useParams, Link } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { useApi } from "../hooks/useApi";
@@ -9,6 +9,11 @@ import { TicketRow } from "../components/tickets/TicketRow";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
+import {
+  useConductorEvents,
+  type ConductorEventType,
+  type ConductorEventData,
+} from "../hooks/useConductorEvents";
 
 export function RepoDetailPage() {
   const { repoId } = useParams<{ repoId: string }>();
@@ -27,8 +32,39 @@ export function RepoDetailPage() {
     refetch: refetchTickets,
   } = useApi(() => api.listTickets(repoId!), [repoId]);
 
-  const { data: latestRuns } = useApi(() => api.latestRunsByWorktree(), []);
-  const { data: ticketTotals } = useApi(() => api.ticketAgentTotals(), []);
+  const { data: latestRuns, refetch: refetchRuns } = useApi(
+    () => api.latestRunsByWorktree(),
+    [],
+  );
+  const { data: ticketTotals, refetch: refetchTotals } = useApi(
+    () => api.ticketAgentTotals(),
+    [],
+  );
+
+  const sseHandlers = useMemo(() => {
+    const handleWorktreeChange = (ev: ConductorEventData) => {
+      if (!ev.data || ev.data.repo_id === repoId) refetchWorktrees();
+    };
+    const handleTicketsChange = (ev: ConductorEventData) => {
+      if (!ev.data || ev.data.repo_id === repoId) refetchTickets();
+    };
+    const handleAgentChange = (_ev: ConductorEventData) => {
+      refetchRuns();
+      refetchTotals();
+    };
+    const map: Partial<
+      Record<ConductorEventType, (data: ConductorEventData) => void>
+    > = {
+      worktree_created: handleWorktreeChange,
+      worktree_deleted: handleWorktreeChange,
+      tickets_synced: handleTicketsChange,
+      agent_started: handleAgentChange,
+      agent_stopped: handleAgentChange,
+    };
+    return map;
+  }, [repoId, refetchWorktrees, refetchTickets, refetchRuns, refetchTotals]);
+
+  useConductorEvents(sseHandlers);
 
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);

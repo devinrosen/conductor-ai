@@ -19,6 +19,8 @@ pub enum ConductorEvent {
     AgentStarted { run_id: String, worktree_id: String },
     #[serde(rename = "agent_stopped")]
     AgentStopped { run_id: String, worktree_id: String },
+    #[serde(rename = "agent_event")]
+    AgentEvent { run_id: String, worktree_id: String },
     #[serde(rename = "work_targets_changed")]
     WorkTargetsChanged,
 }
@@ -34,6 +36,7 @@ impl ConductorEvent {
             Self::TicketsSynced { .. } => "tickets_synced",
             Self::AgentStarted { .. } => "agent_started",
             Self::AgentStopped { .. } => "agent_stopped",
+            Self::AgentEvent { .. } => "agent_event",
             Self::WorkTargetsChanged => "work_targets_changed",
         }
     }
@@ -137,6 +140,13 @@ mod tests {
                     worktree_id: "".into(),
                 },
                 "agent_stopped",
+            ),
+            (
+                ConductorEvent::AgentEvent {
+                    run_id: "".into(),
+                    worktree_id: "".into(),
+                },
+                "agent_event",
             ),
             (ConductorEvent::WorkTargetsChanged, "work_targets_changed"),
         ];
