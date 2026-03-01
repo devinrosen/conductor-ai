@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams, Link, useNavigate } from "react-router";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
-import type { AgentRun, AgentEvent } from "../api/types";
+import type { AgentRun, AgentEvent, Ticket } from "../api/types";
 import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
@@ -18,10 +18,11 @@ export function WorktreeDetailPage() {
   }>();
   const navigate = useNavigate();
 
-  const { data: worktrees, loading } = useApi(
-    () => api.listWorktrees(repoId!),
-    [repoId],
-  );
+  const {
+    data: worktrees,
+    loading,
+    refetch: refetchWorktrees,
+  } = useApi(() => api.listWorktrees(repoId!), [repoId]);
 
   const { data: tickets } = useApi(
     () => api.listTickets(repoId!),
@@ -30,6 +31,12 @@ export function WorktreeDetailPage() {
 
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [pathCopied, setPathCopied] = useState(false);
+  const [pushing, setPushing] = useState(false);
+  const [pushResult, setPushResult] = useState<string | null>(null);
+  const [creatingPr, setCreatingPr] = useState(false);
+  const [prResult, setPrResult] = useState<string | null>(null);
+  const [linkingTicket, setLinkingTicket] = useState(false);
+  const [selectedTicketId, setSelectedTicketId] = useState("");
 
   // Agent state
   const [latestRun, setLatestRun] = useState<AgentRun | null>(null);
@@ -47,6 +54,13 @@ export function WorktreeDetailPage() {
   const linkedTicket = worktree?.ticket_id
     ? tickets?.find((t) => t.id === worktree.ticket_id)
     : null;
+
+  const isActive = worktree?.status === "active";
+
+  // Tickets available for linking: same repo, not already linked to this worktree
+  const availableTickets = tickets?.filter(
+    (t: Ticket) => t.id !== worktree?.ticket_id,
+  );
 
   // Fetch agent data
   const refreshAgent = useCallback(async () => {
@@ -150,6 +164,46 @@ export function WorktreeDetailPage() {
     navigate(`/repos/${repoId}`);
   }
 
+  async function handlePush() {
+    setPushing(true);
+    setPushResult(null);
+    try {
+      const result = await api.pushWorktree(worktreeId!);
+      setPushResult(result.message);
+    } catch (err) {
+      setPushResult(err instanceof Error ? err.message : "Push failed");
+    } finally {
+      setPushing(false);
+    }
+  }
+
+  async function handleCreatePr(draft: boolean) {
+    setCreatingPr(true);
+    setPrResult(null);
+    try {
+      const result = await api.createPr(worktreeId!, draft);
+      setPrResult(result.url);
+    } catch (err) {
+      setPrResult(err instanceof Error ? err.message : "PR creation failed");
+    } finally {
+      setCreatingPr(false);
+    }
+  }
+
+  async function handleLinkTicket() {
+    if (!selectedTicketId) return;
+    setLinkingTicket(true);
+    try {
+      await api.linkTicket(worktreeId!, selectedTicketId);
+      setSelectedTicketId("");
+      refetchWorktrees();
+    } catch (err) {
+      setPushResult(err instanceof Error ? err.message : "Link failed");
+    } finally {
+      setLinkingTicket(false);
+    }
+  }
+
   if (loading) return <LoadingSpinner />;
 
   if (!worktree) {
@@ -239,6 +293,65 @@ export function WorktreeDetailPage() {
         </dl>
       </div>
 
+      {/* Actions — only for active worktrees */}
+      {isActive && (
+        <section>
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+            Actions
+          </h3>
+          <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-4">
+            {/* Push */}
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handlePush}
+                disabled={pushing}
+                className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                {pushing ? "Pushing..." : "Push Branch"}
+              </button>
+              {pushResult && (
+                <span className="text-xs text-gray-500">{pushResult}</span>
+              )}
+            </div>
+
+            {/* Create PR */}
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => handleCreatePr(false)}
+                disabled={creatingPr}
+                className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                {creatingPr ? "Creating..." : "Create PR"}
+              </button>
+              <button
+                onClick={() => handleCreatePr(true)}
+                disabled={creatingPr}
+                className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Draft PR
+              </button>
+              {prResult && (
+                <span className="text-xs text-gray-500">
+                  {prResult.startsWith("http") ? (
+                    <a
+                      href={prResult}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-indigo-600 hover:underline"
+                    >
+                      {prResult}
+                    </a>
+                  ) : (
+                    prResult
+                  )}
+                </span>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Linked Ticket */}
       {linkedTicket && (
         <section>
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
@@ -262,6 +375,38 @@ export function WorktreeDetailPage() {
                 Assigned to {linkedTicket.assignee}
               </p>
             )}
+          </div>
+        </section>
+      )}
+
+      {/* Link Ticket — only for active worktrees without a linked ticket */}
+      {isActive && !linkedTicket && availableTickets && availableTickets.length > 0 && (
+        <section>
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+            Link Ticket
+          </h3>
+          <div className="rounded-lg border border-gray-200 bg-white p-4">
+            <div className="flex items-center gap-3">
+              <select
+                value={selectedTicketId}
+                onChange={(e) => setSelectedTicketId(e.target.value)}
+                className="flex-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm"
+              >
+                <option value="">Select a ticket...</option>
+                {availableTickets.map((t: Ticket) => (
+                  <option key={t.id} value={t.id}>
+                    #{t.source_id} — {t.title}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={handleLinkTicket}
+                disabled={!selectedTicketId || linkingTicket}
+                className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                {linkingTicket ? "Linking..." : "Link"}
+              </button>
+            </div>
           </div>
         </section>
       )}

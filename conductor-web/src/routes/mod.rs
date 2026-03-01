@@ -26,6 +26,12 @@ pub fn api_router() -> Router<AppState> {
             get(worktrees::list_worktrees).post(worktrees::create_worktree),
         )
         .route("/api/worktrees/{id}", delete(worktrees::delete_worktree))
+        .route("/api/worktrees/{id}/push", post(worktrees::push_worktree))
+        .route("/api/worktrees/{id}/pr", post(worktrees::create_pr))
+        .route(
+            "/api/worktrees/{id}/link-ticket",
+            post(worktrees::link_ticket),
+        )
         // Tickets
         .route("/api/tickets", get(tickets::list_all_tickets))
         .route("/api/repos/{id}/tickets", get(tickets::list_tickets))

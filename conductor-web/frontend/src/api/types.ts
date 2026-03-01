@@ -99,3 +99,11 @@ export interface CreateWorkTargetRequest {
   command: string;
   type: string;
 }
+
+export interface PushResult {
+  message: string;
+}
+
+export interface CreatePrResult {
+  url: string;
+}
