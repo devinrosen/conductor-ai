@@ -2,11 +2,13 @@ import type {
   Repo,
   Worktree,
   Ticket,
-  AgentRun,
   TicketAgentTotals,
   CreateRepoRequest,
   CreateWorktreeRequest,
   SyncResult,
+  AgentRun,
+  AgentEvent,
+  AgentPromptInfo,
 } from "./types";
 
 const BASE = "/api";
@@ -50,11 +52,31 @@ export const api = {
   syncTickets: (repoId: string) =>
     request<SyncResult>(`/repos/${repoId}/tickets/sync`, { method: "POST" }),
 
-  // Agent runs & stats
-  listAgentRuns: (worktreeId: string) =>
-    request<AgentRun[]>(`/worktrees/${worktreeId}/agent-runs`),
+  // Agent stats (aggregates)
   latestRunsByWorktree: () =>
     request<Record<string, AgentRun>>("/agent/latest-runs"),
   ticketAgentTotals: () =>
     request<Record<string, TicketAgentTotals>>("/agent/ticket-totals"),
+
+  // Agent orchestration
+  listAgentRuns: (worktreeId: string) =>
+    request<AgentRun[]>(`/worktrees/${worktreeId}/agent/runs`),
+  latestAgentRun: (worktreeId: string) =>
+    request<AgentRun | null>(`/worktrees/${worktreeId}/agent/latest`),
+  startAgent: (worktreeId: string, prompt: string, resumeSessionId?: string) =>
+    request<AgentRun>(`/worktrees/${worktreeId}/agent/start`, {
+      method: "POST",
+      body: JSON.stringify({
+        prompt,
+        resume_session_id: resumeSessionId ?? null,
+      }),
+    }),
+  stopAgent: (worktreeId: string) =>
+    request<AgentRun>(`/worktrees/${worktreeId}/agent/stop`, {
+      method: "POST",
+    }),
+  getAgentEvents: (worktreeId: string) =>
+    request<AgentEvent[]>(`/worktrees/${worktreeId}/agent/events`),
+  getAgentPrompt: (worktreeId: string) =>
+    request<AgentPromptInfo>(`/worktrees/${worktreeId}/agent/prompt`),
 };

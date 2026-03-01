@@ -29,7 +29,7 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/tickets", get(tickets::list_all_tickets))
         .route("/api/repos/{id}/tickets", get(tickets::list_tickets))
         .route("/api/repos/{id}/tickets/sync", post(tickets::sync_tickets))
-        // Agent runs & stats
+        // Agent stats (aggregates)
         .route(
             "/api/worktrees/{id}/agent-runs",
             get(agents::list_agent_runs),
@@ -39,4 +39,26 @@ pub fn api_router() -> Router<AppState> {
             get(agents::latest_runs_by_worktree),
         )
         .route("/api/agent/ticket-totals", get(agents::ticket_totals))
+        // Agent orchestration
+        .route("/api/worktrees/{id}/agent/runs", get(agents::list_runs))
+        .route(
+            "/api/worktrees/{id}/agent/latest",
+            get(agents::latest_run),
+        )
+        .route(
+            "/api/worktrees/{id}/agent/start",
+            post(agents::start_agent),
+        )
+        .route(
+            "/api/worktrees/{id}/agent/stop",
+            post(agents::stop_agent),
+        )
+        .route(
+            "/api/worktrees/{id}/agent/events",
+            get(agents::get_events),
+        )
+        .route(
+            "/api/worktrees/{id}/agent/prompt",
+            get(agents::get_prompt),
+        )
 }
