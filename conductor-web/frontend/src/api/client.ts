@@ -9,6 +9,8 @@ import type {
   AgentRun,
   AgentEvent,
   AgentPromptInfo,
+  WorkTarget,
+  CreateWorkTargetRequest,
 } from "./types";
 
 const BASE = "/api";
@@ -79,4 +81,21 @@ export const api = {
     request<AgentEvent[]>(`/worktrees/${worktreeId}/agent/events`),
   getAgentPrompt: (worktreeId: string) =>
     request<AgentPromptInfo>(`/worktrees/${worktreeId}/agent/prompt`),
+
+  // Work Targets
+  listWorkTargets: () => request<WorkTarget[]>("/config/work-targets"),
+  createWorkTarget: (data: CreateWorkTargetRequest) =>
+    request<WorkTarget[]>("/config/work-targets", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  deleteWorkTarget: (index: number) =>
+    request<WorkTarget[]>(`/config/work-targets/${index}`, {
+      method: "DELETE",
+    }),
+  replaceWorkTargets: (targets: CreateWorkTargetRequest[]) =>
+    request<WorkTarget[]>("/config/work-targets", {
+      method: "PUT",
+      body: JSON.stringify(targets),
+    }),
 };

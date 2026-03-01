@@ -2,6 +2,7 @@ pub mod agents;
 pub mod events;
 pub mod repos;
 pub mod tickets;
+pub mod work_targets;
 pub mod worktrees;
 
 use axum::routing::{delete, get, post};
@@ -46,4 +47,15 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/worktrees/{id}/agent/stop", post(agents::stop_agent))
         .route("/api/worktrees/{id}/agent/events", get(agents::get_events))
         .route("/api/worktrees/{id}/agent/prompt", get(agents::get_prompt))
+        // Work Targets
+        .route(
+            "/api/config/work-targets",
+            get(work_targets::list_work_targets)
+                .post(work_targets::create_work_target)
+                .put(work_targets::replace_work_targets),
+        )
+        .route(
+            "/api/config/work-targets/{index}",
+            delete(work_targets::delete_work_target),
+        )
 }

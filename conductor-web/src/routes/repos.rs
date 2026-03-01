@@ -19,7 +19,8 @@ pub struct CreateRepoRequest {
 
 pub async fn list_repos(State(state): State<AppState>) -> Result<Json<Vec<Repo>>, ApiError> {
     let db = state.db.lock().await;
-    let mgr = RepoManager::new(&db, &state.config);
+    let config = state.config.read().await;
+    let mgr = RepoManager::new(&db, &config);
     let repos = mgr.list()?;
     Ok(Json(repos))
 }
@@ -29,13 +30,14 @@ pub async fn create_repo(
     Json(body): Json<CreateRepoRequest>,
 ) -> Result<(StatusCode, Json<Repo>), ApiError> {
     let db = state.db.lock().await;
-    let mgr = RepoManager::new(&db, &state.config);
+    let config = state.config.read().await;
+    let mgr = RepoManager::new(&db, &config);
     let slug = body
         .slug
         .unwrap_or_else(|| derive_slug_from_url(&body.remote_url));
     let local_path = body
         .local_path
-        .unwrap_or_else(|| derive_local_path(&state.config, &slug));
+        .unwrap_or_else(|| derive_local_path(&config, &slug));
     let repo = mgr.add(
         &slug,
         &local_path,
@@ -53,7 +55,8 @@ pub async fn delete_repo(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let db = state.db.lock().await;
-    let mgr = RepoManager::new(&db, &state.config);
+    let config = state.config.read().await;
+    let mgr = RepoManager::new(&db, &config);
     mgr.remove_by_id(&id)?;
     state.events.emit(ConductorEvent::RepoDeleted { id });
     Ok(StatusCode::NO_CONTENT)

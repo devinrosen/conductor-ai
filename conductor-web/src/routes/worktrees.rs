@@ -22,9 +22,10 @@ pub async fn list_worktrees(
     Path(repo_id): Path<String>,
 ) -> Result<Json<Vec<Worktree>>, ApiError> {
     let db = state.db.lock().await;
+    let config = state.config.read().await;
     // Verify repo exists
-    RepoManager::new(&db, &state.config).get_by_id(&repo_id)?;
-    let mgr = WorktreeManager::new(&db, &state.config);
+    RepoManager::new(&db, &config).get_by_id(&repo_id)?;
+    let mgr = WorktreeManager::new(&db, &config);
     let worktrees = mgr.list_by_repo_id(&repo_id, false)?;
     Ok(Json(worktrees))
 }
@@ -35,8 +36,9 @@ pub async fn create_worktree(
     Json(body): Json<CreateWorktreeRequest>,
 ) -> Result<(StatusCode, Json<Worktree>), ApiError> {
     let db = state.db.lock().await;
-    let repo = RepoManager::new(&db, &state.config).get_by_id(&repo_id)?;
-    let mgr = WorktreeManager::new(&db, &state.config);
+    let config = state.config.read().await;
+    let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
+    let mgr = WorktreeManager::new(&db, &config);
     let (wt, _warnings) = mgr.create(
         &repo.slug,
         &body.name,
@@ -55,7 +57,8 @@ pub async fn delete_worktree(
     Path(id): Path<String>,
 ) -> Result<Json<Worktree>, ApiError> {
     let db = state.db.lock().await;
-    let mgr = WorktreeManager::new(&db, &state.config);
+    let config = state.config.read().await;
+    let mgr = WorktreeManager::new(&db, &config);
     let wt = mgr.delete_by_id(&id)?;
     state.events.emit(ConductorEvent::WorktreeDeleted {
         id: wt.id.clone(),

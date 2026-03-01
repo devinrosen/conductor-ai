@@ -48,6 +48,12 @@ export function Sidebar() {
           <div className="px-3 py-2 text-sm text-gray-400">No repos yet</div>
         )}
       </nav>
+
+      <div className="border-t border-gray-200 p-3">
+        <NavLink to="/settings" className={linkClass}>
+          Settings
+        </NavLink>
+      </div>
     </aside>
   );
 }

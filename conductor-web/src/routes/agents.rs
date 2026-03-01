@@ -85,7 +85,8 @@ pub async fn start_agent(
     let db = state.db.lock().await;
 
     // Look up the worktree to get slug and path
-    let wt_mgr = WorktreeManager::new(&db, &state.config);
+    let config = state.config.read().await;
+    let wt_mgr = WorktreeManager::new(&db, &config);
     let wt = wt_mgr.get_by_id(&worktree_id)?;
 
     // Check if there's already a running agent
@@ -268,7 +269,8 @@ pub async fn get_prompt(
     let db = state.db.lock().await;
 
     // Look up worktree to get ticket_id
-    let wt_mgr = WorktreeManager::new(&db, &state.config);
+    let config = state.config.read().await;
+    let wt_mgr = WorktreeManager::new(&db, &config);
     let wt = wt_mgr.get_by_id(&worktree_id)?;
 
     // Build prompt from ticket if linked

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use conductor_core::config::Config;
 use conductor_core::db::migrations;
 use rusqlite::Connection;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use conductor_web::events::EventBus;
 use conductor_web::routes::api_router;
@@ -17,7 +17,7 @@ async fn spawn_test_server() -> String {
 
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
-        config: Arc::new(Config::default()),
+        config: Arc::new(RwLock::new(Config::default())),
         events: EventBus::new(64),
     };
 
@@ -255,6 +255,97 @@ async fn test_list_all_tickets_empty() {
     assert_eq!(resp.status(), 200);
     let body: Vec<serde_json::Value> = resp.json().await.unwrap();
     assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn test_list_work_targets_default() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/api/config/work-targets"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let targets: Vec<serde_json::Value> = resp.json().await.unwrap();
+    // Default config includes "VS Code"
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0]["name"], "VS Code");
+    assert_eq!(targets[0]["command"], "code");
+    assert_eq!(targets[0]["type"], "editor");
+}
+
+#[tokio::test]
+async fn test_create_work_target() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/config/work-targets"))
+        .json(&serde_json::json!({
+            "name": "iTerm",
+            "command": "open -a iTerm",
+            "type": "terminal"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let targets: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(targets.len(), 2);
+    assert_eq!(targets[1]["name"], "iTerm");
+    assert_eq!(targets[1]["type"], "terminal");
+}
+
+#[tokio::test]
+async fn test_delete_work_target() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    // Delete the default VS Code target (index 0)
+    let resp = client
+        .delete(format!("{base}/api/config/work-targets/0"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let targets: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(targets.is_empty());
+}
+
+#[tokio::test]
+async fn test_delete_work_target_out_of_range() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .delete(format!("{base}/api/config/work-targets/99"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 500);
+}
+
+#[tokio::test]
+async fn test_replace_work_targets() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .put(format!("{base}/api/config/work-targets"))
+        .json(&serde_json::json!([
+            {"name": "Zed", "command": "zed", "type": "editor"},
+            {"name": "Terminal", "command": "terminal", "type": "terminal"}
+        ]))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let targets: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(targets.len(), 2);
+    assert_eq!(targets[0]["name"], "Zed");
+    assert_eq!(targets[1]["name"], "Terminal");
 }
 
 #[tokio::test]
