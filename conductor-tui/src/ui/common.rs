@@ -46,7 +46,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
                     .to_string()
             }
             View::RepoDetail => {
-                "j/k:nav  Enter:select  c:create  d:remove repo  Esc:back  ?:help".to_string()
+                "j/k:nav  Enter:select  c:create  d:remove  S:sources  Esc:back  ?:help".to_string()
             }
             View::WorktreeDetail => {
                 let has_running = state

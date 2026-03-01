@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod events;
+pub mod issue_sources;
 pub mod repos;
 pub mod tickets;
 pub mod work_targets;
@@ -57,6 +58,15 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/worktrees/{id}/agent/stop", post(agents::stop_agent))
         .route("/api/worktrees/{id}/agent/events", get(agents::get_events))
         .route("/api/worktrees/{id}/agent/prompt", get(agents::get_prompt))
+        // Issue Sources
+        .route(
+            "/api/repos/{id}/sources",
+            get(issue_sources::list_issue_sources).post(issue_sources::create_issue_source),
+        )
+        .route(
+            "/api/repos/{id}/sources/{source_id}",
+            delete(issue_sources::delete_issue_source),
+        )
         // Work Targets
         .route(
             "/api/config/work-targets",

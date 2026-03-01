@@ -8,6 +8,7 @@ import { WorktreeRow } from "../components/worktrees/WorktreeRow";
 import { CreateWorktreeForm } from "../components/worktrees/CreateWorktreeForm";
 import { TicketRow } from "../components/tickets/TicketRow";
 import { TicketDetailModal } from "../components/tickets/TicketDetailModal";
+import { IssueSourcesSection } from "../components/issue-sources/IssueSourcesSection";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
@@ -45,6 +46,12 @@ export function RepoDetailPage() {
     [],
   );
 
+  const {
+    data: issueSources,
+    loading: sourcesLoading,
+    refetch: refetchSources,
+  } = useApi(() => api.listIssueSources(repoId!), [repoId]);
+
   const sseHandlers = useMemo(() => {
     const handleWorktreeChange = (ev: ConductorEventData) => {
       if (!ev.data || ev.data.repo_id === repoId) refetchWorktrees();
@@ -64,9 +71,12 @@ export function RepoDetailPage() {
       tickets_synced: handleTicketsChange,
       agent_started: handleAgentChange,
       agent_stopped: handleAgentChange,
+      issue_sources_changed: (ev: ConductorEventData) => {
+        if (!ev.data || ev.data.repo_id === repoId) refetchSources();
+      },
     };
     return map;
-  }, [repoId, refetchWorktrees, refetchTickets, refetchRuns, refetchTotals]);
+  }, [repoId, refetchWorktrees, refetchTickets, refetchRuns, refetchTotals, refetchSources]);
 
   useConductorEvents(sseHandlers);
 
@@ -175,6 +185,15 @@ export function RepoDetailPage() {
           <dd>{repo.default_branch}</dd>
         </dl>
       </div>
+
+      {/* Issue Sources */}
+      <IssueSourcesSection
+        repoId={repoId!}
+        remoteUrl={repo.remote_url}
+        sources={issueSources ?? []}
+        loading={sourcesLoading}
+        onChanged={refetchSources}
+      />
 
       {/* Worktrees */}
       <section>

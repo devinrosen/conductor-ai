@@ -104,6 +104,16 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::IssueSourceManager { .. } => {
+            return match key.code {
+                KeyCode::Esc => Action::DismissModal,
+                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
+                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
+                KeyCode::Char('a') => Action::IssueSourceAdd,
+                KeyCode::Char('d') => Action::IssueSourceDelete,
+                _ => Action::None,
+            };
+        }
         Modal::None => {}
     }
 
@@ -181,6 +191,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('l') => Action::LinkTicket,
         KeyCode::Char('w') => Action::StartWork,
         KeyCode::Char('W') => Action::ManageWorkTargets,
+        KeyCode::Char('S') => Action::ManageIssueSources,
         KeyCode::Char('o') => Action::OpenTicketUrl,
 
         // Direct view navigation

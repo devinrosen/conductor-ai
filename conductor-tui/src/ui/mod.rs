@@ -74,5 +74,11 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         Modal::WorkTargetManager { targets, selected } => {
             modal::render_work_target_manager(frame, area, targets, *selected)
         }
+        Modal::IssueSourceManager {
+            repo_slug,
+            sources,
+            selected,
+            ..
+        } => modal::render_issue_source_manager(frame, area, repo_slug, sources, *selected),
     }
 }

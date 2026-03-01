@@ -14,6 +14,8 @@ import type {
   CreateWorkTargetRequest,
   PushResult,
   CreatePrResult,
+  IssueSource,
+  CreateIssueSourceRequest,
 } from "./types";
 
 const BASE = "/api";
@@ -114,5 +116,18 @@ export const api = {
     request<WorkTarget[]>("/config/work-targets", {
       method: "PUT",
       body: JSON.stringify(targets),
+    }),
+
+  // Issue Sources
+  listIssueSources: (repoId: string) =>
+    request<IssueSource[]>(`/repos/${repoId}/sources`),
+  createIssueSource: (repoId: string, data: CreateIssueSourceRequest) =>
+    request<IssueSource>(`/repos/${repoId}/sources`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  deleteIssueSource: (repoId: string, sourceId: string) =>
+    request<void>(`/repos/${repoId}/sources/${sourceId}`, {
+      method: "DELETE",
     }),
 };

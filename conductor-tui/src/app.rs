@@ -8,6 +8,7 @@ use rusqlite::Connection;
 use conductor_core::agent::AgentManager;
 use conductor_core::config::{save_config, AutoStartAgent, Config, WorkTarget};
 use conductor_core::github;
+use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
@@ -236,6 +237,9 @@ impl App {
             Action::StartWork => self.handle_start_work(),
             Action::SelectWorkTarget(index) => self.handle_select_work_target(index),
             Action::ManageWorkTargets => self.handle_manage_work_targets(),
+            Action::ManageIssueSources => self.handle_manage_issue_sources(),
+            Action::IssueSourceAdd => self.handle_issue_source_add(),
+            Action::IssueSourceDelete => self.handle_issue_source_delete(),
             Action::WorkTargetMoveUp => self.handle_work_target_move_up(),
             Action::WorkTargetMoveDown => self.handle_work_target_move_down(),
             Action::WorkTargetAdd => self.handle_work_target_add(),
@@ -495,6 +499,18 @@ impl App {
                 }
                 return;
             }
+            Modal::IssueSourceManager {
+                ref sources,
+                ref mut selected,
+                ..
+            } => {
+                if *selected > 0 {
+                    *selected -= 1;
+                } else {
+                    *selected = sources.len().saturating_sub(1);
+                }
+                return;
+            }
             _ => {}
         }
         match self.state.view {
@@ -543,6 +559,18 @@ impl App {
                 ref mut selected,
             } => {
                 if *selected + 1 < targets.len() {
+                    *selected += 1;
+                } else {
+                    *selected = 0;
+                }
+                return;
+            }
+            Modal::IssueSourceManager {
+                ref sources,
+                ref mut selected,
+                ..
+            } => {
+                if *selected + 1 < sources.len() {
                     *selected += 1;
                 } else {
                     *selected = 0;
@@ -791,6 +819,33 @@ impl App {
                         }
                     }
                 }
+                ConfirmAction::DeleteIssueSource {
+                    source_id,
+                    repo_id,
+                    repo_slug,
+                    remote_url,
+                } => {
+                    let mgr = IssueSourceManager::new(&self.conn);
+                    match mgr.remove(&source_id) {
+                        Ok(()) => {
+                            let sources = mgr.list(&repo_id).unwrap_or_default();
+                            self.state.modal = Modal::IssueSourceManager {
+                                repo_id,
+                                repo_slug: repo_slug.clone(),
+                                remote_url,
+                                sources,
+                                selected: 0,
+                            };
+                            self.state.status_message =
+                                Some(format!("Removed issue source from {repo_slug}"));
+                        }
+                        Err(e) => {
+                            self.state.modal = Modal::Error {
+                                message: format!("Failed to remove source: {e}"),
+                            };
+                        }
+                    }
+                }
             }
         }
     }
@@ -1035,7 +1090,10 @@ impl App {
                 FormAction::AddRepo => {
                     Self::auto_derive_add_repo_fields(fields, active_field, config)
                 }
-                FormAction::AddWorkTarget => {}
+                FormAction::AddIssueSource { .. } if active_field == 0 => {
+                    Self::sync_issue_source_form_fields(fields);
+                }
+                FormAction::AddWorkTarget | FormAction::AddIssueSource { .. } => {}
             }
         }
     }
@@ -1060,7 +1118,10 @@ impl App {
                 FormAction::AddRepo => {
                     Self::auto_derive_add_repo_fields(fields, active_field, config)
                 }
-                FormAction::AddWorkTarget => {}
+                FormAction::AddIssueSource { .. } if active_field == 0 => {
+                    Self::sync_issue_source_form_fields(fields);
+                }
+                FormAction::AddWorkTarget | FormAction::AddIssueSource { .. } => {}
             }
         }
     }
@@ -1116,6 +1177,38 @@ impl App {
         }
     }
 
+    /// Dynamically add or remove Jira-specific fields based on the current
+    /// value of the Type field (field 0).  Called whenever the type field changes.
+    fn sync_issue_source_form_fields(fields: &mut Vec<FormField>) {
+        let type_val = fields
+            .first()
+            .map(|f| f.value.trim().to_lowercase())
+            .unwrap_or_default();
+
+        let is_jira = type_val == "jira" || type_val == "j";
+
+        if is_jira && fields.len() == 1 {
+            // Add JQL and URL fields
+            fields.push(FormField {
+                label: "JQL".to_string(),
+                value: String::new(),
+                placeholder: "e.g. project = PROJ AND status != Done".to_string(),
+                manually_edited: false,
+                required: true,
+            });
+            fields.push(FormField {
+                label: "Jira URL".to_string(),
+                value: String::new(),
+                placeholder: "e.g. https://mycompany.atlassian.net".to_string(),
+                manually_edited: false,
+                required: true,
+            });
+        } else if !is_jira && fields.len() > 1 {
+            // Remove extra fields when switching away from Jira
+            fields.truncate(1);
+        }
+    }
+
     fn handle_form_submit(&mut self) {
         let modal = std::mem::replace(&mut self.state.modal, Modal::None);
         if let Modal::Form {
@@ -1125,6 +1218,11 @@ impl App {
             match on_submit {
                 FormAction::AddRepo => self.submit_add_repo(fields),
                 FormAction::AddWorkTarget => self.submit_add_work_target(fields),
+                FormAction::AddIssueSource {
+                    repo_id,
+                    repo_slug,
+                    remote_url,
+                } => self.submit_add_issue_source(fields, &repo_id, &repo_slug, &remote_url),
             }
         }
     }
@@ -1212,6 +1310,202 @@ impl App {
                     message: format!("Failed to save config: {e}"),
                 };
             }
+        }
+    }
+
+    fn submit_add_issue_source(
+        &mut self,
+        fields: Vec<FormField>,
+        repo_id: &str,
+        repo_slug: &str,
+        remote_url: &str,
+    ) {
+        let source_type = fields
+            .first()
+            .map(|f| f.value.trim().to_lowercase())
+            .unwrap_or_default();
+
+        let (config_json, type_str) = match source_type.as_str() {
+            "github" | "g" | "gh" => {
+                // Auto-infer from remote URL
+                match github::parse_github_remote(remote_url) {
+                    Some((owner, repo)) => {
+                        let json = serde_json::json!({"owner": owner, "repo": repo}).to_string();
+                        (json, "github")
+                    }
+                    None => {
+                        self.state.modal = Modal::Error {
+                            message: "Cannot infer GitHub owner/repo from remote URL".to_string(),
+                        };
+                        return;
+                    }
+                }
+            }
+            "jira" | "j" => {
+                let jql = fields
+                    .get(1)
+                    .map(|f| f.value.trim().to_string())
+                    .unwrap_or_default();
+                let url = fields
+                    .get(2)
+                    .map(|f| f.value.trim().to_string())
+                    .unwrap_or_default();
+                if jql.is_empty() || url.is_empty() {
+                    self.state.modal = Modal::Error {
+                        message: "JQL and URL are required for Jira sources".to_string(),
+                    };
+                    return;
+                }
+                let json = serde_json::json!({"jql": jql, "url": url}).to_string();
+                (json, "jira")
+            }
+            other => {
+                let msg = if other.is_empty() {
+                    "Type is required — enter 'github' or 'jira'".to_string()
+                } else {
+                    format!("Unknown source type '{other}' — use 'github' or 'jira'")
+                };
+                self.state.modal = Modal::Error { message: msg };
+                return;
+            }
+        };
+
+        let mgr = IssueSourceManager::new(&self.conn);
+        match mgr.add(repo_id, type_str, &config_json, repo_slug) {
+            Ok(_) => {
+                let sources = mgr.list(repo_id).unwrap_or_default();
+                self.state.modal = Modal::IssueSourceManager {
+                    repo_id: repo_id.to_string(),
+                    repo_slug: repo_slug.to_string(),
+                    remote_url: remote_url.to_string(),
+                    sources,
+                    selected: 0,
+                };
+                self.state.status_message =
+                    Some(format!("Added {type_str} source for {repo_slug}"));
+            }
+            Err(e) => {
+                self.state.modal = Modal::Error {
+                    message: format!("Failed to add source: {e}"),
+                };
+            }
+        }
+    }
+
+    fn handle_manage_issue_sources(&mut self) {
+        // Only available from RepoDetail view
+        if self.state.view != View::RepoDetail {
+            return;
+        }
+        let Some(ref repo_id) = self.state.selected_repo_id.clone() else {
+            return;
+        };
+        let Some(repo) = self.state.data.repos.iter().find(|r| r.id == *repo_id) else {
+            return;
+        };
+
+        let mgr = IssueSourceManager::new(&self.conn);
+        let sources = mgr.list(repo_id).unwrap_or_default();
+
+        self.state.modal = Modal::IssueSourceManager {
+            repo_id: repo.id.clone(),
+            repo_slug: repo.slug.clone(),
+            remote_url: repo.remote_url.clone(),
+            sources,
+            selected: 0,
+        };
+    }
+
+    fn handle_issue_source_add(&mut self) {
+        let modal = std::mem::replace(&mut self.state.modal, Modal::None);
+        if let Modal::IssueSourceManager {
+            repo_id,
+            repo_slug,
+            remote_url,
+            sources,
+            ..
+        } = modal
+        {
+            let has_github = sources.iter().any(|s| s.source_type == "github");
+            let has_jira = sources.iter().any(|s| s.source_type == "jira");
+
+            if has_github && has_jira {
+                self.state.modal = Modal::IssueSourceManager {
+                    repo_id,
+                    repo_slug,
+                    remote_url,
+                    sources,
+                    selected: 0,
+                };
+                self.state.status_message =
+                    Some("Both source types already configured".to_string());
+                return;
+            }
+
+            let default_type = if has_github {
+                "jira".to_string()
+            } else if has_jira {
+                "github".to_string()
+            } else {
+                String::new()
+            };
+
+            let mut fields = vec![FormField {
+                label: "Type".to_string(),
+                value: default_type,
+                placeholder: "github or jira (Tab to next field)".to_string(),
+                manually_edited: false,
+                required: true,
+            }];
+
+            // If type is pre-filled to jira, include the Jira fields up front
+            Self::sync_issue_source_form_fields(&mut fields);
+
+            self.state.modal = Modal::Form {
+                title: "Add Issue Source".to_string(),
+                fields,
+                active_field: 0,
+                on_submit: FormAction::AddIssueSource {
+                    repo_id,
+                    repo_slug,
+                    remote_url,
+                },
+            };
+        }
+    }
+
+    fn handle_issue_source_delete(&mut self) {
+        let modal = std::mem::replace(&mut self.state.modal, Modal::None);
+        if let Modal::IssueSourceManager {
+            repo_id,
+            repo_slug,
+            remote_url,
+            sources,
+            selected,
+        } = modal
+        {
+            if sources.is_empty() {
+                self.state.modal = Modal::IssueSourceManager {
+                    repo_id,
+                    repo_slug,
+                    remote_url,
+                    sources,
+                    selected,
+                };
+                return;
+            }
+
+            let source = &sources[selected];
+            self.state.modal = Modal::Confirm {
+                title: "Remove Issue Source".to_string(),
+                message: format!("Remove {} source for {}?", source.source_type, repo_slug),
+                on_confirm: ConfirmAction::DeleteIssueSource {
+                    source_id: source.id.clone(),
+                    repo_id,
+                    repo_slug,
+                    remote_url,
+                },
+            };
         }
     }
 

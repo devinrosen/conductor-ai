@@ -112,3 +112,15 @@ export interface TicketDetail {
   agent_totals: TicketAgentTotals | null;
   worktrees: Worktree[];
 }
+
+export interface IssueSource {
+  id: string;
+  repo_id: string;
+  source_type: string;
+  config_json: string;
+}
+
+export interface CreateIssueSourceRequest {
+  source_type: string;
+  config_json?: string;
+}

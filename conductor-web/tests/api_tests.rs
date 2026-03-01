@@ -365,6 +365,228 @@ async fn test_replace_work_targets() {
     assert_eq!(targets[1]["name"], "Terminal");
 }
 
+// --- Issue Source tests ---
+
+/// Helper: create a repo and return (repo_id, base_url)
+async fn create_test_repo(base: &str, slug: &str) -> String {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base}/api/repos"))
+        .json(&serde_json::json!({
+            "remote_url": format!("https://github.com/test/{slug}.git"),
+            "slug": slug,
+            "local_path": format!("/tmp/{slug}")
+        }))
+        .send()
+        .await
+        .unwrap();
+    let repo: serde_json::Value = resp.json().await.unwrap();
+    repo["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn test_list_issue_sources_empty() {
+    let base = spawn_test_server().await;
+    let repo_id = create_test_repo(&base, "src-empty").await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/api/repos/{repo_id}/sources"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let sources: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(sources.is_empty());
+}
+
+#[tokio::test]
+async fn test_create_github_source_auto_infer() {
+    let base = spawn_test_server().await;
+    let repo_id = create_test_repo(&base, "gh-infer").await;
+    let client = reqwest::Client::new();
+
+    // Create without config_json — should auto-infer from remote URL
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/sources"))
+        .json(&serde_json::json!({
+            "source_type": "github"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let source: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(source["source_type"], "github");
+
+    // Verify config was auto-inferred
+    let config: serde_json::Value =
+        serde_json::from_str(source["config_json"].as_str().unwrap()).unwrap();
+    assert_eq!(config["owner"], "test");
+    assert_eq!(config["repo"], "gh-infer");
+}
+
+#[tokio::test]
+async fn test_create_github_source_explicit_config() {
+    let base = spawn_test_server().await;
+    let repo_id = create_test_repo(&base, "gh-explicit").await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/sources"))
+        .json(&serde_json::json!({
+            "source_type": "github",
+            "config_json": "{\"owner\":\"custom\",\"repo\":\"project\"}"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let source: serde_json::Value = resp.json().await.unwrap();
+    let config: serde_json::Value =
+        serde_json::from_str(source["config_json"].as_str().unwrap()).unwrap();
+    assert_eq!(config["owner"], "custom");
+    assert_eq!(config["repo"], "project");
+}
+
+#[tokio::test]
+async fn test_create_jira_source() {
+    let base = spawn_test_server().await;
+    let repo_id = create_test_repo(&base, "jira-src").await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/sources"))
+        .json(&serde_json::json!({
+            "source_type": "jira",
+            "config_json": "{\"jql\":\"project = TEST\",\"url\":\"https://jira.example.com\"}"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let source: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(source["source_type"], "jira");
+}
+
+#[tokio::test]
+async fn test_create_jira_source_requires_config() {
+    let base = spawn_test_server().await;
+    let repo_id = create_test_repo(&base, "jira-noconfig").await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/sources"))
+        .json(&serde_json::json!({
+            "source_type": "jira"
+        }))
+        .send()
+        .await
+        .unwrap();
+    // Should fail — Jira requires config_json
+    assert!(resp.status().is_client_error() || resp.status().is_server_error());
+}
+
+#[tokio::test]
+async fn test_create_duplicate_source_409() {
+    let base = spawn_test_server().await;
+    let repo_id = create_test_repo(&base, "dup-src").await;
+    let client = reqwest::Client::new();
+
+    // First GitHub source
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/sources"))
+        .json(&serde_json::json!({ "source_type": "github" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // Duplicate should fail with 409
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/sources"))
+        .json(&serde_json::json!({ "source_type": "github" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 409);
+}
+
+#[tokio::test]
+async fn test_delete_issue_source() {
+    let base = spawn_test_server().await;
+    let repo_id = create_test_repo(&base, "del-src").await;
+    let client = reqwest::Client::new();
+
+    // Create
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/sources"))
+        .json(&serde_json::json!({ "source_type": "github" }))
+        .send()
+        .await
+        .unwrap();
+    let source: serde_json::Value = resp.json().await.unwrap();
+    let source_id = source["id"].as_str().unwrap();
+
+    // Delete
+    let resp = client
+        .delete(format!("{base}/api/repos/{repo_id}/sources/{source_id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204);
+
+    // Confirm empty
+    let sources: Vec<serde_json::Value> = client
+        .get(format!("{base}/api/repos/{repo_id}/sources"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(sources.is_empty());
+}
+
+#[tokio::test]
+async fn test_both_source_types_allowed() {
+    let base = spawn_test_server().await;
+    let repo_id = create_test_repo(&base, "both-src").await;
+    let client = reqwest::Client::new();
+
+    // Add GitHub
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/sources"))
+        .json(&serde_json::json!({ "source_type": "github" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // Add Jira
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/sources"))
+        .json(&serde_json::json!({
+            "source_type": "jira",
+            "config_json": "{\"jql\":\"project = X\",\"url\":\"https://j.example.com\"}"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // List should have 2
+    let sources: Vec<serde_json::Value> = client
+        .get(format!("{base}/api/repos/{repo_id}/sources"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(sources.len(), 2);
+}
+
 #[tokio::test]
 async fn test_sse_endpoint_returns_event_stream() {
     let base = spawn_test_server().await;
