@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod events;
 pub mod repos;
 pub mod tickets;
@@ -27,4 +28,14 @@ pub fn api_router() -> Router<AppState> {
         // Tickets
         .route("/api/repos/{id}/tickets", get(tickets::list_tickets))
         .route("/api/repos/{id}/tickets/sync", post(tickets::sync_tickets))
+        // Agent runs & stats
+        .route(
+            "/api/worktrees/{id}/agent-runs",
+            get(agents::list_agent_runs),
+        )
+        .route(
+            "/api/agent/latest-runs",
+            get(agents::latest_runs_by_worktree),
+        )
+        .route("/api/agent/ticket-totals", get(agents::ticket_totals))
 }

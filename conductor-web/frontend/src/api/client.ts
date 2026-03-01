@@ -2,6 +2,8 @@ import type {
   Repo,
   Worktree,
   Ticket,
+  AgentRun,
+  TicketAgentTotals,
   CreateRepoRequest,
   CreateWorktreeRequest,
   SyncResult,
@@ -47,4 +49,11 @@ export const api = {
   syncTickets: (repoId: string) =>
     request<SyncResult>(`/repos/${repoId}/tickets/sync`, { method: "POST" }),
 
+  // Agent runs & stats
+  listAgentRuns: (worktreeId: string) =>
+    request<AgentRun[]>(`/worktrees/${worktreeId}/agent-runs`),
+  latestRunsByWorktree: () =>
+    request<Record<string, AgentRun>>("/agent/latest-runs"),
+  ticketAgentTotals: () =>
+    request<Record<string, TicketAgentTotals>>("/agent/ticket-totals"),
 };

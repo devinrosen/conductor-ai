@@ -1,5 +1,6 @@
-import type { Ticket } from "../../api/types";
+import type { Ticket, TicketAgentTotals } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
+import { formatTicketTotalsFull } from "../../utils/agentStats";
 
 function parseLabels(raw: string): string[] {
   try {
@@ -10,7 +11,13 @@ function parseLabels(raw: string): string[] {
   }
 }
 
-export function TicketRow({ ticket }: { ticket: Ticket }) {
+export function TicketRow({
+  ticket,
+  agentTotals,
+}: {
+  ticket: Ticket;
+  agentTotals?: TicketAgentTotals;
+}) {
   const labels = parseLabels(ticket.labels);
   return (
     <tr>
@@ -42,6 +49,9 @@ export function TicketRow({ ticket }: { ticket: Ticket }) {
       </td>
       <td className="px-4 py-2 text-xs text-gray-500">
         {ticket.assignee ?? "-"}
+      </td>
+      <td className="px-4 py-2 text-xs text-purple-600 whitespace-nowrap">
+        {agentTotals ? formatTicketTotalsFull(agentTotals) : ""}
       </td>
     </tr>
   );

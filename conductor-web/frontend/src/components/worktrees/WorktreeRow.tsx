@@ -1,13 +1,16 @@
 import { Link } from "react-router";
-import type { Worktree } from "../../api/types";
+import type { Worktree, AgentRun } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
 import { TimeAgo } from "../shared/TimeAgo";
+import { agentStatusColor } from "../../utils/agentStats";
 
 export function WorktreeRow({
   worktree,
+  latestRun,
   onDelete,
 }: {
   worktree: Worktree;
+  latestRun?: AgentRun;
   onDelete: (id: string) => void;
 }) {
   return (
@@ -22,6 +25,17 @@ export function WorktreeRow({
       </td>
       <td className="px-4 py-2">
         <StatusBadge status={worktree.status} />
+      </td>
+      <td className="px-4 py-2">
+        {latestRun ? (
+          <span
+            className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${agentStatusColor(latestRun.status)}`}
+          >
+            {latestRun.status}
+          </span>
+        ) : (
+          <span className="text-xs text-gray-400">-</span>
+        )}
       </td>
       <td className="px-4 py-2 text-gray-500 text-xs truncate max-w-xs">
         {worktree.path}

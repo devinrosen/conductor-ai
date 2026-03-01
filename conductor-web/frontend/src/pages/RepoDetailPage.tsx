@@ -27,6 +27,9 @@ export function RepoDetailPage() {
     refetch: refetchTickets,
   } = useApi(() => api.listTickets(repoId!), [repoId]);
 
+  const { data: latestRuns } = useApi(() => api.latestRunsByWorktree(), []);
+  const { data: ticketTotals } = useApi(() => api.ticketAgentTotals(), []);
+
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -115,6 +118,7 @@ export function RepoDetailPage() {
                 <tr>
                   <th className="px-4 py-2">Branch</th>
                   <th className="px-4 py-2">Status</th>
+                  <th className="px-4 py-2">Agent</th>
                   <th className="px-4 py-2">Path</th>
                   <th className="px-4 py-2">Created</th>
                   <th className="px-4 py-2"></th>
@@ -125,6 +129,7 @@ export function RepoDetailPage() {
                   <WorktreeRow
                     key={wt.id}
                     worktree={wt}
+                    latestRun={latestRuns?.[wt.id]}
                     onDelete={setDeleteTarget}
                   />
                 ))}
@@ -167,11 +172,16 @@ export function RepoDetailPage() {
                   <th className="px-4 py-2">State</th>
                   <th className="px-4 py-2">Labels</th>
                   <th className="px-4 py-2">Assignee</th>
+                  <th className="px-4 py-2">Agent</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {tickets.map((t) => (
-                  <TicketRow key={t.id} ticket={t} />
+                  <TicketRow
+                    key={t.id}
+                    ticket={t}
+                    agentTotals={ticketTotals?.[t.id]}
+                  />
                 ))}
               </tbody>
             </table>
