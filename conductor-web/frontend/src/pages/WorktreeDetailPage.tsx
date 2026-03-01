@@ -299,9 +299,8 @@ export function WorktreeDetailPage() {
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
             Actions
           </h3>
-          <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-4">
-            {/* Push */}
-            <div className="flex items-center gap-3">
+          <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
+            <div className="flex items-center gap-2">
               <button
                 onClick={handlePush}
                 disabled={pushing}
@@ -309,13 +308,6 @@ export function WorktreeDetailPage() {
               >
                 {pushing ? "Pushing..." : "Push Branch"}
               </button>
-              {pushResult && (
-                <span className="text-xs text-gray-500">{pushResult}</span>
-              )}
-            </div>
-
-            {/* Create PR */}
-            <div className="flex items-center gap-3">
               <button
                 onClick={() => handleCreatePr(false)}
                 disabled={creatingPr}
@@ -330,9 +322,11 @@ export function WorktreeDetailPage() {
               >
                 Draft PR
               </button>
-              {prResult && (
-                <span className="text-xs text-gray-500">
-                  {prResult.startsWith("http") ? (
+            </div>
+            {(pushResult || prResult) && (
+              <p className="text-xs text-gray-500">
+                {prResult ? (
+                  prResult.startsWith("http") ? (
                     <a
                       href={prResult}
                       target="_blank"
@@ -343,10 +337,12 @@ export function WorktreeDetailPage() {
                     </a>
                   ) : (
                     prResult
-                  )}
-                </span>
-              )}
-            </div>
+                  )
+                ) : (
+                  pushResult
+                )}
+              </p>
+            )}
           </div>
         </section>
       )}
