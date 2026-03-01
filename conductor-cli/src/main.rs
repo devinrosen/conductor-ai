@@ -498,13 +498,17 @@ fn main() -> Result<()> {
                     )
                     .map_err(|_| anyhow::anyhow!("Ticket not found: #{ticket}"))?;
 
-                let worktree_id: String = conn
+                let (worktree_id, existing_ticket): (String, Option<String>) = conn
                     .query_row(
-                        "SELECT id FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
+                        "SELECT id, ticket_id FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
                         rusqlite::params![r.id, worktree],
-                        |row| row.get(0),
+                        |row| Ok((row.get(0)?, row.get(1)?)),
                     )
                     .map_err(|_| anyhow::anyhow!("Worktree not found: {worktree}"))?;
+
+                if existing_ticket.is_some() {
+                    anyhow::bail!("Worktree '{worktree}' already has a linked ticket");
+                }
 
                 let syncer = TicketSyncer::new(&conn);
                 syncer.link_to_worktree(&ticket_id, &worktree_id)?;

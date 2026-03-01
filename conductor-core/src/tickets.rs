@@ -151,7 +151,16 @@ impl<'a> TicketSyncer<'a> {
     }
 
     /// Link a ticket to a worktree.
+    /// Returns an error if the worktree already has a linked ticket.
     pub fn link_to_worktree(&self, ticket_id: &str, worktree_id: &str) -> Result<()> {
+        let existing: Option<String> = self.conn.query_row(
+            "SELECT ticket_id FROM worktrees WHERE id = ?1",
+            params![worktree_id],
+            |row| row.get(0),
+        )?;
+        if existing.is_some() {
+            return Err(ConductorError::TicketAlreadyLinked);
+        }
         self.conn.execute(
             "UPDATE worktrees SET ticket_id = ?1 WHERE id = ?2",
             params![ticket_id, worktree_id],
@@ -585,6 +594,52 @@ mod tests {
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
         assert_eq!(get_worktree_status(&conn, "wt2"), "active");
+    }
+
+    #[test]
+    fn test_link_to_worktree_success() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let tickets = vec![make_ticket("1", "Issue 1")];
+        syncer.upsert_tickets("repo1", &tickets).unwrap();
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        insert_worktree(&conn, "wt1", "repo1", None, "active");
+
+        syncer.link_to_worktree(&ticket_id, "wt1").unwrap();
+
+        let linked: Option<String> = conn
+            .query_row("SELECT ticket_id FROM worktrees WHERE id = 'wt1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(linked, Some(ticket_id));
+    }
+
+    #[test]
+    fn test_link_to_worktree_rejects_if_already_linked() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let tickets = vec![make_ticket("1", "Issue 1"), make_ticket("2", "Issue 2")];
+        syncer.upsert_tickets("repo1", &tickets).unwrap();
+        let tid1: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let tid2: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '2'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        insert_worktree(&conn, "wt1", "repo1", Some(&tid1), "active");
+
+        let result = syncer.link_to_worktree(&tid2, "wt1");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("already has a linked ticket"));
     }
 
     #[test]

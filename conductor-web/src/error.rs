@@ -12,7 +12,8 @@ impl IntoResponse for ApiError {
             | ConductorError::TicketNotFound { .. } => StatusCode::NOT_FOUND,
             ConductorError::RepoAlreadyExists { .. }
             | ConductorError::WorktreeAlreadyExists { .. }
-            | ConductorError::IssueSourceAlreadyExists { .. } => StatusCode::CONFLICT,
+            | ConductorError::IssueSourceAlreadyExists { .. }
+            | ConductorError::TicketAlreadyLinked => StatusCode::CONFLICT,
             ConductorError::TicketSync(_) => StatusCode::BAD_GATEWAY,
             ConductorError::Agent(_) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,

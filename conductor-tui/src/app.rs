@@ -1679,6 +1679,11 @@ impl App {
                     self.state.status_message = Some("Cannot modify archived worktree".to_string());
                     return;
                 }
+                if wt.ticket_id.is_some() {
+                    self.state.status_message =
+                        Some("Worktree already has a linked ticket".to_string());
+                    return;
+                }
             }
             self.state.modal = Modal::Input {
                 title: "Link Ticket".to_string(),
