@@ -249,6 +249,15 @@ async fn test_list_tickets_empty() {
 }
 
 #[tokio::test]
+async fn test_list_all_tickets_empty() {
+    let base = spawn_test_server().await;
+    let resp = reqwest::get(format!("{base}/api/tickets")).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
 async fn test_sse_endpoint_returns_event_stream() {
     let base = spawn_test_server().await;
     let client = reqwest::Client::new();

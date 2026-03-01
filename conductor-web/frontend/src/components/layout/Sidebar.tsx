@@ -21,6 +21,9 @@ export function Sidebar() {
         <NavLink to="/" end className={linkClass}>
           Dashboard
         </NavLink>
+        <NavLink to="/tickets" className={linkClass}>
+          Tickets
+        </NavLink>
         <div className="pt-4 pb-1 px-3">
           <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
             Repos

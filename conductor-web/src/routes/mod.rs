@@ -26,6 +26,7 @@ pub fn api_router() -> Router<AppState> {
         )
         .route("/api/worktrees/{id}", delete(worktrees::delete_worktree))
         // Tickets
+        .route("/api/tickets", get(tickets::list_all_tickets))
         .route("/api/repos/{id}/tickets", get(tickets::list_tickets))
         .route("/api/repos/{id}/tickets/sync", post(tickets::sync_tickets))
         // Agent runs & stats
