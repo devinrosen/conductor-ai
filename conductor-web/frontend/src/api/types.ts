@@ -36,22 +36,6 @@ export interface Ticket {
   raw_json: string;
 }
 
-export interface AgentRun {
-  id: string;
-  worktree_id: string;
-  claude_session_id: string | null;
-  prompt: string;
-  status: string;
-  result_text: string | null;
-  cost_usd: number | null;
-  num_turns: number | null;
-  duration_ms: number | null;
-  started_at: string;
-  ended_at: string | null;
-  tmux_window: string | null;
-  log_file: string | null;
-}
-
 export interface TicketAgentTotals {
   ticket_id: string;
   total_runs: number;
@@ -76,4 +60,30 @@ export interface CreateWorktreeRequest {
 export interface SyncResult {
   synced: number;
   closed: number;
+}
+
+export interface AgentRun {
+  id: string;
+  worktree_id: string;
+  claude_session_id: string | null;
+  prompt: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  result_text: string | null;
+  cost_usd: number | null;
+  num_turns: number | null;
+  duration_ms: number | null;
+  started_at: string;
+  ended_at: string | null;
+  tmux_window: string | null;
+  log_file: string | null;
+}
+
+export interface AgentEvent {
+  kind: "text" | "tool" | "result" | "system" | "error";
+  summary: string;
+}
+
+export interface AgentPromptInfo {
+  prompt: string;
+  resume_session_id: string | null;
 }

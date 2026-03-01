@@ -1,19 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, Link, useNavigate } from "react-router";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
-import type { AgentRun } from "../api/types";
+import type { AgentRun, AgentEvent } from "../api/types";
 import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
-import {
-  agentStatusColor,
-  formatCost,
-  formatDuration,
-  formatRunStats,
-  liveElapsedMs,
-} from "../utils/agentStats";
+import { AgentPromptModal } from "../components/agents/AgentPromptModal";
+import { AgentStatusDisplay } from "../components/agents/AgentStatusDisplay";
+import { AgentActivityLog } from "../components/agents/AgentActivityLog";
 
 export function WorktreeDetailPage() {
   const { repoId, worktreeId } = useParams<{
@@ -32,19 +28,121 @@ export function WorktreeDetailPage() {
     [repoId],
   );
 
-  const { data: agentRuns } = useApi(
-    () => api.listAgentRuns(worktreeId!),
-    [worktreeId],
-  );
-
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+
+  // Agent state
+  const [latestRun, setLatestRun] = useState<AgentRun | null>(null);
+  const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
+  const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
+  const [promptModalOpen, setPromptModalOpen] = useState(false);
+  const [promptInfo, setPromptInfo] = useState({
+    prompt: "",
+    resumeSessionId: null as string | null,
+  });
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [stopConfirm, setStopConfirm] = useState(false);
 
   const worktree = worktrees?.find((w) => w.id === worktreeId);
   const linkedTicket = worktree?.ticket_id
     ? tickets?.find((t) => t.id === worktree.ticket_id)
     : null;
 
-  const latestRun = agentRuns && agentRuns.length > 0 ? agentRuns[0] : null;
+  // Fetch agent data
+  const refreshAgent = useCallback(async () => {
+    if (!worktreeId) return;
+    try {
+      const [latest, runs, events] = await Promise.all([
+        api.latestAgentRun(worktreeId),
+        api.listAgentRuns(worktreeId),
+        api.getAgentEvents(worktreeId),
+      ]);
+      setLatestRun(latest);
+      setAgentRuns(runs);
+      setAgentEvents(events);
+    } catch {
+      // Silently ignore — agent data may not exist yet
+    }
+  }, [worktreeId]);
+
+  useEffect(() => {
+    refreshAgent();
+  }, [refreshAgent]);
+
+  // Poll for updates when agent is running
+  useEffect(() => {
+    if (latestRun?.status !== "running") return;
+    const interval = setInterval(refreshAgent, 5000);
+    return () => clearInterval(interval);
+  }, [latestRun?.status, refreshAgent]);
+
+  // Listen for SSE agent events
+  useEffect(() => {
+    const eventSource = new EventSource("/api/events");
+
+    function handleAgentEvent(e: MessageEvent) {
+      try {
+        const data = JSON.parse(e.data);
+        if (data?.data?.worktree_id === worktreeId) {
+          refreshAgent();
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+
+    eventSource.addEventListener("agent_started", handleAgentEvent);
+    eventSource.addEventListener("agent_stopped", handleAgentEvent);
+
+    return () => {
+      eventSource.removeEventListener("agent_started", handleAgentEvent);
+      eventSource.removeEventListener("agent_stopped", handleAgentEvent);
+      eventSource.close();
+    };
+  }, [worktreeId, refreshAgent]);
+
+  async function handleLaunchClick() {
+    if (!worktreeId) return;
+    try {
+      const info = await api.getAgentPrompt(worktreeId);
+      setPromptInfo({
+        prompt: info.prompt,
+        resumeSessionId: info.resume_session_id,
+      });
+      setPromptModalOpen(true);
+    } catch {
+      // If prompt fetch fails, open modal with empty prompt
+      setPromptInfo({ prompt: "", resumeSessionId: null });
+      setPromptModalOpen(true);
+    }
+  }
+
+  async function handleAgentSubmit(prompt: string, resumeSessionId?: string) {
+    if (!worktreeId) return;
+    setPromptModalOpen(false);
+    setAgentLoading(true);
+    try {
+      await api.startAgent(worktreeId, prompt, resumeSessionId);
+      await refreshAgent();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to start agent");
+    } finally {
+      setAgentLoading(false);
+    }
+  }
+
+  async function handleStopAgent() {
+    if (!worktreeId) return;
+    setStopConfirm(false);
+    setAgentLoading(true);
+    try {
+      await api.stopAgent(worktreeId);
+      await refreshAgent();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to stop agent");
+    } finally {
+      setAgentLoading(false);
+    }
+  }
 
   async function handleDelete() {
     await api.deleteWorktree(worktreeId!);
@@ -66,6 +164,8 @@ export function WorktreeDetailPage() {
       </div>
     );
   }
+
+  const isRunning = latestRun?.status === "running";
 
   return (
     <div className="space-y-6">
@@ -126,11 +226,6 @@ export function WorktreeDetailPage() {
         </dl>
       </div>
 
-      {/* Agent Status */}
-      {latestRun && (
-        <AgentStatusSection latestRun={latestRun} runs={agentRuns!} />
-      )}
-
       {linkedTicket && (
         <section>
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
@@ -158,32 +253,70 @@ export function WorktreeDetailPage() {
         </section>
       )}
 
-      {/* Agent Run History */}
-      {agentRuns && agentRuns.length > 1 && (
+      {/* Agent Section */}
+      <section>
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+          Agent
+        </h3>
+
+        {agentLoading && (
+          <div className="flex items-center gap-2 text-sm text-gray-500 mb-3">
+            <LoadingSpinner />
+            <span>Processing...</span>
+          </div>
+        )}
+
+        {latestRun ? (
+          <AgentStatusDisplay
+            run={latestRun}
+            runs={agentRuns}
+            onLaunch={handleLaunchClick}
+            onStop={() => setStopConfirm(true)}
+          />
+        ) : (
+          <div className="rounded-lg border border-gray-200 bg-white p-4 flex items-center justify-between">
+            <p className="text-sm text-gray-500">No agent runs yet</p>
+            <button
+              onClick={handleLaunchClick}
+              disabled={agentLoading}
+              className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              Launch Agent
+            </button>
+          </div>
+        )}
+      </section>
+
+      {/* Agent Activity Log */}
+      {(agentEvents.length > 0 || isRunning) && (
         <section>
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
-            Agent Runs ({agentRuns.length})
+            Activity Log
           </h3>
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
-                <tr>
-                  <th className="px-4 py-2">Status</th>
-                  <th className="px-4 py-2">Cost</th>
-                  <th className="px-4 py-2">Turns</th>
-                  <th className="px-4 py-2">Duration</th>
-                  <th className="px-4 py-2">Started</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {agentRuns.map((run) => (
-                  <AgentRunRow key={run.id} run={run} />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <AgentActivityLog events={agentEvents} isRunning={isRunning} />
         </section>
       )}
+
+      <AgentPromptModal
+        open={promptModalOpen}
+        title={
+          promptInfo.resumeSessionId
+            ? "Claude Agent (Resume)"
+            : "Claude Agent"
+        }
+        initialPrompt={promptInfo.prompt}
+        resumeSessionId={promptInfo.resumeSessionId}
+        onSubmit={handleAgentSubmit}
+        onCancel={() => setPromptModalOpen(false)}
+      />
+
+      <ConfirmDialog
+        open={stopConfirm}
+        title="Stop Agent"
+        message="Are you sure you want to stop the running agent? The tmux session will be killed and the run marked as cancelled."
+        onConfirm={handleStopAgent}
+        onCancel={() => setStopConfirm(false)}
+      />
 
       <ConfirmDialog
         open={deleteConfirm}
@@ -193,106 +326,5 @@ export function WorktreeDetailPage() {
         onCancel={() => setDeleteConfirm(false)}
       />
     </div>
-  );
-}
-
-function AgentStatusSection({
-  latestRun,
-  runs,
-}: {
-  latestRun: AgentRun;
-  runs: AgentRun[];
-}) {
-  const [, setTick] = useState(0);
-
-  // Tick every second to update live elapsed time when agent is running
-  useEffect(() => {
-    if (latestRun.status !== "running") return;
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
-  }, [latestRun.status]);
-
-  // Aggregate totals from completed runs
-  const completedRuns = runs.filter((r) => r.status === "completed");
-  const totalCost = completedRuns.reduce((s, r) => s + (r.cost_usd ?? 0), 0);
-  const totalTurns = completedRuns.reduce(
-    (s, r) => s + (r.num_turns ?? 0),
-    0,
-  );
-  const totalDurationMs = completedRuns.reduce(
-    (s, r) => s + (r.duration_ms ?? 0),
-    0,
-  );
-
-  let durationMs: number;
-  let displayTurns: number;
-  if (latestRun.status === "running") {
-    durationMs = totalDurationMs + liveElapsedMs(latestRun.started_at);
-    displayTurns = totalTurns + (latestRun.num_turns ?? 0);
-  } else {
-    durationMs = totalDurationMs;
-    displayTurns = totalTurns;
-  }
-
-  const runsLabel = runs.length > 1 ? ` (${runs.length} runs)` : "";
-
-  const statsText =
-    latestRun.status === "failed"
-      ? latestRun.result_text
-        ? latestRun.result_text.slice(0, 80)
-        : ""
-      : latestRun.status === "cancelled"
-        ? ""
-        : formatRunStats(
-            { ...latestRun, cost_usd: totalCost, num_turns: displayTurns },
-            durationMs,
-          ) + runsLabel;
-
-  return (
-    <section>
-      <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
-        Agent
-      </h3>
-      <div className="rounded-lg border border-gray-200 bg-white p-4">
-        <div className="flex items-center gap-3 text-sm">
-          <span className="text-gray-500">Agent:</span>
-          <span
-            className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${agentStatusColor(latestRun.status)}`}
-          >
-            {latestRun.status}
-          </span>
-          {statsText && <span className="text-gray-500">{statsText}</span>}
-        </div>
-        {latestRun.claude_session_id && latestRun.status !== "running" && (
-          <p className="mt-2 text-xs text-gray-400">
-            session: {latestRun.claude_session_id.slice(0, 13)}
-          </p>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function AgentRunRow({ run }: { run: AgentRun }) {
-  return (
-    <tr>
-      <td className="px-4 py-2">
-        <span
-          className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${agentStatusColor(run.status)}`}
-        >
-          {run.status}
-        </span>
-      </td>
-      <td className="px-4 py-2 text-gray-600">
-        {run.cost_usd != null ? formatCost(run.cost_usd) : "-"}
-      </td>
-      <td className="px-4 py-2 text-gray-600">{run.num_turns ?? "-"}</td>
-      <td className="px-4 py-2 text-gray-600">
-        {run.duration_ms != null ? formatDuration(run.duration_ms) : "-"}
-      </td>
-      <td className="px-4 py-2 text-gray-500">
-        <TimeAgo date={run.started_at} />
-      </td>
-    </tr>
   );
 }
