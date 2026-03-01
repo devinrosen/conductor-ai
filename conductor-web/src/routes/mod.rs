@@ -36,6 +36,10 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/tickets", get(tickets::list_all_tickets))
         .route("/api/repos/{id}/tickets", get(tickets::list_tickets))
         .route("/api/repos/{id}/tickets/sync", post(tickets::sync_tickets))
+        .route(
+            "/api/tickets/{ticket_id}/detail",
+            get(tickets::ticket_detail),
+        )
         // Agent stats (aggregates)
         .route(
             "/api/worktrees/{id}/agent-runs",

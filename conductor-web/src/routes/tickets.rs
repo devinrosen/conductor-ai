@@ -2,11 +2,13 @@ use axum::extract::{Path, State};
 use axum::Json;
 use serde::Serialize;
 
+use conductor_core::agent::{AgentManager, TicketAgentTotals};
 use conductor_core::github;
 use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{Ticket, TicketSyncer};
+use conductor_core::worktree::Worktree;
 
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
@@ -16,6 +18,12 @@ use crate::state::AppState;
 pub struct SyncResult {
     pub synced: usize,
     pub closed: usize,
+}
+
+#[derive(Serialize)]
+pub struct TicketDetail {
+    pub agent_totals: Option<TicketAgentTotals>,
+    pub worktrees: Vec<Worktree>,
 }
 
 pub async fn list_all_tickets(
@@ -104,5 +112,41 @@ pub async fn sync_tickets(
     Ok(Json(SyncResult {
         synced: total_synced,
         closed: total_closed,
+    }))
+}
+
+pub async fn ticket_detail(
+    State(state): State<AppState>,
+    Path(ticket_id): Path<String>,
+) -> Result<Json<TicketDetail>, ApiError> {
+    let db = state.db.lock().await;
+
+    let agent_mgr = AgentManager::new(&db);
+    let all_totals = agent_mgr.totals_by_ticket_all()?;
+    let agent_totals = all_totals.get(&ticket_id).cloned();
+
+    let mut stmt = db.prepare(
+        "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at \
+         FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC",
+    )?;
+    let worktrees = stmt
+        .query_map([&ticket_id], |row| {
+            Ok(Worktree {
+                id: row.get(0)?,
+                repo_id: row.get(1)?,
+                slug: row.get(2)?,
+                branch: row.get(3)?,
+                path: row.get(4)?,
+                ticket_id: row.get(5)?,
+                status: row.get(6)?,
+                created_at: row.get(7)?,
+                completed_at: row.get(8)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    Ok(Json(TicketDetail {
+        agent_totals,
+        worktrees,
     }))
 }

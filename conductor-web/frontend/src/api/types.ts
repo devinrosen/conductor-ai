@@ -107,3 +107,8 @@ export interface PushResult {
 export interface CreatePrResult {
   url: string;
 }
+
+export interface TicketDetail {
+  agent_totals: TicketAgentTotals | null;
+  worktrees: Worktree[];
+}
