@@ -19,6 +19,8 @@ pub enum ConductorEvent {
     AgentStarted { run_id: String, worktree_id: String },
     #[serde(rename = "agent_stopped")]
     AgentStopped { run_id: String, worktree_id: String },
+    #[serde(rename = "work_targets_changed")]
+    WorkTargetsChanged,
 }
 
 impl ConductorEvent {
@@ -32,6 +34,7 @@ impl ConductorEvent {
             Self::TicketsSynced { .. } => "tickets_synced",
             Self::AgentStarted { .. } => "agent_started",
             Self::AgentStopped { .. } => "agent_stopped",
+            Self::WorkTargetsChanged => "work_targets_changed",
         }
     }
 }
@@ -135,6 +138,7 @@ mod tests {
                 },
                 "agent_stopped",
             ),
+            (ConductorEvent::WorkTargetsChanged, "work_targets_changed"),
         ];
         for (event, expected) in cases {
             assert_eq!(event.event_name(), expected);

@@ -163,6 +163,9 @@ pub fn load_config() -> Result<Config> {
 /// Save config to disk.
 pub fn save_config(config: &Config) -> Result<()> {
     let path = config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let contents = toml::to_string_pretty(config)
         .map_err(|e| ConductorError::Config(format!("serialize config: {e}")))?;
     std::fs::write(&path, contents)?;

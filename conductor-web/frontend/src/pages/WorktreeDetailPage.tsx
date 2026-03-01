@@ -29,6 +29,7 @@ export function WorktreeDetailPage() {
   );
 
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [pathCopied, setPathCopied] = useState(false);
 
   // Agent state
   const [latestRun, setLatestRun] = useState<AgentRun | null>(null);
@@ -207,7 +208,19 @@ export function WorktreeDetailPage() {
           </div>
           <div>
             <dt className="font-medium text-gray-500">Path</dt>
-            <dd className="mt-1 text-gray-900 truncate">{worktree.path}</dd>
+            <dd className="mt-1 flex items-center gap-2">
+              <span className="text-gray-900 truncate">{worktree.path}</span>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(worktree.path);
+                  setPathCopied(true);
+                  setTimeout(() => setPathCopied(false), 2000);
+                }}
+                className="shrink-0 px-2 py-0.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+              >
+                {pathCopied ? "Copied!" : "Copy"}
+              </button>
+            </dd>
           </div>
           <div>
             <dt className="font-medium text-gray-500">Created</dt>

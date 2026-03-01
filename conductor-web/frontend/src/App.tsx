@@ -4,6 +4,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { RepoDetailPage } from "./pages/RepoDetailPage";
 import { WorktreeDetailPage } from "./pages/WorktreeDetailPage";
 import { TicketsPage } from "./pages/TicketsPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 
 const router = createBrowserRouter([
@@ -17,6 +18,7 @@ const router = createBrowserRouter([
         path: "repos/:repoId/worktrees/:worktreeId",
         element: <WorktreeDetailPage />,
       },
+      { path: "settings", element: <SettingsPage /> },
       { path: "*", element: <NotFoundPage /> },
     ],
   },

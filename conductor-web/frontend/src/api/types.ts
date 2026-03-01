@@ -87,3 +87,15 @@ export interface AgentPromptInfo {
   prompt: string;
   resume_session_id: string | null;
 }
+
+export interface WorkTarget {
+  name: string;
+  command: string;
+  type: string;
+}
+
+export interface CreateWorkTargetRequest {
+  name: string;
+  command: string;
+  type: string;
+}

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use conductor_core::config::{db_path, ensure_dirs, load_config};
 use conductor_core::db::open_database;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
 use conductor_web::assets::static_handler;
@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
 
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
-        config: Arc::new(config),
+        config: Arc::new(RwLock::new(config)),
         events: EventBus::new(64),
     };
 
