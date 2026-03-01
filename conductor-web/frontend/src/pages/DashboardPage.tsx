@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { Link } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { api } from "../api/client";
@@ -10,6 +10,11 @@ import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
 import { agentStatusColor } from "../utils/agentStats";
+import {
+  useConductorEvents,
+  type ConductorEventType,
+  type ConductorEventData,
+} from "../hooks/useConductorEvents";
 
 export function DashboardPage() {
   const { repos, loading: reposLoading, refreshRepos } = useRepos();
@@ -20,6 +25,9 @@ export function DashboardPage() {
     (Worktree & { repoSlug: string })[]
   >([]);
   const [latestRuns, setLatestRuns] = useState<Record<string, AgentRun>>({});
+  const [wtTick, setWtTick] = useState(0);
+
+  const refreshWorktrees = useCallback(() => setWtTick((n) => n + 1), []);
 
   useEffect(() => {
     if (repos.length === 0) return;
@@ -47,7 +55,23 @@ export function DashboardPage() {
       setActiveWorktrees(active);
       setLatestRuns(runs);
     });
-  }, [repos]);
+  }, [repos, wtTick]);
+
+  const handlers = useMemo(() => {
+    const handleWorktreeChange = (_data: ConductorEventData) =>
+      refreshWorktrees();
+    const map: Partial<
+      Record<ConductorEventType, (data: ConductorEventData) => void>
+    > = {
+      worktree_created: handleWorktreeChange,
+      worktree_deleted: handleWorktreeChange,
+      agent_started: handleWorktreeChange,
+      agent_stopped: handleWorktreeChange,
+    };
+    return map;
+  }, [refreshWorktrees]);
+
+  useConductorEvents(handlers);
 
   if (reposLoading) return <LoadingSpinner />;
 

@@ -1,9 +1,14 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useMemo } from "react";
 import { Outlet } from "react-router";
 import { Sidebar } from "./Sidebar";
 import { useApi } from "../../hooks/useApi";
 import { api } from "../../api/client";
 import type { Repo } from "../../api/types";
+import {
+  useConductorEvents,
+  type ConductorEventType,
+  type ConductorEventData,
+} from "../../hooks/useConductorEvents";
 
 interface ReposContextValue {
   repos: Repo[];
@@ -23,6 +28,20 @@ export function useRepos() {
 
 export function AppShell() {
   const { data: repos, loading, refetch } = useApi(() => api.listRepos(), []);
+
+  const handlers = useMemo(() => {
+    const refetchRepos = (_data: ConductorEventData) => refetch();
+    const handleMap: Partial<
+      Record<ConductorEventType, (data: ConductorEventData) => void>
+    > = {
+      repo_created: refetchRepos,
+      repo_deleted: refetchRepos,
+      lagged: refetchRepos,
+    };
+    return handleMap;
+  }, [refetch]);
+
+  useConductorEvents(handlers);
 
   return (
     <ReposContext.Provider

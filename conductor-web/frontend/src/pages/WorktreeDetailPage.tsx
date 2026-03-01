@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, Link, useNavigate } from "react-router";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
@@ -10,6 +10,11 @@ import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { AgentPromptModal } from "../components/agents/AgentPromptModal";
 import { AgentStatusDisplay } from "../components/agents/AgentStatusDisplay";
 import { AgentActivityLog } from "../components/agents/AgentActivityLog";
+import {
+  useConductorEvents,
+  type ConductorEventType,
+  type ConductorEventData,
+} from "../hooks/useConductorEvents";
 
 export function WorktreeDetailPage() {
   const { repoId, worktreeId } = useParams<{
@@ -24,7 +29,7 @@ export function WorktreeDetailPage() {
     refetch: refetchWorktrees,
   } = useApi(() => api.listWorktrees(repoId!), [repoId]);
 
-  const { data: tickets } = useApi(
+  const { data: tickets, refetch: refetchTickets } = useApi(
     () => api.listTickets(repoId!),
     [repoId],
   );
@@ -90,30 +95,41 @@ export function WorktreeDetailPage() {
     return () => clearInterval(interval);
   }, [latestRun?.status, refreshAgent]);
 
-  // Listen for SSE agent events
-  useEffect(() => {
-    const eventSource = new EventSource("/api/events");
-
-    function handleAgentEvent(e: MessageEvent) {
-      try {
-        const data = JSON.parse(e.data);
-        if (data?.data?.worktree_id === worktreeId) {
-          refreshAgent();
-        }
-      } catch {
-        // Ignore parse errors
+  // SSE: auto-refresh worktrees, tickets, and agent data on relevant events
+  const sseHandlers = useMemo(() => {
+    const handleWorktreeChange = (ev: ConductorEventData) => {
+      const d = ev.data;
+      if (
+        !d ||
+        d.worktree_id === worktreeId ||
+        d.id === worktreeId ||
+        d.repo_id === repoId
+      ) {
+        refetchWorktrees();
       }
-    }
-
-    eventSource.addEventListener("agent_started", handleAgentEvent);
-    eventSource.addEventListener("agent_stopped", handleAgentEvent);
-
-    return () => {
-      eventSource.removeEventListener("agent_started", handleAgentEvent);
-      eventSource.removeEventListener("agent_stopped", handleAgentEvent);
-      eventSource.close();
     };
-  }, [worktreeId, refreshAgent]);
+    const handleTickets = (ev: ConductorEventData) => {
+      if (!ev.data || ev.data.repo_id === repoId) refetchTickets();
+    };
+    const handleAgentChange = (ev: ConductorEventData) => {
+      if (!ev.data || ev.data.worktree_id === worktreeId) {
+        refreshAgent();
+      }
+    };
+    const map: Partial<
+      Record<ConductorEventType, (data: ConductorEventData) => void>
+    > = {
+      worktree_created: handleWorktreeChange,
+      worktree_deleted: handleWorktreeChange,
+      tickets_synced: handleTickets,
+      agent_started: handleAgentChange,
+      agent_stopped: handleAgentChange,
+      agent_event: handleAgentChange,
+    };
+    return map;
+  }, [repoId, worktreeId, refetchWorktrees, refetchTickets, refreshAgent]);
+
+  useConductorEvents(sseHandlers);
 
   async function handleLaunchClick() {
     if (!worktreeId) return;
