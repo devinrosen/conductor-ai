@@ -3,9 +3,11 @@ import { useParams, Link } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
+import type { Ticket } from "../api/types";
 import { WorktreeRow } from "../components/worktrees/WorktreeRow";
 import { CreateWorktreeForm } from "../components/worktrees/CreateWorktreeForm";
 import { TicketRow } from "../components/tickets/TicketRow";
+import { TicketDetailModal } from "../components/tickets/TicketDetailModal";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
@@ -70,6 +72,7 @@ export function RepoDetailPage() {
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleteRepoConfirm, setDeleteRepoConfirm] = useState(false);
+  const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
 
   async function handleSyncTickets() {
     setSyncing(true);
@@ -217,6 +220,7 @@ export function RepoDetailPage() {
                     key={t.id}
                     ticket={t}
                     agentTotals={ticketTotals?.[t.id]}
+                    onClick={setSelectedTicket}
                   />
                 ))}
               </tbody>
@@ -226,6 +230,12 @@ export function RepoDetailPage() {
       </section>
 
       {/* Dialogs */}
+      {selectedTicket && (
+        <TicketDetailModal
+          ticket={selectedTicket}
+          onClose={() => setSelectedTicket(null)}
+        />
+      )}
       <ConfirmDialog
         open={deleteTarget !== null}
         title="Delete Worktree"

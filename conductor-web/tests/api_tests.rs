@@ -258,6 +258,23 @@ async fn test_list_all_tickets_empty() {
 }
 
 #[tokio::test]
+async fn test_ticket_detail_empty() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    // Call detail for a ticket with no agent runs or linked worktrees
+    let resp = client
+        .get(format!("{base}/api/tickets/nonexistent-id/detail"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["agent_totals"].is_null());
+    assert_eq!(body["worktrees"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
 async fn test_list_work_targets_default() {
     let base = spawn_test_server().await;
     let client = reqwest::Client::new();

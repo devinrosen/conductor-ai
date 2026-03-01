@@ -27,3 +27,9 @@ impl From<ConductorError> for ApiError {
         ApiError(err)
     }
 }
+
+impl From<rusqlite::Error> for ApiError {
+    fn from(err: rusqlite::Error) -> Self {
+        ApiError(ConductorError::Database(err))
+    }
+}
