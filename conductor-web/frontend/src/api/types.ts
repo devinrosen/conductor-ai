@@ -36,6 +36,30 @@ export interface Ticket {
   raw_json: string;
 }
 
+export interface AgentRun {
+  id: string;
+  worktree_id: string;
+  claude_session_id: string | null;
+  prompt: string;
+  status: string;
+  result_text: string | null;
+  cost_usd: number | null;
+  num_turns: number | null;
+  duration_ms: number | null;
+  started_at: string;
+  ended_at: string | null;
+  tmux_window: string | null;
+  log_file: string | null;
+}
+
+export interface TicketAgentTotals {
+  ticket_id: string;
+  total_runs: number;
+  total_cost: number;
+  total_turns: number;
+  total_duration_ms: number;
+}
+
 export interface CreateRepoRequest {
   remote_url: string;
   slug?: string;

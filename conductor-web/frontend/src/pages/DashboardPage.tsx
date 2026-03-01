@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { api } from "../api/client";
-import type { Worktree } from "../api/types";
+import type { Worktree, AgentRun } from "../api/types";
 import { RepoCard } from "../components/repos/RepoCard";
 import { CreateRepoForm } from "../components/repos/CreateRepoForm";
 import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
+import { agentStatusColor } from "../utils/agentStats";
 
 export function DashboardPage() {
   const { repos, loading: reposLoading, refreshRepos } = useRepos();
@@ -18,13 +19,20 @@ export function DashboardPage() {
   const [activeWorktrees, setActiveWorktrees] = useState<
     (Worktree & { repoSlug: string })[]
   >([]);
+  const [latestRuns, setLatestRuns] = useState<Record<string, AgentRun>>({});
+
   useEffect(() => {
     if (repos.length === 0) return;
-    Promise.all(
-      repos.map((r) =>
-        api.listWorktrees(r.id).then((wts) => ({ repoId: r.id, slug: r.slug, wts })),
+    Promise.all([
+      Promise.all(
+        repos.map((r) =>
+          api
+            .listWorktrees(r.id)
+            .then((wts) => ({ repoId: r.id, slug: r.slug, wts })),
+        ),
       ),
-    ).then((results) => {
+      api.latestRunsByWorktree(),
+    ]).then(([results, runs]) => {
       const counts: Record<string, number> = {};
       const active: (Worktree & { repoSlug: string })[] = [];
       for (const { repoId, slug, wts } of results) {
@@ -37,6 +45,7 @@ export function DashboardPage() {
       }
       setWorktreeCounts(counts);
       setActiveWorktrees(active);
+      setLatestRuns(runs);
     });
   }, [repos]);
 
@@ -84,35 +93,51 @@ export function DashboardPage() {
                   <th className="px-4 py-2">Branch</th>
                   <th className="px-4 py-2">Repo</th>
                   <th className="px-4 py-2">Status</th>
+                  <th className="px-4 py-2">Agent</th>
                   <th className="px-4 py-2">Created</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {activeWorktrees.map((wt) => (
-                  <tr key={wt.id}>
-                    <td className="px-4 py-2">
-                      <Link
-                        to={`/repos/${wt.repo_id}/worktrees/${wt.id}`}
-                        className="text-indigo-600 hover:underline"
-                      >
-                        {wt.branch}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-2 text-gray-600">{wt.repoSlug}</td>
-                    <td className="px-4 py-2">
-                      <StatusBadge status={wt.status} />
-                    </td>
-                    <td className="px-4 py-2 text-gray-500">
-                      <TimeAgo date={wt.created_at} />
-                    </td>
-                  </tr>
-                ))}
+                {activeWorktrees.map((wt) => {
+                  const run = latestRuns[wt.id];
+                  return (
+                    <tr key={wt.id}>
+                      <td className="px-4 py-2">
+                        <Link
+                          to={`/repos/${wt.repo_id}/worktrees/${wt.id}`}
+                          className="text-indigo-600 hover:underline"
+                        >
+                          {wt.branch}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-2 text-gray-600">
+                        {wt.repoSlug}
+                      </td>
+                      <td className="px-4 py-2">
+                        <StatusBadge status={wt.status} />
+                      </td>
+                      <td className="px-4 py-2">
+                        {run ? (
+                          <span
+                            className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${agentStatusColor(run.status)}`}
+                          >
+                            {run.status}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-400">-</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-gray-500">
+                        <TimeAgo date={wt.created_at} />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </section>
-
     </div>
   );
 }
