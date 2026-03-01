@@ -612,9 +612,11 @@ mod tests {
         syncer.link_to_worktree(&ticket_id, "wt1").unwrap();
 
         let linked: Option<String> = conn
-            .query_row("SELECT ticket_id FROM worktrees WHERE id = 'wt1'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT ticket_id FROM worktrees WHERE id = 'wt1'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(linked, Some(ticket_id));
     }
@@ -639,7 +641,10 @@ mod tests {
 
         let result = syncer.link_to_worktree(&tid2, "wt1");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("already has a linked ticket"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("already has a linked ticket"));
     }
 
     #[test]
