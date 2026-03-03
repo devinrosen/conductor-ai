@@ -114,6 +114,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         lines.push(Line::from(""));
         lines.push(render_agent_status_line(run, &state.data.agent_totals));
 
+        // Show child runs if this is a parent (supervisor) run
+        for child in &state.data.child_runs {
+            lines.push(render_child_run_line(child));
+        }
+
         // Plan checklist (if a plan was generated for this run)
         if let Some(ref steps) = run.plan {
             lines.push(Line::from(""));
@@ -345,4 +350,39 @@ fn render_agent_status_line(
             Span::raw(format!("[{other}]")),
         ]),
     }
+}
+
+/// Render a single child run as an indented line under the parent agent status.
+fn render_child_run_line(run: &conductor_core::agent::AgentRun) -> Line<'static> {
+    let (status_text, status_color) = match run.status.as_str() {
+        "running" => ("running", Color::Yellow),
+        "completed" => ("completed", Color::Green),
+        "failed" => ("failed", Color::Red),
+        "cancelled" => ("cancelled", Color::DarkGray),
+        other => (other, Color::White),
+    };
+    let status_str = format!("[{status_text}]");
+
+    let prompt = if run.prompt.len() > 50 {
+        format!("{}...", &run.prompt[..50])
+    } else {
+        run.prompt.clone()
+    };
+
+    let mut spans = vec![
+        Span::styled("  └─ ", Style::default().fg(Color::DarkGray)),
+        Span::styled(status_str, Style::default().fg(status_color)),
+        Span::styled(format!(" {prompt}"), Style::default().fg(Color::DarkGray)),
+    ];
+
+    let cost = run.cost_usd.unwrap_or(0.0);
+    let turns = run.num_turns.unwrap_or(0);
+    if cost > 0.0 || turns > 0 {
+        spans.push(Span::styled(
+            format!("  ${cost:.4} {turns}t"),
+            Style::default().fg(Color::Magenta),
+        ));
+    }
+
+    Line::from(spans)
 }

@@ -1,5 +1,6 @@
 import type { AgentRun } from "../../api/types";
 import { TimeAgo } from "../shared/TimeAgo";
+import { ChildRunsList } from "./ChildRunsList";
 
 const statusColors: Record<string, string> = {
   running: "bg-yellow-100 text-yellow-700",
@@ -23,6 +24,7 @@ function formatCost(usd: number): string {
 interface AgentStatusDisplayProps {
   run: AgentRun;
   runs: AgentRun[];
+  childRuns?: AgentRun[];
   onLaunch: () => void;
   onStop: () => void;
 }
@@ -30,12 +32,14 @@ interface AgentStatusDisplayProps {
 export function AgentStatusDisplay({
   run,
   runs,
+  childRuns,
   onLaunch,
   onStop,
 }: AgentStatusDisplayProps) {
   const color = statusColors[run.status] ?? "bg-gray-100 text-gray-600";
+  const hasChildren = childRuns && childRuns.length > 0;
 
-  // Aggregate totals across all completed runs
+  // Aggregate totals across all completed runs (top-level only)
   const completedRuns = runs.filter((r) => r.status === "completed");
   const totalCost = completedRuns.reduce((s, r) => s + (r.cost_usd ?? 0), 0);
   const totalTurns = completedRuns.reduce((s, r) => s + (r.num_turns ?? 0), 0);
@@ -54,6 +58,21 @@ export function AgentStatusDisplay({
       ? totalDurationMs + (run.duration_ms ?? 0)
       : totalDurationMs;
 
+  // If the latest run has child runs, compute aggregated (parent + children) totals
+  const childCost = hasChildren
+    ? childRuns.reduce((s, r) => s + (r.cost_usd ?? 0), 0)
+    : 0;
+  const childTurns = hasChildren
+    ? childRuns.reduce((s, r) => s + (r.num_turns ?? 0), 0)
+    : 0;
+  const childDurationMs = hasChildren
+    ? childRuns.reduce((s, r) => s + (r.duration_ms ?? 0), 0)
+    : 0;
+
+  const treeCost = displayCost + childCost;
+  const treeTurns = displayTurns + childTurns;
+  const treeDuration = displayDuration + childDurationMs;
+
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4">
       <div className="flex items-center justify-between mb-3">
@@ -68,6 +87,11 @@ export function AgentStatusDisplay({
           </span>
           {run.status === "running" && (
             <span className="inline-block w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+          )}
+          {hasChildren && (
+            <span className="inline-block px-2 py-0.5 text-xs font-medium rounded-full bg-indigo-100 text-indigo-700">
+              {childRuns.length} child{childRuns.length !== 1 ? "ren" : ""}
+            </span>
           )}
         </div>
         <div className="flex gap-2">
@@ -90,25 +114,31 @@ export function AgentStatusDisplay({
       </div>
 
       <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-sm">
-        {displayCost > 0 && (
+        {treeCost > 0 && (
           <div>
-            <dt className="text-gray-500">Cost</dt>
+            <dt className="text-gray-500">
+              Cost{hasChildren ? " (tree)" : ""}
+            </dt>
             <dd className="font-medium text-gray-900">
-              {formatCost(displayCost)}
+              {formatCost(treeCost)}
             </dd>
           </div>
         )}
-        {displayTurns > 0 && (
+        {treeTurns > 0 && (
           <div>
-            <dt className="text-gray-500">Turns</dt>
-            <dd className="font-medium text-gray-900">{displayTurns}</dd>
+            <dt className="text-gray-500">
+              Turns{hasChildren ? " (tree)" : ""}
+            </dt>
+            <dd className="font-medium text-gray-900">{treeTurns}</dd>
           </div>
         )}
-        {displayDuration > 0 && (
+        {treeDuration > 0 && (
           <div>
-            <dt className="text-gray-500">Duration</dt>
+            <dt className="text-gray-500">
+              Duration{hasChildren ? " (tree)" : ""}
+            </dt>
             <dd className="font-medium text-gray-900">
-              {formatDuration(displayDuration)}
+              {formatDuration(treeDuration)}
             </dd>
           </div>
         )}
@@ -145,6 +175,8 @@ export function AgentStatusDisplay({
           {run.result_text}
         </div>
       )}
+
+      {hasChildren && <ChildRunsList children={childRuns} />}
     </div>
   );
 }

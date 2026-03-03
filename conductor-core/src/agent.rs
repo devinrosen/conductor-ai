@@ -35,6 +35,8 @@ pub struct AgentRun {
     pub model: Option<String>,
     /// Two-phase execution plan: JSON-serialized list of steps with completion state.
     pub plan: Option<Vec<PlanStep>>,
+    /// If this is a child run, the ID of the parent (supervisor) run.
+    pub parent_run_id: Option<String>,
 }
 
 /// Parsed JSON result from `claude -p --output-format json`.
@@ -268,6 +270,15 @@ pub struct TicketAgentTotals {
     pub total_duration_ms: i64,
 }
 
+/// Aggregated stats for a run tree (parent + all descendants).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RunTreeTotals {
+    pub total_runs: i64,
+    pub total_cost: f64,
+    pub total_turns: i64,
+    pub total_duration_ms: i64,
+}
+
 pub struct AgentManager<'a> {
     conn: &'a Connection,
 }
@@ -283,6 +294,28 @@ impl<'a> AgentManager<'a> {
         prompt: &str,
         tmux_window: Option<&str>,
         model: Option<&str>,
+    ) -> Result<AgentRun> {
+        self.create_run_with_parent(worktree_id, prompt, tmux_window, model, None)
+    }
+
+    pub fn create_child_run(
+        &self,
+        worktree_id: &str,
+        prompt: &str,
+        tmux_window: Option<&str>,
+        model: Option<&str>,
+        parent_run_id: &str,
+    ) -> Result<AgentRun> {
+        self.create_run_with_parent(worktree_id, prompt, tmux_window, model, Some(parent_run_id))
+    }
+
+    fn create_run_with_parent(
+        &self,
+        worktree_id: &str,
+        prompt: &str,
+        tmux_window: Option<&str>,
+        model: Option<&str>,
+        parent_run_id: Option<&str>,
     ) -> Result<AgentRun> {
         let id = ulid::Ulid::new().to_string();
         let now = Utc::now().to_rfc3339();
@@ -303,11 +336,12 @@ impl<'a> AgentManager<'a> {
             log_file: None,
             model: model.map(String::from),
             plan: None,
+            parent_run_id: parent_run_id.map(String::from),
         };
 
         self.conn.execute(
-            "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, tmux_window, model) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, tmux_window, model, parent_run_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 run.id,
                 run.worktree_id,
@@ -315,7 +349,8 @@ impl<'a> AgentManager<'a> {
                 run.status,
                 run.started_at,
                 run.tmux_window,
-                run.model
+                run.model,
+                run.parent_run_id
             ],
         )?;
 
@@ -326,7 +361,7 @@ impl<'a> AgentManager<'a> {
         let result = self.conn.query_row(
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan \
+             model, plan, parent_run_id \
              FROM agent_runs WHERE id = ?1",
             params![run_id],
             row_to_agent_run,
@@ -426,7 +461,7 @@ impl<'a> AgentManager<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan \
+             model, plan, parent_run_id \
              FROM agent_runs WHERE worktree_id = ?1 ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map(params![worktree_id], row_to_agent_run)?;
@@ -448,7 +483,7 @@ impl<'a> AgentManager<'a> {
         let result = self.conn.query_row(
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan \
+             model, plan, parent_run_id \
              FROM agent_runs WHERE worktree_id = ?1 ORDER BY started_at DESC LIMIT 1",
             params![worktree_id],
             row_to_agent_run,
@@ -567,7 +602,7 @@ impl<'a> AgentManager<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, \
              a.result_text, a.cost_usd, a.num_turns, a.duration_ms, a.started_at, \
-             a.ended_at, a.tmux_window, a.log_file, a.model, a.plan \
+             a.ended_at, a.tmux_window, a.log_file, a.model, a.plan, a.parent_run_id \
              FROM agent_runs a \
              INNER JOIN ( \
                  SELECT worktree_id, MAX(started_at) AS max_started \
@@ -582,6 +617,86 @@ impl<'a> AgentManager<'a> {
             map.insert(run.worktree_id.clone(), run);
         }
         Ok(map)
+    }
+
+    // ── Parent/child run tree queries ─────────────────────────────────
+
+    /// List direct child runs of a parent run (newest first).
+    pub fn list_child_runs(&self, parent_run_id: &str) -> Result<Vec<AgentRun>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
+             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
+             model, plan, parent_run_id \
+             FROM agent_runs WHERE parent_run_id = ?1 ORDER BY started_at DESC",
+        )?;
+        let rows = stmt.query_map(params![parent_run_id], row_to_agent_run)?;
+        let runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(runs)
+    }
+
+    /// Get a full run tree: the given run plus all descendants (children, grandchildren, etc.).
+    /// Returns a flat list ordered by started_at ASC. The caller can reconstruct
+    /// the tree using `parent_run_id` references.
+    pub fn get_run_tree(&self, root_run_id: &str) -> Result<Vec<AgentRun>> {
+        // SQLite supports recursive CTEs, which are perfect for tree traversal.
+        let mut stmt = self.conn.prepare(
+            "WITH RECURSIVE tree(id) AS ( \
+                 SELECT id FROM agent_runs WHERE id = ?1 \
+                 UNION ALL \
+                 SELECT a.id FROM agent_runs a JOIN tree t ON a.parent_run_id = t.id \
+             ) \
+             SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, \
+                    a.result_text, a.cost_usd, a.num_turns, a.duration_ms, a.started_at, \
+                    a.ended_at, a.tmux_window, a.log_file, a.model, a.plan, a.parent_run_id \
+             FROM agent_runs a \
+             JOIN tree t ON a.id = t.id \
+             ORDER BY a.started_at ASC",
+        )?;
+        let rows = stmt.query_map(params![root_run_id], row_to_agent_run)?;
+        let runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(runs)
+    }
+
+    /// List only top-level (root) runs for a worktree — runs with no parent.
+    pub fn list_root_runs_for_worktree(&self, worktree_id: &str) -> Result<Vec<AgentRun>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
+             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
+             model, plan, parent_run_id \
+             FROM agent_runs WHERE worktree_id = ?1 AND parent_run_id IS NULL \
+             ORDER BY started_at DESC",
+        )?;
+        let rows = stmt.query_map(params![worktree_id], row_to_agent_run)?;
+        let runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(runs)
+    }
+
+    /// Compute aggregated cost/turns/duration for a run and all its descendants.
+    pub fn aggregate_run_tree(&self, root_run_id: &str) -> Result<RunTreeTotals> {
+        let row = self.conn.query_row(
+            "WITH RECURSIVE tree(id) AS ( \
+                 SELECT id FROM agent_runs WHERE id = ?1 \
+                 UNION ALL \
+                 SELECT a.id FROM agent_runs a JOIN tree t ON a.parent_run_id = t.id \
+             ) \
+             SELECT COUNT(*) AS total_runs, \
+                    COALESCE(SUM(a.cost_usd), 0.0) AS total_cost, \
+                    COALESCE(SUM(a.num_turns), 0) AS total_turns, \
+                    COALESCE(SUM(a.duration_ms), 0) AS total_duration_ms \
+             FROM agent_runs a \
+             JOIN tree t ON a.id = t.id \
+             WHERE a.status = 'completed'",
+            params![root_run_id],
+            |row| {
+                Ok(RunTreeTotals {
+                    total_runs: row.get(0)?,
+                    total_cost: row.get(1)?,
+                    total_turns: row.get(2)?,
+                    total_duration_ms: row.get(3)?,
+                })
+            },
+        )?;
+        Ok(row)
     }
 }
 
@@ -616,6 +731,7 @@ fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun> {
         log_file: row.get(12)?,
         model: row.get(13)?,
         plan,
+        parent_run_id: row.get(15)?,
     })
 }
 
@@ -1099,5 +1215,145 @@ mod tests {
 
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert!(fetched.model.is_none());
+    }
+
+    // ── Parent/child run tests ────────────────────────────────────────
+
+    #[test]
+    fn test_create_child_run() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let parent = mgr.create_run("w1", "Supervisor task", None, None).unwrap();
+        assert!(parent.parent_run_id.is_none());
+
+        let child = mgr
+            .create_child_run("w1", "Sub-task A", None, None, &parent.id)
+            .unwrap();
+        assert_eq!(child.parent_run_id.as_deref(), Some(parent.id.as_str()));
+
+        let fetched = mgr.get_run(&child.id).unwrap().unwrap();
+        assert_eq!(fetched.parent_run_id.as_deref(), Some(parent.id.as_str()));
+    }
+
+    #[test]
+    fn test_list_child_runs() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let parent = mgr.create_run("w1", "Supervisor", None, None).unwrap();
+        let _child1 = mgr
+            .create_child_run("w1", "Child 1", None, None, &parent.id)
+            .unwrap();
+        let _child2 = mgr
+            .create_child_run("w1", "Child 2", None, None, &parent.id)
+            .unwrap();
+
+        // Unrelated run should not appear
+        let _other = mgr.create_run("w1", "Independent", None, None).unwrap();
+
+        let children = mgr.list_child_runs(&parent.id).unwrap();
+        assert_eq!(children.len(), 2);
+        assert!(children
+            .iter()
+            .all(|c| c.parent_run_id.as_deref() == Some(parent.id.as_str())));
+    }
+
+    #[test]
+    fn test_get_run_tree() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Build a tree: parent -> child1, child2 -> grandchild
+        let parent = mgr.create_run("w1", "Root task", None, None).unwrap();
+        let child1 = mgr
+            .create_child_run("w1", "Child 1", None, None, &parent.id)
+            .unwrap();
+        let _child2 = mgr
+            .create_child_run("w2", "Child 2", None, None, &parent.id)
+            .unwrap();
+        let _grandchild = mgr
+            .create_child_run("w1", "Grandchild", None, None, &child1.id)
+            .unwrap();
+
+        // Unrelated run
+        let _other = mgr.create_run("w1", "Other", None, None).unwrap();
+
+        let tree = mgr.get_run_tree(&parent.id).unwrap();
+        assert_eq!(tree.len(), 4); // parent + 2 children + 1 grandchild
+        assert_eq!(tree[0].id, parent.id); // root is first (earliest started_at)
+    }
+
+    #[test]
+    fn test_list_root_runs_for_worktree() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let parent = mgr.create_run("w1", "Supervisor", None, None).unwrap();
+        let _child = mgr
+            .create_child_run("w1", "Child", None, None, &parent.id)
+            .unwrap();
+        let standalone = mgr.create_run("w1", "Standalone", None, None).unwrap();
+
+        let root_runs = mgr.list_root_runs_for_worktree("w1").unwrap();
+        assert_eq!(root_runs.len(), 2);
+        // Newest first
+        assert_eq!(root_runs[0].id, standalone.id);
+        assert_eq!(root_runs[1].id, parent.id);
+        assert!(root_runs.iter().all(|r| r.parent_run_id.is_none()));
+    }
+
+    #[test]
+    fn test_aggregate_run_tree() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let parent = mgr.create_run("w1", "Supervisor", None, None).unwrap();
+        mgr.update_run_completed(&parent.id, None, None, Some(0.10), Some(5), Some(30000))
+            .unwrap();
+
+        let child1 = mgr
+            .create_child_run("w1", "Child 1", None, None, &parent.id)
+            .unwrap();
+        mgr.update_run_completed(&child1.id, None, None, Some(0.05), Some(3), Some(15000))
+            .unwrap();
+
+        let child2 = mgr
+            .create_child_run("w2", "Child 2", None, None, &parent.id)
+            .unwrap();
+        mgr.update_run_completed(&child2.id, None, None, Some(0.08), Some(4), Some(20000))
+            .unwrap();
+
+        // Still-running child should NOT be included in totals
+        let _running = mgr
+            .create_child_run("w1", "Still running", None, None, &parent.id)
+            .unwrap();
+
+        let totals = mgr.aggregate_run_tree(&parent.id).unwrap();
+        assert_eq!(totals.total_runs, 3);
+        assert!((totals.total_cost - 0.23).abs() < 0.001);
+        assert_eq!(totals.total_turns, 12);
+        assert_eq!(totals.total_duration_ms, 65000);
+    }
+
+    #[test]
+    fn test_parent_run_id_set_null_on_delete() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let parent = mgr.create_run("w1", "Parent", None, None).unwrap();
+        let child = mgr
+            .create_child_run("w1", "Child", None, None, &parent.id)
+            .unwrap();
+
+        // Delete the parent — ON DELETE SET NULL should clear child's parent_run_id
+        conn.execute(
+            "DELETE FROM agent_runs WHERE id = ?1",
+            rusqlite::params![parent.id],
+        )
+        .unwrap();
+
+        let fetched = mgr.get_run(&child.id).unwrap().unwrap();
+        assert!(fetched.parent_run_id.is_none());
     }
 }

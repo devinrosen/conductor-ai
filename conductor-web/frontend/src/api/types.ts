@@ -84,6 +84,14 @@ export interface AgentRun {
   tmux_window: string | null;
   log_file: string | null;
   plan: PlanStep[] | null;
+  parent_run_id: string | null;
+}
+
+export interface RunTreeTotals {
+  total_runs: number;
+  total_cost: number;
+  total_turns: number;
+  total_duration_ms: number;
 }
 
 export interface AgentEvent {
