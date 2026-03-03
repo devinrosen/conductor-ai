@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -8,6 +9,7 @@ use conductor_core::issue_source::IssueSource;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::Ticket;
 use conductor_core::worktree::Worktree;
+use ratatui::widgets::ListState;
 use tui_textarea::TextArea;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -309,8 +311,8 @@ pub struct AppState {
     pub detail_wt_index: usize,
     pub detail_ticket_index: usize,
 
-    // Agent activity scroll
-    pub agent_event_index: usize,
+    // Agent activity list navigation (replaces the old Paragraph scroll offset)
+    pub agent_list_state: RefCell<ListState>,
     /// Tracks pending `g` keypress for `gg` chord (go to top)
     pub pending_g: bool,
 
@@ -344,7 +346,7 @@ impl AppState {
             detail_tickets: Vec::new(),
             detail_wt_index: 0,
             detail_ticket_index: 0,
-            agent_event_index: 0,
+            agent_list_state: RefCell::new(ListState::default()),
             pending_g: false,
             filter_active: false,
             filter_text: String::new(),
@@ -366,7 +368,10 @@ impl AppState {
                 RepoDetailFocus::Worktrees => (self.detail_wt_index, self.detail_worktrees.len()),
                 RepoDetailFocus::Tickets => (self.detail_ticket_index, self.detail_tickets.len()),
             },
-            View::WorktreeDetail => (self.agent_event_index, self.data.agent_events.len()),
+            View::WorktreeDetail => {
+                let idx = self.agent_list_state.borrow().selected().unwrap_or(0);
+                (idx, self.data.agent_events.len())
+            }
             View::Tickets => (self.ticket_index, self.data.tickets.len()),
         }
     }
@@ -383,7 +388,9 @@ impl AppState {
                 RepoDetailFocus::Worktrees => self.detail_wt_index = index,
                 RepoDetailFocus::Tickets => self.detail_ticket_index = index,
             },
-            View::WorktreeDetail => self.agent_event_index = index,
+            View::WorktreeDetail => {
+                self.agent_list_state.borrow_mut().select(Some(index));
+            }
             View::Tickets => self.ticket_index = index,
         }
     }

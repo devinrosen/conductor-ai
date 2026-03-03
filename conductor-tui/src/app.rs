@@ -2,6 +2,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::Result;
+use ratatui::widgets::ListState;
 use ratatui::DefaultTerminal;
 use rusqlite::Connection;
 
@@ -260,13 +261,14 @@ impl App {
             Action::StopAgent => self.handle_stop_agent(),
             Action::ViewAgentLog => self.handle_view_agent_log(),
             Action::AgentActivityDown => {
-                let max = self.state.data.agent_events.len().saturating_sub(1);
-                if self.state.agent_event_index < max {
-                    self.state.agent_event_index += 1;
+                let len = self.state.data.agent_events.len();
+                let cur = self.state.agent_list_state.borrow().selected().unwrap_or(0);
+                if len > 0 && cur + 1 < len {
+                    self.state.agent_list_state.borrow_mut().select_next();
                 }
             }
             Action::AgentActivityUp => {
-                self.state.agent_event_index = self.state.agent_event_index.saturating_sub(1);
+                self.state.agent_list_state.borrow_mut().select_previous();
             }
             // Scroll navigation (all views + discover modals)
             Action::GoToTop => match self.state.modal {
@@ -482,10 +484,19 @@ impl App {
         };
 
         self.state.data.agent_events = all_events;
-        // Clamp scroll index
-        let max = self.state.data.agent_events.len().saturating_sub(1);
-        if self.state.agent_event_index > max {
-            self.state.agent_event_index = max;
+        // Clamp ListState selection to valid range after events reload.
+        // ratatui also clamps during render, but we keep it tidy here.
+        let len = self.state.data.agent_events.len();
+        let cur = self.state.agent_list_state.borrow().selected();
+        if let Some(idx) = cur {
+            if len == 0 {
+                self.state.agent_list_state.borrow_mut().select(None);
+            } else if idx >= len {
+                self.state
+                    .agent_list_state
+                    .borrow_mut()
+                    .select(Some(len - 1));
+            }
         }
     }
 
@@ -783,7 +794,7 @@ impl App {
                         self.state.selected_worktree_id = Some(wt_id);
                         self.state.selected_repo_id = None;
                         self.state.view = View::WorktreeDetail;
-                        self.state.agent_event_index = 0;
+                        *self.state.agent_list_state.borrow_mut() = ListState::default();
                         self.reload_agent_events();
                     }
                 }
@@ -801,7 +812,7 @@ impl App {
                         let wt_id = wt.id.clone();
                         self.state.selected_worktree_id = Some(wt_id);
                         self.state.view = View::WorktreeDetail;
-                        self.state.agent_event_index = 0;
+                        *self.state.agent_list_state.borrow_mut() = ListState::default();
                         self.reload_agent_events();
                     }
                 }

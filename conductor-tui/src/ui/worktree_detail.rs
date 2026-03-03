@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::state::AppState;
@@ -163,7 +163,7 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
 
-    let lines: Vec<Line> = events
+    let items: Vec<ListItem> = events
         .iter()
         .map(|ev| {
             let style = event_style(&ev.kind);
@@ -177,16 +177,15 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
                     ));
                 }
             }
-            Line::from(spans)
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
-    let paragraph = Paragraph::new(lines)
+    let list = List::new(items)
         .block(activity_block)
-        .wrap(Wrap { trim: false })
-        .scroll((state.agent_event_index as u16, 0));
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
-    frame.render_widget(paragraph, area);
+    frame.render_stateful_widget(list, area, &mut state.agent_list_state.borrow_mut());
 }
 
 fn event_style(kind: &str) -> Style {
