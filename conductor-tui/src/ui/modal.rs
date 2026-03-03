@@ -648,7 +648,9 @@ pub fn render_github_discover_orgs(
     } else {
         lines.push(Line::from(Span::styled(
             "  Select an account or organization:",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
 
@@ -732,7 +734,9 @@ pub fn render_github_discover(
     frame.render_widget(Clear, popup);
 
     let dim = Style::default().fg(Color::DarkGray);
-    let cyan = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let cyan = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
 
     let mut lines = vec![Line::from("")];
     let mut cursor_abs_line: usize = 0;
@@ -759,10 +763,7 @@ pub fn render_github_discover(
     } else {
         lines.push(Line::from(vec![
             Span::styled("  Repos from GitHub", cyan),
-            Span::styled(
-                format!("  ({} total)", repos.len()),
-                dim,
-            ),
+            Span::styled(format!("  ({} total)", repos.len()), dim),
         ]));
         lines.push(Line::from(""));
 
@@ -798,7 +799,9 @@ pub fn render_github_discover(
             let checkbox_style = if is_registered {
                 Style::default().fg(Color::DarkGray)
             } else if is_checked {
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -837,10 +840,7 @@ pub fn render_github_discover(
                 } else {
                     repo.description.clone()
                 };
-                lines.push(Line::from(Span::styled(
-                    format!("       {desc}"),
-                    dim,
-                )));
+                lines.push(Line::from(Span::styled(format!("       {desc}"), dim)));
             }
         }
 
@@ -874,10 +874,7 @@ pub fn render_github_discover(
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                format!(" import ({selected_count})  "),
-                dim,
-            ),
+            Span::styled(format!(" import ({selected_count})  "), dim),
             Span::styled(
                 "Esc",
                 Style::default()

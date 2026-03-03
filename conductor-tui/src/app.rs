@@ -2335,19 +2335,20 @@ impl App {
 
         if let Some(ref tx) = self.bg_tx {
             let tx = tx.clone();
-            background::spawn_blocking(tx, move || {
-                match github::list_github_orgs() {
-                    Ok(orgs) => Action::GithubOrgsLoaded { orgs },
-                    Err(e) => Action::GithubOrgsFailed {
-                        error: e.to_string(),
-                    },
-                }
+            background::spawn_blocking(tx, move || match github::list_github_orgs() {
+                Ok(orgs) => Action::GithubOrgsLoaded { orgs },
+                Err(e) => Action::GithubOrgsFailed {
+                    error: e.to_string(),
+                },
             });
         }
     }
 
     fn handle_github_orgs_loaded(&mut self, orgs: Vec<String>) {
-        if !matches!(self.state.modal, Modal::GithubDiscoverOrgs { loading: true, .. }) {
+        if !matches!(
+            self.state.modal,
+            Modal::GithubDiscoverOrgs { loading: true, .. }
+        ) {
             return;
         }
         // Prepend empty string sentinel for "Personal" (displayed as "Personal")
@@ -2507,31 +2508,30 @@ impl App {
     }
 
     fn handle_github_discover_import(&mut self) {
-        let to_import: Vec<String> =
-            if let Modal::GithubDiscover {
-                ref repos,
-                ref registered_urls,
-                ref selected,
-                ..
-            } = self.state.modal
-            {
-                repos
-                    .iter()
-                    .zip(selected.iter())
-                    .filter_map(|(repo, &sel)| {
-                        if sel
-                            && !registered_urls.contains(&repo.clone_url)
-                            && !registered_urls.contains(&repo.ssh_url)
-                        {
-                            Some(repo.clone_url.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            } else {
-                return;
-            };
+        let to_import: Vec<String> = if let Modal::GithubDiscover {
+            ref repos,
+            ref registered_urls,
+            ref selected,
+            ..
+        } = self.state.modal
+        {
+            repos
+                .iter()
+                .zip(selected.iter())
+                .filter_map(|(repo, &sel)| {
+                    if sel
+                        && !registered_urls.contains(&repo.clone_url)
+                        && !registered_urls.contains(&repo.ssh_url)
+                    {
+                        Some(repo.clone_url.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            return;
+        };
 
         if to_import.is_empty() {
             return;

@@ -99,9 +99,9 @@ pub async fn discover_github_repos_handler(
     let result = discovered
         .into_iter()
         .map(|repo| {
-            let registered_entry = registered.iter().find(|r| {
-                r.remote_url == repo.clone_url || r.remote_url == repo.ssh_url
-            });
+            let registered_entry = registered
+                .iter()
+                .find(|r| r.remote_url == repo.clone_url || r.remote_url == repo.ssh_url);
             DiscoverableRepo {
                 already_registered: registered_entry.is_some(),
                 registered_id: registered_entry.map(|r| r.id.clone()),

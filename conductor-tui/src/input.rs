@@ -125,14 +125,10 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ if *loading => Action::None,
                 KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
                 KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
-                KeyCode::Char('d')
-                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     Action::HalfPageDown
                 }
-                KeyCode::Char('u')
-                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     Action::HalfPageUp
                 }
                 KeyCode::Char('g') if state.pending_g => Action::GoToTop,
@@ -154,14 +150,10 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ if *loading => Action::None,
                 KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
                 KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
-                KeyCode::Char('d')
-                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     Action::HalfPageDown
                 }
-                KeyCode::Char('u')
-                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     Action::HalfPageUp
                 }
                 KeyCode::Char('g') if state.pending_g => Action::GoToTop,

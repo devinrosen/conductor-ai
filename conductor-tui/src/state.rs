@@ -151,7 +151,10 @@ impl fmt::Debug for Modal {
                 write!(f, "Modal::GithubDiscoverOrgs(loading={loading})")
             }
             Modal::GithubDiscover { owner, loading, .. } => {
-                write!(f, "Modal::GithubDiscover(owner={owner:?}, loading={loading})")
+                write!(
+                    f,
+                    "Modal::GithubDiscover(owner={owner:?}, loading={loading})"
+                )
             }
         }
     }
