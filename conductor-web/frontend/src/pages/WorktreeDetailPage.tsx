@@ -8,6 +8,7 @@ import { TimeAgo } from "../components/shared/TimeAgo";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { AgentPromptModal } from "../components/agents/AgentPromptModal";
+import { ModelPicker } from "../components/shared/ModelPicker";
 import { AgentStatusDisplay } from "../components/agents/AgentStatusDisplay";
 import { AgentActivityLog } from "../components/agents/AgentActivityLog";
 import { AgentPlanChecklist } from "../components/agents/AgentPlanChecklist";
@@ -45,7 +46,6 @@ export function WorktreeDetailPage() {
   const [linkingTicket, setLinkingTicket] = useState(false);
   const [selectedTicketId, setSelectedTicketId] = useState("");
   const [editingModel, setEditingModel] = useState(false);
-  const [modelInput, setModelInput] = useState("");
 
   // Agent state
   const [latestRun, setLatestRun] = useState<AgentRun | null>(null);
@@ -241,11 +241,9 @@ export function WorktreeDetailPage() {
     }
   }
 
-  async function handleSaveModel() {
-    const model = modelInput.trim() || null;
+  async function handleModelChange(model: string | null) {
     try {
       await api.setWorktreeModel(worktreeId!, model);
-      setEditingModel(false);
       refetchWorktrees();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to save model");
@@ -342,26 +340,27 @@ export function WorktreeDetailPage() {
             <dt className="font-medium text-gray-500">Model</dt>
             <dd className="mt-1">
               {editingModel ? (
-                <span className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={modelInput}
-                    onChange={(e) => setModelInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") handleSaveModel(); if (e.key === "Escape") setEditingModel(false); }}
-                    placeholder="e.g. claude-sonnet-4-6 (blank to clear)"
-                    className="text-sm border border-gray-300 rounded px-2 py-0.5 w-64 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                    autoFocus
+                <div>
+                  <ModelPicker
+                    value={worktree.model}
+                    onChange={(m) => { handleModelChange(m); setEditingModel(false); }}
+                    effectiveDefault={worktree.model}
+                    effectiveSource="worktree"
                   />
-                  <button onClick={handleSaveModel} className="px-2 py-0.5 text-xs rounded bg-indigo-600 text-white hover:bg-indigo-700">Save</button>
-                  <button onClick={() => setEditingModel(false)} className="px-2 py-0.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50">Cancel</button>
-                </span>
+                  <button
+                    onClick={() => setEditingModel(false)}
+                    className="mt-2 px-2 py-0.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
               ) : (
                 <span className="flex items-center gap-2">
                   <span className={worktree.model ? "text-gray-900" : "text-gray-400"}>
                     {worktree.model ?? "Not set"}
                   </span>
                   <button
-                    onClick={() => { setModelInput(worktree.model ?? ""); setEditingModel(true); }}
+                    onClick={() => setEditingModel(true)}
                     className="px-2 py-0.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
                   >
                     Edit

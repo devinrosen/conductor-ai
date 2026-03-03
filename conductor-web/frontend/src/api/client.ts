@@ -19,6 +19,7 @@ import type {
   CreateIssueSourceRequest,
   DiscoverableRepo,
   GlobalConfig,
+  KnownModel,
 } from "./types";
 
 const BASE = "/api";
@@ -136,6 +137,12 @@ export const api = {
     request<GlobalConfig>("/config/model", {
       method: "PATCH",
       body: JSON.stringify({ model }),
+    }),
+  listKnownModels: () => request<KnownModel[]>("/config/known-models"),
+  suggestModel: (prompt: string) =>
+    request<{ suggested: string }>("/config/suggest-model", {
+      method: "POST",
+      body: JSON.stringify({ prompt }),
     }),
 
   // Work Targets

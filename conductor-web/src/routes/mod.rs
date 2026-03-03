@@ -100,6 +100,14 @@ pub fn api_router() -> Router<AppState> {
             get(work_targets::get_global_model).patch(work_targets::patch_global_model),
         )
         .route(
+            "/api/config/known-models",
+            get(work_targets::list_known_models),
+        )
+        .route(
+            "/api/config/suggest-model",
+            post(work_targets::suggest_model),
+        )
+        .route(
             "/api/config/work-targets",
             get(work_targets::list_work_targets)
                 .post(work_targets::create_work_target)

@@ -151,6 +151,14 @@ export interface GlobalConfig {
   model: string | null;
 }
 
+export interface KnownModel {
+  id: string;
+  alias: string;
+  tier: number;
+  tier_label: string;
+  description: string;
+}
+
 export interface DiscoverableRepo {
   name: string;
   /** "owner/repo" format */

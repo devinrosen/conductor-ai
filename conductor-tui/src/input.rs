@@ -75,6 +75,26 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::ModelPicker { custom_active, .. } => {
+            if *custom_active {
+                // In custom input mode: type characters, backspace, enter to confirm, esc to leave custom mode
+                return match key.code {
+                    KeyCode::Enter => Action::InputSubmit,
+                    KeyCode::Esc => Action::DismissModal,
+                    KeyCode::Backspace => Action::InputBackspace,
+                    KeyCode::Char(c) => Action::InputChar(c),
+                    _ => Action::None,
+                };
+            }
+            return match key.code {
+                KeyCode::Esc => Action::DismissModal,
+                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
+                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
+                KeyCode::Enter => Action::InputSubmit,
+                KeyCode::Backspace => Action::InputBackspace,
+                _ => Action::None,
+            };
+        }
         Modal::WorkTargetPicker { targets, .. } => {
             return match key.code {
                 KeyCode::Esc => Action::DismissModal,

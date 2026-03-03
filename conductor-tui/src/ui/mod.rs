@@ -80,6 +80,26 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             selected,
             ..
         } => modal::render_issue_source_manager(frame, area, repo_slug, sources, *selected),
+        Modal::ModelPicker {
+            context_label,
+            effective_default,
+            effective_source,
+            selected,
+            custom_input,
+            custom_active,
+            suggested,
+            ..
+        } => modal::render_model_picker(
+            frame,
+            area,
+            context_label,
+            effective_default.as_deref(),
+            effective_source,
+            *selected,
+            custom_input,
+            *custom_active,
+            suggested.as_deref(),
+        ),
         Modal::GithubDiscoverOrgs {
             orgs,
             cursor,

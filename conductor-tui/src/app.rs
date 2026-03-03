@@ -192,16 +192,43 @@ impl App {
             Action::ConfirmNo => {
                 self.state.modal = Modal::None;
             }
-            Action::InputChar(c) => {
-                if let Modal::Input { ref mut value, .. } = self.state.modal {
+            Action::InputChar(c) => match self.state.modal {
+                Modal::Input { ref mut value, .. } => {
                     value.push(c);
                 }
-            }
-            Action::InputBackspace => {
-                if let Modal::Input { ref mut value, .. } = self.state.modal {
+                Modal::ModelPicker {
+                    ref mut custom_input,
+                    custom_active: true,
+                    ..
+                } => {
+                    custom_input.push(c);
+                }
+                _ => {}
+            },
+            Action::InputBackspace => match self.state.modal {
+                Modal::Input { ref mut value, .. } => {
                     value.pop();
                 }
-            }
+                Modal::ModelPicker {
+                    ref mut custom_input,
+                    custom_active: true,
+                    ..
+                } => {
+                    custom_input.pop();
+                }
+                Modal::ModelPicker {
+                    custom_active: false,
+                    ref on_submit,
+                    ..
+                } => {
+                    // Backspace in non-custom mode: clear the model (submit empty value)
+                    let on_submit = on_submit.clone();
+                    self.state.modal = Modal::None;
+                    self.handle_input_submit_with_value(String::new(), on_submit);
+                    return true;
+                }
+                _ => {}
+            },
             Action::InputSubmit => self.handle_input_submit(),
             Action::TextAreaInput(key) => {
                 if let Modal::AgentPrompt {
@@ -580,6 +607,20 @@ impl App {
 
     fn move_up(&mut self) {
         match self.state.modal {
+            Modal::ModelPicker {
+                ref mut selected,
+                ref mut custom_active,
+                ..
+            } => {
+                *custom_active = false;
+                let total = conductor_core::models::KNOWN_MODELS.len() + 1; // +1 for custom
+                if *selected > 0 {
+                    *selected -= 1;
+                } else {
+                    *selected = total - 1;
+                }
+                return;
+            }
             Modal::WorkTargetPicker {
                 ref targets,
                 ref mut selected,
@@ -670,6 +711,20 @@ impl App {
 
     fn move_down(&mut self) {
         match self.state.modal {
+            Modal::ModelPicker {
+                ref mut selected,
+                ref mut custom_active,
+                ..
+            } => {
+                *custom_active = false;
+                let total = conductor_core::models::KNOWN_MODELS.len() + 1; // +1 for custom
+                if *selected + 1 < total {
+                    *selected += 1;
+                } else {
+                    *selected = 0;
+                }
+                return;
+            }
             Modal::WorkTargetPicker {
                 ref targets,
                 ref mut selected,
@@ -1004,7 +1059,7 @@ impl App {
     fn handle_input_submit(&mut self) {
         let modal = std::mem::replace(&mut self.state.modal, Modal::None);
 
-        // Extract (value, on_submit) from either Input or AgentPrompt modals
+        // Extract (value, on_submit) from Input, AgentPrompt, or ModelPicker modals
         let (value, on_submit) = match modal {
             Modal::Input {
                 value, on_submit, ..
@@ -1015,6 +1070,39 @@ impl App {
                 ..
             } => {
                 let value = textarea.lines().join("\n");
+                (value, on_submit)
+            }
+            Modal::ModelPicker {
+                context_label,
+                effective_default,
+                effective_source,
+                selected,
+                custom_input,
+                custom_active,
+                suggested,
+                on_submit,
+            } => {
+                let models = conductor_core::models::KNOWN_MODELS;
+                let value = if custom_active {
+                    custom_input
+                } else if selected < models.len() {
+                    // Selected a known model — use its alias
+                    models[selected].alias.to_string()
+                } else {
+                    // "custom…" was highlighted but Enter pressed without typing:
+                    // re-open the picker with custom mode active
+                    self.state.modal = Modal::ModelPicker {
+                        context_label,
+                        effective_default,
+                        effective_source,
+                        selected,
+                        custom_input,
+                        custom_active: true,
+                        suggested,
+                        on_submit,
+                    };
+                    return;
+                };
                 (value, on_submit)
             }
             _ => return,
@@ -1127,15 +1215,55 @@ impl App {
                     .or(repo_model)
                     .or_else(|| self.config.general.model.clone());
 
-                // Show second step: optional model override
-                let prompt_text = match &resolved_default {
-                    Some(m) => format!("Model (default: {m}, leave blank to use it):"),
-                    None => "Model override (leave blank for claude's default):".to_string(),
+                // Suggest a model based on the prompt text
+                let suggested = conductor_core::models::suggest_model(&value);
+
+                // Pre-select the suggested model in the picker
+                let initial_selected = conductor_core::models::KNOWN_MODELS
+                    .iter()
+                    .position(|m| m.alias == suggested)
+                    .unwrap_or(1); // default to sonnet
+
+                let (effective_default, effective_source) = match &resolved_default {
+                    Some(m) => {
+                        // Determine source
+                        let source = if self
+                            .state
+                            .data
+                            .worktrees
+                            .iter()
+                            .find(|w| w.id == worktree_id)
+                            .and_then(|w| w.model.as_ref())
+                            .is_some()
+                        {
+                            "worktree"
+                        } else if self
+                            .state
+                            .data
+                            .worktrees
+                            .iter()
+                            .find(|w| w.id == worktree_id)
+                            .and_then(|w| self.state.data.repos.iter().find(|r| r.id == w.repo_id))
+                            .and_then(|r| r.model.as_ref())
+                            .is_some()
+                        {
+                            "repo"
+                        } else {
+                            "global config"
+                        };
+                        (Some(m.clone()), source.to_string())
+                    }
+                    None => (None, "not set".to_string()),
                 };
-                self.state.modal = Modal::Input {
-                    title: "Model Override".to_string(),
-                    prompt: prompt_text,
-                    value: String::new(),
+
+                self.state.modal = Modal::ModelPicker {
+                    context_label: "agent run".to_string(),
+                    effective_default,
+                    effective_source,
+                    selected: initial_selected,
+                    custom_input: String::new(),
+                    custom_active: false,
+                    suggested: Some(suggested.to_string()),
                     on_submit: InputAction::AgentModelOverride {
                         prompt: value,
                         worktree_id,
@@ -1221,6 +1349,88 @@ impl App {
                 }
                 let _ = repo_id;
             }
+        }
+    }
+
+    /// Helper: submit a value + action directly (used when clearing model via Backspace).
+    fn handle_input_submit_with_value(&mut self, value: String, on_submit: InputAction) {
+        // Reuse the same match arm logic from handle_input_submit
+        match on_submit {
+            InputAction::SetWorktreeModel {
+                worktree_id,
+                repo_slug,
+                slug,
+            } => {
+                let model = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(value.trim().to_string())
+                };
+                let mgr = WorktreeManager::new(&self.conn, &self.config);
+                match mgr.set_model(&repo_slug, &slug, model.as_deref()) {
+                    Ok(()) => {
+                        let msg = match &model {
+                            Some(m) => format!("Model for {slug} set to: {m}"),
+                            None => format!("Model for {slug} cleared"),
+                        };
+                        self.state.status_message = Some(msg);
+                        self.refresh_data();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Failed to set model: {e}"),
+                        };
+                    }
+                }
+                let _ = worktree_id;
+            }
+            InputAction::SetRepoModel { repo_id, slug } => {
+                let model = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(value.trim().to_string())
+                };
+                let mgr = RepoManager::new(&self.conn, &self.config);
+                match mgr.set_model(&slug, model.as_deref()) {
+                    Ok(()) => {
+                        let msg = match &model {
+                            Some(m) => format!("Model for {slug} set to: {m}"),
+                            None => format!("Model for {slug} cleared"),
+                        };
+                        self.state.status_message = Some(msg);
+                        self.refresh_data();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Failed to set model: {e}"),
+                        };
+                    }
+                }
+                let _ = repo_id;
+            }
+            InputAction::AgentModelOverride {
+                prompt,
+                worktree_id,
+                worktree_path,
+                worktree_slug,
+                resume_session_id,
+                resolved_default,
+            } => {
+                let model = if value.trim().is_empty() {
+                    resolved_default
+                } else {
+                    Some(value)
+                };
+                self.start_agent_tmux(
+                    prompt,
+                    worktree_id,
+                    worktree_path,
+                    worktree_slug,
+                    resume_session_id,
+                    model,
+                );
+            }
+            _ => {}
         }
     }
 
@@ -2171,6 +2381,40 @@ impl App {
     // ── Model configuration ────────────────────────────────────────────
 
     fn handle_set_model(&mut self) {
+        // Helper to compute effective default and source for a worktree context
+        let resolve_wt_effective =
+            |wt: &conductor_core::worktree::Worktree,
+             config: &conductor_core::config::Config,
+             repos: &[conductor_core::repo::Repo]| {
+                let repo_model = repos
+                    .iter()
+                    .find(|r| r.id == wt.repo_id)
+                    .and_then(|r| r.model.clone());
+                if let Some(ref m) = wt.model {
+                    (Some(m.clone()), "worktree".to_string())
+                } else if let Some(ref m) = repo_model {
+                    (Some(m.clone()), "repo".to_string())
+                } else if let Some(ref m) = config.general.model {
+                    (Some(m.clone()), "global config".to_string())
+                } else {
+                    (None, "not set".to_string())
+                }
+            };
+
+        // Helper to find the initial selected index matching current model
+        let initial_selected = |current: &Option<String>| -> usize {
+            match current {
+                Some(m) => conductor_core::models::KNOWN_MODELS
+                    .iter()
+                    .position(|km| km.id == m.as_str() || km.alias == m.as_str())
+                    .unwrap_or(conductor_core::models::KNOWN_MODELS.len()),
+                None => {
+                    // Default to sonnet (index 1)
+                    1
+                }
+            }
+        };
+
         match self.state.view {
             View::Dashboard => {
                 use crate::state::DashboardFocus;
@@ -2192,12 +2436,17 @@ impl App {
                             .get(&wt.repo_id)
                             .cloned()
                             .unwrap_or_default();
-                        let current = wt.model.clone().unwrap_or_default();
-                        self.state.modal = Modal::Input {
-                            title: "Set Worktree Model".to_string(),
-                            prompt: "Model (e.g. claude-sonnet-4-6, leave blank to clear):"
-                                .to_string(),
-                            value: current,
+                        let (effective, source) =
+                            resolve_wt_effective(&wt, &self.config, &self.state.data.repos);
+                        let selected = initial_selected(&wt.model);
+                        self.state.modal = Modal::ModelPicker {
+                            context_label: format!("worktree: {}", wt.slug),
+                            effective_default: effective,
+                            effective_source: source,
+                            selected,
+                            custom_input: String::new(),
+                            custom_active: false,
+                            suggested: None,
                             on_submit: InputAction::SetWorktreeModel {
                                 worktree_id: wt.id.clone(),
                                 repo_slug,
@@ -2210,12 +2459,22 @@ impl App {
                         else {
                             return;
                         };
-                        let current = repo.model.clone().unwrap_or_default();
-                        self.state.modal = Modal::Input {
-                            title: "Set Repo Model".to_string(),
-                            prompt: "Model (e.g. claude-sonnet-4-6, leave blank to clear):"
-                                .to_string(),
-                            value: current,
+                        let (effective, source) = if let Some(ref m) = repo.model {
+                            (Some(m.clone()), "repo".to_string())
+                        } else if let Some(ref m) = self.config.general.model {
+                            (Some(m.clone()), "global config".to_string())
+                        } else {
+                            (None, "not set".to_string())
+                        };
+                        let selected = initial_selected(&repo.model);
+                        self.state.modal = Modal::ModelPicker {
+                            context_label: format!("repo: {}", repo.slug),
+                            effective_default: effective,
+                            effective_source: source,
+                            selected,
+                            custom_input: String::new(),
+                            custom_active: false,
+                            suggested: None,
                             on_submit: InputAction::SetRepoModel {
                                 repo_id: repo.id.clone(),
                                 slug: repo.slug.clone(),
@@ -2242,11 +2501,17 @@ impl App {
                     .get(&wt.repo_id)
                     .cloned()
                     .unwrap_or_default();
-                let current = wt.model.clone().unwrap_or_default();
-                self.state.modal = Modal::Input {
-                    title: "Set Worktree Model".to_string(),
-                    prompt: "Model (e.g. claude-sonnet-4-6, leave blank to clear):".to_string(),
-                    value: current,
+                let (effective, source) =
+                    resolve_wt_effective(&wt, &self.config, &self.state.data.repos);
+                let selected = initial_selected(&wt.model);
+                self.state.modal = Modal::ModelPicker {
+                    context_label: format!("worktree: {}", wt.slug),
+                    effective_default: effective,
+                    effective_source: source,
+                    selected,
+                    custom_input: String::new(),
+                    custom_active: false,
+                    suggested: None,
                     on_submit: InputAction::SetWorktreeModel {
                         worktree_id: wt.id.clone(),
                         repo_slug,
@@ -2264,11 +2529,22 @@ impl App {
                 else {
                     return;
                 };
-                let current = repo.model.clone().unwrap_or_default();
-                self.state.modal = Modal::Input {
-                    title: "Set Repo Model".to_string(),
-                    prompt: "Model (e.g. claude-sonnet-4-6, leave blank to clear):".to_string(),
-                    value: current,
+                let (effective, source) = if let Some(ref m) = repo.model {
+                    (Some(m.clone()), "repo".to_string())
+                } else if let Some(ref m) = self.config.general.model {
+                    (Some(m.clone()), "global config".to_string())
+                } else {
+                    (None, "not set".to_string())
+                };
+                let selected = initial_selected(&repo.model);
+                self.state.modal = Modal::ModelPicker {
+                    context_label: format!("repo: {}", repo.slug),
+                    effective_default: effective,
+                    effective_source: source,
+                    selected,
+                    custom_input: String::new(),
+                    custom_active: false,
+                    suggested: None,
                     on_submit: InputAction::SetRepoModel {
                         repo_id: repo.id.clone(),
                         slug: repo.slug.clone(),

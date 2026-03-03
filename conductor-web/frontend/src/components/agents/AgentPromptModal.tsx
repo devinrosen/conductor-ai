@@ -1,4 +1,27 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import type { KnownModel } from "../../api/types";
+import { api } from "../../api/client";
+
+/** Client-side keyword heuristics matching conductor-core's suggest_model(). */
+const HAIKU_KEYWORDS = [
+  "commit", "format", "lint", "rename", "typo", "bump version",
+  "changelog", "formatting", "fix typo", "update version",
+];
+const OPUS_KEYWORDS = [
+  "plan", "architect", "design", "refactor", "analyze", "review",
+  "implement", "rewrite", "migrate", "complex",
+];
+
+function suggestModel(prompt: string): string {
+  const lower = prompt.toLowerCase();
+  for (const kw of HAIKU_KEYWORDS) {
+    if (lower.includes(kw)) return "haiku";
+  }
+  for (const kw of OPUS_KEYWORDS) {
+    if (lower.includes(kw)) return "opus";
+  }
+  return "sonnet";
+}
 
 interface AgentPromptModalProps {
   open: boolean;
@@ -19,6 +42,7 @@ export function AgentPromptModal({
 }: AgentPromptModalProps) {
   const [prompt, setPrompt] = useState(initialPrompt);
   const [useResume, setUseResume] = useState(!!resumeSessionId);
+  const [models, setModels] = useState<KnownModel[]>([]);
 
   useEffect(() => {
     setPrompt(initialPrompt);
@@ -33,6 +57,15 @@ export function AgentPromptModal({
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [open, onCancel]);
+
+  useEffect(() => {
+    if (open && models.length === 0) {
+      api.listKnownModels().then(setModels).catch(() => {});
+    }
+  }, [open, models.length]);
+
+  // Live model suggestion based on prompt text
+  const suggested = useMemo(() => suggestModel(prompt), [prompt]);
 
   if (!open) return null;
 
@@ -65,10 +98,36 @@ export function AgentPromptModal({
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          rows={12}
+          rows={10}
           placeholder="Type your prompt here..."
           className="mt-3 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-y"
         />
+
+        {/* Model suggestion based on prompt */}
+        {models.length > 0 && prompt.trim() && (
+          <div className="mt-2 flex items-center gap-2 text-xs text-gray-500">
+            <span>Suggested model:</span>
+            {models.map((m) => {
+              const isSuggested = m.alias === suggested;
+              return (
+                <span
+                  key={m.id}
+                  className={`inline-flex items-center px-2 py-0.5 rounded font-medium ${
+                    isSuggested
+                      ? "bg-green-100 text-green-700 ring-1 ring-green-300"
+                      : "bg-gray-100 text-gray-500"
+                  }`}
+                >
+                  {m.alias}
+                  {isSuggested && (
+                    <span className="ml-1 text-green-600">&larr;</span>
+                  )}
+                </span>
+              );
+            })}
+            <span className="text-gray-400 italic ml-1">(hint only)</span>
+          </div>
+        )}
 
         <div className="mt-4 flex justify-end gap-2">
           <button

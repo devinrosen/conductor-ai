@@ -527,6 +527,173 @@ pub fn render_agent_prompt(
     frame.render_widget(hint, chunks[2]);
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn render_model_picker(
+    frame: &mut Frame,
+    area: Rect,
+    context_label: &str,
+    effective_default: Option<&str>,
+    effective_source: &str,
+    selected: usize,
+    custom_input: &str,
+    custom_active: bool,
+    suggested: Option<&str>,
+) {
+    use conductor_core::models::KNOWN_MODELS;
+
+    let popup = centered_rect(55, 55, area);
+    frame.render_widget(Clear, popup);
+
+    let dim = Style::default().fg(Color::DarkGray);
+    let cyan_bold = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+
+    let mut lines = vec![Line::from("")];
+
+    // Context label
+    lines.push(Line::from(Span::styled(
+        format!("  {context_label}"),
+        cyan_bold,
+    )));
+    lines.push(Line::from(""));
+
+    // Effective default display
+    let default_display = match effective_default {
+        Some(m) => format!("Using: {m}  (from {effective_source})"),
+        None => format!("Using: claude default  ({effective_source})"),
+    };
+    lines.push(Line::from(Span::styled(
+        format!("  {default_display}"),
+        Style::default().fg(Color::Yellow),
+    )));
+    lines.push(Line::from(Span::styled(
+        "         \u{2191} override with:",
+        dim,
+    )));
+    lines.push(Line::from(""));
+
+    // Known models list
+    for (i, model) in KNOWN_MODELS.iter().enumerate() {
+        let is_selected = !custom_active && i == selected;
+        let is_current = effective_default.is_some_and(|d| d == model.id || d == model.alias);
+
+        let prefix = if is_selected { "\u{25b8} " } else { "  " };
+
+        let current_marker = if is_current { " (current)" } else { "" };
+
+        let suggested_marker = if suggested == Some(model.alias) && !is_current {
+            " [Suggested]"
+        } else {
+            ""
+        };
+
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {prefix}"), style),
+            Span::styled(
+                format!("{} ", model.tier_stars()),
+                Style::default().fg(match model.tier {
+                    conductor_core::models::ModelTier::Powerful => Color::Magenta,
+                    conductor_core::models::ModelTier::Balanced => Color::Cyan,
+                    conductor_core::models::ModelTier::Fast => Color::Green,
+                }),
+            ),
+            Span::styled(format!("{:<7}", model.alias), style),
+            Span::styled(format!(" \u{2014} {}", model.description), dim),
+            Span::styled(current_marker, Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                suggested_marker,
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+
+    // Custom input option
+    let custom_idx = KNOWN_MODELS.len();
+    let custom_selected = !custom_active && selected == custom_idx;
+    let custom_prefix = if custom_selected || custom_active {
+        "\u{25b8} "
+    } else {
+        "  "
+    };
+    let custom_style = if custom_selected || custom_active {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    if custom_active {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {custom_prefix}"), custom_style),
+            Span::styled("custom: ", custom_style),
+            Span::styled(
+                custom_input,
+                Style::default().add_modifier(Modifier::UNDERLINED),
+            ),
+            Span::styled("_", Style::default().fg(Color::Cyan)),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {custom_prefix}"), custom_style),
+            Span::styled("custom\u{2026}", custom_style),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+
+    // Clear option
+    lines.push(Line::from(Span::styled(
+        "  (Backspace to clear model override)",
+        dim,
+    )));
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  j/k",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" navigate  ", dim),
+        Span::styled(
+            "Enter",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" select  ", dim),
+        Span::styled(
+            "Esc",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" cancel", dim),
+    ]));
+
+    let content = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" Model Picker "),
+    );
+
+    frame.render_widget(content, popup);
+}
+
 pub fn render_issue_source_manager(
     frame: &mut Frame,
     area: Rect,

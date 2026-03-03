@@ -116,6 +116,25 @@ pub enum Modal {
         loading: bool,
         error: Option<String>,
     },
+    /// Model picker with curated list and effective default display.
+    ModelPicker {
+        /// Label for the context (e.g. "worktree: my-wt" or "repo: my-repo")
+        context_label: String,
+        /// The currently effective model from the resolution chain, if any.
+        effective_default: Option<String>,
+        /// Where the effective default came from (e.g. "global config", "repo", "worktree")
+        effective_source: String,
+        /// Index of the currently selected item in the list (0..=KNOWN_MODELS.len() for custom)
+        selected: usize,
+        /// Custom model input text (when user selects "custom…")
+        custom_input: String,
+        /// Whether the custom input line is active
+        custom_active: bool,
+        /// Suggested model alias based on prompt keywords (e.g. "haiku", "opus"), if any
+        suggested: Option<String>,
+        /// What to do when a model is selected
+        on_submit: InputAction,
+    },
     /// Second level: browse and import repos for a specific owner.
     GithubDiscover {
         /// Owner whose repos are shown ("" = personal account).
@@ -149,6 +168,11 @@ impl fmt::Debug for Modal {
             Modal::WorkTargetPicker { .. } => write!(f, "Modal::WorkTargetPicker"),
             Modal::WorkTargetManager { .. } => write!(f, "Modal::WorkTargetManager"),
             Modal::IssueSourceManager { .. } => write!(f, "Modal::IssueSourceManager"),
+            Modal::ModelPicker {
+                ref context_label, ..
+            } => {
+                write!(f, "Modal::ModelPicker(ctx={context_label:?})")
+            }
             Modal::GithubDiscoverOrgs { loading, .. } => {
                 write!(f, "Modal::GithubDiscoverOrgs(loading={loading})")
             }
