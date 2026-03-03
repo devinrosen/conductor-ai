@@ -25,7 +25,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),
+            Constraint::Length(7),
             Constraint::Percentage(50),
             Constraint::Percentage(50),
         ])
@@ -50,6 +50,16 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         Line::from(vec![
             Span::styled("Worktrees Dir: ", Style::default().fg(Color::DarkGray)),
             Span::raw(&repo.workspace_dir),
+        ]),
+        Line::from(vec![
+            Span::styled("Model: ", Style::default().fg(Color::DarkGray)),
+            match repo.model.as_deref() {
+                Some(m) => Span::raw(m.to_string()),
+                None => Span::styled(
+                    "(not set — press m to configure)",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            },
         ]),
     ])
     .block(Block::default().borders(Borders::ALL).title(" Info "));

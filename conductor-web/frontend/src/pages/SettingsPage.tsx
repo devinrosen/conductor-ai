@@ -13,6 +13,31 @@ export function SettingsPage() {
     refetch,
   } = useApi(() => api.listWorkTargets(), []);
 
+  const { data: globalConfig, refetch: refetchGlobalConfig } = useApi(
+    () => api.getGlobalModel(),
+    [],
+  );
+  const [editingGlobalModel, setEditingGlobalModel] = useState(false);
+  const [globalModelInput, setGlobalModelInput] = useState("");
+  const [savingGlobalModel, setSavingGlobalModel] = useState(false);
+  const [globalModelError, setGlobalModelError] = useState<string | null>(null);
+
+  async function handleSaveGlobalModel() {
+    setSavingGlobalModel(true);
+    setGlobalModelError(null);
+    try {
+      await api.setGlobalModel(globalModelInput.trim() || null);
+      setEditingGlobalModel(false);
+      refetchGlobalConfig();
+    } catch (err) {
+      setGlobalModelError(
+        err instanceof Error ? err.message : "Failed to save",
+      );
+    } finally {
+      setSavingGlobalModel(false);
+    }
+  }
+
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
@@ -97,6 +122,84 @@ export function SettingsPage() {
   return (
     <div className="space-y-8">
       <h2 className="text-xl font-bold text-gray-900">Settings</h2>
+
+      {/* Global Model Section */}
+      <section>
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-1">
+          Global Model Default
+        </h3>
+        <p className="text-sm text-gray-500 mb-3">
+          Default Claude model for all agent runs. Overridden by per-repo and
+          per-worktree model settings. Leave blank to use Claude's default.
+        </p>
+        {globalModelError && (
+          <div className="mb-3 px-3 py-2 text-sm text-red-700 bg-red-50 rounded-md border border-red-200">
+            {globalModelError}
+          </div>
+        )}
+        <div className="rounded-lg border border-gray-200 bg-white px-4 py-3 flex items-center gap-3">
+          <span className="text-sm text-gray-500 w-20 shrink-0">Model</span>
+          {editingGlobalModel ? (
+            <>
+              <input
+                type="text"
+                value={globalModelInput}
+                onChange={(e) => setGlobalModelInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSaveGlobalModel();
+                  if (e.key === "Escape") setEditingGlobalModel(false);
+                }}
+                placeholder="e.g. claude-sonnet-4-6 or sonnet"
+                className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:ring-indigo-500 focus:border-indigo-500"
+                autoFocus
+              />
+              <button
+                onClick={handleSaveGlobalModel}
+                disabled={savingGlobalModel}
+                className="px-2 py-1 text-xs rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                Save
+              </button>
+              <button
+                onClick={() => setEditingGlobalModel(false)}
+                className="px-2 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="flex-1 text-sm">
+                {globalConfig?.model ? (
+                  <span className="font-mono">{globalConfig.model}</span>
+                ) : (
+                  <span className="text-gray-400 italic">not set</span>
+                )}
+              </span>
+              <button
+                onClick={() => {
+                  setGlobalModelInput(globalConfig?.model ?? "");
+                  setEditingGlobalModel(true);
+                }}
+                className="px-2 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+              >
+                Edit
+              </button>
+              {globalConfig?.model && (
+                <button
+                  onClick={async () => {
+                    await api.setGlobalModel(null);
+                    refetchGlobalConfig();
+                  }}
+                  className="px-2 py-1 text-xs rounded border border-red-300 text-red-600 hover:bg-red-50"
+                >
+                  Clear
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </section>
 
       {/* Work Targets Section */}
       <section>

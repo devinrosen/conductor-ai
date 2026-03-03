@@ -128,5 +128,17 @@ pub fn run(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Migration 010: add model column to repos.
+    let has_repo_model: bool = conn.prepare("SELECT model FROM repos LIMIT 0").is_ok();
+    if !has_repo_model {
+        conn.execute_batch(include_str!("migrations/010_repo_model.sql"))?;
+    }
+    if version < 10 {
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '10')",
+            [],
+        )?;
+    }
+
     Ok(())
 }

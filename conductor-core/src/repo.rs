@@ -14,6 +14,9 @@ pub struct Repo {
     pub default_branch: String,
     pub workspace_dir: String,
     pub created_at: String,
+    /// Per-repo default model for Claude agent runs.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 pub struct RepoManager<'a> {
@@ -64,6 +67,7 @@ impl<'a> RepoManager<'a> {
             default_branch: self.config.defaults.default_branch.clone(),
             workspace_dir: ws_dir,
             created_at: now,
+            model: None,
         };
 
         self.conn.execute(
@@ -85,7 +89,7 @@ impl<'a> RepoManager<'a> {
 
     pub fn list(&self) -> Result<Vec<Repo>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, created_at
+            "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, created_at, model
              FROM repos ORDER BY slug",
         )?;
         let repos = stmt
@@ -98,6 +102,7 @@ impl<'a> RepoManager<'a> {
                     default_branch: row.get(4)?,
                     workspace_dir: row.get(5)?,
                     created_at: row.get(6)?,
+                    model: row.get(7)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -107,7 +112,7 @@ impl<'a> RepoManager<'a> {
     pub fn get_by_id(&self, id: &str) -> Result<Repo> {
         self.conn
             .query_row(
-                "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, created_at
+                "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, created_at, model
                  FROM repos WHERE id = ?1",
                 params![id],
                 |row| {
@@ -119,6 +124,7 @@ impl<'a> RepoManager<'a> {
                         default_branch: row.get(4)?,
                         workspace_dir: row.get(5)?,
                         created_at: row.get(6)?,
+                        model: row.get(7)?,
                     })
                 },
             )
@@ -130,7 +136,7 @@ impl<'a> RepoManager<'a> {
     pub fn get_by_slug(&self, slug: &str) -> Result<Repo> {
         self.conn
             .query_row(
-                "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, created_at
+                "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, created_at, model
                  FROM repos WHERE slug = ?1",
                 params![slug],
                 |row| {
@@ -142,12 +148,28 @@ impl<'a> RepoManager<'a> {
                         default_branch: row.get(4)?,
                         workspace_dir: row.get(5)?,
                         created_at: row.get(6)?,
+                        model: row.get(7)?,
                     })
                 },
             )
             .map_err(|_| ConductorError::RepoNotFound {
                 slug: slug.to_string(),
             })
+    }
+
+    /// Set (or clear) the per-repo default model.
+    /// Pass `None` to clear the override and fall back to global config.
+    pub fn set_model(&self, slug: &str, model: Option<&str>) -> Result<()> {
+        let affected = self.conn.execute(
+            "UPDATE repos SET model = ?1 WHERE slug = ?2",
+            params![model, slug],
+        )?;
+        if affected == 0 {
+            return Err(ConductorError::RepoNotFound {
+                slug: slug.to_string(),
+            });
+        }
+        Ok(())
     }
 
     pub fn remove(&self, slug: &str) -> Result<()> {

@@ -85,6 +85,9 @@ pub enum Action {
     GithubDiscoverSelectAll,
     GithubDiscoverImport,
 
+    // Model configuration
+    SetModel,
+
     // Agent triggers (tmux-based)
     LaunchAgent,
     StopAgent,

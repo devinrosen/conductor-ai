@@ -42,6 +42,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         help_line("w", "Open work target at worktree"),
         help_line("W", "Manage work targets"),
         help_line("S", "Manage issue sources (repo detail)"),
+        help_line("m", "Set model default (repo/worktree detail)"),
         help_line("/", "Filter/search"),
         Line::from(""),
         Line::from(Span::styled(

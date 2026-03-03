@@ -63,6 +63,25 @@ pub async fn delete_repo(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+pub struct SetModelRequest {
+    pub model: Option<String>,
+}
+
+pub async fn patch_repo_model(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SetModelRequest>,
+) -> Result<Json<Repo>, ApiError> {
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+    let mgr = RepoManager::new(&db, &config);
+    let repo = mgr.get_by_id(&id)?;
+    mgr.set_model(&repo.slug, body.model.as_deref())?;
+    let updated = mgr.get_by_id(&id)?;
+    Ok(Json(updated))
+}
+
 /// A repo discovered via GitHub with a flag indicating if it's already registered.
 #[derive(Serialize)]
 pub struct DiscoverableRepo {

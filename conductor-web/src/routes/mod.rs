@@ -6,7 +6,7 @@ pub mod tickets;
 pub mod work_targets;
 pub mod worktrees;
 
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::Router;
 
 use crate::state::AppState;
@@ -21,6 +21,7 @@ pub fn api_router() -> Router<AppState> {
             get(repos::list_repos).post(repos::create_repo),
         )
         .route("/api/repos/{id}", delete(repos::delete_repo))
+        .route("/api/repos/{id}/model", patch(repos::patch_repo_model))
         // GitHub repo discovery
         .route("/api/github/orgs", get(repos::list_github_orgs_handler))
         .route(
@@ -33,6 +34,10 @@ pub fn api_router() -> Router<AppState> {
             get(worktrees::list_worktrees).post(worktrees::create_worktree),
         )
         .route("/api/worktrees/{id}", delete(worktrees::delete_worktree))
+        .route(
+            "/api/worktrees/{id}/model",
+            patch(worktrees::patch_worktree_model),
+        )
         .route("/api/worktrees/{id}/push", post(worktrees::push_worktree))
         .route("/api/worktrees/{id}/pr", post(worktrees::create_pr))
         .route(
@@ -78,6 +83,10 @@ pub fn api_router() -> Router<AppState> {
             delete(issue_sources::delete_issue_source),
         )
         // Work Targets
+        .route(
+            "/api/config/model",
+            get(work_targets::get_global_model).patch(work_targets::patch_global_model),
+        )
         .route(
             "/api/config/work-targets",
             get(work_targets::list_work_targets)

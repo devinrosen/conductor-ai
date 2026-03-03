@@ -17,6 +17,7 @@ import type {
   IssueSource,
   CreateIssueSourceRequest,
   DiscoverableRepo,
+  GlobalConfig,
 } from "./types";
 
 const BASE = "/api";
@@ -41,6 +42,11 @@ export const api = {
     request<Repo>("/repos", { method: "POST", body: JSON.stringify(data) }),
   deleteRepo: (id: string) =>
     request<void>(`/repos/${id}`, { method: "DELETE" }),
+  setRepoModel: (id: string, model: string | null) =>
+    request<Repo>(`/repos/${id}/model`, {
+      method: "PATCH",
+      body: JSON.stringify({ model }),
+    }),
 
   // Worktrees
   listWorktrees: (repoId: string) =>
@@ -63,6 +69,11 @@ export const api = {
     request<Worktree>(`/worktrees/${id}/link-ticket`, {
       method: "POST",
       body: JSON.stringify({ ticket_id: ticketId }),
+    }),
+  setWorktreeModel: (id: string, model: string | null) =>
+    request<Worktree>(`/worktrees/${id}/model`, {
+      method: "PATCH",
+      body: JSON.stringify({ model }),
     }),
 
   // Tickets
@@ -101,6 +112,14 @@ export const api = {
     request<AgentEvent[]>(`/worktrees/${worktreeId}/agent/events`),
   getAgentPrompt: (worktreeId: string) =>
     request<AgentPromptInfo>(`/worktrees/${worktreeId}/agent/prompt`),
+
+  // Global config
+  getGlobalModel: () => request<GlobalConfig>("/config/model"),
+  setGlobalModel: (model: string | null) =>
+    request<GlobalConfig>("/config/model", {
+      method: "PATCH",
+      body: JSON.stringify({ model }),
+    }),
 
   // Work Targets
   listWorkTargets: () => request<WorkTarget[]>("/config/work-targets"),

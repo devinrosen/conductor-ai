@@ -84,6 +84,16 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             Span::styled(&wt.status, Style::default().fg(status_color)),
         ]),
         Line::from(vec![
+            Span::styled("Model: ", Style::default().fg(Color::DarkGray)),
+            match wt.model.as_deref() {
+                Some(m) => Span::raw(m.to_string()),
+                None => Span::styled(
+                    "(not set — press m to configure)",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            },
+        ]),
+        Line::from(vec![
             Span::styled("Created: ", Style::default().fg(Color::DarkGray)),
             Span::raw(&wt.created_at),
         ]),
@@ -114,9 +124,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             .get(&wt.id)
             .is_some_and(|run| run.log_file.is_some());
         if has_log {
-            "Actions: r=agent  x=stop  L=log  j/k=scroll  gg/G=top/bot  ^d/^u=½pg  w=work  p=push  P=PR  l=link  d=del  Esc=back"
+            "Actions: r=agent  x=stop  L=log  m=model  j/k=scroll  gg/G=top/bot  ^d/^u=½pg  w=work  p=push  P=PR  l=link  d=del  Esc=back"
         } else {
-            "Actions: r=agent  x=stop  j/k=scroll  gg/G=top/bot  ^d/^u=½pg  w=work  p=push  P=PR  l=link  d=del  Esc=back"
+            "Actions: r=agent  x=stop  m=model  j/k=scroll  gg/G=top/bot  ^d/^u=½pg  w=work  p=push  P=PR  l=link  d=del  Esc=back"
         }
     } else {
         "Actions: o=open ticket  Esc=back  (archived)"

@@ -1,13 +1,44 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use conductor_core::config::{save_config, WorkTarget};
 
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
 use crate::state::AppState;
+
+#[derive(Serialize)]
+pub struct GlobalModelResponse {
+    pub model: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct SetGlobalModelRequest {
+    pub model: Option<String>,
+}
+
+pub async fn get_global_model(
+    State(state): State<AppState>,
+) -> Result<Json<GlobalModelResponse>, ApiError> {
+    let config = state.config.read().await;
+    Ok(Json(GlobalModelResponse {
+        model: config.general.model.clone(),
+    }))
+}
+
+pub async fn patch_global_model(
+    State(state): State<AppState>,
+    Json(body): Json<SetGlobalModelRequest>,
+) -> Result<Json<GlobalModelResponse>, ApiError> {
+    let mut config = state.config.write().await;
+    config.general.model = body.model.filter(|m| !m.trim().is_empty());
+    save_config(&config)?;
+    Ok(Json(GlobalModelResponse {
+        model: config.general.model.clone(),
+    }))
+}
 
 #[derive(Deserialize)]
 pub struct CreateWorkTargetRequest {

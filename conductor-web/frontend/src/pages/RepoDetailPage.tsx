@@ -87,6 +87,8 @@ export function RepoDetailPage() {
   const [deleteRepoConfirm, setDeleteRepoConfirm] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [createWtOpen, setCreateWtOpen] = useState(false);
+  const [editingModel, setEditingModel] = useState(false);
+  const [modelInput, setModelInput] = useState("");
 
   async function handleSyncTickets() {
     setSyncing(true);
@@ -116,6 +118,17 @@ export function RepoDetailPage() {
     setDeleteRepoConfirm(false);
     refreshRepos();
     window.location.href = "/";
+  }
+
+  async function handleSaveModel() {
+    const model = modelInput.trim() || null;
+    try {
+      await api.setRepoModel(repoId!, model);
+      setEditingModel(false);
+      refreshRepos();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to save model");
+    }
   }
 
   const wtCount = worktrees?.length ?? 0;
@@ -183,6 +196,36 @@ export function RepoDetailPage() {
           <dd className="truncate">{repo.local_path}</dd>
           <dt className="font-medium text-gray-500">Default Branch</dt>
           <dd>{repo.default_branch}</dd>
+          <dt className="font-medium text-gray-500">Model</dt>
+          <dd>
+            {editingModel ? (
+              <span className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={modelInput}
+                  onChange={(e) => setModelInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleSaveModel(); if (e.key === "Escape") setEditingModel(false); }}
+                  placeholder="e.g. claude-sonnet-4-6 (blank to clear)"
+                  className="text-sm border border-gray-300 rounded px-2 py-0.5 w-64 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  autoFocus
+                />
+                <button onClick={handleSaveModel} className="px-2 py-0.5 text-xs rounded bg-indigo-600 text-white hover:bg-indigo-700">Save</button>
+                <button onClick={() => setEditingModel(false)} className="px-2 py-0.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50">Cancel</button>
+              </span>
+            ) : (
+              <span className="flex items-center gap-2">
+                <span className={repo.model ? "" : "text-gray-400"}>
+                  {repo.model ?? "Not set"}
+                </span>
+                <button
+                  onClick={() => { setModelInput(repo.model ?? ""); setEditingModel(true); }}
+                  className="px-2 py-0.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                >
+                  Edit
+                </button>
+              </span>
+            )}
+          </dd>
         </dl>
       </div>
 

@@ -96,6 +96,13 @@ enum RepoCommands {
         /// Repo slug
         slug: String,
     },
+    /// Set (or clear) the per-repo default model for agent runs
+    SetModel {
+        /// Repo slug
+        slug: String,
+        /// Model alias or ID (e.g. "sonnet", "claude-opus-4-6"). Omit to clear.
+        model: Option<String>,
+    },
     /// Manage issue sources for a repository
     Sources {
         #[command(subcommand)]
@@ -316,6 +323,14 @@ fn main() -> Result<()> {
                 mgr.remove(&slug)?;
                 println!("Removed repo: {slug}");
             }
+            RepoCommands::SetModel { slug, model } => {
+                let mgr = RepoManager::new(&conn, &config);
+                mgr.set_model(&slug, model.as_deref())?;
+                match model {
+                    Some(m) => println!("Set model for {slug} to: {m}"),
+                    None => println!("Cleared model override for {slug} (will use global default)"),
+                }
+            }
             RepoCommands::Sources { command } => {
                 let repo_mgr = RepoManager::new(&conn, &config);
                 let source_mgr = IssueSourceManager::new(&conn);
@@ -418,8 +433,15 @@ fn main() -> Result<()> {
                             Ok(t) => {
                                 let prompt = build_agent_prompt(&t);
                                 println!("Starting agent...");
-                                // Resolve model: per-worktree default → global config default
-                                let model = wt.model.as_deref().or(config.general.model.as_deref());
+                                // Resolve model: per-worktree → per-repo → global config
+                                let repo_mgr = RepoManager::new(&conn, &config);
+                                let repo_model =
+                                    repo_mgr.get_by_slug(&repo).ok().and_then(|r| r.model);
+                                let model = wt
+                                    .model
+                                    .as_deref()
+                                    .or(repo_model.as_deref())
+                                    .or(config.general.model.as_deref());
                                 let agent_mgr = AgentManager::new(&conn);
                                 let run =
                                     agent_mgr.create_run(&wt.id, &prompt, Some(&wt.slug), model)?;

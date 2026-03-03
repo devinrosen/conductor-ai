@@ -106,6 +106,26 @@ pub async fn create_pr(
     Ok(Json(serde_json::json!({ "url": url })))
 }
 
+#[derive(Deserialize)]
+pub struct SetModelRequest {
+    pub model: Option<String>,
+}
+
+pub async fn patch_worktree_model(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SetModelRequest>,
+) -> Result<Json<Worktree>, ApiError> {
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+    let mgr = WorktreeManager::new(&db, &config);
+    let wt = mgr.get_by_id(&id)?;
+    let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
+    mgr.set_model(&repo.slug, &wt.slug, body.model.as_deref())?;
+    let updated = mgr.get_by_id(&id)?;
+    Ok(Json(updated))
+}
+
 pub async fn link_ticket(
     State(state): State<AppState>,
     Path(id): Path<String>,

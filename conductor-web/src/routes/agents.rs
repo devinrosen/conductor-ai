@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use conductor_core::agent::{
     parse_agent_log, AgentEvent, AgentManager, AgentRun, AgentRunEvent, TicketAgentTotals,
 };
+use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
 
@@ -100,8 +101,17 @@ pub async fn start_agent(
         }
     }
 
+    // Resolve model: per-worktree → per-repo → global config
+    let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
+    let model = wt
+        .model
+        .as_deref()
+        .or(repo.model.as_deref())
+        .or(config.general.model.as_deref())
+        .map(str::to_string);
+
     // Create DB record
-    let run = agent_mgr.create_run(&worktree_id, &body.prompt, Some(&wt.slug), None)?;
+    let run = agent_mgr.create_run(&worktree_id, &body.prompt, Some(&wt.slug), model.as_deref())?;
 
     // Build conductor agent run command
     let mut args = vec![
@@ -118,6 +128,11 @@ pub async fn start_agent(
     if let Some(ref session_id) = body.resume_session_id {
         args.push("--resume".to_string());
         args.push(session_id.clone());
+    }
+
+    if let Some(ref m) = model {
+        args.push("--model".to_string());
+        args.push(m.clone());
     }
 
     // Resolve conductor binary

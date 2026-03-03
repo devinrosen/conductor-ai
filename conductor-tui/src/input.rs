@@ -214,7 +214,28 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('L') if has_log => return Action::ViewAgentLog,
             KeyCode::Char('j') => return Action::AgentActivityDown,
             KeyCode::Char('k') => return Action::AgentActivityUp,
+            KeyCode::Char('m') => return Action::SetModel,
             _ => {}
+        }
+    }
+
+    // View-specific keybindings (RepoDetail)
+    if state.view == View::RepoDetail {
+        if let KeyCode::Char('m') = key.code {
+            return Action::SetModel;
+        }
+    }
+
+    // View-specific keybindings (Dashboard — Repos or Worktrees panel)
+    if state.view == View::Dashboard {
+        use crate::state::DashboardFocus;
+        if let KeyCode::Char('m') = key.code {
+            if matches!(
+                state.dashboard_focus,
+                DashboardFocus::Repos | DashboardFocus::Worktrees
+            ) {
+                return Action::SetModel;
+            }
         }
     }
 

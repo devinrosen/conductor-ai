@@ -6,6 +6,7 @@ export interface Repo {
   default_branch: string;
   workspace_dir: string;
   created_at: string;
+  model: string | null;
 }
 
 export interface Worktree {
@@ -18,6 +19,7 @@ export interface Worktree {
   status: string;
   created_at: string;
   completed_at: string | null;
+  model: string | null;
 }
 
 export interface Ticket {
@@ -129,6 +131,10 @@ export interface IssueSource {
 export interface CreateIssueSourceRequest {
   source_type: string;
   config_json?: string;
+}
+
+export interface GlobalConfig {
+  model: string | null;
 }
 
 export interface DiscoverableRepo {

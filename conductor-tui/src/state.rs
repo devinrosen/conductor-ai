@@ -225,7 +225,7 @@ pub enum InputAction {
         resume_session_id: Option<String>,
     },
     /// Second step: optionally override the model for this run.
-    /// `resolved_default` is the already-resolved model (worktree → global config).
+    /// `resolved_default` is the already-resolved model (worktree → repo → global config).
     AgentModelOverride {
         prompt: String,
         worktree_id: String,
@@ -233,6 +233,17 @@ pub enum InputAction {
         worktree_slug: String,
         resume_session_id: Option<String>,
         resolved_default: Option<String>,
+    },
+    /// Set (or clear) the default model for a worktree.
+    SetWorktreeModel {
+        worktree_id: String,
+        repo_slug: String,
+        slug: String,
+    },
+    /// Set (or clear) the default model for a repo.
+    SetRepoModel {
+        repo_id: String,
+        slug: String,
     },
 }
 
