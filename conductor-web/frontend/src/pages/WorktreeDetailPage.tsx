@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, Link, useNavigate } from "react-router";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
-import type { AgentRun, AgentEvent, Ticket } from "../api/types";
+import type { AgentRun, AgentEvent, AgentCreatedIssue, Ticket } from "../api/types";
 import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
@@ -52,6 +52,7 @@ export function WorktreeDetailPage() {
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
   const [childRuns, setChildRuns] = useState<AgentRun[]>([]);
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
+  const [createdIssues, setCreatedIssues] = useState<AgentCreatedIssue[]>([]);
   const [promptModalOpen, setPromptModalOpen] = useState(false);
   const [promptInfo, setPromptInfo] = useState({
     prompt: "",
@@ -80,14 +81,16 @@ export function WorktreeDetailPage() {
   const refreshAgent = useCallback(async () => {
     if (!worktreeId) return;
     try {
-      const [latest, runs, events] = await Promise.all([
+      const [latest, runs, events, issues] = await Promise.all([
         api.latestAgentRun(worktreeId),
         api.listAgentRuns(worktreeId),
         api.getAgentEvents(worktreeId),
+        api.getCreatedIssues(worktreeId),
       ]);
       setLatestRun(latest);
       setAgentRuns(runs);
       setAgentEvents(events);
+      setCreatedIssues(issues);
 
       // Fetch child runs for the latest run (if it has no parent — i.e. it's a root run)
       if (latest && !latest.parent_run_id) {
@@ -535,6 +538,34 @@ export function WorktreeDetailPage() {
             Activity Log
           </h3>
           <AgentActivityLog events={agentEvents} runs={agentRuns} isRunning={isRunning} />
+        </section>
+      )}
+
+      {/* Issues Created by Agent */}
+      {createdIssues.length > 0 && (
+        <section>
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+            Issues Created by Agent
+          </h3>
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+            <ul className="divide-y divide-gray-100">
+              {createdIssues.map((issue) => (
+                <li key={issue.id} className="px-4 py-3 flex items-center gap-3">
+                  <span className="text-xs font-mono text-gray-400">
+                    #{issue.source_id}
+                  </span>
+                  <a
+                    href={issue.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-indigo-600 hover:underline flex-1"
+                  >
+                    {issue.title}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
         </section>
       )}
 

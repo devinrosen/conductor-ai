@@ -82,6 +82,27 @@ pub async fn patch_repo_model(
     Ok(Json(updated))
 }
 
+#[derive(Deserialize)]
+pub struct UpdateRepoSettingsRequest {
+    pub allow_agent_issue_creation: Option<bool>,
+}
+
+/// Update per-repo settings (e.g. agent issue creation opt-in).
+pub async fn update_repo_settings(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateRepoSettingsRequest>,
+) -> Result<Json<Repo>, ApiError> {
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+    let mgr = RepoManager::new(&db, &config);
+    if let Some(allow) = body.allow_agent_issue_creation {
+        mgr.set_allow_agent_issue_creation(&id, allow)?;
+    }
+    let repo = mgr.get_by_id(&id)?;
+    Ok(Json(repo))
+}
+
 /// A repo discovered via GitHub with a flag indicating if it's already registered.
 #[derive(Serialize)]
 pub struct DiscoverableRepo {

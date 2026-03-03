@@ -286,6 +286,9 @@ impl App {
             // Model configuration
             Action::SetModel => self.handle_set_model(),
 
+            // Agent issue creation toggle
+            Action::ToggleAgentIssues => self.handle_toggle_agent_issues(),
+
             // Agent (tmux-based)
             Action::LaunchAgent => self.handle_launch_agent(),
             Action::StopAgent => self.handle_stop_agent(),
@@ -459,6 +462,7 @@ impl App {
             self.state.data.agent_run_info = std::collections::HashMap::new();
             self.state.data.agent_totals = AgentTotals::default();
             self.state.data.child_runs = Vec::new();
+            self.state.data.agent_created_issues = Vec::new();
             return;
         };
 
@@ -552,6 +556,11 @@ impl App {
                     .select(Some(len - 1));
             }
         }
+
+        // Load issues created by agents for this worktree
+        self.state.data.agent_created_issues = mgr
+            .list_created_issues_for_worktree(wt_id)
+            .unwrap_or_default();
     }
 
     fn clamp_indices(&mut self) {
@@ -2563,6 +2572,32 @@ impl App {
                 };
             }
             _ => {}
+        }
+    }
+
+    fn handle_toggle_agent_issues(&mut self) {
+        let Some(repo) = self
+            .state
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
+            .cloned()
+        else {
+            self.state.status_message = Some("No repo selected".to_string());
+            return;
+        };
+        let new_value = !repo.allow_agent_issue_creation;
+        let mgr = conductor_core::repo::RepoManager::new(&self.conn, &self.config);
+        match mgr.set_allow_agent_issue_creation(&repo.id, new_value) {
+            Ok(()) => {
+                let label = if new_value { "enabled" } else { "disabled" };
+                self.state.status_message =
+                    Some(format!("Agent issue creation {} for {}", label, repo.slug));
+                self.refresh_data();
+            }
+            Err(e) => {
+                self.state.status_message = Some(format!("Failed to toggle agent issues: {e}"));
+            }
         }
     }
 

@@ -241,8 +241,10 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
     // View-specific keybindings (RepoDetail)
     if state.view == View::RepoDetail {
-        if let KeyCode::Char('m') = key.code {
-            return Action::SetModel;
+        match key.code {
+            KeyCode::Char('m') => return Action::SetModel,
+            KeyCode::Char('I') => return Action::ToggleAgentIssues,
+            _ => {}
         }
     }
 

@@ -260,6 +260,19 @@ fn tool_summary(tool_name: &str, input: Option<&serde_json::Value>) -> String {
     }
 }
 
+/// A GitHub issue (or other tracker issue) created by an agent run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCreatedIssue {
+    pub id: String,
+    pub agent_run_id: String,
+    pub repo_id: String,
+    pub source_type: String,
+    pub source_id: String,
+    pub title: String,
+    pub url: String,
+    pub created_at: String,
+}
+
 /// Aggregated agent stats for a ticket (across all linked worktrees).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TicketAgentTotals {
@@ -597,6 +610,81 @@ impl<'a> AgentManager<'a> {
         Ok(events)
     }
 
+    /// Record a GitHub issue created by an agent run.
+    pub fn record_created_issue(
+        &self,
+        agent_run_id: &str,
+        repo_id: &str,
+        source_type: &str,
+        source_id: &str,
+        title: &str,
+        url: &str,
+    ) -> Result<AgentCreatedIssue> {
+        let id = ulid::Ulid::new().to_string();
+        let now = Utc::now().to_rfc3339();
+
+        let issue = AgentCreatedIssue {
+            id: id.clone(),
+            agent_run_id: agent_run_id.to_string(),
+            repo_id: repo_id.to_string(),
+            source_type: source_type.to_string(),
+            source_id: source_id.to_string(),
+            title: title.to_string(),
+            url: url.to_string(),
+            created_at: now.clone(),
+        };
+
+        self.conn.execute(
+            "INSERT INTO agent_created_issues \
+             (id, agent_run_id, repo_id, source_type, source_id, title, url, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                issue.id,
+                issue.agent_run_id,
+                issue.repo_id,
+                issue.source_type,
+                issue.source_id,
+                issue.title,
+                issue.url,
+                issue.created_at,
+            ],
+        )?;
+
+        Ok(issue)
+    }
+
+    /// List all issues created by a specific agent run.
+    pub fn list_created_issues_for_run(
+        &self,
+        agent_run_id: &str,
+    ) -> Result<Vec<AgentCreatedIssue>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, agent_run_id, repo_id, source_type, source_id, title, url, created_at \
+             FROM agent_created_issues WHERE agent_run_id = ?1 ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![agent_run_id], row_to_agent_created_issue)?;
+        let issues = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(issues)
+    }
+
+    /// List all issues created by all runs for a worktree.
+    pub fn list_created_issues_for_worktree(
+        &self,
+        worktree_id: &str,
+    ) -> Result<Vec<AgentCreatedIssue>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT aci.id, aci.agent_run_id, aci.repo_id, aci.source_type, \
+             aci.source_id, aci.title, aci.url, aci.created_at \
+             FROM agent_created_issues aci \
+             JOIN agent_runs ar ON aci.agent_run_id = ar.id \
+             WHERE ar.worktree_id = ?1 \
+             ORDER BY aci.created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![worktree_id], row_to_agent_created_issue)?;
+        let issues = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(issues)
+    }
+
     /// Returns the latest agent run for each worktree, keyed by worktree_id.
     pub fn latest_runs_by_worktree(&self) -> Result<HashMap<String, AgentRun>> {
         let mut stmt = self.conn.prepare(
@@ -709,6 +797,19 @@ fn row_to_agent_run_event(row: &rusqlite::Row) -> rusqlite::Result<AgentRunEvent
         started_at: row.get(4)?,
         ended_at: row.get(5)?,
         metadata: row.get(6)?,
+    })
+}
+
+fn row_to_agent_created_issue(row: &rusqlite::Row) -> rusqlite::Result<AgentCreatedIssue> {
+    Ok(AgentCreatedIssue {
+        id: row.get(0)?,
+        agent_run_id: row.get(1)?,
+        repo_id: row.get(2)?,
+        source_type: row.get(3)?,
+        source_id: row.get(4)?,
+        title: row.get(5)?,
+        url: row.get(6)?,
+        created_at: row.get(7)?,
     })
 }
 
@@ -1051,6 +1152,76 @@ mod tests {
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0].description, "Do the thing");
         assert!(plan[0].done);
+    }
+
+    #[test]
+    fn test_record_and_list_created_issues() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run1 = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run2 = mgr.create_run("w2", "Other task", None, None).unwrap();
+
+        // No issues yet
+        assert!(mgr
+            .list_created_issues_for_run(&run1.id)
+            .unwrap()
+            .is_empty());
+        assert!(mgr
+            .list_created_issues_for_worktree("w1")
+            .unwrap()
+            .is_empty());
+
+        // Record two issues on run1
+        let issue1 = mgr
+            .record_created_issue(
+                &run1.id,
+                "r1",
+                "github",
+                "101",
+                "Found a memory leak",
+                "https://github.com/test/repo/issues/101",
+            )
+            .unwrap();
+        let issue2 = mgr
+            .record_created_issue(
+                &run1.id,
+                "r1",
+                "github",
+                "102",
+                "Needs follow-up refactor",
+                "https://github.com/test/repo/issues/102",
+            )
+            .unwrap();
+
+        // Record one issue on run2
+        mgr.record_created_issue(
+            &run2.id,
+            "r1",
+            "github",
+            "103",
+            "Another issue",
+            "https://github.com/test/repo/issues/103",
+        )
+        .unwrap();
+
+        // list_for_run returns only run1's issues
+        let run1_issues = mgr.list_created_issues_for_run(&run1.id).unwrap();
+        assert_eq!(run1_issues.len(), 2);
+        assert_eq!(run1_issues[0].source_id, "101");
+        assert_eq!(run1_issues[1].source_id, "102");
+        assert_eq!(run1_issues[0].title, "Found a memory leak");
+
+        // list_for_worktree returns issues from all runs on w1 (only run1 here)
+        let w1_issues = mgr.list_created_issues_for_worktree("w1").unwrap();
+        assert_eq!(w1_issues.len(), 2);
+        assert_eq!(w1_issues[0].id, issue1.id);
+        assert_eq!(w1_issues[1].id, issue2.id);
+
+        // w2 has its own issue
+        let w2_issues = mgr.list_created_issues_for_worktree("w2").unwrap();
+        assert_eq!(w2_issues.len(), 1);
+        assert_eq!(w2_issues[0].source_id, "103");
     }
 
     #[test]

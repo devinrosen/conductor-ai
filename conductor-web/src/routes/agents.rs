@@ -7,8 +7,8 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use conductor_core::agent::{
-    parse_agent_log, AgentEvent, AgentManager, AgentRun, AgentRunEvent, RunTreeTotals,
-    TicketAgentTotals,
+    parse_agent_log, AgentCreatedIssue, AgentEvent, AgentManager, AgentRun, AgentRunEvent,
+    RunTreeTotals, TicketAgentTotals,
 };
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
@@ -459,6 +459,17 @@ pub async fn get_run_tree_totals(
     let mgr = AgentManager::new(&db);
     let totals = mgr.aggregate_run_tree(&run_id)?;
     Ok(Json(totals))
+}
+
+/// List issues created by all agent runs for a worktree.
+pub async fn list_created_issues(
+    State(state): State<AppState>,
+    Path(worktree_id): Path<String>,
+) -> Result<Json<Vec<AgentCreatedIssue>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+    let issues = mgr.list_created_issues_for_worktree(&worktree_id)?;
+    Ok(Json(issues))
 }
 
 fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {

@@ -17,6 +17,8 @@ pub struct Repo {
     /// Per-repo default model for Claude agent runs.
     #[serde(default)]
     pub model: Option<String>,
+    /// Whether agents are allowed to create issues in the issue tracker for this repo.
+    pub allow_agent_issue_creation: bool,
 }
 
 pub struct RepoManager<'a> {
@@ -68,6 +70,7 @@ impl<'a> RepoManager<'a> {
             workspace_dir: ws_dir,
             created_at: now,
             model: None,
+            allow_agent_issue_creation: false,
         };
 
         self.conn.execute(
@@ -89,7 +92,9 @@ impl<'a> RepoManager<'a> {
 
     pub fn list(&self) -> Result<Vec<Repo>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, created_at, model
+            "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, created_at, \
+             COALESCE(model, NULL) as model, \
+             COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation \
              FROM repos ORDER BY slug",
         )?;
         let repos = stmt
@@ -103,6 +108,7 @@ impl<'a> RepoManager<'a> {
                     workspace_dir: row.get(5)?,
                     created_at: row.get(6)?,
                     model: row.get(7)?,
+                    allow_agent_issue_creation: row.get::<_, i64>(8).map(|v| v != 0)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -112,7 +118,10 @@ impl<'a> RepoManager<'a> {
     pub fn get_by_id(&self, id: &str) -> Result<Repo> {
         self.conn
             .query_row(
-                "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, created_at, model
+                "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, \
+                 created_at, \
+                 COALESCE(model, NULL) as model, \
+                 COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation \
                  FROM repos WHERE id = ?1",
                 params![id],
                 |row| {
@@ -125,6 +134,7 @@ impl<'a> RepoManager<'a> {
                         workspace_dir: row.get(5)?,
                         created_at: row.get(6)?,
                         model: row.get(7)?,
+                        allow_agent_issue_creation: row.get::<_, i64>(8).map(|v| v != 0)?,
                     })
                 },
             )
@@ -136,7 +146,10 @@ impl<'a> RepoManager<'a> {
     pub fn get_by_slug(&self, slug: &str) -> Result<Repo> {
         self.conn
             .query_row(
-                "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, created_at, model
+                "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, \
+                 created_at, \
+                 COALESCE(model, NULL) as model, \
+                 COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation \
                  FROM repos WHERE slug = ?1",
                 params![slug],
                 |row| {
@@ -149,6 +162,7 @@ impl<'a> RepoManager<'a> {
                         workspace_dir: row.get(5)?,
                         created_at: row.get(6)?,
                         model: row.get(7)?,
+                        allow_agent_issue_creation: row.get::<_, i64>(8).map(|v| v != 0)?,
                     })
                 },
             )
@@ -167,6 +181,20 @@ impl<'a> RepoManager<'a> {
         if affected == 0 {
             return Err(ConductorError::RepoNotFound {
                 slug: slug.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Set whether agents can create issues for this repo.
+    pub fn set_allow_agent_issue_creation(&self, repo_id: &str, allow: bool) -> Result<()> {
+        let affected = self.conn.execute(
+            "UPDATE repos SET allow_agent_issue_creation = ?1 WHERE id = ?2",
+            params![allow as i64, repo_id],
+        )?;
+        if affected == 0 {
+            return Err(ConductorError::RepoNotFound {
+                slug: repo_id.to_string(),
             });
         }
         Ok(())

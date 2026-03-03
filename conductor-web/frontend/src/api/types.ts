@@ -7,6 +7,7 @@ export interface Repo {
   workspace_dir: string;
   created_at: string;
   model: string | null;
+  allow_agent_issue_creation: boolean;
 }
 
 export interface Worktree {
@@ -109,6 +110,17 @@ export interface AgentEvent {
 export interface AgentPromptInfo {
   prompt: string;
   resume_session_id: string | null;
+}
+
+export interface AgentCreatedIssue {
+  id: string;
+  agent_run_id: string;
+  repo_id: string;
+  source_type: string;
+  source_id: string;
+  title: string;
+  url: string;
+  created_at: string;
 }
 
 export interface WorkTarget {

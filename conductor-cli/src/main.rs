@@ -14,6 +14,9 @@ use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager}
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
 
+/// Environment variable name used to pass the current agent run ID to subprocesses.
+const CONDUCTOR_RUN_ID_ENV: &str = "CONDUCTOR_RUN_ID";
+
 #[derive(Parser)]
 #[command(name = "conductor", about = "Multi-repo orchestration tool")]
 struct Cli {
@@ -65,6 +68,18 @@ enum AgentCommands {
         #[arg(long)]
         model: Option<String>,
     },
+    /// Create a new GitHub issue (called by agents during a run)
+    CreateIssue {
+        /// Issue title
+        #[arg(long)]
+        title: String,
+        /// Issue body
+        #[arg(long)]
+        body: String,
+        /// Agent run ID (defaults to $CONDUCTOR_RUN_ID env var)
+        #[arg(long)]
+        run_id: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -107,6 +122,14 @@ enum RepoCommands {
     Sources {
         #[command(subcommand)]
         command: SourceCommands,
+    },
+    /// Allow or disallow agents to create issues for a repository
+    AllowAgentIssues {
+        /// Repo slug
+        slug: String,
+        /// Set to true to allow, false to disallow
+        #[arg(long, default_value = "true")]
+        allow: bool,
     },
 }
 
@@ -331,6 +354,16 @@ fn main() -> Result<()> {
                     None => println!("Cleared model override for {slug} (will use global default)"),
                 }
             }
+            RepoCommands::AllowAgentIssues { slug, allow } => {
+                let mgr = RepoManager::new(&conn, &config);
+                let repo = mgr.get_by_slug(&slug)?;
+                mgr.set_allow_agent_issue_creation(&repo.id, allow)?;
+                if allow {
+                    println!("Enabled agent issue creation for {slug}");
+                } else {
+                    println!("Disabled agent issue creation for {slug}");
+                }
+            }
             RepoCommands::Sources { command } => {
                 let repo_mgr = RepoManager::new(&conn, &config);
                 let source_mgr = IssueSourceManager::new(&conn);
@@ -516,6 +549,73 @@ fn main() -> Result<()> {
                     resume.as_deref(),
                     model.as_deref(),
                 )?;
+            }
+            AgentCommands::CreateIssue {
+                title,
+                body,
+                run_id,
+            } => {
+                let run_id = run_id
+                    .or_else(|| std::env::var(CONDUCTOR_RUN_ID_ENV).ok())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No run ID provided. Use --run-id or set ${CONDUCTOR_RUN_ID_ENV}."
+                        )
+                    })?;
+
+                let agent_mgr = AgentManager::new(&conn);
+
+                // Look up run → worktree → repo
+                let run = agent_mgr
+                    .get_run(&run_id)?
+                    .ok_or_else(|| anyhow::anyhow!("Agent run not found: {run_id}"))?;
+
+                let (repo_id, remote_url): (String, String) = conn
+                    .query_row(
+                        "SELECT r.id, r.remote_url \
+                         FROM worktrees w \
+                         JOIN repos r ON w.repo_id = r.id \
+                         WHERE w.id = ?1",
+                        rusqlite::params![run.worktree_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(|_| {
+                        anyhow::anyhow!("Could not find repo for worktree {}", run.worktree_id)
+                    })?;
+
+                // Check per-repo opt-in
+                let allow: bool = conn
+                    .query_row(
+                        "SELECT allow_agent_issue_creation FROM repos WHERE id = ?1",
+                        rusqlite::params![repo_id],
+                        |row| row.get::<_, i64>(0).map(|v| v != 0),
+                    )
+                    .unwrap_or(false);
+
+                if !allow {
+                    anyhow::bail!(
+                        "Agent issue creation is disabled for this repo. \
+                         Enable it via `conductor repo allow-agent-issues <repo-slug>`."
+                    );
+                }
+
+                // Determine GitHub owner/repo from remote URL
+                let (owner, repo_name) =
+                    github::parse_github_remote(&remote_url).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Cannot determine GitHub repo from remote URL: {remote_url}"
+                        )
+                    })?;
+
+                // Create the GitHub issue
+                let (source_id, url) =
+                    github::create_github_issue(&owner, &repo_name, &title, &body)?;
+
+                // Record in DB
+                agent_mgr
+                    .record_created_issue(&run_id, &repo_id, "github", &source_id, &title, &url)?;
+
+                println!("Created issue #{source_id}: {url}");
             }
         },
         Commands::Tickets { command } => match command {
@@ -787,6 +887,7 @@ fn run_agent(
         .arg("stream-json")
         .arg("--verbose")
         .arg("--dangerously-skip-permissions")
+        .env(CONDUCTOR_RUN_ID_ENV, run_id)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .current_dir(worktree_path);
