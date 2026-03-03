@@ -804,6 +804,14 @@ fn run_agent(
         run_id, worktree_path
     );
 
+    // Emit the user's prompt as the first event so it appears in the activity log
+    {
+        let now = chrono::Utc::now().to_rfc3339();
+        if let Err(e) = mgr.create_event(run_id, "prompt", prompt, &now, None) {
+            eprintln!("[conductor] Warning: could not persist prompt event: {e}");
+        }
+    }
+
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => {

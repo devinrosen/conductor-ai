@@ -534,7 +534,7 @@ export function WorktreeDetailPage() {
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
             Activity Log
           </h3>
-          <AgentActivityLog events={agentEvents} isRunning={isRunning} />
+          <AgentActivityLog events={agentEvents} runs={agentRuns} isRunning={isRunning} />
         </section>
       )}
 

@@ -217,26 +217,54 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
         .map(|wt| wt.path.as_str())
         .unwrap_or("");
 
-    let items: Vec<ListItem> = events
-        .iter()
-        .map(|ev| {
-            let style = event_style(&ev.kind);
-            let mut spans = vec![Span::styled(
-                shorten_paths(&ev.summary, worktree_path),
-                style,
-            )];
-            if let Some(dur) = ev.duration_ms() {
-                if dur >= 100 {
-                    let dur_s = dur as f64 / 1000.0;
-                    spans.push(Span::styled(
-                        format!("  ({dur_s:.1}s)"),
-                        Style::default().fg(Color::DarkGray),
-                    ));
+    let run_info = &state.data.agent_run_info;
+    let has_multiple_runs = run_info.len() > 1;
+
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut prev_run_id: Option<&str> = None;
+
+    for ev in events {
+        // Insert a run boundary separator when run_id changes
+        if has_multiple_runs {
+            let is_new_run = prev_run_id.is_some_and(|prev| prev != ev.run_id);
+            let is_first = prev_run_id.is_none();
+            if is_first || is_new_run {
+                if let Some((run_num, model, started_at)) = run_info.get(&ev.run_id) {
+                    let ts = started_at
+                        .get(..16)
+                        .unwrap_or(started_at)
+                        .replacen('T', " ", 1);
+                    let model_str = model.as_deref().unwrap_or("default");
+                    let header = format!("── Run {run_num}  {ts}  {model_str} ");
+                    let pad = "─".repeat(60usize.saturating_sub(header.len()));
+                    items.push(ListItem::new(Line::from(Span::styled(
+                        format!("{header}{pad}"),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::DIM),
+                    ))));
                 }
             }
-            ListItem::new(Line::from(spans))
-        })
-        .collect();
+        }
+        prev_run_id = Some(&ev.run_id);
+
+        let style = event_style(&ev.kind);
+        let prefix = if ev.kind == "prompt" { "YOU: " } else { "" };
+        let mut spans = vec![Span::styled(
+            format!("{prefix}{}", shorten_paths(&ev.summary, worktree_path)),
+            style,
+        )];
+        if let Some(dur) = ev.duration_ms() {
+            if dur >= 100 {
+                let dur_s = dur as f64 / 1000.0;
+                spans.push(Span::styled(
+                    format!("  ({dur_s:.1}s)"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+        }
+        items.push(ListItem::new(Line::from(spans)));
+    }
 
     let list = List::new(items)
         .block(activity_block)
@@ -265,6 +293,7 @@ fn event_style(kind: &str) -> Style {
         "result" => Style::default().fg(Color::Green),
         "system" => Style::default().fg(Color::DarkGray),
         "error" => Style::default().fg(Color::Red),
+        "prompt" => Style::default().fg(Color::Cyan),
         _ => Style::default(),
     }
 }

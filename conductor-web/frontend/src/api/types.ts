@@ -83,6 +83,7 @@ export interface AgentRun {
   ended_at: string | null;
   tmux_window: string | null;
   log_file: string | null;
+  model: string | null;
   plan: PlanStep[] | null;
   parent_run_id: string | null;
 }
@@ -97,7 +98,7 @@ export interface RunTreeTotals {
 export interface AgentEvent {
   id: string;
   run_id: string;
-  kind: "text" | "tool" | "result" | "system" | "error";
+  kind: "text" | "tool" | "result" | "system" | "error" | "prompt";
   summary: string;
   started_at: string;
   ended_at: string | null;

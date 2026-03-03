@@ -1125,6 +1125,41 @@ mod tests {
     }
 
     #[test]
+    fn test_prompt_event_appears_first() {
+        // Simulates what run_agent does: emit a "prompt" event before spawning claude,
+        // then subsequent agent events follow. Verifies the prompt is first in the list.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let prompt_text = "Fix the login bug";
+        let run = mgr.create_run("w1", prompt_text, None, None).unwrap();
+
+        let t0 = "2024-01-01T00:00:00Z";
+        let t1 = "2024-01-01T00:00:01Z";
+        let t2 = "2024-01-01T00:00:05Z";
+
+        // This mirrors what run_agent now does before spawning claude
+        mgr.create_event(&run.id, "prompt", prompt_text, t0, None)
+            .unwrap();
+        mgr.create_event(&run.id, "system", "Session started", t1, None)
+            .unwrap();
+        mgr.create_event(&run.id, "tool", "[Bash] cargo test", t2, None)
+            .unwrap();
+
+        let events = mgr.list_events_for_run(&run.id).unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].kind, "prompt");
+        assert_eq!(events[0].summary, prompt_text);
+        assert_eq!(events[1].kind, "system");
+        assert_eq!(events[2].kind, "tool");
+
+        // Also verify via list_events_for_worktree
+        let wt_events = mgr.list_events_for_worktree("w1").unwrap();
+        assert_eq!(wt_events[0].kind, "prompt");
+        assert_eq!(wt_events[0].run_id, run.id);
+    }
+
+    #[test]
     fn test_events_cascade_delete_on_run_removal() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
