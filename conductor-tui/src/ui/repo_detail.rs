@@ -25,7 +25,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(7),
+            Constraint::Length(8),
             Constraint::Percentage(50),
             Constraint::Percentage(50),
         ])
@@ -60,6 +60,15 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                     Style::default().fg(Color::DarkGray),
                 ),
             },
+        ]),
+        Line::from(vec![
+            Span::styled("Agent Issues: ", Style::default().fg(Color::DarkGray)),
+            if repo.allow_agent_issue_creation {
+                Span::styled("Enabled", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("Disabled", Style::default().fg(Color::DarkGray))
+            },
+            Span::styled(" (press I to toggle)", Style::default().fg(Color::DarkGray)),
         ]),
     ])
     .block(Block::default().borders(Borders::ALL).title(" Info "));

@@ -160,6 +160,50 @@ pub fn sync_github_issues(owner: &str, repo: &str) -> Result<Vec<TicketInput>> {
     Ok(tickets)
 }
 
+/// Create a new GitHub issue via the `gh` CLI.
+/// Returns `(source_id, url)` where `source_id` is the issue number as a string.
+pub fn create_github_issue(
+    owner: &str,
+    repo: &str,
+    title: &str,
+    body: &str,
+) -> Result<(String, String)> {
+    let output = Command::new("gh")
+        .args([
+            "issue",
+            "create",
+            "--repo",
+            &format!("{owner}/{repo}"),
+            "--title",
+            title,
+            "--body",
+            body,
+        ])
+        .output()
+        .map_err(|e| ConductorError::TicketSync(format!("failed to run gh: {e}")))?;
+
+    if !output.status.success() {
+        return Err(ConductorError::TicketSync(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+
+    // `gh issue create` prints the issue URL on stdout, e.g.
+    // https://github.com/owner/repo/issues/42
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    // Extract the issue number from the URL's last path segment.
+    let number = url.rsplit('/').next().unwrap_or("").to_string();
+
+    if number.is_empty() {
+        return Err(ConductorError::TicketSync(format!(
+            "unexpected output from gh issue create: {url}"
+        )));
+    }
+
+    Ok((number, url))
+}
+
 /// Parse a GitHub remote URL to extract owner and repo name.
 /// Handles both SSH (git@github.com:owner/repo.git) and HTTPS (https://github.com/owner/repo.git).
 pub fn parse_github_remote(remote_url: &str) -> Option<(String, String)> {

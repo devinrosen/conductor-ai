@@ -11,6 +11,7 @@ import type {
   AgentEvent,
   AgentPromptInfo,
   RunTreeTotals,
+  AgentCreatedIssue,
   WorkTarget,
   CreateWorkTargetRequest,
   PushResult,
@@ -130,6 +131,13 @@ export const api = {
     request<RunTreeTotals>(
       `/worktrees/${worktreeId}/agent/runs/${runId}/tree-totals`,
     ),
+  getCreatedIssues: (worktreeId: string) =>
+    request<AgentCreatedIssue[]>(`/worktrees/${worktreeId}/agent/created-issues`),
+  updateRepoSettings: (repoId: string, settings: { allow_agent_issue_creation?: boolean }) =>
+    request<Repo>(`/repos/${repoId}/settings`, {
+      method: "PATCH",
+      body: JSON.stringify(settings),
+    }),
 
   // Global config
   getGlobalModel: () => request<GlobalConfig>("/config/model"),

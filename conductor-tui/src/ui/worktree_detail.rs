@@ -152,6 +152,23 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         }
     }
 
+    // Issues created by agents
+    if !state.data.agent_created_issues.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![Span::styled(
+            "Issues created:",
+            Style::default().fg(Color::DarkGray),
+        )]));
+        for issue in &state.data.agent_created_issues {
+            lines.push(Line::from(vec![
+                Span::styled("  #", Style::default().fg(Color::DarkGray)),
+                Span::styled(&issue.source_id, Style::default().fg(Color::Cyan)),
+                Span::raw(" — "),
+                Span::raw(&issue.title),
+            ]));
+        }
+    }
+
     lines.push(Line::from(""));
 
     let actions_text = if wt.is_active() {

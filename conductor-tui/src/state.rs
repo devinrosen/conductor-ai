@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 
-use conductor_core::agent::{AgentRun, AgentRunEvent, TicketAgentTotals};
+use conductor_core::agent::{AgentCreatedIssue, AgentRun, AgentRunEvent, TicketAgentTotals};
 use conductor_core::config::WorkTarget;
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::issue_source::IssueSource;
@@ -296,6 +296,8 @@ pub struct DataCache {
     pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
     /// ticket_id -> linked worktrees (most recently created first)
     pub ticket_worktrees: HashMap<String, Vec<Worktree>>,
+    /// Issues created by agents for the currently viewed worktree
+    pub agent_created_issues: Vec<AgentCreatedIssue>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.

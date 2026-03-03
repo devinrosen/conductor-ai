@@ -84,6 +84,7 @@ export function RepoDetailPage() {
   const navigate = useNavigate();
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [togglingAgentIssues, setTogglingAgentIssues] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleteRepoConfirm, setDeleteRepoConfirm] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
@@ -126,6 +127,21 @@ export function RepoDetailPage() {
       refreshRepos();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to save model");
+    }
+  }
+
+  async function handleToggleAgentIssues() {
+    if (!repo) return;
+    setTogglingAgentIssues(true);
+    try {
+      await api.updateRepoSettings(repoId!, {
+        allow_agent_issue_creation: !repo.allow_agent_issue_creation,
+      });
+      refreshRepos();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to update setting");
+    } finally {
+      setTogglingAgentIssues(false);
     }
   }
 
@@ -224,6 +240,20 @@ export function RepoDetailPage() {
                 </button>
               </span>
             )}
+          </dd>
+          <dt className="font-medium text-gray-500">Agent Issue Creation</dt>
+          <dd>
+            <button
+              onClick={handleToggleAgentIssues}
+              disabled={togglingAgentIssues}
+              className={`px-2 py-0.5 text-xs rounded border ${
+                repo.allow_agent_issue_creation
+                  ? "border-green-300 text-green-700 bg-green-50 hover:bg-green-100"
+                  : "border-gray-300 text-gray-600 hover:bg-gray-50"
+              } disabled:opacity-50`}
+            >
+              {repo.allow_agent_issue_creation ? "Enabled" : "Disabled"}
+            </button>
           </dd>
         </dl>
       </div>

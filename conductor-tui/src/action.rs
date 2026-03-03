@@ -88,6 +88,9 @@ pub enum Action {
     // Model configuration
     SetModel,
 
+    // Agent issue creation toggle (repo-level)
+    ToggleAgentIssues,
+
     // Agent triggers (tmux-based)
     LaunchAgent,
     StopAgent,

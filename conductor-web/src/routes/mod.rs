@@ -22,6 +22,10 @@ pub fn api_router() -> Router<AppState> {
         )
         .route("/api/repos/{id}", delete(repos::delete_repo))
         .route("/api/repos/{id}/model", patch(repos::patch_repo_model))
+        .route(
+            "/api/repos/{id}/settings",
+            patch(repos::update_repo_settings),
+        )
         // GitHub repo discovery
         .route("/api/github/orgs", get(repos::list_github_orgs_handler))
         .route(
@@ -85,6 +89,10 @@ pub fn api_router() -> Router<AppState> {
             get(agents::get_run_tree_totals),
         )
         .route("/api/worktrees/{id}/agent/prompt", get(agents::get_prompt))
+        .route(
+            "/api/worktrees/{id}/agent/created-issues",
+            get(agents::list_created_issues),
+        )
         // Issue Sources
         .route(
             "/api/repos/{id}/sources",

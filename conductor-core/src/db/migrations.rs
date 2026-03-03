@@ -166,5 +166,33 @@ pub fn run(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Migration 013: add agent_created_issues table.
+    let has_agent_created_issues: bool = conn
+        .prepare("SELECT id FROM agent_created_issues LIMIT 0")
+        .is_ok();
+    if !has_agent_created_issues {
+        conn.execute_batch(include_str!("migrations/007_agent_created_issues.sql"))?;
+    }
+    if version < 13 {
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '13')",
+            [],
+        )?;
+    }
+
+    // Migration 014: add allow_agent_issue_creation to repos.
+    let has_allow_agent_issue_creation: bool = conn
+        .prepare("SELECT allow_agent_issue_creation FROM repos LIMIT 0")
+        .is_ok();
+    if !has_allow_agent_issue_creation {
+        conn.execute_batch(include_str!("migrations/008_repo_allow_agent_issues.sql"))?;
+    }
+    if version < 14 {
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '14')",
+            [],
+        )?;
+    }
+
     Ok(())
 }
