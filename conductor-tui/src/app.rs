@@ -13,7 +13,7 @@ use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager}
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
 
-use crate::action::Action;
+use crate::action::{Action, GithubDiscoverPayload};
 use crate::background;
 use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
@@ -240,6 +240,16 @@ impl App {
             Action::ManageIssueSources => self.handle_manage_issue_sources(),
             Action::IssueSourceAdd => self.handle_issue_source_add(),
             Action::IssueSourceDelete => self.handle_issue_source_delete(),
+            Action::DiscoverGithubOrgs => self.handle_discover_github_orgs(),
+            Action::GithubOrgsLoaded { orgs } => self.handle_github_orgs_loaded(orgs),
+            Action::GithubOrgsFailed { error } => self.handle_github_orgs_failed(error),
+            Action::GithubDrillIntoOwner { owner } => self.handle_github_drill_into_owner(owner),
+            Action::GithubBackToOrgs => self.handle_github_back_to_orgs(),
+            Action::GithubDiscoverLoaded(payload) => self.handle_github_discover_loaded(*payload),
+            Action::GithubDiscoverFailed { error } => self.handle_github_discover_failed(error),
+            Action::GithubDiscoverToggle => self.handle_github_discover_toggle(),
+            Action::GithubDiscoverSelectAll => self.handle_github_discover_select_all(),
+            Action::GithubDiscoverImport => self.handle_github_discover_import(),
             Action::WorkTargetMoveUp => self.handle_work_target_move_up(),
             Action::WorkTargetMoveDown => self.handle_work_target_move_down(),
             Action::WorkTargetAdd => self.handle_work_target_add(),
@@ -258,24 +268,72 @@ impl App {
             Action::AgentActivityUp => {
                 self.state.agent_event_index = self.state.agent_event_index.saturating_sub(1);
             }
-            // Scroll navigation (all views)
-            Action::GoToTop => {
-                self.state.set_focused_index(0);
-            }
-            Action::GoToBottom => {
-                let (_, len) = self.state.focused_index_and_len();
-                self.state.set_focused_index(len.saturating_sub(1));
-            }
+            // Scroll navigation (all views + discover modals)
+            Action::GoToTop => match self.state.modal {
+                Modal::GithubDiscoverOrgs { ref mut cursor, .. }
+                | Modal::GithubDiscover { ref mut cursor, .. } => {
+                    *cursor = 0;
+                }
+                _ => {
+                    self.state.set_focused_index(0);
+                }
+            },
+            Action::GoToBottom => match self.state.modal {
+                Modal::GithubDiscoverOrgs {
+                    ref orgs,
+                    ref mut cursor,
+                    ..
+                } => {
+                    *cursor = orgs.len().saturating_sub(1);
+                }
+                Modal::GithubDiscover {
+                    ref repos,
+                    ref mut cursor,
+                    ..
+                } => {
+                    *cursor = repos.len().saturating_sub(1);
+                }
+                _ => {
+                    let (_, len) = self.state.focused_index_and_len();
+                    self.state.set_focused_index(len.saturating_sub(1));
+                }
+            },
             Action::HalfPageDown => {
-                let (idx, len) = self.state.focused_index_and_len();
                 let half = self.half_page_size();
-                self.state
-                    .set_focused_index((idx + half).min(len.saturating_sub(1)));
+                match self.state.modal {
+                    Modal::GithubDiscoverOrgs {
+                        ref orgs,
+                        ref mut cursor,
+                        ..
+                    } => {
+                        *cursor = (*cursor + half).min(orgs.len().saturating_sub(1));
+                    }
+                    Modal::GithubDiscover {
+                        ref repos,
+                        ref mut cursor,
+                        ..
+                    } => {
+                        *cursor = (*cursor + half).min(repos.len().saturating_sub(1));
+                    }
+                    _ => {
+                        let (idx, len) = self.state.focused_index_and_len();
+                        self.state
+                            .set_focused_index((idx + half).min(len.saturating_sub(1)));
+                    }
+                }
             }
             Action::HalfPageUp => {
-                let (idx, _) = self.state.focused_index_and_len();
                 let half = self.half_page_size();
-                self.state.set_focused_index(idx.saturating_sub(half));
+                match self.state.modal {
+                    Modal::GithubDiscoverOrgs { ref mut cursor, .. }
+                    | Modal::GithubDiscover { ref mut cursor, .. } => {
+                        *cursor = cursor.saturating_sub(half);
+                    }
+                    _ => {
+                        let (idx, _) = self.state.focused_index_and_len();
+                        self.state.set_focused_index(idx.saturating_sub(half));
+                    }
+                }
             }
 
             // PendingG is handled above before the match
@@ -511,6 +569,30 @@ impl App {
                 }
                 return;
             }
+            Modal::GithubDiscoverOrgs {
+                ref orgs,
+                ref mut cursor,
+                ..
+            } => {
+                if *cursor > 0 {
+                    *cursor -= 1;
+                } else {
+                    *cursor = orgs.len().saturating_sub(1);
+                }
+                return;
+            }
+            Modal::GithubDiscover {
+                ref repos,
+                ref mut cursor,
+                ..
+            } => {
+                if *cursor > 0 {
+                    *cursor -= 1;
+                } else {
+                    *cursor = repos.len().saturating_sub(1);
+                }
+                return;
+            }
             _ => {}
         }
         match self.state.view {
@@ -574,6 +656,30 @@ impl App {
                     *selected += 1;
                 } else {
                     *selected = 0;
+                }
+                return;
+            }
+            Modal::GithubDiscoverOrgs {
+                ref orgs,
+                ref mut cursor,
+                ..
+            } => {
+                if *cursor + 1 < orgs.len() {
+                    *cursor += 1;
+                } else {
+                    *cursor = 0;
+                }
+                return;
+            }
+            Modal::GithubDiscover {
+                ref repos,
+                ref mut cursor,
+                ..
+            } => {
+                if *cursor + 1 < repos.len() {
+                    *cursor += 1;
+                } else {
+                    *cursor = 0;
                 }
                 return;
             }
@@ -2214,6 +2320,246 @@ impl App {
             Err(e) => {
                 self.state.status_message = Some(format!("Failed to open log: {e}"));
             }
+        }
+    }
+
+    // ── GitHub repo discovery ────────────────────────────────────────────────
+
+    fn handle_discover_github_orgs(&mut self) {
+        self.state.modal = Modal::GithubDiscoverOrgs {
+            orgs: Vec::new(),
+            cursor: 0,
+            loading: true,
+            error: None,
+        };
+
+        if let Some(ref tx) = self.bg_tx {
+            let tx = tx.clone();
+            background::spawn_blocking(tx, move || {
+                match github::list_github_orgs() {
+                    Ok(orgs) => Action::GithubOrgsLoaded { orgs },
+                    Err(e) => Action::GithubOrgsFailed {
+                        error: e.to_string(),
+                    },
+                }
+            });
+        }
+    }
+
+    fn handle_github_orgs_loaded(&mut self, orgs: Vec<String>) {
+        if !matches!(self.state.modal, Modal::GithubDiscoverOrgs { loading: true, .. }) {
+            return;
+        }
+        // Prepend empty string sentinel for "Personal" (displayed as "Personal")
+        let mut display_orgs = vec![String::new()];
+        display_orgs.extend(orgs);
+        self.state.github_orgs_cache = display_orgs.clone();
+        self.state.modal = Modal::GithubDiscoverOrgs {
+            orgs: display_orgs,
+            cursor: 0,
+            loading: false,
+            error: None,
+        };
+    }
+
+    fn handle_github_orgs_failed(&mut self, error: String) {
+        if matches!(self.state.modal, Modal::GithubDiscoverOrgs { .. }) {
+            self.state.modal = Modal::GithubDiscoverOrgs {
+                orgs: Vec::new(),
+                cursor: 0,
+                loading: false,
+                error: Some(error),
+            };
+        }
+    }
+
+    fn handle_github_drill_into_owner(&mut self, owner: String) {
+        let registered_urls: Vec<String> = self
+            .state
+            .data
+            .repos
+            .iter()
+            .map(|r| r.remote_url.clone())
+            .collect();
+
+        let owner_opt = if owner.is_empty() {
+            None
+        } else {
+            Some(owner.clone())
+        };
+
+        self.state.modal = Modal::GithubDiscover {
+            owner: owner.clone(),
+            repos: Vec::new(),
+            registered_urls: Vec::new(),
+            selected: Vec::new(),
+            cursor: 0,
+            loading: true,
+            error: None,
+        };
+
+        if let Some(ref tx) = self.bg_tx {
+            let tx = tx.clone();
+            background::spawn_blocking(tx, move || {
+                match github::discover_github_repos(owner_opt.as_deref()) {
+                    Ok(repos) => Action::GithubDiscoverLoaded(Box::new(GithubDiscoverPayload {
+                        owner: owner_opt.unwrap_or_default(),
+                        repos,
+                        registered_urls,
+                    })),
+                    Err(e) => Action::GithubDiscoverFailed {
+                        error: e.to_string(),
+                    },
+                }
+            });
+        }
+    }
+
+    fn handle_github_back_to_orgs(&mut self) {
+        let orgs = self.state.github_orgs_cache.clone();
+        self.state.modal = Modal::GithubDiscoverOrgs {
+            orgs,
+            cursor: 0,
+            loading: false,
+            error: None,
+        };
+    }
+
+    fn handle_github_discover_loaded(&mut self, payload: GithubDiscoverPayload) {
+        // Only update if the modal is still open in loading state
+        if let Modal::GithubDiscover { loading, .. } = self.state.modal {
+            if !loading {
+                return;
+            }
+        } else {
+            return;
+        }
+
+        let count = payload.repos.len();
+        self.state.modal = Modal::GithubDiscover {
+            owner: payload.owner,
+            selected: vec![false; count],
+            repos: payload.repos,
+            registered_urls: payload.registered_urls,
+            cursor: 0,
+            loading: false,
+            error: None,
+        };
+    }
+
+    fn handle_github_discover_failed(&mut self, error: String) {
+        let owner = if let Modal::GithubDiscover { ref owner, .. } = self.state.modal {
+            owner.clone()
+        } else {
+            return;
+        };
+        self.state.modal = Modal::GithubDiscover {
+            owner,
+            repos: Vec::new(),
+            registered_urls: Vec::new(),
+            selected: Vec::new(),
+            cursor: 0,
+            loading: false,
+            error: Some(error),
+        };
+    }
+
+    fn handle_github_discover_toggle(&mut self) {
+        if let Modal::GithubDiscover {
+            ref repos,
+            ref registered_urls,
+            ref mut selected,
+            cursor,
+            ..
+        } = self.state.modal
+        {
+            if let Some(sel) = selected.get_mut(cursor) {
+                let repo = &repos[cursor];
+                let is_registered = registered_urls.contains(&repo.clone_url)
+                    || registered_urls.contains(&repo.ssh_url);
+                if !is_registered {
+                    *sel = !*sel;
+                }
+            }
+        }
+    }
+
+    fn handle_github_discover_select_all(&mut self) {
+        if let Modal::GithubDiscover {
+            ref repos,
+            ref registered_urls,
+            ref mut selected,
+            ..
+        } = self.state.modal
+        {
+            let any_unselected = repos.iter().zip(selected.iter()).any(|(r, &s)| {
+                !s && !registered_urls.contains(&r.clone_url)
+                    && !registered_urls.contains(&r.ssh_url)
+            });
+            for (repo, sel) in repos.iter().zip(selected.iter_mut()) {
+                let is_registered = registered_urls.contains(&repo.clone_url)
+                    || registered_urls.contains(&repo.ssh_url);
+                if !is_registered {
+                    *sel = any_unselected;
+                }
+            }
+        }
+    }
+
+    fn handle_github_discover_import(&mut self) {
+        let to_import: Vec<String> =
+            if let Modal::GithubDiscover {
+                ref repos,
+                ref registered_urls,
+                ref selected,
+                ..
+            } = self.state.modal
+            {
+                repos
+                    .iter()
+                    .zip(selected.iter())
+                    .filter_map(|(repo, &sel)| {
+                        if sel
+                            && !registered_urls.contains(&repo.clone_url)
+                            && !registered_urls.contains(&repo.ssh_url)
+                        {
+                            Some(repo.clone_url.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                return;
+            };
+
+        if to_import.is_empty() {
+            return;
+        }
+
+        let mgr = RepoManager::new(&self.conn, &self.config);
+        let mut imported = 0usize;
+        let mut errors = Vec::new();
+
+        for url in &to_import {
+            let slug = derive_slug_from_url(url);
+            let local_path = derive_local_path(&self.config, &slug);
+            match mgr.add(&slug, &local_path, url, None) {
+                Ok(_) => imported += 1,
+                Err(e) => errors.push(format!("{slug}: {e}")),
+            }
+        }
+
+        self.refresh_data();
+        self.handle_github_back_to_orgs();
+
+        if errors.is_empty() {
+            self.state.status_message = Some(format!("Imported {imported} repo(s) from GitHub"));
+        } else {
+            self.state.status_message = Some(format!(
+                "Imported {imported} repo(s), {} error(s)",
+                errors.len()
+            ));
         }
     }
 }

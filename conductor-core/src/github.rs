@@ -1,7 +1,99 @@
 use std::process::Command;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::{ConductorError, Result};
 use crate::tickets::TicketInput;
+
+/// A GitHub repository discovered via the `gh` CLI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredRepo {
+    pub name: String,
+    /// Full "owner/repo" name
+    pub full_name: String,
+    pub description: String,
+    /// HTTPS clone URL
+    pub clone_url: String,
+    /// SSH clone URL
+    pub ssh_url: String,
+    pub default_branch: String,
+    pub private: bool,
+}
+
+/// List GitHub organizations the authenticated user belongs to via the `gh` CLI.
+/// Returns org login names (e.g. `["myorg", "another-org"]`).
+pub fn list_github_orgs() -> Result<Vec<String>> {
+    let output = Command::new("gh")
+        .args(["api", "user/orgs", "--jq", ".[].login"])
+        .output()
+        .map_err(|e| ConductorError::TicketSync(format!("failed to run gh: {e}")))?;
+
+    if !output.status.success() {
+        return Err(ConductorError::TicketSync(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+
+    let orgs = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect();
+
+    Ok(orgs)
+}
+
+/// Discover GitHub repos for a given owner via the `gh` CLI.
+/// Pass `None` for the authenticated user's personal repos, or `Some("orgname")` for an org.
+/// Returns up to 200 repos.
+pub fn discover_github_repos(owner: Option<&str>) -> Result<Vec<DiscoveredRepo>> {
+    let mut args = vec!["repo", "list"];
+    if let Some(o) = owner {
+        args.push(o);
+    }
+    args.extend([
+        "--limit",
+        "200",
+        "--json",
+        "name,nameWithOwner,description,url,sshUrl,defaultBranchRef,isPrivate",
+    ]);
+
+    let output = Command::new("gh")
+        .args(&args)
+        .output()
+        .map_err(|e| ConductorError::TicketSync(format!("failed to run gh: {e}")))?;
+
+    if !output.status.success() {
+        return Err(ConductorError::TicketSync(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&json_str)
+        .map_err(|e| ConductorError::TicketSync(format!("failed to parse gh output: {e}")))?;
+
+    let repos = items
+        .into_iter()
+        .map(|item| {
+            let default_branch = item["defaultBranchRef"]["name"]
+                .as_str()
+                .unwrap_or("main")
+                .to_string();
+            DiscoveredRepo {
+                name: item["name"].as_str().unwrap_or("").to_string(),
+                full_name: item["nameWithOwner"].as_str().unwrap_or("").to_string(),
+                description: item["description"].as_str().unwrap_or("").to_string(),
+                clone_url: item["url"].as_str().unwrap_or("").to_string(),
+                ssh_url: item["sshUrl"].as_str().unwrap_or("").to_string(),
+                default_branch,
+                private: item["isPrivate"].as_bool().unwrap_or(false),
+            }
+        })
+        .collect();
+
+    Ok(repos)
+}
 
 /// Sync open GitHub issues for a repo using the `gh` CLI.
 /// Returns a list of normalized TicketInputs ready for upsert.
@@ -124,5 +216,42 @@ mod tests {
     #[test]
     fn test_parse_non_github() {
         assert!(parse_github_remote("https://gitlab.com/user/repo.git").is_none());
+    }
+
+    #[test]
+    fn test_parse_discovered_repo_json() {
+        // Simulate the JSON output from `gh repo list --json ...`
+        let json = r#"[
+            {
+                "name": "my-repo",
+                "nameWithOwner": "alice/my-repo",
+                "description": "A test repo",
+                "url": "https://github.com/alice/my-repo",
+                "sshUrl": "git@github.com:alice/my-repo.git",
+                "defaultBranchRef": {"name": "main"},
+                "isPrivate": false
+            }
+        ]"#;
+        let items: Vec<serde_json::Value> = serde_json::from_str(json).unwrap();
+        let item = &items[0];
+        let default_branch = item["defaultBranchRef"]["name"].as_str().unwrap_or("main");
+        assert_eq!(item["name"].as_str().unwrap(), "my-repo");
+        assert_eq!(item["nameWithOwner"].as_str().unwrap(), "alice/my-repo");
+        assert_eq!(default_branch, "main");
+        assert!(!item["isPrivate"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_parse_discovered_repo_null_branch() {
+        // Empty repos may have a null defaultBranchRef
+        let json = r#"[{"name": "empty", "nameWithOwner": "alice/empty",
+                         "description": null, "url": "https://github.com/alice/empty",
+                         "sshUrl": "git@github.com:alice/empty.git",
+                         "defaultBranchRef": null, "isPrivate": true}]"#;
+        let items: Vec<serde_json::Value> = serde_json::from_str(json).unwrap();
+        let item = &items[0];
+        let default_branch = item["defaultBranchRef"]["name"].as_str().unwrap_or("main");
+        assert_eq!(default_branch, "main");
+        assert!(item["isPrivate"].as_bool().unwrap());
     }
 }

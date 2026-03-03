@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import type { Worktree, AgentRun } from "../api/types";
 import { RepoCard } from "../components/repos/RepoCard";
 import { CreateRepoForm } from "../components/repos/CreateRepoForm";
+import { GitHubDiscoverModal } from "../components/repos/GitHubDiscoverModal";
 import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
@@ -30,6 +31,7 @@ export function DashboardPage() {
   const [latestRuns, setLatestRuns] = useState<Record<string, AgentRun>>({});
   const [wtTick, setWtTick] = useState(0);
   const [createRepoOpen, setCreateRepoOpen] = useState(false);
+  const [discoverOpen, setDiscoverOpen] = useState(false);
 
   const refreshWorktrees = useCallback(() => setWtTick((n) => n + 1), []);
 
@@ -85,6 +87,7 @@ export function DashboardPage() {
   }, [activeWorktrees, selectedIndex, navigate]);
 
   const openCreateRepo = useCallback(() => setCreateRepoOpen(true), []);
+  const openDiscover = useCallback(() => setDiscoverOpen(true), []);
 
   const handleEscape = useCallback(() => {
     if (selectedIndex >= 0) reset();
@@ -95,6 +98,7 @@ export function DashboardPage() {
     { key: "k", handler: moveUp, description: "Previous worktree" },
     { key: "Enter", handler: openSelected, description: "Open selected", enabled: selectedIndex >= 0 },
     { key: "c", handler: openCreateRepo, description: "Add repo" },
+    { key: "d", handler: openDiscover, description: "Discover GitHub repos" },
     { key: "Escape", handler: handleEscape, description: "Deselect", enabled: selectedIndex >= 0 },
   ]);
 
@@ -104,8 +108,21 @@ export function DashboardPage() {
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold text-gray-900">Dashboard</h2>
-        <CreateRepoForm onCreated={refreshRepos} open={createRepoOpen} onOpenChange={setCreateRepoOpen} />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setDiscoverOpen(true)}
+            className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
+          >
+            Discover from GitHub
+          </button>
+          <CreateRepoForm onCreated={refreshRepos} open={createRepoOpen} onOpenChange={setCreateRepoOpen} />
+        </div>
       </div>
+      <GitHubDiscoverModal
+        open={discoverOpen}
+        onClose={() => setDiscoverOpen(false)}
+        onImported={refreshRepos}
+      />
 
       {/* Repos */}
       <section>

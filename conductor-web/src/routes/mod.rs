@@ -21,6 +21,12 @@ pub fn api_router() -> Router<AppState> {
             get(repos::list_repos).post(repos::create_repo),
         )
         .route("/api/repos/{id}", delete(repos::delete_repo))
+        // GitHub repo discovery
+        .route("/api/github/orgs", get(repos::list_github_orgs_handler))
+        .route(
+            "/api/github/repos",
+            get(repos::discover_github_repos_handler),
+        )
         // Worktrees
         .route(
             "/api/repos/{id}/worktrees",

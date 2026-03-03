@@ -3,6 +3,7 @@ use std::fmt;
 
 use conductor_core::agent::{AgentEvent, AgentRun, TicketAgentTotals};
 use conductor_core::config::WorkTarget;
+use conductor_core::github::DiscoveredRepo;
 use conductor_core::issue_source::IssueSource;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::Ticket;
@@ -105,6 +106,27 @@ pub enum Modal {
         sources: Vec<IssueSource>,
         selected: usize,
     },
+    /// First level: pick a GitHub org (or personal account) to browse repos from.
+    GithubDiscoverOrgs {
+        /// Org login names; "Personal" (displayed) maps to empty owner string internally.
+        orgs: Vec<String>,
+        cursor: usize,
+        loading: bool,
+        error: Option<String>,
+    },
+    /// Second level: browse and import repos for a specific owner.
+    GithubDiscover {
+        /// Owner whose repos are shown ("" = personal account).
+        owner: String,
+        repos: Vec<DiscoveredRepo>,
+        /// HTTPS/SSH URLs of already-registered repos, for duplicate detection
+        registered_urls: Vec<String>,
+        /// Per-repo selection state (parallel to `repos`)
+        selected: Vec<bool>,
+        cursor: usize,
+        loading: bool,
+        error: Option<String>,
+    },
 }
 
 impl fmt::Debug for Modal {
@@ -125,6 +147,12 @@ impl fmt::Debug for Modal {
             Modal::WorkTargetPicker { .. } => write!(f, "Modal::WorkTargetPicker"),
             Modal::WorkTargetManager { .. } => write!(f, "Modal::WorkTargetManager"),
             Modal::IssueSourceManager { .. } => write!(f, "Modal::IssueSourceManager"),
+            Modal::GithubDiscoverOrgs { loading, .. } => {
+                write!(f, "Modal::GithubDiscoverOrgs(loading={loading})")
+            }
+            Modal::GithubDiscover { owner, loading, .. } => {
+                write!(f, "Modal::GithubDiscover(owner={owner:?}, loading={loading})")
+            }
         }
     }
 }
@@ -290,6 +318,9 @@ pub struct AppState {
     // Status bar message
     pub status_message: Option<String>,
 
+    /// Cached org list so navigating back from repo modal doesn't re-fetch.
+    pub github_orgs_cache: Vec<String>,
+
     pub should_quit: bool,
 }
 
@@ -315,6 +346,7 @@ impl AppState {
             filter_active: false,
             filter_text: String::new(),
             status_message: None,
+            github_orgs_cache: Vec::new(),
             should_quit: false,
         }
     }

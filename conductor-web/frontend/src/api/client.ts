@@ -16,6 +16,7 @@ import type {
   CreatePrResult,
   IssueSource,
   CreateIssueSourceRequest,
+  DiscoverableRepo,
 } from "./types";
 
 const BASE = "/api";
@@ -130,4 +131,11 @@ export const api = {
     request<void>(`/repos/${repoId}/sources/${sourceId}`, {
       method: "DELETE",
     }),
+
+  // GitHub repo discovery
+  listGithubOrgs: () => request<string[]>("/github/orgs"),
+  discoverGithubRepos: (owner?: string) =>
+    request<DiscoverableRepo[]>(
+      owner ? `/github/repos?owner=${encodeURIComponent(owner)}` : "/github/repos",
+    ),
 };

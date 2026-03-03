@@ -7,6 +7,7 @@ use tui_textarea::TextArea;
 
 use conductor_core::agent::TicketAgentTotals;
 use conductor_core::config::WorkTarget;
+use conductor_core::github::DiscoveredRepo;
 use conductor_core::issue_source::IssueSource;
 use conductor_core::tickets::Ticket;
 use conductor_core::worktree::Worktree;
@@ -613,6 +614,292 @@ pub fn render_issue_source_manager(
                 .title(" Issue Source Manager "),
         )
         .wrap(Wrap { trim: false });
+
+    frame.render_widget(content, popup);
+}
+
+pub fn render_github_discover_orgs(
+    frame: &mut Frame,
+    area: Rect,
+    orgs: &[String],
+    cursor: usize,
+    loading: bool,
+    error: Option<&str>,
+) {
+    let popup = centered_rect(50, 60, area);
+    frame.render_widget(Clear, popup);
+
+    let dim = Style::default().fg(Color::DarkGray);
+
+    let mut lines = vec![Line::from("")];
+
+    if loading {
+        lines.push(Line::from(Span::styled(
+            "  Fetching organizations...",
+            Style::default().fg(Color::Yellow),
+        )));
+    } else if let Some(err) = error {
+        lines.push(Line::from(Span::styled(
+            format!("  Error: {err}"),
+            Style::default().fg(Color::Red),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("  Esc to close", dim)));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  Select an account or organization:",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+
+        for (i, owner) in orgs.iter().enumerate() {
+            let is_cursor = i == cursor;
+            let label = if owner.is_empty() {
+                "Personal (your repos)"
+            } else {
+                owner.as_str()
+            };
+            let prefix = if is_cursor { "▸ " } else { "  " };
+            let style = if is_cursor {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {prefix}"), style),
+                Span::styled(label, style),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "  j/k",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" navigate  ", dim),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" browse repos  ", dim),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" cancel", dim),
+        ]));
+    }
+
+    // Lines 0..3 = blank + header + blank; each org is 1 line after that.
+    let cursor_abs_line = (3 + cursor) as u16;
+    let inner_h = popup.height.saturating_sub(2);
+    let scroll_offset = cursor_abs_line.saturating_sub(inner_h / 2);
+
+    let content = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(" Discover GitHub Repos "),
+        )
+        .scroll((scroll_offset, 0));
+
+    frame.render_widget(content, popup);
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn render_github_discover(
+    frame: &mut Frame,
+    area: Rect,
+    repos: &[DiscoveredRepo],
+    registered_urls: &[String],
+    selected: &[bool],
+    cursor: usize,
+    loading: bool,
+    error: Option<&str>,
+) {
+    let popup = centered_rect(65, 75, area);
+    frame.render_widget(Clear, popup);
+
+    let dim = Style::default().fg(Color::DarkGray);
+    let cyan = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+
+    let mut lines = vec![Line::from("")];
+    let mut cursor_abs_line: usize = 0;
+
+    if loading {
+        lines.push(Line::from(Span::styled(
+            "  Fetching repos from GitHub...",
+            Style::default().fg(Color::Yellow),
+        )));
+    } else if let Some(err) = error {
+        lines.push(Line::from(Span::styled(
+            format!("  Error: {err}"),
+            Style::default().fg(Color::Red),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("  Esc to close", dim)));
+    } else if repos.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No repos found (check `gh` auth).",
+            dim,
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("  Esc to close", dim)));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("  Repos from GitHub", cyan),
+            Span::styled(
+                format!("  ({} total)", repos.len()),
+                dim,
+            ),
+        ]));
+        lines.push(Line::from(""));
+
+        // Lines 0..3 are: blank + header + blank.  Count lines up to cursor so
+        // we can compute the scroll offset needed to keep it in view.
+        const HEADER_LINES: usize = 3; // blank + "Repos from GitHub" + blank
+        cursor_abs_line = HEADER_LINES;
+        for (i, repo) in repos.iter().enumerate() {
+            if i == cursor {
+                break;
+            }
+            cursor_abs_line += 1; // name line
+            if !repo.description.is_empty() {
+                cursor_abs_line += 1;
+            }
+        }
+
+        for (i, repo) in repos.iter().enumerate() {
+            let is_cursor = i == cursor;
+            let is_checked = selected.get(i).copied().unwrap_or(false);
+            let is_registered = registered_urls
+                .iter()
+                .any(|u| u == &repo.clone_url || u == &repo.ssh_url);
+
+            let checkbox = if is_registered {
+                "[✓]"
+            } else if is_checked {
+                "[x]"
+            } else {
+                "[ ]"
+            };
+
+            let checkbox_style = if is_registered {
+                Style::default().fg(Color::DarkGray)
+            } else if is_checked {
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let name_style = if is_cursor {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else if is_registered {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let prefix = if is_cursor { "▸ " } else { "  " };
+
+            let mut spans = vec![
+                Span::styled(format!("  {prefix}"), name_style),
+                Span::styled(checkbox, checkbox_style),
+                Span::raw(" "),
+                Span::styled(&repo.full_name, name_style),
+            ];
+
+            if repo.private {
+                spans.push(Span::styled(" [private]", dim));
+            }
+            if is_registered {
+                spans.push(Span::styled(" [registered]", dim));
+            }
+
+            lines.push(Line::from(spans));
+
+            if !repo.description.is_empty() {
+                let desc = if repo.description.len() > 60 {
+                    format!("{}...", &repo.description[..57])
+                } else {
+                    repo.description.clone()
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("       {desc}"),
+                    dim,
+                )));
+            }
+        }
+
+        let selected_count = selected.iter().filter(|&&s| s).count();
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "  j/k",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" navigate  ", dim),
+            Span::styled(
+                "Space",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" toggle  ", dim),
+            Span::styled(
+                "a",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" select all  ", dim),
+            Span::styled(
+                "i",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" import ({selected_count})  "),
+                dim,
+            ),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" cancel", dim),
+        ]));
+    }
+
+    // Scroll so the cursor row stays roughly centred in the visible area.
+    let inner_h = popup.height.saturating_sub(2) as usize; // exclude borders
+    let scroll_offset = cursor_abs_line.saturating_sub(inner_h / 2) as u16;
+
+    let content = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(" Discover GitHub Repos "),
+        )
+        .scroll((scroll_offset, 0));
 
     frame.render_widget(content, popup);
 }

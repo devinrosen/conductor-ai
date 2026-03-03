@@ -1,10 +1,21 @@
 use std::collections::HashMap;
 
 use conductor_core::agent::{AgentRun, TicketAgentTotals};
+use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::Ticket;
 use conductor_core::worktree::Worktree;
 use crossterm::event::KeyEvent;
+
+/// Payload for the DataRefreshed action (boxed to keep Action enum small).
+#[derive(Debug)]
+pub struct GithubDiscoverPayload {
+    /// Owner whose repos were fetched ("" = personal account).
+    pub owner: String,
+    pub repos: Vec<DiscoveredRepo>,
+    /// HTTPS/SSH URLs of repos already registered in Conductor
+    pub registered_urls: Vec<String>,
+}
 
 /// Payload for the DataRefreshed action (boxed to keep Action enum small).
 #[derive(Debug)]
@@ -49,6 +60,30 @@ pub enum Action {
     ManageIssueSources,
     IssueSourceAdd,
     IssueSourceDelete,
+
+    // GitHub repo discovery — org level
+    DiscoverGithubOrgs,
+    GithubOrgsLoaded {
+        orgs: Vec<String>,
+    },
+    GithubOrgsFailed {
+        error: String,
+    },
+    /// Drill into an owner's repos. Empty string = personal account.
+    GithubDrillIntoOwner {
+        owner: String,
+    },
+    /// Go back from the repo list to the org list.
+    GithubBackToOrgs,
+
+    // GitHub repo discovery — repo level
+    GithubDiscoverLoaded(Box<GithubDiscoverPayload>),
+    GithubDiscoverFailed {
+        error: String,
+    },
+    GithubDiscoverToggle,
+    GithubDiscoverSelectAll,
+    GithubDiscoverImport,
 
     // Agent triggers (tmux-based)
     LaunchAgent,

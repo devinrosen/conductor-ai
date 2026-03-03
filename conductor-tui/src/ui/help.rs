@@ -34,6 +34,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         help_line("a", "Add repository"),
         help_line("c", "Create worktree"),
         help_line("d", "Delete (worktree/repo)"),
+        help_line("D", "Discover repos from GitHub"),
         help_line("p", "Push current worktree"),
         help_line("P", "Create pull request"),
         help_line("s", "Sync tickets"),

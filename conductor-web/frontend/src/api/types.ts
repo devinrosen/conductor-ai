@@ -124,3 +124,16 @@ export interface CreateIssueSourceRequest {
   source_type: string;
   config_json?: string;
 }
+
+export interface DiscoverableRepo {
+  name: string;
+  /** "owner/repo" format */
+  full_name: string;
+  description: string;
+  clone_url: string;
+  ssh_url: string;
+  default_branch: string;
+  private: boolean;
+  already_registered: boolean;
+  registered_id: string | null;
+}

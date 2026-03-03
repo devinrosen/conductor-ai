@@ -1,8 +1,9 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
+use conductor_core::github::{discover_github_repos, list_github_orgs, DiscoveredRepo};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, Repo, RepoManager};
 
 use crate::error::ApiError;
@@ -60,4 +61,54 @@ pub async fn delete_repo(
     mgr.remove_by_id(&id)?;
     state.events.emit(ConductorEvent::RepoDeleted { id });
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// A repo discovered via GitHub with a flag indicating if it's already registered.
+#[derive(Serialize)]
+pub struct DiscoverableRepo {
+    #[serde(flatten)]
+    pub repo: DiscoveredRepo,
+    pub already_registered: bool,
+    pub registered_id: Option<String>,
+}
+
+/// GET /api/github/orgs — list GitHub organizations the authenticated user belongs to.
+pub async fn list_github_orgs_handler() -> Result<Json<Vec<String>>, ApiError> {
+    let orgs = list_github_orgs()?;
+    Ok(Json(orgs))
+}
+
+#[derive(Deserialize)]
+pub struct DiscoverReposQuery {
+    pub owner: Option<String>,
+}
+
+/// GET /api/github/repos?owner=<org> — fetch repos for the given org (or personal if omitted)
+/// and annotate each with whether it's already registered in Conductor.
+pub async fn discover_github_repos_handler(
+    State(state): State<AppState>,
+    Query(params): Query<DiscoverReposQuery>,
+) -> Result<Json<Vec<DiscoverableRepo>>, ApiError> {
+    let discovered = discover_github_repos(params.owner.as_deref())?;
+
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+    let mgr = RepoManager::new(&db, &config);
+    let registered = mgr.list()?;
+
+    let result = discovered
+        .into_iter()
+        .map(|repo| {
+            let registered_entry = registered.iter().find(|r| {
+                r.remote_url == repo.clone_url || r.remote_url == repo.ssh_url
+            });
+            DiscoverableRepo {
+                already_registered: registered_entry.is_some(),
+                registered_id: registered_entry.map(|r| r.id.clone()),
+                repo,
+            }
+        })
+        .collect();
+
+    Ok(Json(result))
 }

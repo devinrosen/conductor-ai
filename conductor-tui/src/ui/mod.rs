@@ -80,5 +80,36 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             selected,
             ..
         } => modal::render_issue_source_manager(frame, area, repo_slug, sources, *selected),
+        Modal::GithubDiscoverOrgs {
+            orgs,
+            cursor,
+            loading,
+            error,
+        } => modal::render_github_discover_orgs(
+            frame,
+            area,
+            orgs,
+            *cursor,
+            *loading,
+            error.as_deref(),
+        ),
+        Modal::GithubDiscover {
+            repos,
+            registered_urls,
+            selected,
+            cursor,
+            loading,
+            error,
+            ..
+        } => modal::render_github_discover(
+            frame,
+            area,
+            repos,
+            registered_urls,
+            selected,
+            *cursor,
+            *loading,
+            error.as_deref(),
+        ),
     }
 }

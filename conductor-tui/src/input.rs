@@ -114,6 +114,68 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::GithubDiscoverOrgs {
+            loading,
+            orgs,
+            cursor,
+            ..
+        } => {
+            return match key.code {
+                KeyCode::Esc => Action::DismissModal,
+                _ if *loading => Action::None,
+                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
+                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
+                KeyCode::Char('d')
+                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    Action::HalfPageDown
+                }
+                KeyCode::Char('u')
+                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    Action::HalfPageUp
+                }
+                KeyCode::Char('g') if state.pending_g => Action::GoToTop,
+                KeyCode::Char('g') => Action::PendingG,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
+                KeyCode::Home => Action::GoToTop,
+                KeyCode::Enter => {
+                    // orgs[0] == "" means Personal; rest are org logins
+                    let owner = orgs.get(*cursor).cloned().unwrap_or_default();
+                    Action::GithubDrillIntoOwner { owner }
+                }
+                _ => Action::None,
+            };
+        }
+        Modal::GithubDiscover { loading, repos, .. } => {
+            return match key.code {
+                KeyCode::Esc => Action::GithubBackToOrgs,
+                // While loading, only allow Esc
+                _ if *loading => Action::None,
+                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
+                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
+                KeyCode::Char('d')
+                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    Action::HalfPageDown
+                }
+                KeyCode::Char('u')
+                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    Action::HalfPageUp
+                }
+                KeyCode::Char('g') if state.pending_g => Action::GoToTop,
+                KeyCode::Char('g') => Action::PendingG,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
+                KeyCode::Home => Action::GoToTop,
+                KeyCode::Char(' ') => Action::GithubDiscoverToggle,
+                KeyCode::Char('a') => Action::GithubDiscoverSelectAll,
+                KeyCode::Char('i') | KeyCode::Enter if !repos.is_empty() => {
+                    Action::GithubDiscoverImport
+                }
+                _ => Action::None,
+            };
+        }
         Modal::None => {}
     }
 
@@ -185,6 +247,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('a') => Action::AddRepo,
         KeyCode::Char('c') => Action::Create,
         KeyCode::Char('d') => Action::Delete,
+        KeyCode::Char('D') => Action::DiscoverGithubOrgs,
         KeyCode::Char('p') => Action::Push,
         KeyCode::Char('P') => Action::CreatePr,
         KeyCode::Char('s') => Action::SyncTickets,

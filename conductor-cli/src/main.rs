@@ -82,6 +82,12 @@ enum RepoCommands {
     },
     /// List all repositories
     List,
+    /// Discover repos from your GitHub account or an org (requires gh CLI).
+    /// Omit <owner> to list orgs; pass an org name to list its repos.
+    Discover {
+        /// GitHub org login, or omit to list available orgs
+        owner: Option<String>,
+    },
     /// Remove a repository
     Remove {
         /// Repo slug
@@ -238,6 +244,58 @@ fn main() -> Result<()> {
                 } else {
                     for repo in repos {
                         println!("  {}  {}", repo.slug, repo.remote_url);
+                    }
+                }
+            }
+            RepoCommands::Discover { owner } => {
+                if let Some(ref owner_str) = owner {
+                    // List repos for a specific owner (org or personal via "")
+                    let owner_opt = if owner_str.is_empty() {
+                        None
+                    } else {
+                        Some(owner_str.as_str())
+                    };
+                    let discovered = github::discover_github_repos(owner_opt)?;
+                    if discovered.is_empty() {
+                        println!("No repos found for {}.", owner_str);
+                    } else {
+                        let mgr = RepoManager::new(&conn, &config);
+                        let registered = mgr.list()?;
+                        for repo in &discovered {
+                            let is_registered = registered.iter().any(|r| {
+                                r.remote_url == repo.clone_url || r.remote_url == repo.ssh_url
+                            });
+                            let marker = if is_registered { " [registered]" } else { "" };
+                            let privacy = if repo.private { " (private)" } else { "" };
+                            println!("  {}{}{}", repo.full_name, privacy, marker);
+                            if !repo.description.is_empty() {
+                                println!("    {}", repo.description);
+                            }
+                        }
+                        let unregistered = discovered
+                            .iter()
+                            .filter(|r| {
+                                !registered.iter().any(|reg| {
+                                    reg.remote_url == r.clone_url || reg.remote_url == r.ssh_url
+                                })
+                            })
+                            .count();
+                        println!(
+                            "\n{} repo(s) found, {} not yet registered.",
+                            discovered.len(),
+                            unregistered
+                        );
+                        println!("Use `conductor repo add <url>` to register a repo.");
+                    }
+                } else {
+                    // No owner given: list orgs (+ personal)
+                    let orgs = github::list_github_orgs()?;
+                    println!("  Personal (your repos)  →  conductor repo discover \"\"");
+                    for org in &orgs {
+                        println!("  {org}  →  conductor repo discover {org}");
+                    }
+                    if orgs.is_empty() {
+                        println!("  (no organizations found)");
                     }
                 }
             }
