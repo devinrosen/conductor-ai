@@ -264,6 +264,8 @@ pub struct DataCache {
     pub agent_events: Vec<AgentRunEvent>,
     /// Aggregate stats across all agent runs for the currently viewed worktree
     pub agent_totals: AgentTotals,
+    /// Child runs of the latest root run (for run tree display)
+    pub child_runs: Vec<AgentRun>,
     /// ticket_id -> aggregated agent stats across all linked worktrees
     pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
     /// ticket_id -> linked worktrees (most recently created first)

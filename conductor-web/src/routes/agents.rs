@@ -7,7 +7,8 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use conductor_core::agent::{
-    parse_agent_log, AgentEvent, AgentManager, AgentRun, AgentRunEvent, TicketAgentTotals,
+    parse_agent_log, AgentEvent, AgentManager, AgentRun, AgentRunEvent, RunTreeTotals,
+    TicketAgentTotals,
 };
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
@@ -75,6 +76,7 @@ pub async fn latest_run(
 pub struct StartAgentRequest {
     pub prompt: String,
     pub resume_session_id: Option<String>,
+    pub parent_run_id: Option<String>,
 }
 
 /// Start an agent for a worktree. Creates a DB record and spawns a tmux window.
@@ -110,8 +112,18 @@ pub async fn start_agent(
         .or(config.general.model.as_deref())
         .map(str::to_string);
 
-    // Create DB record
-    let run = agent_mgr.create_run(&worktree_id, &body.prompt, Some(&wt.slug), model.as_deref())?;
+    // Create DB record (child or top-level)
+    let run = if let Some(ref parent_id) = body.parent_run_id {
+        agent_mgr.create_child_run(
+            &worktree_id,
+            &body.prompt,
+            Some(&wt.slug),
+            model.as_deref(),
+            parent_id,
+        )?
+    } else {
+        agent_mgr.create_run(&worktree_id, &body.prompt, Some(&wt.slug), model.as_deref())?
+    };
 
     // Build conductor agent run command
     let mut args = vec![
@@ -412,6 +424,41 @@ pub async fn get_prompt(
         prompt,
         resume_session_id,
     }))
+}
+
+// ── Parent/child run tree endpoints ───────────────────────────────────
+
+/// List direct child runs of a given parent run.
+pub async fn list_child_runs(
+    State(state): State<AppState>,
+    Path((_worktree_id, run_id)): Path<(String, String)>,
+) -> Result<Json<Vec<AgentRun>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+    let children = mgr.list_child_runs(&run_id)?;
+    Ok(Json(children))
+}
+
+/// Get a full run tree: the root run plus all descendants.
+pub async fn get_run_tree(
+    State(state): State<AppState>,
+    Path((_worktree_id, run_id)): Path<(String, String)>,
+) -> Result<Json<Vec<AgentRun>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+    let tree = mgr.get_run_tree(&run_id)?;
+    Ok(Json(tree))
+}
+
+/// Get aggregated cost/turns/duration for a run tree.
+pub async fn get_run_tree_totals(
+    State(state): State<AppState>,
+    Path((_worktree_id, run_id)): Path<(String, String)>,
+) -> Result<Json<RunTreeTotals>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+    let totals = mgr.aggregate_run_tree(&run_id)?;
+    Ok(Json(totals))
 }
 
 fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {

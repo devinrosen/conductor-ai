@@ -152,5 +152,19 @@ pub fn run(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Migration 012: add parent_run_id to agent_runs for parent/child relationships.
+    let has_parent_run_id: bool = conn
+        .prepare("SELECT parent_run_id FROM agent_runs LIMIT 0")
+        .is_ok();
+    if !has_parent_run_id {
+        conn.execute_batch(include_str!("migrations/012_parent_run_id.sql"))?;
+    }
+    if version < 12 {
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '12')",
+            [],
+        )?;
+    }
+
     Ok(())
 }

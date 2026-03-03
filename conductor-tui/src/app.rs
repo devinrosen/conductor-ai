@@ -430,6 +430,7 @@ impl App {
         let Some(ref wt_id) = self.state.selected_worktree_id else {
             self.state.data.agent_events = Vec::new();
             self.state.data.agent_totals = AgentTotals::default();
+            self.state.data.child_runs = Vec::new();
             return;
         };
 
@@ -487,6 +488,18 @@ impl App {
         };
 
         self.state.data.agent_events = all_events;
+
+        // Load child runs for the latest root run (for run tree display)
+        if let Some(latest) = runs.last() {
+            if latest.parent_run_id.is_none() {
+                self.state.data.child_runs = mgr.list_child_runs(&latest.id).unwrap_or_default();
+            } else {
+                self.state.data.child_runs = Vec::new();
+            }
+        } else {
+            self.state.data.child_runs = Vec::new();
+        }
+
         // Clamp ListState selection to valid range after events reload.
         // ratatui also clamps during render, but we keep it tidy here.
         let len = self.state.data.agent_events.len();

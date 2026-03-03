@@ -72,6 +72,18 @@ pub fn api_router() -> Router<AppState> {
             "/api/worktrees/{id}/agent/runs/{run_id}/events",
             get(agents::get_run_events),
         )
+        .route(
+            "/api/worktrees/{id}/agent/runs/{run_id}/children",
+            get(agents::list_child_runs),
+        )
+        .route(
+            "/api/worktrees/{id}/agent/runs/{run_id}/tree",
+            get(agents::get_run_tree),
+        )
+        .route(
+            "/api/worktrees/{id}/agent/runs/{run_id}/tree-totals",
+            get(agents::get_run_tree_totals),
+        )
         .route("/api/worktrees/{id}/agent/prompt", get(agents::get_prompt))
         // Issue Sources
         .route(

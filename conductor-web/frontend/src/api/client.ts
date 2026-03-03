@@ -10,6 +10,7 @@ import type {
   AgentRun,
   AgentEvent,
   AgentPromptInfo,
+  RunTreeTotals,
   WorkTarget,
   CreateWorkTargetRequest,
   PushResult,
@@ -96,12 +97,18 @@ export const api = {
     request<AgentRun[]>(`/worktrees/${worktreeId}/agent/runs`),
   latestAgentRun: (worktreeId: string) =>
     request<AgentRun | null>(`/worktrees/${worktreeId}/agent/latest`),
-  startAgent: (worktreeId: string, prompt: string, resumeSessionId?: string) =>
+  startAgent: (
+    worktreeId: string,
+    prompt: string,
+    resumeSessionId?: string,
+    parentRunId?: string,
+  ) =>
     request<AgentRun>(`/worktrees/${worktreeId}/agent/start`, {
       method: "POST",
       body: JSON.stringify({
         prompt,
         resume_session_id: resumeSessionId ?? null,
+        parent_run_id: parentRunId ?? null,
       }),
     }),
   stopAgent: (worktreeId: string) =>
@@ -112,6 +119,16 @@ export const api = {
     request<AgentEvent[]>(`/worktrees/${worktreeId}/agent/events`),
   getAgentPrompt: (worktreeId: string) =>
     request<AgentPromptInfo>(`/worktrees/${worktreeId}/agent/prompt`),
+  listChildRuns: (worktreeId: string, runId: string) =>
+    request<AgentRun[]>(
+      `/worktrees/${worktreeId}/agent/runs/${runId}/children`,
+    ),
+  getRunTree: (worktreeId: string, runId: string) =>
+    request<AgentRun[]>(`/worktrees/${worktreeId}/agent/runs/${runId}/tree`),
+  getRunTreeTotals: (worktreeId: string, runId: string) =>
+    request<RunTreeTotals>(
+      `/worktrees/${worktreeId}/agent/runs/${runId}/tree-totals`,
+    ),
 
   // Global config
   getGlobalModel: () => request<GlobalConfig>("/config/model"),

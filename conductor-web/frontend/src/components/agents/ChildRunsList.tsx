@@ -1,0 +1,77 @@
+import type { AgentRun } from "../../api/types";
+import { TimeAgo } from "../shared/TimeAgo";
+
+const statusColors: Record<string, string> = {
+  running: "bg-yellow-100 text-yellow-700",
+  completed: "bg-green-100 text-green-700",
+  failed: "bg-red-100 text-red-700",
+  cancelled: "bg-gray-100 text-gray-600",
+};
+
+function formatDuration(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remaining = seconds % 60;
+  return `${minutes}m ${remaining}s`;
+}
+
+function formatCost(usd: number): string {
+  return `$${usd.toFixed(4)}`;
+}
+
+interface ChildRunsListProps {
+  children: AgentRun[];
+}
+
+export function ChildRunsList({ children }: ChildRunsListProps) {
+  if (children.length === 0) return null;
+
+  return (
+    <div className="mt-3 border-t border-gray-100 pt-3">
+      <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">
+        Child Runs ({children.length})
+      </h4>
+      <div className="space-y-2">
+        {children.map((child) => {
+          const color =
+            statusColors[child.status] ?? "bg-gray-100 text-gray-600";
+          return (
+            <div
+              key={child.id}
+              className="flex items-center gap-3 rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-sm"
+            >
+              <span
+                className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${color}`}
+              >
+                {child.status}
+              </span>
+              {child.status === "running" && (
+                <span className="inline-block w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+              )}
+              <span className="text-gray-700 truncate flex-1" title={child.prompt}>
+                {child.prompt.length > 80
+                  ? child.prompt.slice(0, 80) + "..."
+                  : child.prompt}
+              </span>
+              <span className="shrink-0 text-xs text-gray-500 tabular-nums space-x-2">
+                {child.cost_usd != null && child.cost_usd > 0 && (
+                  <span>{formatCost(child.cost_usd)}</span>
+                )}
+                {child.num_turns != null && child.num_turns > 0 && (
+                  <span>{child.num_turns}t</span>
+                )}
+                {child.duration_ms != null && child.duration_ms > 0 && (
+                  <span>{formatDuration(child.duration_ms)}</span>
+                )}
+              </span>
+              <span className="shrink-0 text-xs text-gray-400">
+                <TimeAgo date={child.started_at} />
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

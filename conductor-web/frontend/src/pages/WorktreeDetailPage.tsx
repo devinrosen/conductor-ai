@@ -50,6 +50,7 @@ export function WorktreeDetailPage() {
   // Agent state
   const [latestRun, setLatestRun] = useState<AgentRun | null>(null);
   const [agentRuns, setAgentRuns] = useState<AgentRun[]>([]);
+  const [childRuns, setChildRuns] = useState<AgentRun[]>([]);
   const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
   const [promptModalOpen, setPromptModalOpen] = useState(false);
   const [promptInfo, setPromptInfo] = useState({
@@ -87,6 +88,18 @@ export function WorktreeDetailPage() {
       setLatestRun(latest);
       setAgentRuns(runs);
       setAgentEvents(events);
+
+      // Fetch child runs for the latest run (if it has no parent — i.e. it's a root run)
+      if (latest && !latest.parent_run_id) {
+        try {
+          const children = await api.listChildRuns(worktreeId, latest.id);
+          setChildRuns(children);
+        } catch {
+          setChildRuns([]);
+        }
+      } else {
+        setChildRuns([]);
+      }
     } catch {
       // Silently ignore — agent data may not exist yet
     }
@@ -491,6 +504,7 @@ export function WorktreeDetailPage() {
           <AgentStatusDisplay
             run={latestRun}
             runs={agentRuns}
+            childRuns={childRuns}
             onLaunch={handleLaunchClick}
             onStop={() => setStopConfirm(true)}
           />
