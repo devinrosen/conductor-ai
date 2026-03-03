@@ -8,6 +8,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 
+/// A single step in an agent's two-phase execution plan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanStep {
+    pub description: String,
+    #[serde(default)]
+    pub done: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRun {
     pub id: String,
@@ -25,6 +33,8 @@ pub struct AgentRun {
     pub log_file: Option<String>,
     /// The model used for this run (e.g. "claude-sonnet-4-6"). None means claude's default.
     pub model: Option<String>,
+    /// Two-phase execution plan: JSON-serialized list of steps with completion state.
+    pub plan: Option<Vec<PlanStep>>,
 }
 
 /// Parsed JSON result from `claude -p --output-format json`.
@@ -292,6 +302,7 @@ impl<'a> AgentManager<'a> {
             tmux_window: tmux_window.map(String::from),
             log_file: None,
             model: model.map(String::from),
+            plan: None,
         };
 
         self.conn.execute(
@@ -314,7 +325,8 @@ impl<'a> AgentManager<'a> {
     pub fn get_run(&self, run_id: &str) -> Result<Option<AgentRun>> {
         let result = self.conn.query_row(
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
-             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, model \
+             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
+             model, plan \
              FROM agent_runs WHERE id = ?1",
             params![run_id],
             row_to_agent_run,
@@ -381,10 +393,40 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Store the two-phase plan for a run. Replaces any existing plan.
+    pub fn update_run_plan(&self, run_id: &str, steps: &[PlanStep]) -> Result<()> {
+        let plan_json = serde_json::to_string(steps)
+            .map_err(|e| crate::error::ConductorError::Agent(e.to_string()))?;
+        self.conn.execute(
+            "UPDATE agent_runs SET plan = ?1 WHERE id = ?2",
+            params![plan_json, run_id],
+        )?;
+        Ok(())
+    }
+
+    /// Mark all steps in the plan as done (called on successful run completion).
+    pub fn mark_plan_done(&self, run_id: &str) -> Result<()> {
+        if let Some(run) = self.get_run(run_id)? {
+            if let Some(mut steps) = run.plan {
+                for step in &mut steps {
+                    step.done = true;
+                }
+                let plan_json = serde_json::to_string(&steps)
+                    .map_err(|e| crate::error::ConductorError::Agent(e.to_string()))?;
+                self.conn.execute(
+                    "UPDATE agent_runs SET plan = ?1 WHERE id = ?2",
+                    params![plan_json, run_id],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn list_for_worktree(&self, worktree_id: &str) -> Result<Vec<AgentRun>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
-             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, model \
+             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
+             model, plan \
              FROM agent_runs WHERE worktree_id = ?1 ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map(params![worktree_id], row_to_agent_run)?;
@@ -405,7 +447,8 @@ impl<'a> AgentManager<'a> {
     pub fn latest_for_worktree(&self, worktree_id: &str) -> Result<Option<AgentRun>> {
         let result = self.conn.query_row(
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
-             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, model \
+             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
+             model, plan \
              FROM agent_runs WHERE worktree_id = ?1 ORDER BY started_at DESC LIMIT 1",
             params![worktree_id],
             row_to_agent_run,
@@ -524,7 +567,7 @@ impl<'a> AgentManager<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, \
              a.result_text, a.cost_usd, a.num_turns, a.duration_ms, a.started_at, \
-             a.ended_at, a.tmux_window, a.log_file, a.model \
+             a.ended_at, a.tmux_window, a.log_file, a.model, a.plan \
              FROM agent_runs a \
              INNER JOIN ( \
                  SELECT worktree_id, MAX(started_at) AS max_started \
@@ -555,6 +598,8 @@ fn row_to_agent_run_event(row: &rusqlite::Row) -> rusqlite::Result<AgentRunEvent
 }
 
 fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun> {
+    let plan_json: Option<String> = row.get(14)?;
+    let plan = plan_json.and_then(|json| serde_json::from_str(&json).ok());
     Ok(AgentRun {
         id: row.get(0)?,
         worktree_id: row.get(1)?,
@@ -570,6 +615,7 @@ fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun> {
         tmux_window: row.get(11)?,
         log_file: row.get(12)?,
         model: row.get(13)?,
+        plan,
     })
 }
 
@@ -802,6 +848,93 @@ mod tests {
 
         let totals = mgr.totals_by_ticket_all().unwrap();
         assert!(totals.is_empty());
+    }
+
+    #[test]
+    fn test_update_run_plan() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        assert!(run.plan.is_none());
+
+        let steps = vec![
+            PlanStep {
+                description: "Investigate the issue".to_string(),
+                done: false,
+            },
+            PlanStep {
+                description: "Write a fix".to_string(),
+                done: false,
+            },
+        ];
+        mgr.update_run_plan(&run.id, &steps).unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        let plan = fetched.plan.unwrap();
+        assert_eq!(plan.len(), 2);
+        assert_eq!(plan[0].description, "Investigate the issue");
+        assert!(!plan[0].done);
+        assert_eq!(plan[1].description, "Write a fix");
+        assert!(!plan[1].done);
+    }
+
+    #[test]
+    fn test_mark_plan_done() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let steps = vec![
+            PlanStep {
+                description: "Step one".to_string(),
+                done: false,
+            },
+            PlanStep {
+                description: "Step two".to_string(),
+                done: false,
+            },
+        ];
+        mgr.update_run_plan(&run.id, &steps).unwrap();
+        mgr.mark_plan_done(&run.id).unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        let plan = fetched.plan.unwrap();
+        assert!(plan[0].done);
+        assert!(plan[1].done);
+    }
+
+    #[test]
+    fn test_mark_plan_done_no_plan() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        // Should not error when no plan exists
+        mgr.mark_plan_done(&run.id).unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert!(fetched.plan.is_none());
+    }
+
+    #[test]
+    fn test_plan_roundtrip_in_latest_runs() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let steps = vec![PlanStep {
+            description: "Do the thing".to_string(),
+            done: true,
+        }];
+        mgr.update_run_plan(&run.id, &steps).unwrap();
+
+        let map = mgr.latest_runs_by_worktree().unwrap();
+        let latest = map.get("w1").unwrap();
+        let plan = latest.plan.as_ref().unwrap();
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].description, "Do the thing");
+        assert!(plan[0].done);
     }
 
     #[test]

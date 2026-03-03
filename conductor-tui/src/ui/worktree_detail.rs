@@ -109,10 +109,42 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     lines.push(Line::from(""));
     lines.push(Line::from(ticket_line));
 
-    // Agent status line from DB poll
+    // Agent status line and plan checklist from DB poll
     if let Some(run) = state.data.latest_agent_runs.get(&wt.id) {
         lines.push(Line::from(""));
         lines.push(render_agent_status_line(run, &state.data.agent_totals));
+
+        // Plan checklist (if a plan was generated for this run)
+        if let Some(ref steps) = run.plan {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Plan:",
+                Style::default().fg(Color::DarkGray),
+            )));
+            for step in steps {
+                let (checkbox, style) = if step.done {
+                    (
+                        "[x]",
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::DIM),
+                    )
+                } else {
+                    ("[ ]", Style::default().fg(Color::White))
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("  {checkbox} "),
+                        Style::default().fg(if step.done {
+                            Color::Green
+                        } else {
+                            Color::DarkGray
+                        }),
+                    ),
+                    Span::styled(&step.description, style),
+                ]));
+            }
+        }
     }
 
     lines.push(Line::from(""));

@@ -140,5 +140,17 @@ pub fn run(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Migration 011: add plan column to agent_runs.
+    let has_plan: bool = conn.prepare("SELECT plan FROM agent_runs LIMIT 0").is_ok();
+    if !has_plan {
+        conn.execute_batch(include_str!("migrations/011_agent_plan.sql"))?;
+    }
+    if version < 11 {
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '11')",
+            [],
+        )?;
+    }
+
     Ok(())
 }

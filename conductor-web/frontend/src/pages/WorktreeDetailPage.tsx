@@ -10,6 +10,7 @@ import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { AgentPromptModal } from "../components/agents/AgentPromptModal";
 import { AgentStatusDisplay } from "../components/agents/AgentStatusDisplay";
 import { AgentActivityLog } from "../components/agents/AgentActivityLog";
+import { AgentPlanChecklist } from "../components/agents/AgentPlanChecklist";
 import {
   useConductorEvents,
   type ConductorEventType,
@@ -506,6 +507,13 @@ export function WorktreeDetailPage() {
           </div>
         )}
       </section>
+
+      {/* Agent Plan Checklist */}
+      {latestRun?.plan && latestRun.plan.length > 0 && (
+        <section>
+          <AgentPlanChecklist steps={latestRun.plan} />
+        </section>
+      )}
 
       {/* Agent Activity Log */}
       {(agentEvents.length > 0 || isRunning) && (

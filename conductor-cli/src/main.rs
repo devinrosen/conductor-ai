@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use conductor_core::agent::{parse_events_from_line, AgentManager};
+use conductor_core::agent::{parse_events_from_line, AgentManager, PlanStep};
 use conductor_core::config::{ensure_dirs, load_config};
 use conductor_core::db::open_database;
 use conductor_core::github;
@@ -675,6 +675,68 @@ fn truncate_str(s: &str, max: usize) -> String {
     }
 }
 
+/// Generate an implementation plan by asking Claude to produce a JSON step list.
+///
+/// Returns `None` (non-fatal) if plan generation fails or produces no steps.
+fn generate_plan(worktree_path: &str, prompt: &str) -> Option<Vec<PlanStep>> {
+    let plan_prompt = format!(
+        "You are planning a software development task. \
+         Generate a concise implementation plan as a JSON array.\n\n\
+         Task:\n{prompt}\n\n\
+         Respond with ONLY a JSON array of step objects. \
+         Each object must have a \"description\" string field. \
+         No markdown, no backticks, no explanation — just the raw JSON array. \
+         Example: [{{\"description\":\"Read the relevant files\"}},{{\"description\":\"Write tests\"}}]\n\
+         Aim for 3-8 concrete, actionable steps."
+    );
+
+    let output = Command::new("claude")
+        .arg("-p")
+        .arg(&plan_prompt)
+        .arg("--output-format")
+        .arg("json")
+        .arg("--dangerously-skip-permissions")
+        .current_dir(worktree_path)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let result_text = response.get("result")?.as_str()?;
+
+    // Strip optional markdown code fences that Claude sometimes adds
+    let trimmed = result_text.trim();
+    let json_text = if let Some(inner) = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+    {
+        inner.trim_end_matches("```").trim()
+    } else {
+        trimmed
+    };
+
+    let raw: Vec<serde_json::Value> = serde_json::from_str(json_text).ok()?;
+    let steps: Vec<PlanStep> = raw
+        .into_iter()
+        .filter_map(|v| {
+            let description = v.get("description")?.as_str()?.to_string();
+            Some(PlanStep {
+                description,
+                done: false,
+            })
+        })
+        .collect();
+
+    if steps.is_empty() {
+        None
+    } else {
+        Some(steps)
+    }
+}
+
 /// Run a Claude agent for a worktree. Called inside a tmux window by the TUI.
 ///
 /// Uses `--output-format json` (single JSON result) since the tmux terminal IS the display.
@@ -693,6 +755,26 @@ fn run_agent(
     let run = mgr.get_run(run_id)?;
     if run.is_none() {
         anyhow::bail!("agent run not found: {run_id}");
+    }
+
+    // Phase 1: Plan generation (only for new runs, not resumes)
+    if resume_session_id.is_none() {
+        eprintln!("[conductor] Phase 1: Generating plan...");
+        match generate_plan(worktree_path, prompt) {
+            Some(steps) => {
+                eprintln!("[conductor] Plan ({} steps):", steps.len());
+                for (i, step) in steps.iter().enumerate() {
+                    eprintln!("  {}. {}", i + 1, step.description);
+                }
+                if let Err(e) = mgr.update_run_plan(run_id, &steps) {
+                    eprintln!("[conductor] Warning: could not save plan to DB: {e}");
+                }
+            }
+            None => {
+                eprintln!("[conductor] Plan generation skipped (no steps returned)");
+            }
+        }
+        eprintln!("[conductor] Phase 2: Executing...");
     }
 
     // Build the claude command in print mode with stream-json output.
@@ -832,6 +914,10 @@ fn run_agent(
                 num_turns,
                 duration_ms,
             )?;
+            // Mark all plan steps done now that the run succeeded
+            if let Err(e) = mgr.mark_plan_done(run_id) {
+                eprintln!("[conductor] Warning: could not mark plan done: {e}");
+            }
             eprintln!("[conductor] Agent completed successfully");
             if let Some(cost) = cost_usd {
                 eprintln!(

@@ -64,6 +64,11 @@ export interface SyncResult {
   closed: number;
 }
 
+export interface PlanStep {
+  description: string;
+  done: boolean;
+}
+
 export interface AgentRun {
   id: string;
   worktree_id: string;
@@ -78,6 +83,7 @@ export interface AgentRun {
   ended_at: string | null;
   tmux_window: string | null;
   log_file: string | null;
+  plan: PlanStep[] | null;
 }
 
 export interface AgentEvent {
