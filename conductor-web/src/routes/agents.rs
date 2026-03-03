@@ -101,7 +101,7 @@ pub async fn start_agent(
     }
 
     // Create DB record
-    let run = agent_mgr.create_run(&worktree_id, &body.prompt, Some(&wt.slug))?;
+    let run = agent_mgr.create_run(&worktree_id, &body.prompt, Some(&wt.slug), None)?;
 
     // Build conductor agent run command
     let mut args = vec![

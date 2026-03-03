@@ -1004,14 +1004,14 @@ impl App {
             _ => return,
         };
 
-        if value.is_empty() {
-            return;
-        }
         match on_submit {
             InputAction::CreateWorktree {
                 repo_slug,
                 ticket_id,
             } => {
+                if value.is_empty() {
+                    return;
+                }
                 let wt_mgr = WorktreeManager::new(&self.conn, &self.config);
                 match wt_mgr.create(&repo_slug, &value, None, ticket_id.as_deref()) {
                     Ok((wt, warnings)) => {
@@ -1045,6 +1045,9 @@ impl App {
                 }
             }
             InputAction::LinkTicket { worktree_id } => {
+                if value.is_empty() {
+                    return;
+                }
                 let syncer = TicketSyncer::new(&self.conn);
                 // Find ticket by source_id, scoped to the worktree's repo
                 let wt_repo_id = self
@@ -1085,12 +1088,59 @@ impl App {
                 worktree_slug,
                 resume_session_id,
             } => {
+                if value.is_empty() {
+                    return;
+                }
+                // Resolve the default model: per-worktree → global config
+                let resolved_default = self
+                    .state
+                    .data
+                    .worktrees
+                    .iter()
+                    .find(|w| w.id == worktree_id)
+                    .and_then(|w| w.model.clone())
+                    .or_else(|| self.config.general.model.clone());
+
+                // Show second step: optional model override
+                let prompt_text = match &resolved_default {
+                    Some(m) => format!("Model (default: {m}, leave blank to use it):"),
+                    None => "Model override (leave blank for claude's default):".to_string(),
+                };
+                self.state.modal = Modal::Input {
+                    title: "Model Override".to_string(),
+                    prompt: prompt_text,
+                    value: String::new(),
+                    on_submit: InputAction::AgentModelOverride {
+                        prompt: value,
+                        worktree_id,
+                        worktree_path,
+                        worktree_slug,
+                        resume_session_id,
+                        resolved_default,
+                    },
+                };
+            }
+            InputAction::AgentModelOverride {
+                prompt,
+                worktree_id,
+                worktree_path,
+                worktree_slug,
+                resume_session_id,
+                resolved_default,
+            } => {
+                // Empty value means "use the resolved default"
+                let model = if value.trim().is_empty() {
+                    resolved_default
+                } else {
+                    Some(value)
+                };
                 self.start_agent_tmux(
-                    value,
+                    prompt,
                     worktree_id,
                     worktree_path,
                     worktree_slug,
                     resume_session_id,
+                    model,
                 );
             }
         }
@@ -2245,10 +2295,16 @@ impl App {
         worktree_path: String,
         worktree_slug: String,
         resume_session_id: Option<String>,
+        model: Option<String>,
     ) {
         // Create DB record with tmux window name
         let mgr = AgentManager::new(&self.conn);
-        let run = match mgr.create_run(&worktree_id, &prompt, Some(&worktree_slug)) {
+        let run = match mgr.create_run(
+            &worktree_id,
+            &prompt,
+            Some(&worktree_slug),
+            model.as_deref(),
+        ) {
             Ok(run) => run,
             Err(e) => {
                 self.state.modal = Modal::Error {
@@ -2273,6 +2329,11 @@ impl App {
         if let Some(ref session_id) = resume_session_id {
             args.push("--resume".to_string());
             args.push(session_id.clone());
+        }
+
+        if let Some(ref m) = model {
+            args.push("--model".to_string());
+            args.push(m.clone());
         }
 
         // Resolve the conductor binary path — look next to the current executable first,

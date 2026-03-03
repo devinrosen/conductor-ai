@@ -61,6 +61,9 @@ enum AgentCommands {
         /// Resume a previous Claude session
         #[arg(long)]
         resume: Option<String>,
+        /// Model to use (e.g. "sonnet", "claude-opus-4-6"). Overrides per-worktree and global defaults.
+        #[arg(long)]
+        model: Option<String>,
     },
 }
 
@@ -181,6 +184,15 @@ enum WorktreeCommands {
         /// Create as draft PR
         #[arg(long)]
         draft: bool,
+    },
+    /// Set (or clear) the per-worktree default model for agent runs
+    SetModel {
+        /// Repo slug
+        repo: String,
+        /// Worktree slug
+        name: String,
+        /// Model alias or full ID (e.g. "sonnet", "claude-opus-4-6"). Omit to clear.
+        model: Option<String>,
     },
 }
 
@@ -406,9 +418,12 @@ fn main() -> Result<()> {
                             Ok(t) => {
                                 let prompt = build_agent_prompt(&t);
                                 println!("Starting agent...");
+                                // Resolve model: per-worktree default → global config default
+                                let model = wt.model.as_deref().or(config.general.model.as_deref());
                                 let agent_mgr = AgentManager::new(&conn);
-                                let run = agent_mgr.create_run(&wt.id, &prompt, Some(&wt.slug))?;
-                                run_agent(&conn, &run.id, &wt.path, &prompt, None)?;
+                                let run =
+                                    agent_mgr.create_run(&wt.id, &prompt, Some(&wt.slug), model)?;
+                                run_agent(&conn, &run.id, &wt.path, &prompt, None, model)?;
                             }
                             Err(e) => {
                                 eprintln!("Warning: could not load ticket for agent prompt: {e}");
@@ -454,6 +469,14 @@ fn main() -> Result<()> {
                 let url = mgr.create_pr(&repo, &name, draft)?;
                 println!("PR created: {url}");
             }
+            WorktreeCommands::SetModel { repo, name, model } => {
+                let mgr = WorktreeManager::new(&conn, &config);
+                mgr.set_model(&repo, &name, model.as_deref())?;
+                match model {
+                    Some(m) => println!("Set model for {name} to: {m}"),
+                    None => println!("Cleared model override for {name} (will use global default)"),
+                }
+            }
         },
         Commands::Agent { command } => match command {
             AgentCommands::Run {
@@ -461,8 +484,16 @@ fn main() -> Result<()> {
                 worktree_path,
                 prompt,
                 resume,
+                model,
             } => {
-                run_agent(&conn, &run_id, &worktree_path, &prompt, resume.as_deref())?;
+                run_agent(
+                    &conn,
+                    &run_id,
+                    &worktree_path,
+                    &prompt,
+                    resume.as_deref(),
+                    model.as_deref(),
+                )?;
             }
         },
         Commands::Tickets { command } => match command {
@@ -632,6 +663,7 @@ fn run_agent(
     worktree_path: &str,
     prompt: &str,
     resume_session_id: Option<&str>,
+    model: Option<&str>,
 ) -> Result<()> {
     let mgr = AgentManager::new(conn);
 
@@ -657,6 +689,10 @@ fn run_agent(
 
     if let Some(session_id) = resume_session_id {
         cmd.arg("--resume").arg(session_id);
+    }
+
+    if let Some(m) = model {
+        cmd.arg("--model").arg(m);
     }
 
     eprintln!(

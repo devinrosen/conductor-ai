@@ -126,7 +126,7 @@ pub async fn ticket_detail(
     let agent_totals = all_totals.get(&ticket_id).cloned();
 
     let mut stmt = db.prepare(
-        "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at \
+        "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model \
          FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC",
     )?;
     let worktrees = stmt
@@ -141,6 +141,7 @@ pub async fn ticket_detail(
                 status: row.get(6)?,
                 created_at: row.get(7)?,
                 completed_at: row.get(8)?,
+                model: row.get(9)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;

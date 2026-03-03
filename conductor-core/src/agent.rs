@@ -23,6 +23,8 @@ pub struct AgentRun {
     pub ended_at: Option<String>,
     pub tmux_window: Option<String>,
     pub log_file: Option<String>,
+    /// The model used for this run (e.g. "claude-sonnet-4-6"). None means claude's default.
+    pub model: Option<String>,
 }
 
 /// Parsed JSON result from `claude -p --output-format json`.
@@ -270,6 +272,7 @@ impl<'a> AgentManager<'a> {
         worktree_id: &str,
         prompt: &str,
         tmux_window: Option<&str>,
+        model: Option<&str>,
     ) -> Result<AgentRun> {
         let id = ulid::Ulid::new().to_string();
         let now = Utc::now().to_rfc3339();
@@ -288,18 +291,20 @@ impl<'a> AgentManager<'a> {
             ended_at: None,
             tmux_window: tmux_window.map(String::from),
             log_file: None,
+            model: model.map(String::from),
         };
 
         self.conn.execute(
-            "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, tmux_window) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, tmux_window, model) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 run.id,
                 run.worktree_id,
                 run.prompt,
                 run.status,
                 run.started_at,
-                run.tmux_window
+                run.tmux_window,
+                run.model
             ],
         )?;
 
@@ -309,7 +314,7 @@ impl<'a> AgentManager<'a> {
     pub fn get_run(&self, run_id: &str) -> Result<Option<AgentRun>> {
         let result = self.conn.query_row(
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
-             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file \
+             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, model \
              FROM agent_runs WHERE id = ?1",
             params![run_id],
             row_to_agent_run,
@@ -379,7 +384,7 @@ impl<'a> AgentManager<'a> {
     pub fn list_for_worktree(&self, worktree_id: &str) -> Result<Vec<AgentRun>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
-             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file \
+             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, model \
              FROM agent_runs WHERE worktree_id = ?1 ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map(params![worktree_id], row_to_agent_run)?;
@@ -400,7 +405,7 @@ impl<'a> AgentManager<'a> {
     pub fn latest_for_worktree(&self, worktree_id: &str) -> Result<Option<AgentRun>> {
         let result = self.conn.query_row(
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
-             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file \
+             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, model \
              FROM agent_runs WHERE worktree_id = ?1 ORDER BY started_at DESC LIMIT 1",
             params![worktree_id],
             row_to_agent_run,
@@ -519,7 +524,7 @@ impl<'a> AgentManager<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, \
              a.result_text, a.cost_usd, a.num_turns, a.duration_ms, a.started_at, \
-             a.ended_at, a.tmux_window, a.log_file \
+             a.ended_at, a.tmux_window, a.log_file, a.model \
              FROM agent_runs a \
              INNER JOIN ( \
                  SELECT worktree_id, MAX(started_at) AS max_started \
@@ -564,6 +569,7 @@ fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun> {
         ended_at: row.get(10)?,
         tmux_window: row.get(11)?,
         log_file: row.get(12)?,
+        model: row.get(13)?,
     })
 }
 
@@ -601,7 +607,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None).unwrap();
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
         assert_eq!(run.status, "running");
         assert_eq!(run.prompt, "Fix the bug");
         assert!(run.tmux_window.is_none());
@@ -617,7 +623,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let run = mgr
-            .create_run("w1", "Fix the bug", Some("feat-test"))
+            .create_run("w1", "Fix the bug", Some("feat-test"), None)
             .unwrap();
         assert_eq!(run.tmux_window.as_deref(), Some("feat-test"));
 
@@ -630,7 +636,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None).unwrap();
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.id, run.id);
         assert_eq!(fetched.prompt, "Fix the bug");
@@ -644,7 +650,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None).unwrap();
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
         mgr.update_run_completed(
             &run.id,
             Some("sess-123"),
@@ -666,7 +672,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None).unwrap();
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
         mgr.update_run_failed(&run.id, "Something went wrong")
             .unwrap();
 
@@ -680,7 +686,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None).unwrap();
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
         mgr.update_run_cancelled(&run.id).unwrap();
 
         let latest = mgr.latest_for_worktree("w1").unwrap().unwrap();
@@ -706,7 +712,7 @@ mod tests {
         assert!(!mgr.has_runs_for_worktree("w1").unwrap());
 
         // Create a run
-        mgr.create_run("w1", "First prompt", None).unwrap();
+        mgr.create_run("w1", "First prompt", None, None).unwrap();
         assert!(mgr.has_runs_for_worktree("w1").unwrap());
 
         // Different worktree still has no runs
@@ -719,9 +725,9 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create runs for two different worktrees
-        let _run1 = mgr.create_run("w1", "First prompt", None).unwrap();
-        let run2 = mgr.create_run("w1", "Second prompt", None).unwrap();
-        let run3 = mgr.create_run("w2", "Other prompt", None).unwrap();
+        let _run1 = mgr.create_run("w1", "First prompt", None, None).unwrap();
+        let run2 = mgr.create_run("w1", "Second prompt", None, None).unwrap();
+        let run3 = mgr.create_run("w2", "Other prompt", None, None).unwrap();
 
         let map = mgr.latest_runs_by_worktree().unwrap();
         assert_eq!(map.len(), 2);
@@ -735,7 +741,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let run = mgr
-            .create_run("w1", "Fix the bug", Some("feat-test"))
+            .create_run("w1", "Fix the bug", Some("feat-test"), None)
             .unwrap();
         assert!(run.log_file.is_none());
 
@@ -766,18 +772,18 @@ mod tests {
             .unwrap();
 
         // Create completed runs on both worktrees
-        let run1 = mgr.create_run("w1", "First task", None).unwrap();
+        let run1 = mgr.create_run("w1", "First task", None, None).unwrap();
         mgr.update_run_completed(&run1.id, None, None, Some(0.10), Some(5), Some(30000))
             .unwrap();
-        let run2 = mgr.create_run("w1", "Second task", None).unwrap();
+        let run2 = mgr.create_run("w1", "Second task", None, None).unwrap();
         mgr.update_run_completed(&run2.id, None, None, Some(0.05), Some(3), Some(15000))
             .unwrap();
-        let run3 = mgr.create_run("w2", "Third task", None).unwrap();
+        let run3 = mgr.create_run("w2", "Third task", None, None).unwrap();
         mgr.update_run_completed(&run3.id, None, None, Some(0.08), Some(4), Some(20000))
             .unwrap();
 
         // Create a running run (should NOT be included)
-        let _run4 = mgr.create_run("w1", "In progress", None).unwrap();
+        let _run4 = mgr.create_run("w1", "In progress", None, None).unwrap();
 
         let totals = mgr.totals_by_ticket_all().unwrap();
         assert_eq!(totals.len(), 1);
@@ -814,7 +820,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None).unwrap();
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
         let t0 = "2024-01-01T00:00:00Z";
         let t1 = "2024-01-01T00:00:02Z";
         let t2 = "2024-01-01T00:00:05Z";
@@ -846,9 +852,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run1 = mgr.create_run("w1", "First task", None).unwrap();
-        let run2 = mgr.create_run("w1", "Second task", None).unwrap();
-        let run3 = mgr.create_run("w2", "Other task", None).unwrap();
+        let run1 = mgr.create_run("w1", "First task", None, None).unwrap();
+        let run2 = mgr.create_run("w1", "Second task", None, None).unwrap();
+        let run3 = mgr.create_run("w2", "Other task", None, None).unwrap();
 
         let t = "2024-01-01T00:00:00Z";
         mgr.create_event(&run1.id, "text", "Planning", t, None)
@@ -874,7 +880,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None).unwrap();
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
         let t = "2024-01-01T00:00:00Z";
         mgr.create_event(&run.id, "text", "hello", t, None).unwrap();
         mgr.create_event(&run.id, "tool", "[Bash] ls", t, None)
@@ -934,5 +940,31 @@ mod tests {
         assert_eq!(events[0].kind, "system");
         assert_eq!(events[1].kind, "text");
         assert_eq!(events[1].summary, "Hello");
+    }
+
+    #[test]
+    fn test_create_run_with_model() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run("w1", "Fix the bug", None, Some("claude-sonnet-4-6"))
+            .unwrap();
+        assert_eq!(run.model.as_deref(), Some("claude-sonnet-4-6"));
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.model.as_deref(), Some("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn test_create_run_without_model() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        assert!(run.model.is_none());
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert!(fetched.model.is_none());
     }
 }

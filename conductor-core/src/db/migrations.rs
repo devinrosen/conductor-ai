@@ -104,5 +104,29 @@ pub fn run(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Migration 008: add model column to worktrees.
+    let has_worktree_model: bool = conn.prepare("SELECT model FROM worktrees LIMIT 0").is_ok();
+    if !has_worktree_model {
+        conn.execute_batch(include_str!("migrations/008_worktree_model.sql"))?;
+    }
+    if version < 8 {
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '8')",
+            [],
+        )?;
+    }
+
+    // Migration 009: add model column to agent_runs.
+    let has_agent_run_model: bool = conn.prepare("SELECT model FROM agent_runs LIMIT 0").is_ok();
+    if !has_agent_run_model {
+        conn.execute_batch(include_str!("migrations/009_agent_run_model.sql"))?;
+    }
+    if version < 9 {
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '9')",
+            [],
+        )?;
+    }
+
     Ok(())
 }

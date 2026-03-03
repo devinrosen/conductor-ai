@@ -53,6 +53,10 @@ pub struct GeneralConfig {
     pub work_targets: Vec<WorkTarget>,
     #[serde(default)]
     pub auto_start_agent: AutoStartAgent,
+    /// Global default model for Claude agent runs (e.g. "sonnet", "claude-opus-4-6").
+    /// Overridden by per-worktree and per-run model settings. Omit to use claude's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +97,7 @@ impl Default for GeneralConfig {
             editor: None,
             work_targets: default_work_targets(),
             auto_start_agent: AutoStartAgent::default(),
+            model: None,
         }
     }
 }
@@ -211,5 +216,35 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.general.auto_start_agent, AutoStartAgent::Never);
+    }
+
+    #[test]
+    fn test_model_default_is_none() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.general.model, None);
+    }
+
+    #[test]
+    fn test_model_can_be_set() {
+        let config: Config = toml::from_str(
+            r#"
+            [general]
+            model = "claude-sonnet-4-6"
+        "#,
+        )
+        .unwrap();
+        assert_eq!(config.general.model.as_deref(), Some("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn test_model_alias() {
+        let config: Config = toml::from_str(
+            r#"
+            [general]
+            model = "sonnet"
+        "#,
+        )
+        .unwrap();
+        assert_eq!(config.general.model.as_deref(), Some("sonnet"));
     }
 }
