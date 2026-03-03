@@ -167,7 +167,17 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
         .iter()
         .map(|ev| {
             let style = event_style(&ev.kind);
-            Line::from(Span::styled(&ev.summary, style))
+            let mut spans = vec![Span::styled(ev.summary.clone(), style)];
+            if let Some(dur) = ev.duration_ms() {
+                if dur >= 100 {
+                    let dur_s = dur as f64 / 1000.0;
+                    spans.push(Span::styled(
+                        format!("  ({dur_s:.1}s)"),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+            }
+            Line::from(spans)
         })
         .collect();
 

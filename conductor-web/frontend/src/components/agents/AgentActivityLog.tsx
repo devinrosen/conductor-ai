@@ -88,9 +88,16 @@ export function AgentActivityLog({ events, isRunning }: AgentActivityLogProps) {
             >
               {cfg.label}
             </span>
-            <span className={`${cfg.text} leading-snug break-words min-w-0`}>
+            <span className={`${cfg.text} leading-snug break-words min-w-0 flex-1`}>
               {event.summary}
             </span>
+            {event.duration_ms != null && event.duration_ms >= 100 && (
+              <span className="shrink-0 text-[10px] text-gray-500 tabular-nums">
+                {event.duration_ms >= 1000
+                  ? `${(event.duration_ms / 1000).toFixed(1)}s`
+                  : `${event.duration_ms}ms`}
+              </span>
+            )}
           </div>
         );
       })}

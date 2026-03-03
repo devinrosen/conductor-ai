@@ -79,8 +79,14 @@ export interface AgentRun {
 }
 
 export interface AgentEvent {
+  id: string;
+  run_id: string;
   kind: "text" | "tool" | "result" | "system" | "error";
   summary: string;
+  started_at: string;
+  ended_at: string | null;
+  duration_ms: number | null;
+  metadata: string | null;
 }
 
 export interface AgentPromptInfo {

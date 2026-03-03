@@ -43,6 +43,132 @@ pub struct AgentEvent {
     pub summary: String,
 }
 
+/// A persisted agent run event (trace/span model) stored in `agent_run_events`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentRunEvent {
+    pub id: String,
+    pub run_id: String,
+    pub kind: String,
+    pub summary: String,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub metadata: Option<String>,
+}
+
+impl AgentRunEvent {
+    /// Duration in milliseconds, if both timestamps are present and parseable.
+    pub fn duration_ms(&self) -> Option<i64> {
+        let start = chrono::DateTime::parse_from_rfc3339(&self.started_at).ok()?;
+        let end = chrono::DateTime::parse_from_rfc3339(self.ended_at.as_ref()?).ok()?;
+        Some((end - start).num_milliseconds().max(0))
+    }
+}
+
+/// Parse a single stream-json log line into zero or more display events.
+pub fn parse_events_from_line(line: &str) -> Vec<AgentEvent> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Vec::new();
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return Vec::new();
+    };
+
+    let mut events = Vec::new();
+    let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+    match event_type {
+        "system" => {
+            let subtype = value.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
+            if subtype == "init" {
+                let model = value
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                events.push(AgentEvent {
+                    kind: "system".to_string(),
+                    summary: format!("Session started (model: {model})"),
+                });
+            }
+        }
+        "assistant" => {
+            let content = value
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_array());
+
+            if let Some(blocks) = content {
+                for block in blocks {
+                    let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    match block_type {
+                        "text" => {
+                            if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                                for text_line in text.lines() {
+                                    let trimmed = text_line.trim();
+                                    if !trimmed.is_empty() {
+                                        events.push(AgentEvent {
+                                            kind: "text".to_string(),
+                                            summary: trimmed.to_string(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        "tool_use" => {
+                            let tool_name = block
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            let input = block.get("input");
+                            let desc = tool_summary(tool_name, input);
+                            events.push(AgentEvent {
+                                kind: "tool".to_string(),
+                                summary: desc,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        "result" => {
+            let cost = value
+                .get("total_cost_usd")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let turns = value.get("num_turns").and_then(|v| v.as_i64()).unwrap_or(0);
+            let dur_ms = value
+                .get("duration_ms")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let dur_s = dur_ms as f64 / 1000.0;
+            let is_error = value
+                .get("is_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if is_error {
+                let err_text = value
+                    .get("result")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error");
+                events.push(AgentEvent {
+                    kind: "error".to_string(),
+                    summary: format!("Error: {err_text}"),
+                });
+            } else {
+                events.push(AgentEvent {
+                    kind: "result".to_string(),
+                    summary: format!("${cost:.4} · {turns} turns · {dur_s:.1}s"),
+                });
+            }
+        }
+        // Skip "user" and "rate_limit_event" — noise
+        _ => {}
+    }
+
+    events
+}
+
 /// Parse a stream-json agent log file into displayable events.
 /// Each line is a JSON object with a `type` field.
 pub fn parse_agent_log(path: &str) -> Vec<AgentEvent> {
@@ -51,108 +177,9 @@ pub fn parse_agent_log(path: &str) -> Vec<AgentEvent> {
     };
 
     let mut events = Vec::new();
-
     for line in contents.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-
-        let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-
-        match event_type {
-            "system" => {
-                let subtype = value.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
-                if subtype == "init" {
-                    let model = value
-                        .get("model")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
-                    events.push(AgentEvent {
-                        kind: "system".to_string(),
-                        summary: format!("Session started (model: {model})"),
-                    });
-                }
-            }
-            "assistant" => {
-                let content = value
-                    .get("message")
-                    .and_then(|m| m.get("content"))
-                    .and_then(|c| c.as_array());
-
-                if let Some(blocks) = content {
-                    for block in blocks {
-                        let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                        match block_type {
-                            "text" => {
-                                if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-                                    for line in text.lines() {
-                                        let trimmed = line.trim();
-                                        if !trimmed.is_empty() {
-                                            events.push(AgentEvent {
-                                                kind: "text".to_string(),
-                                                summary: trimmed.to_string(),
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                            "tool_use" => {
-                                let tool_name = block
-                                    .get("name")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("unknown");
-                                let input = block.get("input");
-                                let desc = tool_summary(tool_name, input);
-                                events.push(AgentEvent {
-                                    kind: "tool".to_string(),
-                                    summary: desc,
-                                });
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            "result" => {
-                let cost = value
-                    .get("total_cost_usd")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
-                let turns = value.get("num_turns").and_then(|v| v.as_i64()).unwrap_or(0);
-                let dur_ms = value
-                    .get("duration_ms")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
-                let dur_s = dur_ms as f64 / 1000.0;
-                let is_error = value
-                    .get("is_error")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                if is_error {
-                    let err_text = value
-                        .get("result")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown error");
-                    events.push(AgentEvent {
-                        kind: "error".to_string(),
-                        summary: format!("Error: {err_text}"),
-                    });
-                } else {
-                    events.push(AgentEvent {
-                        kind: "result".to_string(),
-                        summary: format!("${cost:.4} · {turns} turns · {dur_s:.1}s"),
-                    });
-                }
-            }
-            // Skip "user" and "rate_limit_event" — noise
-            _ => {}
-        }
+        events.extend(parse_events_from_line(line));
     }
-
     events
 }
 
@@ -419,6 +446,74 @@ impl<'a> AgentManager<'a> {
         Ok(map)
     }
 
+    /// Persist a new event span for a run. Returns the created event.
+    pub fn create_event(
+        &self,
+        run_id: &str,
+        kind: &str,
+        summary: &str,
+        started_at: &str,
+        metadata: Option<&str>,
+    ) -> Result<AgentRunEvent> {
+        let id = ulid::Ulid::new().to_string();
+        let event = AgentRunEvent {
+            id: id.clone(),
+            run_id: run_id.to_string(),
+            kind: kind.to_string(),
+            summary: summary.to_string(),
+            started_at: started_at.to_string(),
+            ended_at: None,
+            metadata: metadata.map(String::from),
+        };
+        self.conn.execute(
+            "INSERT INTO agent_run_events (id, run_id, kind, summary, started_at, metadata) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                event.id,
+                event.run_id,
+                event.kind,
+                event.summary,
+                event.started_at,
+                event.metadata
+            ],
+        )?;
+        Ok(event)
+    }
+
+    /// Set the ended_at timestamp for a previously created event span.
+    pub fn update_event_ended_at(&self, event_id: &str, ended_at: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_run_events SET ended_at = ?1 WHERE id = ?2",
+            params![ended_at, event_id],
+        )?;
+        Ok(())
+    }
+
+    /// List all events for a run in chronological order.
+    pub fn list_events_for_run(&self, run_id: &str) -> Result<Vec<AgentRunEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, run_id, kind, summary, started_at, ended_at, metadata \
+             FROM agent_run_events WHERE run_id = ?1 ORDER BY started_at ASC",
+        )?;
+        let rows = stmt.query_map(params![run_id], row_to_agent_run_event)?;
+        let events = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(events)
+    }
+
+    /// List all events across all runs for a worktree, in chronological order.
+    pub fn list_events_for_worktree(&self, worktree_id: &str) -> Result<Vec<AgentRunEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.id, e.run_id, e.kind, e.summary, e.started_at, e.ended_at, e.metadata \
+             FROM agent_run_events e \
+             JOIN agent_runs r ON e.run_id = r.id \
+             WHERE r.worktree_id = ?1 \
+             ORDER BY e.started_at ASC",
+        )?;
+        let rows = stmt.query_map(params![worktree_id], row_to_agent_run_event)?;
+        let events = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(events)
+    }
+
     /// Returns the latest agent run for each worktree, keyed by worktree_id.
     pub fn latest_runs_by_worktree(&self) -> Result<HashMap<String, AgentRun>> {
         let mut stmt = self.conn.prepare(
@@ -440,6 +535,18 @@ impl<'a> AgentManager<'a> {
         }
         Ok(map)
     }
+}
+
+fn row_to_agent_run_event(row: &rusqlite::Row) -> rusqlite::Result<AgentRunEvent> {
+    Ok(AgentRunEvent {
+        id: row.get(0)?,
+        run_id: row.get(1)?,
+        kind: row.get(2)?,
+        summary: row.get(3)?,
+        started_at: row.get(4)?,
+        ended_at: row.get(5)?,
+        metadata: row.get(6)?,
+    })
 }
 
 fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun> {
@@ -700,5 +807,132 @@ mod tests {
         assert_eq!(result.num_turns, Some(3));
         assert_eq!(result.duration_ms, Some(15000));
         assert_eq!(result.is_error, Some(false));
+    }
+
+    #[test]
+    fn test_create_and_list_events() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None).unwrap();
+        let t0 = "2024-01-01T00:00:00Z";
+        let t1 = "2024-01-01T00:00:02Z";
+        let t2 = "2024-01-01T00:00:05Z";
+
+        let ev1 = mgr
+            .create_event(&run.id, "system", "Session started", t0, None)
+            .unwrap();
+        let ev2 = mgr
+            .create_event(&run.id, "tool", "[Bash] cargo build", t1, None)
+            .unwrap();
+        mgr.update_event_ended_at(&ev1.id, t1).unwrap();
+        mgr.update_event_ended_at(&ev2.id, t2).unwrap();
+
+        let events = mgr.list_events_for_run(&run.id).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, "system");
+        assert_eq!(events[0].ended_at.as_deref(), Some(t1));
+        assert_eq!(events[1].kind, "tool");
+        assert_eq!(events[1].summary, "[Bash] cargo build");
+        assert_eq!(events[1].ended_at.as_deref(), Some(t2));
+
+        // duration_ms computed from timestamps
+        let dur = events[1].duration_ms().unwrap();
+        assert_eq!(dur, 3000);
+    }
+
+    #[test]
+    fn test_list_events_for_worktree() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run1 = mgr.create_run("w1", "First task", None).unwrap();
+        let run2 = mgr.create_run("w1", "Second task", None).unwrap();
+        let run3 = mgr.create_run("w2", "Other task", None).unwrap();
+
+        let t = "2024-01-01T00:00:00Z";
+        mgr.create_event(&run1.id, "text", "Planning", t, None)
+            .unwrap();
+        mgr.create_event(&run1.id, "tool", "[Read] file.rs", t, None)
+            .unwrap();
+        mgr.create_event(&run2.id, "result", "$0.0010 · 1 turns · 1.0s", t, None)
+            .unwrap();
+        // run3 belongs to a different worktree
+        mgr.create_event(&run3.id, "text", "Other wt event", t, None)
+            .unwrap();
+
+        let w1_events = mgr.list_events_for_worktree("w1").unwrap();
+        assert_eq!(w1_events.len(), 3);
+
+        let w2_events = mgr.list_events_for_worktree("w2").unwrap();
+        assert_eq!(w2_events.len(), 1);
+        assert_eq!(w2_events[0].summary, "Other wt event");
+    }
+
+    #[test]
+    fn test_events_cascade_delete_on_run_removal() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None).unwrap();
+        let t = "2024-01-01T00:00:00Z";
+        mgr.create_event(&run.id, "text", "hello", t, None).unwrap();
+        mgr.create_event(&run.id, "tool", "[Bash] ls", t, None)
+            .unwrap();
+
+        // Deleting the run should cascade to events
+        conn.execute(
+            "DELETE FROM agent_runs WHERE id = ?1",
+            rusqlite::params![run.id],
+        )
+        .unwrap();
+
+        let events = mgr.list_events_for_run(&run.id).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_parse_events_from_line_system_init() {
+        let line = r#"{"type":"system","subtype":"init","model":"claude-opus-4-5"}"#;
+        let events = parse_events_from_line(line);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "system");
+        assert!(events[0].summary.contains("claude-opus-4-5"));
+    }
+
+    #[test]
+    fn test_parse_events_from_line_tool_use() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"description":"run tests"}}]}}"#;
+        let events = parse_events_from_line(line);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "tool");
+        assert!(events[0].summary.contains("Bash"));
+        assert!(events[0].summary.contains("run tests"));
+    }
+
+    #[test]
+    fn test_parse_events_from_line_unknown_type() {
+        let line = r#"{"type":"rate_limit_event"}"#;
+        let events = parse_events_from_line(line);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_parse_agent_log_uses_from_line() {
+        // parse_agent_log should produce same results as iterating parse_events_from_line
+        let line1 = r#"{"type":"system","subtype":"init","model":"claude-3"}"#;
+        let line2 =
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}]}}"#;
+        let content = format!("{line1}\n{line2}\n");
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), &content).unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+
+        let events = parse_agent_log(&path);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, "system");
+        assert_eq!(events[1].kind, "text");
+        assert_eq!(events[1].summary, "Hello");
     }
 }

@@ -7,7 +7,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use conductor_core::agent::{
-    parse_agent_log, AgentEvent, AgentManager, AgentRun, TicketAgentTotals,
+    parse_agent_log, AgentEvent, AgentManager, AgentRun, AgentRunEvent, TicketAgentTotals,
 };
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
@@ -221,20 +221,49 @@ pub async fn stop_agent(
 
 #[derive(Serialize)]
 pub struct AgentEventResponse {
+    pub id: String,
+    pub run_id: String,
     pub kind: String,
     pub summary: String,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub metadata: Option<String>,
+}
+
+impl From<AgentRunEvent> for AgentEventResponse {
+    fn from(e: AgentRunEvent) -> Self {
+        let duration_ms = e.duration_ms();
+        Self {
+            id: e.id,
+            run_id: e.run_id,
+            kind: e.kind,
+            summary: e.summary,
+            started_at: e.started_at,
+            ended_at: e.ended_at,
+            duration_ms,
+            metadata: e.metadata,
+        }
+    }
 }
 
 impl From<AgentEvent> for AgentEventResponse {
     fn from(e: AgentEvent) -> Self {
         Self {
+            id: String::new(),
+            run_id: String::new(),
             kind: e.kind,
             summary: e.summary,
+            started_at: String::new(),
+            ended_at: None,
+            duration_ms: None,
+            metadata: None,
         }
     }
 }
 
-/// Get parsed agent events from the log file of the latest run.
+/// Get parsed agent events for all runs of a worktree.
+/// Uses DB records when available; falls back to log file parsing for older runs.
 pub async fn get_events(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
@@ -242,9 +271,20 @@ pub async fn get_events(
     let db = state.db.lock().await;
     let agent_mgr = AgentManager::new(&db);
 
+    // Try DB events first (covers all runs with persisted events)
+    let db_events = agent_mgr.list_events_for_worktree(&worktree_id)?;
+    if !db_events.is_empty() {
+        return Ok(Json(
+            db_events
+                .into_iter()
+                .map(AgentEventResponse::from)
+                .collect(),
+        ));
+    }
+
+    // Backward compat: parse log files for older runs without DB events
     let runs = agent_mgr.list_for_worktree(&worktree_id)?;
     let mut all_events = Vec::new();
-
     for run in runs.iter().rev() {
         if let Some(ref log_file) = run.log_file {
             let events = parse_agent_log(log_file);
@@ -253,6 +293,39 @@ pub async fn get_events(
     }
 
     Ok(Json(all_events))
+}
+
+/// Get events for a specific agent run.
+pub async fn get_run_events(
+    State(state): State<AppState>,
+    Path((_worktree_id, run_id)): Path<(String, String)>,
+) -> Result<Json<Vec<AgentEventResponse>>, ApiError> {
+    let db = state.db.lock().await;
+    let agent_mgr = AgentManager::new(&db);
+
+    let db_events = agent_mgr.list_events_for_run(&run_id)?;
+    if !db_events.is_empty() {
+        return Ok(Json(
+            db_events
+                .into_iter()
+                .map(AgentEventResponse::from)
+                .collect(),
+        ));
+    }
+
+    // Backward compat: parse log file if no DB events
+    let run = agent_mgr.get_run(&run_id)?;
+    let events = run
+        .and_then(|r| r.log_file)
+        .map(|path| {
+            parse_agent_log(&path)
+                .into_iter()
+                .map(AgentEventResponse::from)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Ok(Json(events))
 }
 
 #[derive(Serialize)]

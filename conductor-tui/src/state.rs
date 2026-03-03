@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use conductor_core::agent::{AgentEvent, AgentRun, TicketAgentTotals};
+use conductor_core::agent::{AgentRun, AgentRunEvent, TicketAgentTotals};
 use conductor_core::config::WorkTarget;
 use conductor_core::issue_source::IssueSource;
 use conductor_core::repo::Repo;
@@ -206,8 +206,8 @@ pub struct DataCache {
     pub repo_worktree_count: HashMap<String, usize>,
     /// worktree_id -> latest AgentRun (populated by DB poller)
     pub latest_agent_runs: HashMap<String, AgentRun>,
-    /// Parsed agent events for the currently viewed worktree
-    pub agent_events: Vec<AgentEvent>,
+    /// Persisted agent events for the currently viewed worktree (from DB)
+    pub agent_events: Vec<AgentRunEvent>,
     /// Aggregate stats across all agent runs for the currently viewed worktree
     pub agent_totals: AgentTotals,
     /// ticket_id -> aggregated agent stats across all linked worktrees

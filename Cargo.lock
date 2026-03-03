@@ -292,6 +292,7 @@ name = "conductor-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "conductor-core",
  "rusqlite",
@@ -326,6 +327,7 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "tui-textarea",
+ "ulid",
 ]
 
 [[package]]

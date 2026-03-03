@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use conductor_core::agent::AgentManager;
+use conductor_core::agent::{parse_events_from_line, AgentManager};
 use conductor_core::config::{ensure_dirs, load_config};
 use conductor_core::db::open_database;
 use conductor_core::github;
@@ -638,6 +638,9 @@ fn run_agent(
     let mut duration_ms: Option<i64> = None;
     let mut is_error = false;
 
+    // Track the last persisted event span so we can fill its ended_at
+    let mut last_event_id: Option<String> = None;
+
     if let Some(stdout) = child.stdout.take() {
         let reader = std::io::BufReader::new(stdout);
         for line in reader.lines() {
@@ -674,10 +677,34 @@ fn run_agent(
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
             }
+
+            // Persist parsed events to DB as spans
+            let parsed = parse_events_from_line(&line);
+            if !parsed.is_empty() {
+                let now = chrono::Utc::now().to_rfc3339();
+                // Close the previous span
+                if let Some(ref prev_id) = last_event_id {
+                    let _ = mgr.update_event_ended_at(prev_id, &now);
+                }
+                // Create a new span for each parsed event; only the last one stays open
+                for ev in &parsed {
+                    match mgr.create_event(run_id, &ev.kind, &ev.summary, &now, None) {
+                        Ok(db_ev) => last_event_id = Some(db_ev.id),
+                        Err(e) => eprintln!("[conductor] Warning: could not persist event: {e}"),
+                    }
+                }
+            }
         }
     }
 
     let status = child.wait();
+
+    let end_time = chrono::Utc::now().to_rfc3339();
+
+    // Close the last open event span
+    if let Some(ref prev_id) = last_event_id {
+        let _ = mgr.update_event_ended_at(prev_id, &end_time);
+    }
 
     match status {
         Ok(s) if s.success() && !is_error => {
@@ -699,7 +726,7 @@ fn run_agent(
                 );
             }
         }
-        Ok(s) if is_error => {
+        Ok(_) if is_error => {
             let error_msg = result_text.as_deref().unwrap_or("Claude reported an error");
             mgr.update_run_failed(run_id, error_msg)?;
             eprintln!("[conductor] Agent failed: {}", error_msg);

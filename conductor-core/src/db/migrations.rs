@@ -90,5 +90,19 @@ pub fn run(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Migration 007: add agent_run_events table (trace/span model).
+    let has_agent_run_events: bool = conn
+        .prepare("SELECT id FROM agent_run_events LIMIT 0")
+        .is_ok();
+    if !has_agent_run_events {
+        conn.execute_batch(include_str!("migrations/007_agent_run_events.sql"))?;
+    }
+    if version < 7 {
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '7')",
+            [],
+        )?;
+    }
+
     Ok(())
 }

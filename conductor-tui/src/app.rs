@@ -358,7 +358,9 @@ impl App {
     }
 
     fn reload_agent_events(&mut self) {
-        use conductor_core::agent::{count_turns_in_log, parse_agent_log, AgentManager};
+        use conductor_core::agent::{
+            count_turns_in_log, parse_agent_log, AgentManager, AgentRunEvent,
+        };
 
         use crate::state::AgentTotals;
 
@@ -395,15 +397,31 @@ impl App {
 
         self.state.data.agent_totals = totals;
 
-        let mut all_events = Vec::new();
-        for run in &runs {
-            if let Some(ref path) = run.log_file {
-                let events = parse_agent_log(path);
-                if !events.is_empty() {
-                    all_events.extend(events);
+        // Load events: prefer DB records, fall back to log file parsing for older runs
+        let db_events = mgr.list_events_for_worktree(wt_id).unwrap_or_default();
+        let all_events = if !db_events.is_empty() {
+            db_events
+        } else {
+            // Backward compat: parse log files and wrap as AgentRunEvent without timing
+            let mut fallback = Vec::new();
+            for run in &runs {
+                if let Some(ref path) = run.log_file {
+                    let events = parse_agent_log(path);
+                    for ev in events {
+                        fallback.push(AgentRunEvent {
+                            id: ulid::Ulid::new().to_string(),
+                            run_id: run.id.clone(),
+                            kind: ev.kind,
+                            summary: ev.summary,
+                            started_at: run.started_at.clone(),
+                            ended_at: None,
+                            metadata: None,
+                        });
+                    }
                 }
             }
-        }
+            fallback
+        };
 
         self.state.data.agent_events = all_events;
         // Clamp scroll index
