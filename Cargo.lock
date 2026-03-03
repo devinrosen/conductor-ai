@@ -323,6 +323,7 @@ dependencies = [
  "chrono",
  "conductor-core",
  "crossterm",
+ "dirs",
  "ratatui",
  "rusqlite",
  "serde_json",

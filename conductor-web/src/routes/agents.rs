@@ -284,6 +284,13 @@ pub async fn get_events(
     Path(worktree_id): Path<String>,
 ) -> Result<Json<Vec<AgentEventResponse>>, ApiError> {
     let db = state.db.lock().await;
+    let wt_path = {
+        let config = state.config.read().await;
+        WorktreeManager::new(&db, &config)
+            .get_by_id(&worktree_id)
+            .map(|wt| wt.path)
+            .unwrap_or_default()
+    };
     let agent_mgr = AgentManager::new(&db);
 
     // Try DB events first (covers all runs with persisted events)
@@ -292,7 +299,11 @@ pub async fn get_events(
         return Ok(Json(
             db_events
                 .into_iter()
-                .map(AgentEventResponse::from)
+                .map(|e| {
+                    let mut resp = AgentEventResponse::from(e);
+                    resp.summary = strip_worktree_prefix(&resp.summary, &wt_path);
+                    resp
+                })
                 .collect(),
         ));
     }
@@ -303,7 +314,11 @@ pub async fn get_events(
     for run in runs.iter().rev() {
         if let Some(ref log_file) = run.log_file {
             let events = parse_agent_log(log_file);
-            all_events.extend(events.into_iter().map(AgentEventResponse::from));
+            all_events.extend(events.into_iter().map(|e| {
+                let mut resp = AgentEventResponse::from(e);
+                resp.summary = strip_worktree_prefix(&resp.summary, &wt_path);
+                resp
+            }));
         }
     }
 
@@ -313,9 +328,16 @@ pub async fn get_events(
 /// Get events for a specific agent run.
 pub async fn get_run_events(
     State(state): State<AppState>,
-    Path((_worktree_id, run_id)): Path<(String, String)>,
+    Path((worktree_id, run_id)): Path<(String, String)>,
 ) -> Result<Json<Vec<AgentEventResponse>>, ApiError> {
     let db = state.db.lock().await;
+    let wt_path = {
+        let config = state.config.read().await;
+        WorktreeManager::new(&db, &config)
+            .get_by_id(&worktree_id)
+            .map(|wt| wt.path)
+            .unwrap_or_default()
+    };
     let agent_mgr = AgentManager::new(&db);
 
     let db_events = agent_mgr.list_events_for_run(&run_id)?;
@@ -323,7 +345,11 @@ pub async fn get_run_events(
         return Ok(Json(
             db_events
                 .into_iter()
-                .map(AgentEventResponse::from)
+                .map(|e| {
+                    let mut resp = AgentEventResponse::from(e);
+                    resp.summary = strip_worktree_prefix(&resp.summary, &wt_path);
+                    resp
+                })
                 .collect(),
         ));
     }
@@ -335,7 +361,11 @@ pub async fn get_run_events(
         .map(|path| {
             parse_agent_log(&path)
                 .into_iter()
-                .map(AgentEventResponse::from)
+                .map(|e| {
+                    let mut resp = AgentEventResponse::from(e);
+                    resp.summary = strip_worktree_prefix(&resp.summary, &wt_path);
+                    resp
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -382,6 +412,16 @@ pub async fn get_prompt(
         prompt,
         resume_session_id,
     }))
+}
+
+fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {
+    if worktree_path.is_empty() {
+        return summary.to_string();
+    }
+    match summary.strip_prefix(worktree_path) {
+        Some(rest) => format!("{{worktree}}{rest}"),
+        None => summary.to_string(),
+    }
 }
 
 /// Best-effort capture of tmux scrollback to `~/.conductor/agent-logs/<run_id>.log`.
