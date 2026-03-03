@@ -294,7 +294,7 @@ impl App {
             Action::StopAgent => self.handle_stop_agent(),
             Action::ViewAgentLog => self.handle_view_agent_log(),
             Action::AgentActivityDown => {
-                let len = self.state.data.agent_events.len();
+                let len = self.state.data.agent_activity_len();
                 let cur = self.state.agent_list_state.borrow().selected().unwrap_or(0);
                 if len > 0 && cur + 1 < len {
                     self.state.agent_list_state.borrow_mut().select_next();

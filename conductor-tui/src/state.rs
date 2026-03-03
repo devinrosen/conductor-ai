@@ -312,6 +312,25 @@ pub struct AgentTotals {
 }
 
 impl DataCache {
+    /// Total number of items in the agent activity list, including run boundary
+    /// separators. Must match the item count built in `render_agent_activity`.
+    pub fn agent_activity_len(&self) -> usize {
+        let has_multiple_runs = self.agent_run_info.len() > 1;
+        if !has_multiple_runs || self.agent_events.is_empty() {
+            return self.agent_events.len();
+        }
+        let mut separators = 0usize;
+        let mut prev_run_id: Option<&str> = None;
+        for ev in &self.agent_events {
+            let new_group = prev_run_id.is_none() || prev_run_id.is_some_and(|p| p != ev.run_id);
+            if new_group && self.agent_run_info.contains_key(&ev.run_id) {
+                separators += 1;
+            }
+            prev_run_id = Some(&ev.run_id);
+        }
+        self.agent_events.len() + separators
+    }
+
     pub fn rebuild_maps(&mut self) {
         self.repo_slug_map.clear();
         for repo in &self.repos {
@@ -421,7 +440,7 @@ impl AppState {
             },
             View::WorktreeDetail => {
                 let idx = self.agent_list_state.borrow().selected().unwrap_or(0);
-                (idx, self.data.agent_events.len())
+                (idx, self.data.agent_activity_len())
             }
             View::Tickets => (self.ticket_index, self.data.tickets.len()),
         }
