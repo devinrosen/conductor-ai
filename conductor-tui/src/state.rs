@@ -286,6 +286,8 @@ pub struct DataCache {
     pub latest_agent_runs: HashMap<String, AgentRun>,
     /// Persisted agent events for the currently viewed worktree (from DB)
     pub agent_events: Vec<AgentRunEvent>,
+    /// run_id -> (run_number, model, started_at) for per-run boundary headers
+    pub agent_run_info: HashMap<String, (usize, Option<String>, String)>,
     /// Aggregate stats across all agent runs for the currently viewed worktree
     pub agent_totals: AgentTotals,
     /// Child runs of the latest root run (for run tree display)

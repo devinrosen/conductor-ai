@@ -456,6 +456,7 @@ impl App {
 
         let Some(ref wt_id) = self.state.selected_worktree_id else {
             self.state.data.agent_events = Vec::new();
+            self.state.data.agent_run_info = std::collections::HashMap::new();
             self.state.data.agent_totals = AgentTotals::default();
             self.state.data.child_runs = Vec::new();
             return;
@@ -513,6 +514,16 @@ impl App {
             }
             fallback
         };
+
+        // Build run_id -> (run_number, model, started_at) map for boundary headers
+        let mut run_info = std::collections::HashMap::new();
+        for (i, run) in runs.iter().enumerate() {
+            run_info.insert(
+                run.id.clone(),
+                (i + 1, run.model.clone(), run.started_at.clone()),
+            );
+        }
+        self.state.data.agent_run_info = run_info;
 
         self.state.data.agent_events = all_events;
 
