@@ -11,7 +11,8 @@ cargo test                     # Run all tests
 cargo test --lib github        # Run specific module tests (e.g., github)
 cargo test -p conductor-core   # Test a single crate
 cargo clippy -- -D warnings    # Lint (CI enforces -D warnings)
-cargo fmt --check              # Check formatting
+cargo fmt --all                # Auto-format
+cargo fmt --all --check        # Check formatting (CI gate)
 cargo build --bin conductor     # Build CLI only
 cargo build --bin conductor-tui # Build TUI only
 cargo build --bin conductor-web # Build web UI (requires frontend built first)
@@ -21,6 +22,9 @@ cd conductor-web/frontend && npm install && npm run build
 ```
 
 No Makefile/justfile — use `cargo` directly.
+
+# One-time dev setup: enable pre-commit hook that runs cargo fmt --all --check
+git config core.hooksPath .githooks
 
 ## Architecture
 

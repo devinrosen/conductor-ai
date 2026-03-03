@@ -1,0 +1,10 @@
+#!/bin/sh
+# Pre-commit hook: enforce rustfmt formatting.
+# Enable with: git config core.hooksPath .githooks
+
+set -e
+
+if ! cargo fmt --all --check 2>/dev/null; then
+  echo "error: rustfmt check failed. Run 'cargo fmt --all' to fix." >&2
+  exit 1
+fi
