@@ -57,6 +57,10 @@ pub struct GeneralConfig {
     /// Overridden by per-worktree and per-run model settings. Omit to use claude's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Whether to auto-inject session context (worktree, ticket, prior runs, recent commits)
+    /// into agent prompts. Defaults to true; set to false to disable.
+    #[serde(default = "default_true")]
+    pub inject_startup_context: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +93,10 @@ fn default_fix_prefix() -> String {
     "fix-".to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
@@ -98,6 +106,7 @@ impl Default for GeneralConfig {
             work_targets: default_work_targets(),
             auto_start_agent: AutoStartAgent::default(),
             model: None,
+            inject_startup_context: true,
         }
     }
 }
@@ -246,5 +255,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.general.model.as_deref(), Some("sonnet"));
+    }
+
+    #[test]
+    fn test_inject_startup_context_default_true() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.general.inject_startup_context);
+    }
+
+    #[test]
+    fn test_inject_startup_context_opt_out() {
+        let config: Config = toml::from_str(
+            r#"
+            [general]
+            inject_startup_context = false
+        "#,
+        )
+        .unwrap();
+        assert!(!config.general.inject_startup_context);
     }
 }

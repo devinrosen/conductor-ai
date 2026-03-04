@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 use chrono::Utc;
 use rusqlite::{params, Connection};
@@ -788,6 +789,123 @@ impl<'a> AgentManager<'a> {
     }
 }
 
+/// Build a startup context block to prepend to the agent prompt.
+///
+/// Pulls worktree info, linked ticket, prior run plans, recent commits,
+/// and prior run summaries from the database. Returns `None` if there is
+/// no useful context to inject (e.g. first run with no linked ticket).
+pub fn build_startup_context(
+    conn: &Connection,
+    worktree_id: &str,
+    current_run_id: &str,
+    worktree_path: &str,
+) -> Option<String> {
+    let mut sections = Vec::new();
+
+    // 1. Worktree branch
+    let branch: Option<String> = conn
+        .query_row(
+            "SELECT branch FROM worktrees WHERE id = ?1",
+            params![worktree_id],
+            |row| row.get(0),
+        )
+        .ok();
+
+    if let Some(ref branch) = branch {
+        sections.push(format!("**Worktree:** {branch}"));
+    }
+
+    // 2. Linked ticket
+    let ticket_info: Option<(String, String)> = conn
+        .query_row(
+            "SELECT t.source_id, t.title FROM tickets t \
+             JOIN worktrees w ON w.ticket_id = t.id \
+             WHERE w.id = ?1",
+            params![worktree_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok();
+
+    if let Some((source_id, title)) = ticket_info {
+        sections.push(format!("**Ticket:** #{source_id} — {title}"));
+    }
+
+    // 3. Prior runs (excluding the current run being started)
+    let mgr = AgentManager::new(conn);
+    if let Ok(runs) = mgr.list_for_worktree(worktree_id) {
+        let prior_runs: Vec<&AgentRun> = runs.iter().filter(|r| r.id != current_run_id).collect();
+
+        // Plan steps from the most recent run that has a plan
+        if let Some(run_with_plan) = prior_runs.iter().find(|r| r.plan.is_some()) {
+            if let Some(ref plan) = run_with_plan.plan {
+                let plan_lines: Vec<String> = plan
+                    .iter()
+                    .enumerate()
+                    .map(|(i, step)| {
+                        let marker = if step.done { "✅" } else { "⏳" };
+                        format!("{}. {} {}", i + 1, marker, step.description)
+                    })
+                    .collect();
+                if !plan_lines.is_empty() {
+                    sections.push(format!(
+                        "**Plan steps (from prior run):**\n{}",
+                        plan_lines.join("\n")
+                    ));
+                }
+            }
+        }
+
+        // Prior run summary (from last completed or failed run)
+        if let Some(last_run) = prior_runs
+            .iter()
+            .find(|r| r.status == "completed" || r.status == "failed")
+        {
+            if let Some(ref result) = last_run.result_text {
+                let truncated = if result.len() > 500 {
+                    format!("{}…", &result[..500])
+                } else {
+                    result.clone()
+                };
+                sections.push(format!(
+                    "**Prior run outcome ({}):** {}",
+                    last_run.status, truncated
+                ));
+            }
+        }
+    }
+
+    // 4. Recent commits via git log
+    let commits = Command::new("git")
+        .args(["log", "--oneline", "-10"])
+        .current_dir(worktree_path)
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout).ok()
+            } else {
+                None
+            }
+        });
+
+    if let Some(ref commit_output) = commits {
+        let lines: Vec<&str> = commit_output.lines().collect();
+        if !lines.is_empty() {
+            let commit_lines: Vec<String> = lines.iter().map(|l| format!("- {l}")).collect();
+            sections.push(format!(
+                "**Recent commits in this worktree:**\n{}",
+                commit_lines.join("\n")
+            ));
+        }
+    }
+
+    if sections.is_empty() {
+        return None;
+    }
+
+    Some(format!("## Session Context\n\n{}", sections.join("\n\n")))
+}
+
 fn row_to_agent_run_event(row: &rusqlite::Row) -> rusqlite::Result<AgentRunEvent> {
     Ok(AgentRunEvent {
         id: row.get(0)?,
@@ -1561,5 +1679,143 @@ mod tests {
 
         let fetched = mgr.get_run(&child.id).unwrap().unwrap();
         assert!(fetched.parent_run_id.is_none());
+    }
+
+    // --- build_startup_context tests ---
+
+    #[test]
+    fn test_startup_context_returns_none_when_no_useful_data() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a current run (no prior runs, no ticket, non-git path)
+        let current = mgr.create_run("w1", "Do stuff", None, None).unwrap();
+
+        // worktree_path is /tmp which has no git repo → commits section will be empty
+        // but the branch is still known from the DB
+        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        // Should have at least the worktree branch
+        assert!(ctx.is_some());
+        let text = ctx.unwrap();
+        assert!(text.contains("**Worktree:** feat/test"));
+        // No ticket, no prior runs
+        assert!(!text.contains("**Ticket:**"));
+        assert!(!text.contains("**Plan steps"));
+        assert!(!text.contains("**Prior run outcome"));
+    }
+
+    #[test]
+    fn test_startup_context_includes_ticket() {
+        let conn = setup_db();
+
+        // Insert a ticket and link it to worktree w1
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES ('t1', 'r1', 'github', '42', 'Fix payment bug', 'Description', 'open', '[]', '', '2024-01-01T00:00:00Z', '{}')",
+            [],
+        ).unwrap();
+        conn.execute("UPDATE worktrees SET ticket_id = 't1' WHERE id = 'w1'", [])
+            .unwrap();
+
+        let mgr = AgentManager::new(&conn);
+        let current = mgr.create_run("w1", "Fix it", None, None).unwrap();
+
+        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp").unwrap();
+        assert!(ctx.contains("**Ticket:** #42 — Fix payment bug"));
+    }
+
+    #[test]
+    fn test_startup_context_includes_prior_plan_steps() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a prior completed run with a plan
+        let prior = mgr.create_run("w1", "Prior work", None, None).unwrap();
+        let steps = vec![
+            PlanStep {
+                description: "Read the code".to_string(),
+                done: true,
+            },
+            PlanStep {
+                description: "Write tests".to_string(),
+                done: true,
+            },
+            PlanStep {
+                description: "Implement feature".to_string(),
+                done: false,
+            },
+        ];
+        mgr.update_run_plan(&prior.id, &steps).unwrap();
+        mgr.update_run_completed(&prior.id, None, Some("All done"), None, None, None)
+            .unwrap();
+
+        // Create current run
+        let current = mgr.create_run("w1", "Continue work", None, None).unwrap();
+
+        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp").unwrap();
+        assert!(ctx.contains("**Plan steps (from prior run):**"));
+        assert!(ctx.contains("1. ✅ Read the code"));
+        assert!(ctx.contains("2. ✅ Write tests"));
+        assert!(ctx.contains("3. ⏳ Implement feature"));
+    }
+
+    #[test]
+    fn test_startup_context_includes_prior_run_summary() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a prior completed run with a result
+        let prior = mgr.create_run("w1", "Prior task", None, None).unwrap();
+        mgr.update_run_completed(
+            &prior.id,
+            None,
+            Some("Successfully implemented the payment module"),
+            Some(0.15),
+            Some(10),
+            Some(60000),
+        )
+        .unwrap();
+
+        // Create current run
+        let current = mgr.create_run("w1", "Next task", None, None).unwrap();
+
+        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp").unwrap();
+        assert!(ctx.contains("**Prior run outcome (completed):**"));
+        assert!(ctx.contains("Successfully implemented the payment module"));
+    }
+
+    #[test]
+    fn test_startup_context_excludes_current_run() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Only the current run exists (no prior runs)
+        let current = mgr.create_run("w1", "My prompt", None, None).unwrap();
+
+        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp").unwrap();
+        // Should NOT include any prior run info
+        assert!(!ctx.contains("**Plan steps"));
+        assert!(!ctx.contains("**Prior run outcome"));
+    }
+
+    #[test]
+    fn test_startup_context_truncates_long_result() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a prior run with a very long result
+        let prior = mgr.create_run("w1", "Prior task", None, None).unwrap();
+        let long_result = "x".repeat(1000);
+        mgr.update_run_completed(&prior.id, None, Some(&long_result), None, None, None)
+            .unwrap();
+
+        let current = mgr.create_run("w1", "Next", None, None).unwrap();
+
+        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp").unwrap();
+        assert!(ctx.contains("**Prior run outcome (completed):**"));
+        // Should be truncated to 500 chars + ellipsis
+        assert!(ctx.contains(&"x".repeat(500)));
+        assert!(ctx.contains('…'));
+        assert!(!ctx.contains(&"x".repeat(501)));
     }
 }

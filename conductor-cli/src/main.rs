@@ -4,7 +4,9 @@ use std::process::{Command, Stdio};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use conductor_core::agent::{parse_events_from_line, AgentManager, PlanStep};
+use conductor_core::agent::{
+    build_startup_context, parse_events_from_line, AgentManager, PlanStep,
+};
 use conductor_core::config::{ensure_dirs, load_config};
 use conductor_core::db::open_database;
 use conductor_core::github;
@@ -853,14 +855,29 @@ fn run_agent(
 
     // Verify the run exists
     let run = mgr.get_run(run_id)?;
-    if run.is_none() {
-        anyhow::bail!("agent run not found: {run_id}");
-    }
+    let run = match run {
+        Some(r) => r,
+        None => anyhow::bail!("agent run not found: {run_id}"),
+    };
+
+    // Build effective prompt with optional startup context
+    let config = load_config().unwrap_or_default();
+    let effective_prompt = if config.general.inject_startup_context {
+        match build_startup_context(conn, &run.worktree_id, run_id, worktree_path) {
+            Some(context) => {
+                eprintln!("[conductor] Injecting session context into prompt");
+                format!("{context}\n\n---\n\n{prompt}")
+            }
+            None => prompt.to_string(),
+        }
+    } else {
+        prompt.to_string()
+    };
 
     // Phase 1: Plan generation (only for new runs, not resumes)
     if resume_session_id.is_none() {
         eprintln!("[conductor] Phase 1: Generating plan...");
-        match generate_plan(worktree_path, prompt) {
+        match generate_plan(worktree_path, &effective_prompt) {
             Some(steps) => {
                 eprintln!("[conductor] Plan ({} steps):", steps.len());
                 for (i, step) in steps.iter().enumerate() {
@@ -882,7 +899,7 @@ fn run_agent(
     // stderr: verbose turn-by-turn output (inherited, visible in tmux)
     let mut cmd = Command::new("claude");
     cmd.arg("-p")
-        .arg(prompt)
+        .arg(&effective_prompt)
         .arg("--output-format")
         .arg("stream-json")
         .arg("--verbose")
