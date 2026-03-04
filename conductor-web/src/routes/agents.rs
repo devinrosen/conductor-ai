@@ -389,6 +389,10 @@ pub async fn get_run_events(
 pub struct AgentPromptResponse {
     pub prompt: String,
     pub resume_session_id: Option<String>,
+    /// True if the latest run ended with incomplete plan steps and can be auto-resumed.
+    pub needs_resume: bool,
+    /// Number of incomplete plan steps remaining (0 if no resume needed).
+    pub incomplete_steps: usize,
 }
 
 /// Get a pre-filled agent prompt for a worktree (from its linked ticket).
@@ -403,8 +407,26 @@ pub async fn get_prompt(
     let wt_mgr = WorktreeManager::new(&db, &config);
     let wt = wt_mgr.get_by_id(&worktree_id)?;
 
-    // Build prompt from ticket if linked
-    let prompt = if let Some(ref ticket_id) = wt.ticket_id {
+    // Check for resumable session
+    let agent_mgr = AgentManager::new(&db);
+    let latest_run = agent_mgr.latest_for_worktree(&wt.id)?;
+
+    let (resume_session_id, needs_resume, incomplete_steps) = match &latest_run {
+        Some(run) if run.needs_resume() => {
+            let incomplete = run.incomplete_plan_steps().len();
+            (run.claude_session_id.clone(), true, incomplete)
+        }
+        Some(run) => (run.claude_session_id.clone(), false, 0),
+        None => (None, false, 0),
+    };
+
+    // Build prompt: if needs_resume, use the resume prompt; otherwise use ticket context
+    let prompt = if needs_resume {
+        latest_run
+            .as_ref()
+            .map(|r| r.build_resume_prompt())
+            .unwrap_or_default()
+    } else if let Some(ref ticket_id) = wt.ticket_id {
         let syncer = TicketSyncer::new(&db);
         match syncer.get_by_id(ticket_id) {
             Ok(ticket) => build_agent_prompt(&ticket),
@@ -414,15 +436,11 @@ pub async fn get_prompt(
         String::new()
     };
 
-    // Check for resumable session
-    let agent_mgr = AgentManager::new(&db);
-    let resume_session_id = agent_mgr
-        .latest_for_worktree(&wt.id)?
-        .and_then(|run| run.claude_session_id);
-
     Ok(Json(AgentPromptResponse {
         prompt,
         resume_session_id,
+        needs_resume,
+        incomplete_steps,
     }))
 }
 

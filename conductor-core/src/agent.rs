@@ -73,6 +73,48 @@ pub struct AgentRun {
     pub parent_run_id: Option<String>,
 }
 
+impl AgentRun {
+    /// Returns true if this run ended (failed/cancelled) with incomplete plan steps
+    /// and has a session_id available for resume.
+    pub fn needs_resume(&self) -> bool {
+        matches!(self.status.as_str(), "failed" | "cancelled")
+            && self.claude_session_id.is_some()
+            && self.has_incomplete_plan_steps()
+    }
+
+    /// Returns true if the run has a plan with at least one incomplete step.
+    pub fn has_incomplete_plan_steps(&self) -> bool {
+        self.plan
+            .as_ref()
+            .is_some_and(|steps| steps.iter().any(|s| !s.done))
+    }
+
+    /// Returns the incomplete plan steps (not yet done).
+    pub fn incomplete_plan_steps(&self) -> Vec<&PlanStep> {
+        self.plan
+            .as_ref()
+            .map(|steps| steps.iter().filter(|s| !s.done).collect())
+            .unwrap_or_default()
+    }
+
+    /// Build a resume prompt from the remaining plan steps.
+    pub fn build_resume_prompt(&self) -> String {
+        let incomplete = self.incomplete_plan_steps();
+        if incomplete.is_empty() {
+            return "Continue where you left off.".to_string();
+        }
+
+        let mut prompt = String::from(
+            "Continue where you left off. The following plan steps remain incomplete:\n",
+        );
+        for (i, step) in incomplete.iter().enumerate() {
+            prompt.push_str(&format!("{}. {}\n", i + 1, step.description));
+        }
+        prompt.push_str("\nPlease complete these remaining steps.");
+        prompt
+    }
+}
+
 /// Parsed JSON result from `claude -p --output-format json`.
 #[derive(Debug, Deserialize)]
 pub struct ClaudeJsonResult {
@@ -453,11 +495,22 @@ impl<'a> AgentManager<'a> {
     }
 
     pub fn update_run_failed(&self, run_id: &str, error: &str) -> Result<()> {
+        self.update_run_failed_with_session(run_id, error, None)
+    }
+
+    /// Mark a run as failed, optionally preserving the session_id for resume.
+    pub fn update_run_failed_with_session(
+        &self,
+        run_id: &str,
+        error: &str,
+        session_id: Option<&str>,
+    ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE agent_runs SET status = 'failed', result_text = ?1, ended_at = ?2 \
-             WHERE id = ?3",
-            params![error, now, run_id],
+            "UPDATE agent_runs SET status = 'failed', result_text = ?1, ended_at = ?2, \
+             claude_session_id = COALESCE(?3, claude_session_id) \
+             WHERE id = ?4",
+            params![error, now, session_id, run_id],
         )?;
         Ok(())
     }
@@ -467,6 +520,16 @@ impl<'a> AgentManager<'a> {
         self.conn.execute(
             "UPDATE agent_runs SET status = 'cancelled', ended_at = ?1 WHERE id = ?2",
             params![now, run_id],
+        )?;
+        Ok(())
+    }
+
+    /// Save the claude session_id as soon as it's known (before run completes).
+    /// This enables resume even if the run fails or is cancelled.
+    pub fn update_run_session_id(&self, run_id: &str, session_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE agent_runs SET claude_session_id = ?1 WHERE id = ?2",
+            params![session_id, run_id],
         )?;
         Ok(())
     }
@@ -2091,5 +2154,207 @@ mod tests {
         assert!(ctx.contains(&"x".repeat(500)));
         assert!(ctx.contains('…'));
         assert!(!ctx.contains(&"x".repeat(501)));
+    }
+
+    // ── Auto-resume tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_needs_resume_failed_with_incomplete_plan() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let steps = vec![
+            PlanStep {
+                description: "Investigate".to_string(),
+                done: true,
+                ..Default::default()
+            },
+            PlanStep {
+                description: "Write fix".to_string(),
+                ..Default::default()
+            },
+            PlanStep {
+                description: "Write tests".to_string(),
+                ..Default::default()
+            },
+        ];
+        mgr.update_run_plan(&run.id, &steps).unwrap();
+        mgr.update_run_session_id(&run.id, "sess-abc").unwrap();
+        mgr.update_run_failed(&run.id, "Context exhausted").unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert!(fetched.needs_resume());
+        assert!(fetched.has_incomplete_plan_steps());
+        assert_eq!(fetched.incomplete_plan_steps().len(), 2);
+        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-abc"));
+    }
+
+    #[test]
+    fn test_needs_resume_cancelled_with_incomplete_plan() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let steps = vec![
+            PlanStep {
+                description: "Step 1".to_string(),
+                done: true,
+                ..Default::default()
+            },
+            PlanStep {
+                description: "Step 2".to_string(),
+                ..Default::default()
+            },
+        ];
+        mgr.update_run_plan(&run.id, &steps).unwrap();
+        mgr.update_run_session_id(&run.id, "sess-xyz").unwrap();
+        mgr.update_run_cancelled(&run.id).unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert!(fetched.needs_resume());
+        assert_eq!(fetched.incomplete_plan_steps().len(), 1);
+    }
+
+    #[test]
+    fn test_no_needs_resume_completed_run() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let steps = vec![PlanStep {
+            description: "Step 1".to_string(),
+            ..Default::default()
+        }];
+        mgr.update_run_plan(&run.id, &steps).unwrap();
+        mgr.update_run_completed(&run.id, Some("sess-123"), None, None, None, None)
+            .unwrap();
+        mgr.mark_plan_done(&run.id).unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert!(!fetched.needs_resume());
+    }
+
+    #[test]
+    fn test_no_needs_resume_no_session_id() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let steps = vec![PlanStep {
+            description: "Step 1".to_string(),
+            ..Default::default()
+        }];
+        mgr.update_run_plan(&run.id, &steps).unwrap();
+        // Fail without ever getting a session_id (e.g. spawn failure)
+        mgr.update_run_failed(&run.id, "Failed to spawn").unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert!(!fetched.needs_resume()); // No session_id means can't resume
+    }
+
+    #[test]
+    fn test_no_needs_resume_all_steps_done() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let steps = vec![PlanStep {
+            description: "Step 1".to_string(),
+            done: true,
+            ..Default::default()
+        }];
+        mgr.update_run_plan(&run.id, &steps).unwrap();
+        mgr.update_run_session_id(&run.id, "sess-123").unwrap();
+        mgr.update_run_failed(&run.id, "Some error").unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert!(!fetched.needs_resume()); // All steps done, nothing to resume
+    }
+
+    #[test]
+    fn test_build_resume_prompt() {
+        let run = AgentRun {
+            id: "test".to_string(),
+            worktree_id: "w1".to_string(),
+            claude_session_id: Some("sess-abc".to_string()),
+            prompt: "Fix the bug".to_string(),
+            status: "failed".to_string(),
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2024-01-01T00:00:00Z".to_string(),
+            ended_at: None,
+            tmux_window: None,
+            log_file: None,
+            model: None,
+            plan: Some(vec![
+                PlanStep {
+                    description: "Investigate".to_string(),
+                    done: true,
+                    ..Default::default()
+                },
+                PlanStep {
+                    description: "Write fix".to_string(),
+                    ..Default::default()
+                },
+                PlanStep {
+                    description: "Write tests".to_string(),
+                    ..Default::default()
+                },
+            ]),
+            parent_run_id: None,
+        };
+
+        let prompt = run.build_resume_prompt();
+        assert!(prompt.contains("Continue where you left off"));
+        assert!(prompt.contains("1. Write fix"));
+        assert!(prompt.contains("2. Write tests"));
+        assert!(!prompt.contains("Investigate")); // Done step should not appear
+    }
+
+    #[test]
+    fn test_update_run_failed_with_session() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        mgr.update_run_failed_with_session(&run.id, "Context exhausted", Some("sess-456"))
+            .unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.status, "failed");
+        assert_eq!(fetched.result_text.as_deref(), Some("Context exhausted"));
+        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-456"));
+    }
+
+    #[test]
+    fn test_update_run_session_id() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        assert!(run.claude_session_id.is_none());
+
+        mgr.update_run_session_id(&run.id, "sess-early").unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-early"));
+    }
+
+    #[test]
+    fn test_failed_with_session_preserves_eager_session_id() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        // Session ID was saved eagerly during stream
+        mgr.update_run_session_id(&run.id, "sess-eager").unwrap();
+        // Fail without passing session_id (uses COALESCE to keep existing)
+        mgr.update_run_failed(&run.id, "Crashed").unwrap();
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-eager"));
     }
 }

@@ -892,6 +892,33 @@ fn run_agent(
             }
         }
         eprintln!("[conductor] Phase 2: Executing...");
+    } else {
+        // Resuming: carry forward the plan from the previous run
+        // Look up the previous run that owns this session_id
+        if let Ok(prev_runs) = mgr.list_for_worktree(&run.worktree_id) {
+            let prev_run = prev_runs
+                .iter()
+                .find(|r| r.claude_session_id.as_deref() == resume_session_id && r.id != run_id);
+            if let Some(prev) = prev_run {
+                if prev.has_incomplete_plan_steps() {
+                    let incomplete: Vec<&PlanStep> = prev.incomplete_plan_steps();
+                    eprintln!(
+                        "[conductor] Resuming with {} incomplete plan steps:",
+                        incomplete.len()
+                    );
+                    for (i, step) in incomplete.iter().enumerate() {
+                        eprintln!("  {}. {}", i + 1, step.description);
+                    }
+                    // Carry forward the full plan to the new run
+                    if let Some(ref plan) = prev.plan {
+                        if let Err(e) = mgr.update_run_plan(run_id, plan) {
+                            eprintln!("[conductor] Warning: could not carry forward plan: {e}");
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("[conductor] Resuming session...");
     }
 
     // Build the claude command in print mode with stream-json output.
@@ -982,9 +1009,12 @@ fn run_agent(
             // Display human-readable activity in the tmux terminal
             print_event_summary(&event);
 
-            // Capture session_id from init message
+            // Capture session_id from init message and save immediately for resume
             if let Some(sid) = event.get("session_id").and_then(|v| v.as_str()) {
                 session_id_parsed = Some(sid.to_string());
+                if let Err(e) = mgr.update_run_session_id(run_id, sid) {
+                    eprintln!("[conductor] Warning: could not save session_id: {e}");
+                }
             }
 
             // Capture result from final message
@@ -1056,17 +1086,17 @@ fn run_agent(
         }
         Ok(_) if is_error => {
             let error_msg = result_text.as_deref().unwrap_or("Claude reported an error");
-            mgr.update_run_failed(run_id, error_msg)?;
+            mgr.update_run_failed_with_session(run_id, error_msg, session_id_parsed.as_deref())?;
             eprintln!("[conductor] Agent failed: {}", error_msg);
         }
         Ok(s) => {
             let error_msg = format!("Claude exited with status: {}", s);
-            mgr.update_run_failed(run_id, &error_msg)?;
+            mgr.update_run_failed_with_session(run_id, &error_msg, session_id_parsed.as_deref())?;
             eprintln!("[conductor] Agent failed: {}", error_msg);
         }
         Err(e) => {
             let error_msg = format!("Error waiting for claude: {e}");
-            mgr.update_run_failed(run_id, &error_msg)?;
+            mgr.update_run_failed_with_session(run_id, &error_msg, session_id_parsed.as_deref())?;
             eprintln!("[conductor] {}", error_msg);
         }
     }

@@ -2630,18 +2630,33 @@ impl App {
         }
 
         // Check for existing session to resume (from DB)
-        let resume_session_id = self
-            .state
-            .data
-            .latest_agent_runs
-            .get(&wt.id)
-            .and_then(|run| run.claude_session_id.clone());
+        let latest_run = self.state.data.latest_agent_runs.get(&wt.id);
+
+        // Determine resume state: either a normal resume (completed run with session_id)
+        // or a needs_resume (failed/cancelled run with incomplete plan steps)
+        let (resume_session_id, needs_resume) = match latest_run {
+            Some(run) if run.needs_resume() => (run.claude_session_id.clone(), true),
+            Some(run) => (run.claude_session_id.clone(), false),
+            None => (None, false),
+        };
 
         let has_prior_runs = AgentManager::new(&self.conn)
             .has_runs_for_worktree(&wt.id)
             .unwrap_or(false);
 
-        let (title, prefill) = if resume_session_id.is_some() {
+        let (title, prefill) = if needs_resume {
+            // Auto-build resume prompt from incomplete plan steps
+            let incomplete_count = latest_run
+                .map(|r| r.incomplete_plan_steps().len())
+                .unwrap_or(0);
+            let resume_prompt = latest_run
+                .map(|r| r.build_resume_prompt())
+                .unwrap_or_default();
+            (
+                format!("Claude Agent (Resume — {incomplete_count} steps remaining)"),
+                resume_prompt,
+            )
+        } else if resume_session_id.is_some() {
             ("Claude Agent (Resume)".to_string(), String::new())
         } else if has_prior_runs {
             // Skip pre-fill when worktree has prior agent activity

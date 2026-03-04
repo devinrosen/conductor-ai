@@ -376,7 +376,13 @@ fn render_agent_status_line(
                 Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
                 Span::styled("[failed]", Style::default().fg(Color::Red)),
             ];
-            if let Some(ref err) = run.result_text {
+            if run.needs_resume() {
+                let remaining = run.incomplete_plan_steps().len();
+                spans.push(Span::styled(
+                    format!(" [{remaining} steps remaining — press r to resume]"),
+                    Style::default().fg(Color::Yellow),
+                ));
+            } else if let Some(ref err) = run.result_text {
                 let truncated = if err.len() > 60 { &err[..60] } else { err };
                 spans.push(Span::styled(
                     format!(" {truncated}"),
@@ -385,10 +391,20 @@ fn render_agent_status_line(
             }
             Line::from(spans)
         }
-        "cancelled" => Line::from(vec![
-            Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[cancelled]", Style::default().fg(Color::DarkGray)),
-        ]),
+        "cancelled" => {
+            let mut spans = vec![
+                Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[cancelled]", Style::default().fg(Color::DarkGray)),
+            ];
+            if run.needs_resume() {
+                let remaining = run.incomplete_plan_steps().len();
+                spans.push(Span::styled(
+                    format!(" [{remaining} steps remaining — press r to resume]"),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+            Line::from(spans)
+        }
         other => Line::from(vec![
             Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
             Span::raw(format!("[{other}]")),
