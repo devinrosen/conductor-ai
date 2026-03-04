@@ -10,11 +10,44 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 
 /// A single step in an agent's two-phase execution plan.
+/// Stored as individual records in the `agent_run_steps` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanStep {
+    /// ULID primary key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub description: String,
+    /// Backward-compat flag derived from `status == "completed"`.
     #[serde(default)]
     pub done: bool,
+    /// One of: pending, in_progress, completed, failed.
+    #[serde(default = "default_step_status")]
+    pub status: String,
+    /// Ordering within the run's plan (0-based).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+}
+
+fn default_step_status() -> String {
+    "pending".to_string()
+}
+
+impl Default for PlanStep {
+    fn default() -> Self {
+        Self {
+            id: None,
+            description: String::new(),
+            done: false,
+            status: default_step_status(),
+            position: None,
+            started_at: None,
+            completed_at: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -382,7 +415,11 @@ impl<'a> AgentManager<'a> {
         );
 
         match result {
-            Ok(run) => Ok(Some(run)),
+            Ok(mut run) => {
+                let steps = self.get_run_steps(&run.id)?;
+                run.plan = if steps.is_empty() { None } else { Some(steps) };
+                Ok(Some(run))
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -442,30 +479,105 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
-    /// Store the two-phase plan for a run. Replaces any existing plan.
+    /// Store the two-phase plan for a run. Replaces any existing plan steps.
+    /// Inserts individual records into `agent_run_steps`.
     pub fn update_run_plan(&self, run_id: &str, steps: &[PlanStep]) -> Result<()> {
-        let plan_json = serde_json::to_string(steps)
-            .map_err(|e| crate::error::ConductorError::Agent(e.to_string()))?;
+        // Delete any existing steps for this run.
         self.conn.execute(
-            "UPDATE agent_runs SET plan = ?1 WHERE id = ?2",
-            params![plan_json, run_id],
+            "DELETE FROM agent_run_steps WHERE run_id = ?1",
+            params![run_id],
+        )?;
+
+        for (i, step) in steps.iter().enumerate() {
+            let step_id = ulid::Ulid::new().to_string();
+            let status = if step.done { "completed" } else { "pending" };
+            self.conn.execute(
+                "INSERT INTO agent_run_steps (id, run_id, position, description, status) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![step_id, run_id, i as i64, step.description, status],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Mark all steps in the plan as completed (called on successful run completion).
+    pub fn mark_plan_done(&self, run_id: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE agent_run_steps SET status = 'completed', completed_at = ?1 \
+             WHERE run_id = ?2 AND status != 'completed'",
+            params![now, run_id],
         )?;
         Ok(())
     }
 
-    /// Mark all steps in the plan as done (called on successful run completion).
-    pub fn mark_plan_done(&self, run_id: &str) -> Result<()> {
-        if let Some(run) = self.get_run(run_id)? {
-            if let Some(mut steps) = run.plan {
-                for step in &mut steps {
-                    step.done = true;
-                }
-                let plan_json = serde_json::to_string(&steps)
-                    .map_err(|e| crate::error::ConductorError::Agent(e.to_string()))?;
+    /// Update the status of a single plan step.
+    pub fn update_step_status(&self, step_id: &str, status: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        match status {
+            "in_progress" => {
                 self.conn.execute(
-                    "UPDATE agent_runs SET plan = ?1 WHERE id = ?2",
-                    params![plan_json, run_id],
+                    "UPDATE agent_run_steps SET status = ?1, started_at = ?2 WHERE id = ?3",
+                    params![status, now, step_id],
                 )?;
+            }
+            "completed" | "failed" => {
+                self.conn.execute(
+                    "UPDATE agent_run_steps SET status = ?1, completed_at = ?2 WHERE id = ?3",
+                    params![status, now, step_id],
+                )?;
+            }
+            _ => {
+                self.conn.execute(
+                    "UPDATE agent_run_steps SET status = ?1 WHERE id = ?2",
+                    params![status, step_id],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Get all plan steps for a run, ordered by position.
+    pub fn get_run_steps(&self, run_id: &str) -> Result<Vec<PlanStep>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, run_id, position, description, status, started_at, completed_at \
+             FROM agent_run_steps WHERE run_id = ?1 ORDER BY position ASC",
+        )?;
+        let rows = stmt.query_map(params![run_id], row_to_plan_step)?;
+        let steps = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(steps)
+    }
+
+    /// Populate the `plan` field on a slice of runs from the steps table.
+    fn populate_plans(&self, runs: &mut [AgentRun]) -> Result<()> {
+        if runs.is_empty() {
+            return Ok(());
+        }
+
+        // Build a set of run IDs and fetch all steps at once.
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+        let placeholders: String = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT id, run_id, position, description, status, started_at, completed_at \
+             FROM agent_run_steps WHERE run_id IN ({placeholders}) ORDER BY position ASC"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(&ids), |row| {
+            let run_id: String = row.get(1)?;
+            let step = row_to_plan_step(row)?;
+            Ok((run_id, step))
+        })?;
+
+        let mut steps_map: HashMap<String, Vec<PlanStep>> = HashMap::new();
+        for row in rows {
+            let (run_id, step) = row?;
+            steps_map.entry(run_id).or_default().push(step);
+        }
+
+        for run in runs.iter_mut() {
+            if let Some(steps) = steps_map.remove(&run.id) {
+                run.plan = if steps.is_empty() { None } else { Some(steps) };
             }
         }
         Ok(())
@@ -479,7 +591,8 @@ impl<'a> AgentManager<'a> {
              FROM agent_runs WHERE worktree_id = ?1 ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map(params![worktree_id], row_to_agent_run)?;
-        let runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        self.populate_plans(&mut runs)?;
         Ok(runs)
     }
 
@@ -504,7 +617,11 @@ impl<'a> AgentManager<'a> {
         );
 
         match result {
-            Ok(run) => Ok(Some(run)),
+            Ok(mut run) => {
+                let steps = self.get_run_steps(&run.id)?;
+                run.plan = if steps.is_empty() { None } else { Some(steps) };
+                Ok(Some(run))
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -700,9 +817,10 @@ impl<'a> AgentManager<'a> {
         )?;
 
         let rows = stmt.query_map([], row_to_agent_run)?;
+        let mut runs: Vec<AgentRun> = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        self.populate_plans(&mut runs)?;
         let mut map = HashMap::new();
-        for run in rows {
-            let run = run?;
+        for run in runs {
             map.insert(run.worktree_id.clone(), run);
         }
         Ok(map)
@@ -719,7 +837,8 @@ impl<'a> AgentManager<'a> {
              FROM agent_runs WHERE parent_run_id = ?1 ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map(params![parent_run_id], row_to_agent_run)?;
-        let runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        self.populate_plans(&mut runs)?;
         Ok(runs)
     }
 
@@ -742,7 +861,8 @@ impl<'a> AgentManager<'a> {
              ORDER BY a.started_at ASC",
         )?;
         let rows = stmt.query_map(params![root_run_id], row_to_agent_run)?;
-        let runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        self.populate_plans(&mut runs)?;
         Ok(runs)
     }
 
@@ -756,7 +876,8 @@ impl<'a> AgentManager<'a> {
              ORDER BY started_at DESC",
         )?;
         let rows = stmt.query_map(params![worktree_id], row_to_agent_run)?;
-        let runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        self.populate_plans(&mut runs)?;
         Ok(runs)
     }
 
@@ -932,8 +1053,8 @@ fn row_to_agent_created_issue(row: &rusqlite::Row) -> rusqlite::Result<AgentCrea
 }
 
 fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun> {
-    let plan_json: Option<String> = row.get(14)?;
-    let plan = plan_json.and_then(|json| serde_json::from_str(&json).ok());
+    // Plan is populated separately from agent_run_steps table by the caller.
+    // Column 14 (plan JSON) is still selected for SQL compatibility but ignored.
     Ok(AgentRun {
         id: row.get(0)?,
         worktree_id: row.get(1)?,
@@ -949,8 +1070,22 @@ fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun> {
         tmux_window: row.get(11)?,
         log_file: row.get(12)?,
         model: row.get(13)?,
-        plan,
+        plan: None,
         parent_run_id: row.get(15)?,
+    })
+}
+
+fn row_to_plan_step(row: &rusqlite::Row) -> rusqlite::Result<PlanStep> {
+    let status: String = row.get(4)?;
+    let done = status == "completed";
+    Ok(PlanStep {
+        id: Some(row.get(0)?),
+        description: row.get(3)?,
+        done,
+        status,
+        position: Some(row.get(2)?),
+        started_at: row.get(5)?,
+        completed_at: row.get(6)?,
     })
 }
 
@@ -1196,11 +1331,11 @@ mod tests {
         let steps = vec![
             PlanStep {
                 description: "Investigate the issue".to_string(),
-                done: false,
+                ..Default::default()
             },
             PlanStep {
                 description: "Write a fix".to_string(),
-                done: false,
+                ..Default::default()
             },
         ];
         mgr.update_run_plan(&run.id, &steps).unwrap();
@@ -1210,8 +1345,12 @@ mod tests {
         assert_eq!(plan.len(), 2);
         assert_eq!(plan[0].description, "Investigate the issue");
         assert!(!plan[0].done);
+        assert_eq!(plan[0].status, "pending");
+        assert!(plan[0].id.is_some());
+        assert_eq!(plan[0].position, Some(0));
         assert_eq!(plan[1].description, "Write a fix");
         assert!(!plan[1].done);
+        assert_eq!(plan[1].position, Some(1));
     }
 
     #[test]
@@ -1223,11 +1362,11 @@ mod tests {
         let steps = vec![
             PlanStep {
                 description: "Step one".to_string(),
-                done: false,
+                ..Default::default()
             },
             PlanStep {
                 description: "Step two".to_string(),
-                done: false,
+                ..Default::default()
             },
         ];
         mgr.update_run_plan(&run.id, &steps).unwrap();
@@ -1236,7 +1375,11 @@ mod tests {
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         let plan = fetched.plan.unwrap();
         assert!(plan[0].done);
+        assert_eq!(plan[0].status, "completed");
+        assert!(plan[0].completed_at.is_some());
         assert!(plan[1].done);
+        assert_eq!(plan[1].status, "completed");
+        assert!(plan[1].completed_at.is_some());
     }
 
     #[test]
@@ -1261,6 +1404,8 @@ mod tests {
         let steps = vec![PlanStep {
             description: "Do the thing".to_string(),
             done: true,
+            status: "completed".to_string(),
+            ..Default::default()
         }];
         mgr.update_run_plan(&run.id, &steps).unwrap();
 
@@ -1270,6 +1415,131 @@ mod tests {
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0].description, "Do the thing");
         assert!(plan[0].done);
+    }
+
+    #[test]
+    fn test_update_step_status() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let steps = vec![
+            PlanStep {
+                description: "Step one".to_string(),
+                ..Default::default()
+            },
+            PlanStep {
+                description: "Step two".to_string(),
+                ..Default::default()
+            },
+        ];
+        mgr.update_run_plan(&run.id, &steps).unwrap();
+
+        // Get the step IDs
+        let stored = mgr.get_run_steps(&run.id).unwrap();
+        assert_eq!(stored.len(), 2);
+
+        // Mark first step in_progress
+        let step_id = stored[0].id.as_ref().unwrap();
+        mgr.update_step_status(step_id, "in_progress").unwrap();
+        let updated = mgr.get_run_steps(&run.id).unwrap();
+        assert_eq!(updated[0].status, "in_progress");
+        assert!(updated[0].started_at.is_some());
+        assert!(!updated[0].done);
+
+        // Mark first step completed
+        mgr.update_step_status(step_id, "completed").unwrap();
+        let updated = mgr.get_run_steps(&run.id).unwrap();
+        assert_eq!(updated[0].status, "completed");
+        assert!(updated[0].completed_at.is_some());
+        assert!(updated[0].done);
+        // Second step still pending
+        assert_eq!(updated[1].status, "pending");
+        assert!(!updated[1].done);
+    }
+
+    #[test]
+    fn test_update_step_status_failed() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let steps = vec![PlanStep {
+            description: "Step one".to_string(),
+            ..Default::default()
+        }];
+        mgr.update_run_plan(&run.id, &steps).unwrap();
+
+        let stored = mgr.get_run_steps(&run.id).unwrap();
+        let step_id = stored[0].id.as_ref().unwrap();
+        mgr.update_step_status(step_id, "failed").unwrap();
+
+        let updated = mgr.get_run_steps(&run.id).unwrap();
+        assert_eq!(updated[0].status, "failed");
+        assert!(updated[0].completed_at.is_some());
+        assert!(!updated[0].done);
+    }
+
+    #[test]
+    fn test_get_run_steps_ordering() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let steps = vec![
+            PlanStep {
+                description: "First".to_string(),
+                ..Default::default()
+            },
+            PlanStep {
+                description: "Second".to_string(),
+                ..Default::default()
+            },
+            PlanStep {
+                description: "Third".to_string(),
+                ..Default::default()
+            },
+        ];
+        mgr.update_run_plan(&run.id, &steps).unwrap();
+
+        let stored = mgr.get_run_steps(&run.id).unwrap();
+        assert_eq!(stored.len(), 3);
+        assert_eq!(stored[0].description, "First");
+        assert_eq!(stored[0].position, Some(0));
+        assert_eq!(stored[1].description, "Second");
+        assert_eq!(stored[1].position, Some(1));
+        assert_eq!(stored[2].description, "Third");
+        assert_eq!(stored[2].position, Some(2));
+    }
+
+    #[test]
+    fn test_update_run_plan_replaces_existing() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let steps1 = vec![PlanStep {
+            description: "Old step".to_string(),
+            ..Default::default()
+        }];
+        mgr.update_run_plan(&run.id, &steps1).unwrap();
+
+        let steps2 = vec![
+            PlanStep {
+                description: "New step one".to_string(),
+                ..Default::default()
+            },
+            PlanStep {
+                description: "New step two".to_string(),
+                ..Default::default()
+            },
+        ];
+        mgr.update_run_plan(&run.id, &steps2).unwrap();
+
+        let stored = mgr.get_run_steps(&run.id).unwrap();
+        assert_eq!(stored.len(), 2);
+        assert_eq!(stored[0].description, "New step one");
+        assert_eq!(stored[1].description, "New step two");
     }
 
     #[test]
@@ -1735,14 +2005,18 @@ mod tests {
             PlanStep {
                 description: "Read the code".to_string(),
                 done: true,
+                status: "completed".to_string(),
+                ..Default::default()
             },
             PlanStep {
                 description: "Write tests".to_string(),
                 done: true,
+                status: "completed".to_string(),
+                ..Default::default()
             },
             PlanStep {
                 description: "Implement feature".to_string(),
-                done: false,
+                ..Default::default()
             },
         ];
         mgr.update_run_plan(&prior.id, &steps).unwrap();

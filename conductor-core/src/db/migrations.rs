@@ -1,6 +1,15 @@
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
+use serde::Deserialize;
 
 use crate::error::Result;
+
+/// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
+#[derive(Deserialize)]
+struct LegacyPlanStep {
+    description: String,
+    #[serde(default)]
+    done: bool,
+}
 
 /// Run all schema migrations. Uses a simple version counter in a meta table.
 pub fn run(conn: &Connection) -> Result<()> {
@@ -190,6 +199,41 @@ pub fn run(conn: &Connection) -> Result<()> {
     if version < 14 {
         conn.execute(
             "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '14')",
+            [],
+        )?;
+    }
+
+    // Migration 015: create agent_run_steps table and migrate JSON plan data.
+    let has_agent_run_steps: bool = conn
+        .prepare("SELECT id FROM agent_run_steps LIMIT 0")
+        .is_ok();
+    if !has_agent_run_steps {
+        conn.execute_batch(include_str!("migrations/015_agent_run_steps.sql"))?;
+
+        // Migrate existing JSON plan data from agent_runs.plan into the new table.
+        let mut read_stmt =
+            conn.prepare("SELECT id, plan FROM agent_runs WHERE plan IS NOT NULL")?;
+        let rows: Vec<(String, String)> = read_stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+        for (run_id, plan_json) in &rows {
+            if let Ok(steps) = serde_json::from_str::<Vec<LegacyPlanStep>>(plan_json) {
+                for (i, step) in steps.iter().enumerate() {
+                    let step_id = ulid::Ulid::new().to_string();
+                    let status = if step.done { "completed" } else { "pending" };
+                    conn.execute(
+                        "INSERT INTO agent_run_steps (id, run_id, position, description, status) \
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![step_id, run_id, i as i64, step.description, status],
+                    )?;
+                }
+            }
+        }
+    }
+    if version < 15 {
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '15')",
             [],
         )?;
     }

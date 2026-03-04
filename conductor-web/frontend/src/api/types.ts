@@ -66,8 +66,13 @@ export interface SyncResult {
 }
 
 export interface PlanStep {
+  id?: string;
   description: string;
   done: boolean;
+  status: "pending" | "in_progress" | "completed" | "failed";
+  position?: number;
+  started_at?: string | null;
+  completed_at?: string | null;
 }
 
 export interface AgentRun {

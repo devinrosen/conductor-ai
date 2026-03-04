@@ -827,7 +827,7 @@ fn generate_plan(worktree_path: &str, prompt: &str) -> Option<Vec<PlanStep>> {
             let description = v.get("description")?.as_str()?.to_string();
             Some(PlanStep {
                 description,
-                done: false,
+                ..Default::default()
             })
         })
         .collect();

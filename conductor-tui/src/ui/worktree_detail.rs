@@ -127,24 +127,22 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 Style::default().fg(Color::DarkGray),
             )));
             for step in steps {
-                let (checkbox, style) = if step.done {
-                    (
+                let (checkbox, checkbox_color, style) = match step.status.as_str() {
+                    "completed" => (
                         "[x]",
+                        Color::Green,
                         Style::default()
                             .fg(Color::Green)
                             .add_modifier(Modifier::DIM),
-                    )
-                } else {
-                    ("[ ]", Style::default().fg(Color::White))
+                    ),
+                    "in_progress" => ("[>]", Color::Blue, Style::default().fg(Color::Blue)),
+                    "failed" => ("[!]", Color::Red, Style::default().fg(Color::Red)),
+                    _ => ("[ ]", Color::DarkGray, Style::default().fg(Color::White)),
                 };
                 lines.push(Line::from(vec![
                     Span::styled(
                         format!("  {checkbox} "),
-                        Style::default().fg(if step.done {
-                            Color::Green
-                        } else {
-                            Color::DarkGray
-                        }),
+                        Style::default().fg(checkbox_color),
                     ),
                     Span::styled(&step.description, style),
                 ]));
