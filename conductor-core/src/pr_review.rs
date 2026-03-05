@@ -665,20 +665,17 @@ fn deduplicate_off_diff_findings(findings: Vec<OffDiffFinding>) -> Vec<OffDiffFi
     deduped
 }
 
-/// Search for an existing GH issue matching a finding, to avoid duplicates.
-fn find_existing_issue(owner: &str, repo: &str, title: &str) -> Option<String> {
-    let issues = github::list_issues_by_search(owner, repo, title, "conductor-review", 5).ok()?;
-
-    // Look for a title that matches closely (case-insensitive substring)
+/// Find an existing issue URL that matches the given title (case-insensitive
+/// substring match) from a pre-fetched list of issues.
+fn find_existing_issue(existing_issues: &[github::IssueRef], title: &str) -> Option<String> {
     let title_lower = title.to_lowercase();
-    for issue in &issues {
-        let existing_lower = issue.title.to_lowercase();
-        if existing_lower.contains(&title_lower) || title_lower.contains(&existing_lower) {
-            return Some(issue.url.clone());
-        }
-    }
-
-    None
+    existing_issues
+        .iter()
+        .find(|issue| {
+            let existing_lower = issue.title.to_lowercase();
+            existing_lower.contains(&title_lower) || title_lower.contains(&existing_lower)
+        })
+        .map(|issue| issue.url.clone())
 }
 
 /// File off-diff findings as GitHub issues (or reference existing ones).
@@ -688,11 +685,15 @@ fn file_off_diff_issues(
     pr_branch: &str,
     findings: &[OffDiffFinding],
 ) -> Vec<FiledIssue> {
+    // Batch-fetch all conductor-review issues once to avoid N subprocess spawns.
+    let existing_issues =
+        github::list_issues_by_search(owner, repo, "", "conductor-review", 200).unwrap_or_default();
+
     let mut filed = Vec::new();
 
     for finding in findings {
         // Check if an existing issue already covers this
-        if let Some(existing_url) = find_existing_issue(owner, repo, &finding.title) {
+        if let Some(existing_url) = find_existing_issue(&existing_issues, &finding.title) {
             eprintln!(
                 "[review-swarm] Off-diff finding '{}' matches existing issue: {}",
                 finding.title, existing_url
@@ -1971,5 +1972,46 @@ mod tests {
         assert!(comment.contains("Pre-existing SQL injection"));
         assert!(comment.contains("src/db.rs"));
         assert!(comment.contains("issues/99"));
+    }
+
+    #[test]
+    fn test_find_existing_issue_exact_match() {
+        let issues = vec![github::IssueRef {
+            title: "perf: batch existing-issue lookup".to_string(),
+            url: "https://github.com/test/repo/issues/1".to_string(),
+        }];
+        let result = find_existing_issue(&issues, "perf: batch existing-issue lookup");
+        assert_eq!(
+            result,
+            Some("https://github.com/test/repo/issues/1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_existing_issue_case_insensitive_substring() {
+        let issues = vec![github::IssueRef {
+            title: "Perf: Batch Existing-Issue Lookup".to_string(),
+            url: "https://github.com/test/repo/issues/2".to_string(),
+        }];
+        let result = find_existing_issue(&issues, "batch existing-issue lookup");
+        assert_eq!(
+            result,
+            Some("https://github.com/test/repo/issues/2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_existing_issue_no_match() {
+        let issues = vec![github::IssueRef {
+            title: "unrelated issue".to_string(),
+            url: "https://github.com/test/repo/issues/3".to_string(),
+        }];
+        assert_eq!(find_existing_issue(&issues, "something else"), None);
+    }
+
+    #[test]
+    fn test_find_existing_issue_empty_list() {
+        let issues: Vec<github::IssueRef> = Vec::new();
+        assert_eq!(find_existing_issue(&issues, "anything"), None);
     }
 }
