@@ -90,7 +90,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
         });
     }
 
-    let diff = get_staged_or_all_diff(&wt.path)?;
+    let diff = stage_all_and_get_diff(&wt.path)?;
     let ticket = fetch_linked_ticket(conn, wt);
     let ticket_context = ticket
         .as_ref()
@@ -235,7 +235,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
             owner,
             repo_name,
             pr_number,
-            &ticket,
+            ticket.as_ref(),
             wt,
             wt_mgr,
             "[post-run]",
@@ -290,7 +290,7 @@ pub fn approve_and_merge(input: &PostRunInput<'_>) -> Result<PostRunResult> {
         owner,
         repo_name,
         pr_number,
-        &ticket,
+        ticket.as_ref(),
         wt,
         wt_mgr,
         "[approve]",
@@ -347,8 +347,7 @@ fn has_changes(worktree_path: &str) -> Result<bool> {
     Ok(!output.stdout.is_empty())
 }
 
-fn get_staged_or_all_diff(worktree_path: &str) -> Result<String> {
-    // Stage everything first so we can get a complete diff
+fn stage_all_and_get_diff(worktree_path: &str) -> Result<String> {
     let _ = Command::new("git")
         .args(["add", "-A"])
         .current_dir(worktree_path)
@@ -583,7 +582,7 @@ fn merge_and_cleanup(
     owner: &str,
     repo_name: &str,
     pr_number: i64,
-    ticket: &Option<Ticket>,
+    ticket: Option<&Ticket>,
     wt: &crate::worktree::Worktree,
     wt_mgr: &WorktreeManager,
     log_prefix: &str,
@@ -592,7 +591,7 @@ fn merge_and_cleanup(
     eprintln!("{log_prefix} PR #{pr_number} squash-merged");
 
     // Close linked GitHub issue if applicable
-    if let Some(ref t) = ticket {
+    if let Some(t) = ticket {
         if t.source_type == "github" {
             let _ = github::close_github_issue(owner, repo_name, &t.source_id);
             eprintln!("{log_prefix} Closed issue #{}", t.source_id);

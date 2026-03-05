@@ -368,7 +368,7 @@ pub fn build_remediation_prompt(swarm_result: &ReviewSwarmResult) -> String {
     prompt
 }
 
-// Re-export for backwards compatibility — canonical home is text_util.
+// Internal use alias — canonical home is text_util.
 pub(crate) use crate::text_util::truncate_str;
 
 /// Truncate `s` to at most `max` bytes (on a char boundary) and append `suffix` when truncated.
