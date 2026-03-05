@@ -264,11 +264,20 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
         prev_run_id = Some(&ev.run_id);
 
         let style = event_style(&ev.kind);
-        let prefix = if ev.kind == "prompt" { "YOU: " } else { "" };
-        let mut spans = vec![Span::styled(
-            format!("{prefix}{}", shorten_paths(&ev.summary, worktree_path)),
-            style,
-        )];
+        let (display_text, effective_style) = if ev.kind == "prompt" {
+            let step_label = extract_step_label(&ev.summary);
+            let is_step = step_label.is_some();
+            let label = step_label.unwrap_or_else(|| shorten_paths(&ev.summary, worktree_path));
+            let s = if is_step {
+                Style::default().fg(Color::Magenta)
+            } else {
+                style
+            };
+            (label, s)
+        } else {
+            (shorten_paths(&ev.summary, worktree_path), style)
+        };
+        let mut spans = vec![Span::styled(display_text, effective_style)];
         if let Some(dur) = ev.duration_ms() {
             if dur >= 100 {
                 let dur_s = dur as f64 / 1000.0;
@@ -299,6 +308,40 @@ fn shorten_paths(summary: &str, worktree_path: &str) -> String {
         Some(home) => s.replacen(home.to_string_lossy().as_ref(), "~", 1),
         None => s,
     }
+}
+
+/// Extract a clean display label from an orchestrator child prompt.
+/// Returns "Step N/M: description" if the prompt matches the child format.
+fn extract_step_label(prompt: &str) -> Option<String> {
+    let rest = prompt.strip_prefix("You are executing step ")?;
+    let space = rest.find(' ')?;
+    let step_num = &rest[..space];
+    let rest = rest[space..].strip_prefix(" of ")?;
+    let space = rest.find(' ')?;
+    let total = &rest[..space];
+
+    if let Some(idx) = prompt.find("## Your Assignment") {
+        let after = &prompt[idx..];
+        if let Some(nl) = after.find('\n') {
+            let desc: String = after[nl + 1..]
+                .trim_start()
+                .lines()
+                .take_while(|l| !l.starts_with("Focus only on this step"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let desc = desc.trim();
+            if !desc.is_empty() {
+                let truncated = if desc.len() > 80 {
+                    format!("{}...", &desc[..80])
+                } else {
+                    desc.to_string()
+                };
+                return Some(format!("STEP {step_num}/{total}: {truncated}"));
+            }
+        }
+    }
+
+    Some(format!("STEP {step_num}/{total}"))
 }
 
 fn event_style(kind: &str) -> Style {
@@ -423,11 +466,13 @@ fn render_child_run_line(run: &conductor_core::agent::AgentRun) -> Line<'static>
     };
     let status_str = format!("[{status_text}]");
 
-    let prompt = if run.prompt.len() > 50 {
-        format!("{}...", &run.prompt[..50])
-    } else {
-        run.prompt.clone()
-    };
+    let prompt = extract_step_label(&run.prompt).unwrap_or_else(|| {
+        if run.prompt.len() > 50 {
+            format!("{}...", &run.prompt[..50])
+        } else {
+            run.prompt.clone()
+        }
+    });
 
     let mut spans = vec![
         Span::styled("  └─ ", Style::default().fg(Color::DarkGray)),

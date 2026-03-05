@@ -90,6 +90,10 @@ pub fn api_router() -> Router<AppState> {
         )
         .route("/api/worktrees/{id}/agent/prompt", get(agents::get_prompt))
         .route(
+            "/api/worktrees/{id}/agent/orchestrate",
+            post(agents::orchestrate_agent),
+        )
+        .route(
             "/api/worktrees/{id}/agent/created-issues",
             get(agents::list_created_issues),
         )

@@ -248,6 +248,11 @@ pub enum InputAction {
         worktree_slug: String,
         resume_session_id: Option<String>,
     },
+    OrchestratePrompt {
+        worktree_id: String,
+        worktree_path: String,
+        worktree_slug: String,
+    },
     /// Second step: optionally override the model for this run.
     /// `resolved_default` is the already-resolved model (worktree → repo → global config).
     AgentModelOverride {

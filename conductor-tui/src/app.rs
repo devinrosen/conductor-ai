@@ -291,6 +291,7 @@ impl App {
 
             // Agent (tmux-based)
             Action::LaunchAgent => self.handle_launch_agent(),
+            Action::OrchestrateAgent => self.handle_orchestrate_agent(),
             Action::StopAgent => self.handle_stop_agent(),
             Action::ViewAgentLog => self.handle_view_agent_log(),
             Action::AgentActivityDown => {
@@ -1316,6 +1317,16 @@ impl App {
                     resume_session_id,
                     model,
                 );
+            }
+            InputAction::OrchestratePrompt {
+                worktree_id,
+                worktree_path,
+                worktree_slug,
+            } => {
+                if value.is_empty() {
+                    return;
+                }
+                self.start_orchestrate_tmux(value, worktree_id, worktree_path, worktree_slug);
             }
             InputAction::SetWorktreeModel {
                 worktree_id,
@@ -2716,6 +2727,175 @@ impl App {
 
         self.state.status_message = Some("Agent cancelled".to_string());
         self.refresh_data();
+    }
+
+    fn handle_orchestrate_agent(&mut self) {
+        let wt = self
+            .state
+            .selected_worktree_id
+            .as_ref()
+            .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
+            .cloned();
+
+        let Some(wt) = wt else {
+            self.state.status_message = Some("Select a worktree first".to_string());
+            return;
+        };
+
+        // Check if there's already a running agent for this worktree
+        let has_running = self
+            .state
+            .data
+            .latest_agent_runs
+            .get(&wt.id)
+            .is_some_and(|run| run.status == "running");
+
+        if has_running {
+            self.state.status_message = Some("Agent already running — press x to stop".to_string());
+            return;
+        }
+
+        // Pre-fill prompt from linked ticket if available
+        let has_prior_runs = AgentManager::new(&self.conn)
+            .has_runs_for_worktree(&wt.id)
+            .unwrap_or(false);
+
+        let prefill = if has_prior_runs {
+            String::new()
+        } else {
+            wt.ticket_id
+                .as_ref()
+                .and_then(|tid| self.state.data.ticket_map.get(tid))
+                .map(build_agent_prompt)
+                .unwrap_or_default()
+        };
+
+        let lines = if prefill.is_empty() {
+            vec![String::new()]
+        } else {
+            prefill.lines().map(String::from).collect()
+        };
+        let mut textarea = tui_textarea::TextArea::new(lines);
+        textarea.set_cursor_line_style(ratatui::style::Style::default());
+        textarea.set_placeholder_text("Type your prompt here...");
+
+        self.state.modal = Modal::AgentPrompt {
+            title: "Orchestrate (multi-step)".to_string(),
+            prompt: "Enter prompt — plan will be generated, then each step runs as a child agent:"
+                .to_string(),
+            textarea: Box::new(textarea),
+            on_submit: InputAction::OrchestratePrompt {
+                worktree_id: wt.id.clone(),
+                worktree_path: wt.path.clone(),
+                worktree_slug: wt.slug.clone(),
+            },
+        };
+    }
+
+    fn start_orchestrate_tmux(
+        &mut self,
+        prompt: String,
+        worktree_id: String,
+        worktree_path: String,
+        worktree_slug: String,
+    ) {
+        // Resolve model: per-worktree → per-repo → global config
+        let wt_model = self
+            .state
+            .data
+            .worktrees
+            .iter()
+            .find(|w| w.id == worktree_id)
+            .and_then(|w| w.model.clone());
+        let repo_model = self
+            .state
+            .data
+            .worktrees
+            .iter()
+            .find(|w| w.id == worktree_id)
+            .and_then(|w| self.state.data.repos.iter().find(|r| r.id == w.repo_id))
+            .and_then(|r| r.model.clone());
+        let model = wt_model
+            .or(repo_model)
+            .or_else(|| self.config.general.model.clone());
+
+        // Create DB record with tmux window name
+        let mgr = AgentManager::new(&self.conn);
+        let run = match mgr.create_run(
+            &worktree_id,
+            &prompt,
+            Some(&worktree_slug),
+            model.as_deref(),
+        ) {
+            Ok(run) => run,
+            Err(e) => {
+                self.state.modal = Modal::Error {
+                    message: format!("Failed to create agent run: {e}"),
+                };
+                return;
+            }
+        };
+
+        // Build the conductor agent orchestrate command
+        let mut args = vec![
+            "agent".to_string(),
+            "orchestrate".to_string(),
+            "--run-id".to_string(),
+            run.id.clone(),
+            "--worktree-path".to_string(),
+            worktree_path,
+        ];
+
+        if let Some(ref m) = model {
+            args.push("--model".to_string());
+            args.push(m.clone());
+        }
+
+        // Resolve the conductor binary path
+        let conductor_bin = std::env::current_exe()
+            .ok()
+            .and_then(|p| {
+                let sibling = p.parent()?.join("conductor");
+                sibling
+                    .exists()
+                    .then(|| sibling.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "conductor".to_string());
+
+        // Spawn tmux window
+        let mut tmux_args = vec![
+            "new-window".to_string(),
+            "-d".to_string(),
+            "-n".to_string(),
+            worktree_slug.clone(),
+            "--".to_string(),
+            conductor_bin,
+        ];
+        tmux_args.extend(args);
+
+        let result = Command::new("tmux").args(&tmux_args).output();
+
+        match result {
+            Ok(o) if o.status.success() => {
+                self.state.status_message = Some(format!(
+                    "Orchestrator launched in tmux window: {worktree_slug}"
+                ));
+                self.refresh_data();
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                let _ = mgr.update_run_failed(&run.id, &format!("tmux failed: {stderr}"));
+                self.state.modal = Modal::Error {
+                    message: format!("Failed to spawn tmux window: {stderr}"),
+                };
+            }
+            Err(e) => {
+                let _ = mgr.update_run_failed(&run.id, &format!("tmux error: {e}"));
+                self.state.modal = Modal::Error {
+                    message: format!("Failed to spawn tmux: {e}"),
+                };
+            }
+        }
     }
 
     fn maybe_start_agent_for_worktree(

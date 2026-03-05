@@ -60,6 +60,7 @@ export function WorktreeDetailPage() {
   });
   const [agentLoading, setAgentLoading] = useState(false);
   const [stopConfirm, setStopConfirm] = useState(false);
+  const [orchestrateModalOpen, setOrchestrateModalOpen] = useState(false);
 
   useHotkeys([
     { key: "d", handler: () => setDeleteConfirm(true), description: "Delete worktree", enabled: !deleteConfirm && !promptModalOpen && !stopConfirm },
@@ -180,6 +181,32 @@ export function WorktreeDetailPage() {
       await refreshAgent();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to start agent");
+    } finally {
+      setAgentLoading(false);
+    }
+  }
+
+  async function handleOrchestrateClick() {
+    if (!worktreeId) return;
+    try {
+      const info = await api.getAgentPrompt(worktreeId);
+      setPromptInfo({ prompt: info.prompt, resumeSessionId: null });
+      setOrchestrateModalOpen(true);
+    } catch {
+      setPromptInfo({ prompt: "", resumeSessionId: null });
+      setOrchestrateModalOpen(true);
+    }
+  }
+
+  async function handleOrchestrateSubmit(prompt: string) {
+    if (!worktreeId) return;
+    setOrchestrateModalOpen(false);
+    setAgentLoading(true);
+    try {
+      await api.orchestrateAgent(worktreeId, prompt);
+      await refreshAgent();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to start orchestration");
     } finally {
       setAgentLoading(false);
     }
@@ -508,18 +535,28 @@ export function WorktreeDetailPage() {
             runs={agentRuns}
             childRuns={childRuns}
             onLaunch={handleLaunchClick}
+            onOrchestrate={handleOrchestrateClick}
             onStop={() => setStopConfirm(true)}
           />
         ) : (
           <div className="rounded-lg border border-gray-200 bg-white p-4 flex items-center justify-between">
             <p className="text-sm text-gray-500">No agent runs yet</p>
-            <button
-              onClick={handleLaunchClick}
-              disabled={agentLoading}
-              className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
-            >
-              Launch Agent
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleLaunchClick}
+                disabled={agentLoading}
+                className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                Launch Agent
+              </button>
+              <button
+                onClick={handleOrchestrateClick}
+                disabled={agentLoading}
+                className="px-3 py-1.5 text-sm rounded-md border border-indigo-300 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+              >
+                Orchestrate
+              </button>
+            </div>
           </div>
         )}
       </section>
@@ -580,6 +617,15 @@ export function WorktreeDetailPage() {
         resumeSessionId={promptInfo.resumeSessionId}
         onSubmit={handleAgentSubmit}
         onCancel={() => setPromptModalOpen(false)}
+      />
+
+      <AgentPromptModal
+        open={orchestrateModalOpen}
+        title="Orchestrate (Multi-Step)"
+        initialPrompt={promptInfo.prompt}
+        resumeSessionId={null}
+        onSubmit={(prompt) => handleOrchestrateSubmit(prompt)}
+        onCancel={() => setOrchestrateModalOpen(false)}
       />
 
       <ConfirmDialog

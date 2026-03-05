@@ -230,6 +230,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         match key.code {
             KeyCode::Char('r') => return Action::LaunchAgent,
+            KeyCode::Char('o') if !has_running_agent => return Action::OrchestrateAgent,
             KeyCode::Char('x') if has_running_agent => return Action::StopAgent,
             KeyCode::Char('L') if has_log => return Action::ViewAgentLog,
             KeyCode::Char('j') => return Action::AgentActivityDown,

@@ -12,6 +12,7 @@ use conductor_core::db::open_database;
 use conductor_core::github;
 use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
 use conductor_core::jira_acli;
+use conductor_core::orchestrator::{self, OrchestratorConfig};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
@@ -69,6 +70,24 @@ enum AgentCommands {
         /// Model to use (e.g. "sonnet", "claude-opus-4-6"). Overrides per-worktree and global defaults.
         #[arg(long)]
         model: Option<String>,
+    },
+    /// Orchestrate child agents: spawn a child run for each plan step
+    Orchestrate {
+        /// Parent agent run ID (must have plan steps)
+        #[arg(long)]
+        run_id: String,
+        /// Path to the worktree directory
+        #[arg(long)]
+        worktree_path: String,
+        /// Model to use for child agents
+        #[arg(long)]
+        model: Option<String>,
+        /// Stop on first child failure
+        #[arg(long)]
+        fail_fast: bool,
+        /// Child run timeout in seconds (default: 1800 = 30 min)
+        #[arg(long, default_value = "1800")]
+        child_timeout_secs: u64,
     },
     /// Create a new GitHub issue (called by agents during a run)
     CreateIssue {
@@ -550,6 +569,23 @@ fn main() -> Result<()> {
                     &prompt,
                     resume.as_deref(),
                     model.as_deref(),
+                )?;
+            }
+            AgentCommands::Orchestrate {
+                run_id,
+                worktree_path,
+                model,
+                fail_fast,
+                child_timeout_secs,
+            } => {
+                run_orchestrate(
+                    &conn,
+                    &config,
+                    &run_id,
+                    &worktree_path,
+                    model.as_deref(),
+                    fail_fast,
+                    child_timeout_secs,
                 )?;
             }
             AgentCommands::CreateIssue {
@@ -1105,6 +1141,115 @@ fn run_agent(
         "[conductor] Agent log saved to {}",
         log_path.to_string_lossy()
     );
+
+    Ok(())
+}
+
+/// Run the orchestration: generate a plan, then spawn child agents for each step.
+fn run_orchestrate(
+    conn: &rusqlite::Connection,
+    config: &conductor_core::config::Config,
+    run_id: &str,
+    worktree_path: &str,
+    model: Option<&str>,
+    fail_fast: bool,
+    child_timeout_secs: u64,
+) -> Result<()> {
+    let mgr = AgentManager::new(conn);
+
+    // Verify the run exists
+    let run = mgr.get_run(run_id)?;
+    let run = match run {
+        Some(r) => r,
+        None => anyhow::bail!("agent run not found: {run_id}"),
+    };
+
+    // Build effective prompt with startup context
+    let effective_prompt = if config.general.inject_startup_context {
+        match build_startup_context(conn, &run.worktree_id, run_id, worktree_path) {
+            Some(context) => {
+                eprintln!("[orchestrator] Injecting session context into prompt");
+                format!("{context}\n\n---\n\n{}", run.prompt)
+            }
+            None => run.prompt.clone(),
+        }
+    } else {
+        run.prompt.clone()
+    };
+
+    // Phase 1: Generate plan
+    eprintln!("[orchestrator] Generating plan...");
+    let steps = generate_plan(worktree_path, &effective_prompt);
+    match steps {
+        Some(ref plan_steps) => {
+            eprintln!("[orchestrator] Plan ({} steps):", plan_steps.len());
+            for (i, step) in plan_steps.iter().enumerate() {
+                eprintln!("  {}. {}", i + 1, step.description);
+            }
+            if let Err(e) = mgr.update_run_plan(run_id, plan_steps) {
+                eprintln!("[orchestrator] Warning: could not save plan to DB: {e}");
+            }
+        }
+        None => {
+            let msg = "Plan generation returned no steps — cannot orchestrate";
+            eprintln!("[orchestrator] {msg}");
+            mgr.update_run_failed(run_id, msg)?;
+            return Ok(());
+        }
+    }
+
+    // Emit orchestration start event
+    {
+        let now = chrono::Utc::now().to_rfc3339();
+        let _ = mgr.create_event(
+            run_id,
+            "system",
+            &format!("Orchestrating {} plan steps", steps.as_ref().unwrap().len()),
+            &now,
+            None,
+        );
+    }
+
+    // Phase 2: Orchestrate child runs
+    eprintln!("[orchestrator] Starting child orchestration...");
+
+    let orch_config = OrchestratorConfig {
+        fail_fast,
+        child_timeout: std::time::Duration::from_secs(child_timeout_secs),
+        ..Default::default()
+    };
+
+    let conductor_bin = std::env::current_exe()
+        .ok()
+        .and_then(|p| {
+            let sibling = p.parent()?.join("conductor");
+            sibling
+                .exists()
+                .then(|| sibling.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "conductor".to_string());
+
+    match orchestrator::orchestrate_run(
+        conn,
+        config,
+        run_id,
+        worktree_path,
+        model,
+        &conductor_bin,
+        &orch_config,
+    ) {
+        Ok(result) => {
+            if result.all_succeeded {
+                eprintln!("[orchestrator] All steps completed successfully");
+            } else {
+                eprintln!("[orchestrator] Orchestration completed with failures");
+            }
+        }
+        Err(e) => {
+            eprintln!("[orchestrator] Orchestration failed: {e}");
+            let _ = mgr.update_run_failed(run_id, &format!("Orchestration error: {e}"));
+        }
+    }
 
     Ok(())
 }

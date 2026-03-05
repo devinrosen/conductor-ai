@@ -490,6 +490,132 @@ pub async fn list_created_issues(
     Ok(Json(issues))
 }
 
+// ── Agent orchestration (auto-spawn child runs) ──────────────────────
+
+#[derive(Deserialize)]
+pub struct OrchestrateRequest {
+    pub prompt: String,
+    /// Stop on first child failure.
+    #[serde(default)]
+    pub fail_fast: bool,
+    /// Child run timeout in seconds (default: 1800 = 30 min).
+    #[serde(default = "default_child_timeout_secs")]
+    pub child_timeout_secs: u64,
+}
+
+fn default_child_timeout_secs() -> u64 {
+    1800
+}
+
+/// Start an orchestrated agent run: generate a plan, then spawn child agents
+/// for each step sequentially. The orchestrator runs in a tmux window.
+pub async fn orchestrate_agent(
+    State(state): State<AppState>,
+    Path(worktree_id): Path<String>,
+    Json(body): Json<OrchestrateRequest>,
+) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
+    let db = state.db.lock().await;
+
+    // Look up the worktree
+    let config = state.config.read().await;
+    let wt_mgr = WorktreeManager::new(&db, &config);
+    let wt = wt_mgr.get_by_id(&worktree_id)?;
+
+    // Check if there's already a running agent
+    let agent_mgr = AgentManager::new(&db);
+    if let Some(existing) = agent_mgr.latest_for_worktree(&worktree_id)? {
+        if existing.status == "running" {
+            return Err(conductor_core::error::ConductorError::Agent(
+                "Agent already running for this worktree".to_string(),
+            )
+            .into());
+        }
+    }
+
+    // Resolve model
+    let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
+    let model = wt
+        .model
+        .as_deref()
+        .or(repo.model.as_deref())
+        .or(config.general.model.as_deref())
+        .map(str::to_string);
+
+    // Create parent run record (this is the orchestrator run)
+    let run = agent_mgr.create_run(&worktree_id, &body.prompt, Some(&wt.slug), model.as_deref())?;
+
+    // Build conductor agent orchestrate command
+    let mut args = vec![
+        "agent".to_string(),
+        "orchestrate".to_string(),
+        "--run-id".to_string(),
+        run.id.clone(),
+        "--worktree-path".to_string(),
+        wt.path.clone(),
+    ];
+
+    if let Some(ref m) = model {
+        args.push("--model".to_string());
+        args.push(m.clone());
+    }
+
+    if body.fail_fast {
+        args.push("--fail-fast".to_string());
+    }
+
+    args.push("--child-timeout-secs".to_string());
+    args.push(body.child_timeout_secs.to_string());
+
+    // Resolve conductor binary
+    let conductor_bin = std::env::current_exe()
+        .ok()
+        .and_then(|p| {
+            let sibling = p.parent()?.join("conductor");
+            sibling
+                .exists()
+                .then(|| sibling.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "conductor".to_string());
+
+    // Spawn tmux window for the orchestrator
+    let mut tmux_args = vec![
+        "new-window".to_string(),
+        "-d".to_string(),
+        "-n".to_string(),
+        wt.slug.clone(),
+        "--".to_string(),
+        conductor_bin,
+    ];
+    tmux_args.extend(args);
+
+    let result = Command::new("tmux").args(&tmux_args).output();
+
+    match result {
+        Ok(o) if o.status.success() => {
+            state.events.emit(ConductorEvent::AgentStarted {
+                run_id: run.id.clone(),
+                worktree_id: wt.id.clone(),
+            });
+            Ok((StatusCode::CREATED, Json(run)))
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            let _ = agent_mgr.update_run_failed(&run.id, &format!("tmux failed: {stderr}"));
+            Err(conductor_core::error::ConductorError::Agent(format!(
+                "Failed to spawn tmux window: {stderr}"
+            ))
+            .into())
+        }
+        Err(e) => {
+            let _ = agent_mgr.update_run_failed(&run.id, &format!("tmux error: {e}"));
+            Err(
+                conductor_core::error::ConductorError::Agent(format!("Failed to spawn tmux: {e}"))
+                    .into(),
+            )
+        }
+    }
+}
+
 fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {
     if worktree_path.is_empty() {
         return summary.to_string();

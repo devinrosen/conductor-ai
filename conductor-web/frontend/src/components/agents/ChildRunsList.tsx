@@ -20,6 +20,38 @@ function formatCost(usd: number): string {
   return `$${usd.toFixed(4)}`;
 }
 
+/**
+ * Extract a clean step label from an orchestrator child prompt.
+ */
+function extractStepLabel(prompt: string): string | null {
+  const match = prompt.match(
+    /^You are executing step (\d+) of (\d+) in a multi-step plan\./,
+  );
+  if (!match) return null;
+  const [, stepNum, total] = match;
+
+  const assignmentIdx = prompt.indexOf("## Your Assignment");
+  if (assignmentIdx !== -1) {
+    const afterHeader = prompt.slice(assignmentIdx);
+    const nlIdx = afterHeader.indexOf("\n");
+    if (nlIdx !== -1) {
+      const desc = afterHeader
+        .slice(nlIdx + 1)
+        .trim()
+        .split("\n")
+        .filter((l) => !l.startsWith("Focus only on this step"))
+        .join(" ")
+        .trim();
+      if (desc) {
+        const truncated = desc.length > 80 ? desc.slice(0, 80) + "..." : desc;
+        return `Step ${stepNum}/${total}: ${truncated}`;
+      }
+    }
+  }
+
+  return `Step ${stepNum}/${total}`;
+}
+
 interface ChildRunsListProps {
   children: AgentRun[];
 }
@@ -50,9 +82,10 @@ export function ChildRunsList({ children }: ChildRunsListProps) {
                 <span className="inline-block w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
               )}
               <span className="text-gray-700 truncate flex-1" title={child.prompt}>
-                {child.prompt.length > 80
-                  ? child.prompt.slice(0, 80) + "..."
-                  : child.prompt}
+                {extractStepLabel(child.prompt) ??
+                  (child.prompt.length > 80
+                    ? child.prompt.slice(0, 80) + "..."
+                    : child.prompt)}
               </span>
               <span className="shrink-0 text-xs text-gray-500 tabular-nums space-x-2">
                 {child.cost_usd != null && child.cost_usd > 0 && (

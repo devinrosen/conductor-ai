@@ -6,6 +6,7 @@ pub mod github;
 pub mod issue_source;
 pub mod jira_acli;
 pub mod models;
+pub mod orchestrator;
 pub mod repo;
 pub mod tickets;
 pub mod worktree;
