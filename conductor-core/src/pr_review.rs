@@ -506,6 +506,7 @@ enum OffDiffLineKind {
 }
 
 /// Result of parsing a reviewer's output in a single pass.
+#[derive(Default)]
 struct ParsedReviewerOutput {
     off_diff_findings: Vec<OffDiffFinding>,
     inline_severities: Vec<String>,
@@ -596,16 +597,6 @@ fn parse_reviewer_output(text: &str, reviewer_name: &str) -> ParsedReviewerOutpu
         off_diff_findings: findings,
         inline_severities,
     }
-}
-
-#[cfg(test)]
-fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFinding> {
-    parse_reviewer_output(text, reviewer_name).off_diff_findings
-}
-
-#[cfg(test)]
-fn parse_inline_severities(text: &str) -> Vec<String> {
-    parse_reviewer_output(text, "").inline_severities
 }
 
 /// Check if a reviewer's findings contain only suggestion-severity issues (no critical/warning).
@@ -1039,10 +1030,7 @@ fn poll_all_reviewers(
                         let parsed = findings
                             .as_deref()
                             .map(|text| parse_reviewer_output(text, &role.name))
-                            .unwrap_or(ParsedReviewerOutput {
-                                off_diff_findings: Vec::new(),
-                                inline_severities: Vec::new(),
-                            });
+                            .unwrap_or_default();
                         let off_diff = parsed.off_diff_findings;
                         let approved =
                             is_review_approved(&run, &off_diff, &parsed.inline_severities);
@@ -1596,14 +1584,16 @@ mod tests {
             END-OFF-DIFF-FINDING\n\
             \nVERDICT: APPROVE";
 
-        let findings = parse_off_diff_findings(text, "security");
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].title, "Missing null check");
-        assert_eq!(findings[0].file, "src/lib.rs");
-        assert_eq!(findings[0].line, 42);
-        assert_eq!(findings[0].severity, "warning");
-        assert!(findings[0].body.contains("does not check for null"));
-        assert_eq!(findings[0].reviewer, "security");
+        let parsed = parse_reviewer_output(text, "security");
+        assert_eq!(parsed.off_diff_findings.len(), 1);
+        assert_eq!(parsed.off_diff_findings[0].title, "Missing null check");
+        assert_eq!(parsed.off_diff_findings[0].file, "src/lib.rs");
+        assert_eq!(parsed.off_diff_findings[0].line, 42);
+        assert_eq!(parsed.off_diff_findings[0].severity, "warning");
+        assert!(parsed.off_diff_findings[0]
+            .body
+            .contains("does not check for null"));
+        assert_eq!(parsed.off_diff_findings[0].reviewer, "security");
     }
 
     #[test]
@@ -1624,17 +1614,17 @@ mod tests {
             body: Description B\n\
             END-OFF-DIFF-FINDING";
 
-        let findings = parse_off_diff_findings(text, "architecture");
-        assert_eq!(findings.len(), 2);
-        assert_eq!(findings[0].title, "Issue A");
-        assert_eq!(findings[1].title, "Issue B");
+        let parsed = parse_reviewer_output(text, "architecture");
+        assert_eq!(parsed.off_diff_findings.len(), 2);
+        assert_eq!(parsed.off_diff_findings[0].title, "Issue A");
+        assert_eq!(parsed.off_diff_findings[1].title, "Issue B");
     }
 
     #[test]
     fn test_parse_off_diff_findings_none() {
         let text = "No issues found.\n\nVERDICT: APPROVE";
-        let findings = parse_off_diff_findings(text, "security");
-        assert!(findings.is_empty());
+        let parsed = parse_reviewer_output(text, "security");
+        assert!(parsed.off_diff_findings.is_empty());
     }
 
     #[test]
@@ -1644,25 +1634,25 @@ mod tests {
             "OFF-DIFF-FINDING\ntitle: Test\nfile: {}\nline: 1\nseverity: warning\nbody: desc\nEND-OFF-DIFF-FINDING",
             long_file
         );
-        let findings = parse_off_diff_findings(&text, "test");
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].file.len(), 512);
+        let parsed = parse_reviewer_output(&text, "test");
+        assert_eq!(parsed.off_diff_findings.len(), 1);
+        assert_eq!(parsed.off_diff_findings[0].file.len(), 512);
     }
 
     #[test]
     fn test_parse_off_diff_findings_severity_validated() {
         let text = "OFF-DIFF-FINDING\ntitle: Test\nfile: a.rs\nline: 1\nseverity: bananas\nbody: desc\nEND-OFF-DIFF-FINDING";
-        let findings = parse_off_diff_findings(text, "test");
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].severity, "suggestion");
+        let parsed = parse_reviewer_output(text, "test");
+        assert_eq!(parsed.off_diff_findings.len(), 1);
+        assert_eq!(parsed.off_diff_findings[0].severity, "suggestion");
     }
 
     #[test]
     fn test_parse_off_diff_findings_severity_case_insensitive() {
         let text = "OFF-DIFF-FINDING\ntitle: Test\nfile: a.rs\nline: 1\nseverity: Warning\nbody: desc\nEND-OFF-DIFF-FINDING";
-        let findings = parse_off_diff_findings(text, "test");
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].severity, "warning");
+        let parsed = parse_reviewer_output(text, "test");
+        assert_eq!(parsed.off_diff_findings.len(), 1);
+        assert_eq!(parsed.off_diff_findings[0].severity, "warning");
     }
 
     #[test]
@@ -1687,13 +1677,13 @@ mod tests {
             "OFF-DIFF-FINDING\ntitle: {}\nfile: a.rs\nline: 1\nseverity: warning\nbody: desc\nEND-OFF-DIFF-FINDING",
             long_title
         );
-        let findings = parse_off_diff_findings(&text, "test");
-        assert_eq!(findings.len(), 1);
+        let parsed = parse_reviewer_output(&text, "test");
+        assert_eq!(parsed.off_diff_findings.len(), 1);
         // Must be valid UTF-8 and ≤ MAX_TITLE + len('…')
-        assert!(findings[0].title.len() <= 256 + '…'.len_utf8());
-        assert!(findings[0].title.ends_with('…'));
+        assert!(parsed.off_diff_findings[0].title.len() <= 256 + '…'.len_utf8());
+        assert!(parsed.off_diff_findings[0].title.ends_with('…'));
         // Should not have split a multi-byte char
-        for c in findings[0].title.chars() {
+        for c in parsed.off_diff_findings[0].title.chars() {
             assert!(c == 'é' || c == '…');
         }
     }
@@ -1706,11 +1696,11 @@ mod tests {
             "OFF-DIFF-FINDING\ntitle: Test\nfile: {}\nline: 1\nseverity: warning\nbody: desc\nEND-OFF-DIFF-FINDING",
             long_file
         );
-        let findings = parse_off_diff_findings(&text, "test");
-        assert_eq!(findings.len(), 1);
-        assert!(findings[0].file.len() <= 512);
+        let parsed = parse_reviewer_output(&text, "test");
+        assert_eq!(parsed.off_diff_findings.len(), 1);
+        assert!(parsed.off_diff_findings[0].file.len() <= 512);
         // Must be valid UTF-8 and only contain whole 'é' chars
-        for c in findings[0].file.chars() {
+        for c in parsed.off_diff_findings[0].file.chars() {
             assert_eq!(c, 'é');
         }
     }
@@ -1723,12 +1713,14 @@ mod tests {
             "OFF-DIFF-FINDING\ntitle: Test\nfile: a.rs\nline: 1\nseverity: warning\nbody: {}\nEND-OFF-DIFF-FINDING",
             long_body
         );
-        let findings = parse_off_diff_findings(&text, "test");
-        assert_eq!(findings.len(), 1);
+        let parsed = parse_reviewer_output(&text, "test");
+        assert_eq!(parsed.off_diff_findings.len(), 1);
         // Body is capped + "\n\n*(truncated)*" suffix
-        assert!(findings[0].body.ends_with("*(truncated)*"));
+        assert!(parsed.off_diff_findings[0].body.ends_with("*(truncated)*"));
         // Strip the suffix and verify the crab portion is valid UTF-8 with whole chars
-        let stripped = findings[0].body.trim_end_matches("\n\n*(truncated)*");
+        let stripped = parsed.off_diff_findings[0]
+            .body
+            .trim_end_matches("\n\n*(truncated)*");
         assert!(stripped.len() <= 65_536);
         for c in stripped.chars() {
             assert_eq!(c, '🦀');
@@ -1743,8 +1735,8 @@ mod tests {
             line: 10\n\
             END-OFF-DIFF-FINDING";
 
-        let findings = parse_off_diff_findings(text, "test");
-        assert!(findings.is_empty());
+        let parsed = parse_reviewer_output(text, "test");
+        assert!(parsed.off_diff_findings.is_empty());
     }
 
     #[test]
@@ -1817,13 +1809,23 @@ mod tests {
     #[test]
     fn test_has_only_suggestions_ignores_off_diff_block_severity_in_inline_parse() {
         // Severity inside OFF-DIFF-FINDING blocks should not be double-counted as inline
-        // parse_reviewer_output correctly skips block contents for inline severities,
-        // so when called with no inline severities and no off-diff findings, returns false
-        assert!(!has_only_suggestions(&[], &[]));
+        let text = "OFF-DIFF-FINDING\n\
+            title: Issue\n\
+            file: a.rs\n\
+            line: 1\n\
+            severity: critical\n\
+            body: Bad stuff\n\
+            END-OFF-DIFF-FINDING\n\
+            VERDICT: REQUEST_CHANGES";
+        let parsed = parse_reviewer_output(text, "test");
+        // The critical severity lives only in off_diff_findings, not in inline_severities
+        assert!(parsed.inline_severities.is_empty());
+        assert_eq!(parsed.off_diff_findings.len(), 1);
+        assert_eq!(parsed.off_diff_findings[0].severity, "critical");
     }
 
     #[test]
-    fn test_parse_inline_severities_skips_off_diff_blocks() {
+    fn test_parse_reviewer_output_inline_severities_skip_off_diff_blocks() {
         let text = "**Severity**: suggestion\n\
             OFF-DIFF-FINDING\n\
             title: Issue\n\
@@ -1833,8 +1835,10 @@ mod tests {
             body: Bad stuff\n\
             END-OFF-DIFF-FINDING\n\
             Severity: suggestion";
-        let severities = parse_inline_severities(text);
-        assert_eq!(severities, vec!["suggestion", "suggestion"]);
+        let parsed = parse_reviewer_output(text, "test");
+        assert_eq!(parsed.inline_severities, vec!["suggestion", "suggestion"]);
+        assert_eq!(parsed.off_diff_findings.len(), 1);
+        assert_eq!(parsed.off_diff_findings[0].severity, "critical");
     }
 
     #[test]
