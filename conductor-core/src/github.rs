@@ -268,6 +268,124 @@ pub fn detect_pr_number(remote_url: &str, branch: &str) -> Option<i64> {
     json.first()?.get("number")?.as_i64()
 }
 
+/// Close a GitHub issue as completed via the `gh` CLI.
+pub fn close_github_issue(owner: &str, repo: &str, issue_number: &str) -> Result<()> {
+    let repo_slug = repo_slug(owner, repo);
+    run_gh(&[
+        "issue",
+        "close",
+        issue_number,
+        "--repo",
+        &repo_slug,
+        "--reason",
+        "completed",
+    ])?;
+    Ok(())
+}
+
+/// Squash-merge a PR via the `gh` CLI. Deletes the remote branch after merge.
+pub fn squash_merge_pr(owner: &str, repo: &str, pr_number: i64) -> Result<()> {
+    let repo_slug = repo_slug(owner, repo);
+    let pr_str = pr_number.to_string();
+    run_gh(&[
+        "pr",
+        "merge",
+        &pr_str,
+        "--repo",
+        &repo_slug,
+        "--squash",
+        "--delete-branch",
+    ])?;
+    Ok(())
+}
+
+/// Add a label to a PR via the `gh` CLI.
+pub fn add_pr_label(owner: &str, repo: &str, pr_number: i64, label: &str) -> Result<()> {
+    let repo_slug = repo_slug(owner, repo);
+    let pr_str = pr_number.to_string();
+    run_gh(&[
+        "pr",
+        "edit",
+        &pr_str,
+        "--repo",
+        &repo_slug,
+        "--add-label",
+        label,
+    ])?;
+    Ok(())
+}
+
+/// Create a PR with a specific title and body via the `gh` CLI.
+/// Returns the PR URL.
+pub fn create_pr_with_body(
+    owner: &str,
+    repo: &str,
+    branch: &str,
+    title: &str,
+    body: &str,
+) -> Result<String> {
+    let repo_slug = repo_slug(owner, repo);
+    let output = run_gh(&[
+        "pr", "create", "--repo", &repo_slug, "--head", branch, "--title", title, "--body", body,
+    ])?;
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(url)
+}
+
+/// Extract the PR number from a GitHub PR URL (e.g. `https://github.com/owner/repo/pull/123`).
+pub fn parse_pr_number_from_url(url: &str) -> Option<i64> {
+    let segment = url.rsplit('/').next()?;
+    segment.parse().ok()
+}
+
+/// Get on-diff review comments on a PR via the `gh` CLI.
+/// Returns `true` if there are unresolved review comments with file positions.
+pub fn has_on_diff_comments(owner: &str, repo: &str, pr_number: i64) -> Result<bool> {
+    let repo_slug = repo_slug(owner, repo);
+    let pr_str = pr_number.to_string();
+    let output = run_gh(&[
+        "api",
+        &format!("repos/{repo_slug}/pulls/{pr_str}/comments"),
+        "--jq",
+        "length",
+    ])?;
+    let count_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let count: i64 = count_str.parse().unwrap_or(0);
+    Ok(count > 0)
+}
+
+/// Detect the PR number for a branch. Returns (pr_number, pr_url).
+pub fn detect_pr(owner: &str, repo: &str, branch: &str) -> Result<Option<(i64, String)>> {
+    let slug = repo_slug(owner, repo);
+    let output = run_gh(&[
+        "pr",
+        "list",
+        "--repo",
+        &slug,
+        "--head",
+        branch,
+        "--json",
+        "number,url",
+        "--limit",
+        "1",
+    ])?;
+
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout)
+        .map_err(|e| ConductorError::TicketSync(format!("failed to parse gh output: {e}")))?;
+    if let Some(first) = json.first() {
+        let number = first.get("number").and_then(|v| v.as_i64());
+        let url = first
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if let Some(n) = number {
+            return Ok(Some((n, url)));
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,5 +459,22 @@ mod tests {
         let default_branch = item["defaultBranchRef"]["name"].as_str().unwrap_or("main");
         assert_eq!(default_branch, "main");
         assert!(item["isPrivate"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_parse_pr_number_from_url() {
+        assert_eq!(
+            parse_pr_number_from_url("https://github.com/owner/repo/pull/42"),
+            Some(42)
+        );
+        assert_eq!(
+            parse_pr_number_from_url("https://github.com/owner/repo/pull/999"),
+            Some(999)
+        );
+        assert_eq!(
+            parse_pr_number_from_url("https://github.com/owner/repo/pull/"),
+            None
+        );
+        assert_eq!(parse_pr_number_from_url("not-a-url"), None);
     }
 }
