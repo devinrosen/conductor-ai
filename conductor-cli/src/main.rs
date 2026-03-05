@@ -176,9 +176,6 @@ enum AgentCommands {
         /// Model to use for reviewer agents
         #[arg(long)]
         model: Option<String>,
-        /// Maximum fix-review retry iterations (default: from repo config or 3)
-        #[arg(long)]
-        retry_limit: Option<i64>,
         /// Reviewer timeout in seconds (default: 900 = 15 min)
         #[arg(long, default_value = "900")]
         reviewer_timeout_secs: u64,
@@ -749,7 +746,6 @@ fn main() -> Result<()> {
                 worktree,
                 pr_number,
                 model,
-                retry_limit: _retry_limit,
                 reviewer_timeout_secs,
             } => {
                 let repo_mgr = RepoManager::new(&conn, &config);
@@ -760,7 +756,7 @@ fn main() -> Result<()> {
                 // Auto-detect PR number from branch if not provided
                 let pr_num = match pr_number {
                     Some(n) => Some(n),
-                    None => detect_pr_number(&r.remote_url, &wt.branch),
+                    None => github::detect_pr_number(&r.remote_url, &wt.branch),
                 };
 
                 let conductor_bin = std::env::current_exe()
@@ -1627,31 +1623,4 @@ fn sync_github(syncer: &TicketSyncer, repo_id: &str, repo_slug: &str, owner: &st
             eprintln!("  {} — sync failed: {e}", repo_slug);
         }
     }
-}
-
-/// Detect the PR number for a branch using `gh pr list`.
-fn detect_pr_number(remote_url: &str, branch: &str) -> Option<i64> {
-    let (owner, repo) = github::parse_github_remote(remote_url)?;
-    let output = Command::new("gh")
-        .args([
-            "pr",
-            "list",
-            "--repo",
-            &format!("{owner}/{repo}"),
-            "--head",
-            branch,
-            "--json",
-            "number",
-            "--limit",
-            "1",
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).ok()?;
-    json.first()?.get("number")?.as_i64()
 }
