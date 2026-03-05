@@ -103,11 +103,18 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         Modal::EventDetail {
             title,
             body,
+            line_count,
             scroll_offset,
             horizontal_offset,
-        } => {
-            modal::render_event_detail(frame, area, title, body, *scroll_offset, *horizontal_offset)
-        }
+        } => modal::render_event_detail(
+            frame,
+            area,
+            title,
+            body,
+            *line_count,
+            *scroll_offset,
+            *horizontal_offset,
+        ),
         Modal::GithubDiscoverOrgs {
             orgs,
             cursor,

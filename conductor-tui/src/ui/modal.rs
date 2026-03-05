@@ -1073,6 +1073,7 @@ pub fn render_event_detail(
     area: Rect,
     title: &str,
     body: &str,
+    line_count: usize,
     scroll_offset: u16,
     horizontal_offset: u16,
 ) {
@@ -1087,7 +1088,7 @@ pub fn render_event_detail(
     let hint = format!(
         " j/k=scroll  h/l=pan  gg/G=top/bot  q/Esc=close  (line {}/{})",
         scroll_offset + 1,
-        lines.len().max(1),
+        line_count.max(1),
     );
 
     let title_display = if title.len() > (popup.width as usize).saturating_sub(4) {

@@ -112,6 +112,7 @@ pub enum Modal {
     EventDetail {
         title: String,
         body: String,
+        line_count: usize,
         scroll_offset: u16,
         horizontal_offset: u16,
     },

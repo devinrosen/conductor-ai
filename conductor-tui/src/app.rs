@@ -299,10 +299,10 @@ impl App {
             Action::AgentActivityDown => match self.state.modal {
                 Modal::EventDetail {
                     ref mut scroll_offset,
-                    ref body,
+                    line_count,
                     ..
                 } => {
-                    let max = body.lines().count().saturating_sub(1) as u16;
+                    let max = line_count.saturating_sub(1) as u16;
                     *scroll_offset = (*scroll_offset + 1).min(max);
                 }
                 _ => {
@@ -345,10 +345,10 @@ impl App {
             Action::GoToBottom => match self.state.modal {
                 Modal::EventDetail {
                     ref mut scroll_offset,
-                    ref body,
+                    line_count,
                     ..
                 } => {
-                    *scroll_offset = body.lines().count().saturating_sub(1) as u16;
+                    *scroll_offset = line_count.saturating_sub(1) as u16;
                 }
                 Modal::GithubDiscoverOrgs {
                     ref orgs,
@@ -3178,15 +3178,16 @@ impl App {
             return;
         };
 
-        let content = match std::fs::read_to_string(log_path) {
-            Ok(c) => c,
+        let file = match std::fs::File::open(log_path) {
+            Ok(f) => f,
             Err(e) => {
                 self.state.status_message = Some(format!("Failed to read log: {e}"));
                 return;
             }
         };
+        let reader = std::io::BufReader::new(file);
 
-        let Some(code_block) = extract_last_code_block(&content) else {
+        let Some(code_block) = extract_last_code_block(reader) else {
             self.state.status_message = Some("No code block found in log".to_string());
             return;
         };
@@ -3211,8 +3212,9 @@ impl App {
         match copy_result {
             Ok(mut child) => {
                 use std::io::Write;
-                if let Some(ref mut stdin) = child.stdin {
+                if let Some(mut stdin) = child.stdin.take() {
                     let _ = stdin.write_all(code_block.as_bytes());
+                    drop(stdin); // Close stdin so clipboard tool sees EOF
                 }
                 match child.wait() {
                     Ok(status) if status.success() => {
@@ -3271,10 +3273,12 @@ impl App {
 
         let title = format!("[{}] {}", ev.kind, &ev.summary[..ev.summary.len().min(60)]);
         let body = ev.summary.clone();
+        let line_count = body.lines().count();
 
         self.state.modal = Modal::EventDetail {
             title,
             body,
+            line_count,
             scroll_offset: 0,
             horizontal_offset: 0,
         };
@@ -3521,18 +3525,21 @@ impl App {
     }
 }
 
-/// Extract the last fenced code block (```...```) from log content.
-fn extract_last_code_block(content: &str) -> Option<String> {
+/// Extract the last fenced code block (```...```) from a reader (line-by-line streaming).
+fn extract_last_code_block(reader: impl std::io::BufRead) -> Option<String> {
     let mut last_block: Option<String> = None;
     let mut in_block = false;
     let mut current_block = String::new();
 
-    for line in content.lines() {
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
         if line.trim_start().starts_with("```") {
             if in_block {
-                // Closing fence — save the block
-                last_block = Some(current_block.clone());
-                current_block.clear();
+                // Closing fence — save the block (take avoids clone)
+                last_block = Some(std::mem::take(&mut current_block));
                 in_block = false;
             } else {
                 // Opening fence
@@ -3543,7 +3550,7 @@ fn extract_last_code_block(content: &str) -> Option<String> {
             if !current_block.is_empty() {
                 current_block.push('\n');
             }
-            current_block.push_str(line);
+            current_block.push_str(&line);
         }
     }
 
@@ -3588,12 +3595,13 @@ fn capture_agent_log(mgr: &AgentManager, run_id: &str, tmux_window: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn test_extract_last_code_block_single() {
         let content = "some text\n```bash\necho hello\n```\nmore text";
         assert_eq!(
-            extract_last_code_block(content),
+            extract_last_code_block(Cursor::new(content)),
             Some("echo hello".to_string())
         );
     }
@@ -3602,19 +3610,22 @@ mod tests {
     fn test_extract_last_code_block_multiple() {
         let content = "```\nfirst\n```\nstuff\n```python\nsecond\nthird\n```\n";
         assert_eq!(
-            extract_last_code_block(content),
+            extract_last_code_block(Cursor::new(content)),
             Some("second\nthird".to_string())
         );
     }
 
     #[test]
     fn test_extract_last_code_block_none() {
-        assert_eq!(extract_last_code_block("no code here"), None);
+        assert_eq!(extract_last_code_block(Cursor::new("no code here")), None);
     }
 
     #[test]
     fn test_extract_last_code_block_unclosed() {
         let content = "```\nclosed\n```\n```\nunclosed";
-        assert_eq!(extract_last_code_block(content), Some("closed".to_string()));
+        assert_eq!(
+            extract_last_code_block(Cursor::new(content)),
+            Some("closed".to_string())
+        );
     }
 }
