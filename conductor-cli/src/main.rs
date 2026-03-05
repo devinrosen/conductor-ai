@@ -1,7 +1,7 @@
 use std::io::{BufRead, Write};
 use std::process::{Command, Stdio};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use conductor_core::agent::{
@@ -121,9 +121,12 @@ enum AgentCommands {
         /// Path to the worktree directory
         #[arg(long)]
         worktree_path: String,
-        /// Prompt for Claude
+        /// Prompt for Claude (use --prompt-file for large prompts)
         #[arg(long)]
-        prompt: String,
+        prompt: Option<String>,
+        /// Read prompt from a file (avoids OS arg length limits for large diffs)
+        #[arg(long)]
+        prompt_file: Option<String>,
         /// Resume a previous Claude session
         #[arg(long)]
         resume: Option<String>,
@@ -638,14 +641,21 @@ fn main() -> Result<()> {
                 run_id,
                 worktree_path,
                 prompt,
+                prompt_file,
                 resume,
                 model,
             } => {
+                let resolved_prompt = match (prompt, prompt_file) {
+                    (Some(p), _) => p,
+                    (None, Some(path)) => std::fs::read_to_string(&path)
+                        .with_context(|| format!("Failed to read prompt file: {path}"))?,
+                    (None, None) => anyhow::bail!("Either --prompt or --prompt-file is required"),
+                };
                 run_agent(
                     &conn,
                     &run_id,
                     &worktree_path,
-                    &prompt,
+                    &resolved_prompt,
                     resume.as_deref(),
                     model.as_deref(),
                 )?;

@@ -4,6 +4,7 @@
 //! PR diff with a different focus area. Aggregates findings into a unified
 //! review and optionally posts to the GitHub PR.
 
+use std::io::Write;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -507,6 +508,9 @@ fn post_pr_comment(owner: &str, repo: &str, pr_number: i64, comment: &str) -> Re
 }
 
 /// Spawn a reviewer agent in a tmux window.
+///
+/// The prompt is written to a temp file to avoid exceeding tmux/OS command length
+/// limits (large PR diffs can easily blow past the ~200KB arg limit).
 fn spawn_reviewer_tmux(
     conductor_bin: &str,
     run_id: &str,
@@ -515,34 +519,36 @@ fn spawn_reviewer_tmux(
     model: Option<&str>,
     window_name: &str,
 ) -> std::result::Result<(), String> {
-    let mut args = vec![
-        "agent".to_string(),
-        "run".to_string(),
-        "--run-id".to_string(),
-        run_id.to_string(),
-        "--worktree-path".to_string(),
-        worktree_path.to_string(),
-        "--prompt".to_string(),
-        prompt.to_string(),
-    ];
+    // Write prompt to a temp file so the tmux command stays short
+    let prompt_file = std::env::temp_dir().join(format!("conductor-review-{run_id}.txt"));
+    let mut f = std::fs::File::create(&prompt_file)
+        .map_err(|e| format!("Failed to write prompt file: {e}"))?;
+    f.write_all(prompt.as_bytes())
+        .map_err(|e| format!("Failed to write prompt file: {e}"))?;
 
+    let mut model_flag = String::new();
     if let Some(m) = model {
-        args.push("--model".to_string());
-        args.push(m.to_string());
+        model_flag = format!(" --model {m}");
     }
 
-    let mut tmux_args = vec![
-        "new-window".to_string(),
-        "-d".to_string(),
-        "-n".to_string(),
-        window_name.to_string(),
-        "--".to_string(),
-        conductor_bin.to_string(),
-    ];
-    tmux_args.extend(args);
+    // Use shell -c so tmux only sees a short command string
+    let shell_cmd = format!(
+        "{conductor_bin} agent run --run-id {run_id} --worktree-path {worktree_path} \
+         --prompt-file {prompt_file}{model_flag}",
+        prompt_file = prompt_file.display(),
+    );
 
     let result = Command::new("tmux")
-        .args(&tmux_args)
+        .args([
+            "new-window",
+            "-d",
+            "-n",
+            window_name,
+            "--",
+            "sh",
+            "-c",
+            &shell_cmd,
+        ])
         .output()
         .map_err(|e| format!("Failed to spawn tmux: {e}"))?;
 
@@ -562,6 +568,7 @@ fn poll_reviewer_completion(
     timeout: Duration,
 ) -> std::result::Result<AgentRun, String> {
     let start = std::time::Instant::now();
+    let mgr = AgentManager::new(conn);
 
     loop {
         if start.elapsed() > timeout {
@@ -572,7 +579,6 @@ fn poll_reviewer_completion(
             ));
         }
 
-        let mgr = AgentManager::new(conn);
         match mgr.get_run(run_id) {
             Ok(Some(run)) => match run.status.as_str() {
                 "completed" | "failed" | "cancelled" => return Ok(run),
