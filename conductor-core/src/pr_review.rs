@@ -604,14 +604,12 @@ fn parse_reviewer_output(text: &str, reviewer_name: &str) -> ParsedReviewerOutpu
 /// Examines both already-parsed off-diff findings and inline severity markers in the review text.
 /// Returns true only if there are explicit suggestion-severity findings and no critical/warning.
 /// Returns false if there are no structured severity findings at all (respects the raw verdict).
-fn has_only_suggestions(
-    inline_severities: &[String],
-    off_diff_findings: &[OffDiffFinding],
-) -> bool {
-    let all_severities: Vec<&str> = off_diff_findings
+fn has_only_suggestions(parsed: &ParsedReviewerOutput) -> bool {
+    let all_severities: Vec<&str> = parsed
+        .off_diff_findings
         .iter()
         .map(|f| f.severity.as_str())
-        .chain(inline_severities.iter().map(|s| s.as_str()))
+        .chain(parsed.inline_severities.iter().map(|s| s.as_str()))
         .collect();
 
     if all_severities.is_empty() {
@@ -758,11 +756,7 @@ fn file_off_diff_issues(
 /// 1. They explicitly output `VERDICT: APPROVE`, OR
 /// 2. They output `VERDICT: REQUEST_CHANGES` but only have suggestion-severity findings
 ///    (no critical or warning). Suggestion-only findings should not block.
-fn is_review_approved(
-    run: &AgentRun,
-    off_diff_findings: &[OffDiffFinding],
-    inline_severities: &[String],
-) -> bool {
+fn is_review_approved(run: &AgentRun, parsed: &ParsedReviewerOutput) -> bool {
     if run.status != "completed" {
         return false;
     }
@@ -778,9 +772,7 @@ fn is_review_approved(
                 return true;
             }
             // If REQUEST_CHANGES but only suggestions, treat as approved
-            if verdict == "VERDICT: REQUEST_CHANGES"
-                && has_only_suggestions(inline_severities, off_diff_findings)
-            {
+            if verdict == "VERDICT: REQUEST_CHANGES" && has_only_suggestions(parsed) {
                 return true;
             }
             false
@@ -1031,9 +1023,8 @@ fn poll_all_reviewers(
                             .as_deref()
                             .map(|text| parse_reviewer_output(text, &role.name))
                             .unwrap_or_default();
+                        let approved = is_review_approved(&run, &parsed);
                         let off_diff = parsed.off_diff_findings;
-                        let approved =
-                            is_review_approved(&run, &off_diff, &parsed.inline_severities);
                         if let Some(ref step_id) = steps[*step_idx].id {
                             let status = if run.status == "completed" {
                                 "completed"
@@ -1199,13 +1190,13 @@ mod tests {
     #[test]
     fn test_is_review_approved_approve() {
         let run = make_run("completed", Some("No issues found.\n\nVERDICT: APPROVE"));
-        assert!(is_review_approved(&run, &[], &[]));
+        assert!(is_review_approved(&run, &ParsedReviewerOutput::default()));
     }
 
     #[test]
     fn test_is_review_approved_approve_trailing_whitespace() {
         let run = make_run("completed", Some("No issues found.\n\nVERDICT: APPROVE\n"));
-        assert!(is_review_approved(&run, &[], &[]));
+        assert!(is_review_approved(&run, &ParsedReviewerOutput::default()));
     }
 
     #[test]
@@ -1214,25 +1205,25 @@ mod tests {
             "completed",
             Some("Found issues.\n\nVERDICT: REQUEST_CHANGES"),
         );
-        assert!(!is_review_approved(&run, &[], &[]));
+        assert!(!is_review_approved(&run, &ParsedReviewerOutput::default()));
     }
 
     #[test]
     fn test_is_review_approved_failed_run() {
         let run = make_run("failed", Some("VERDICT: APPROVE"));
-        assert!(!is_review_approved(&run, &[], &[]));
+        assert!(!is_review_approved(&run, &ParsedReviewerOutput::default()));
     }
 
     #[test]
     fn test_is_review_approved_no_result() {
         let run = make_run("completed", None);
-        assert!(!is_review_approved(&run, &[], &[]));
+        assert!(!is_review_approved(&run, &ParsedReviewerOutput::default()));
     }
 
     #[test]
     fn test_is_review_approved_case_insensitive() {
         let run = make_run("completed", Some("verdict: approve"));
-        assert!(is_review_approved(&run, &[], &[]));
+        assert!(is_review_approved(&run, &ParsedReviewerOutput::default()));
     }
 
     #[test]
@@ -1242,7 +1233,7 @@ mod tests {
             "completed",
             Some("Found issues.\n+// VERDICT: APPROVE\n\nVERDICT: REQUEST_CHANGES"),
         );
-        assert!(!is_review_approved(&run, &[], &[]));
+        assert!(!is_review_approved(&run, &ParsedReviewerOutput::default()));
     }
 
     #[test]
@@ -1741,26 +1732,35 @@ mod tests {
 
     #[test]
     fn test_has_only_suggestions_true() {
-        let inline = vec!["suggestion".to_string()];
-        assert!(has_only_suggestions(&inline, &[]));
+        let parsed = ParsedReviewerOutput {
+            inline_severities: vec!["suggestion".to_string()],
+            ..Default::default()
+        };
+        assert!(has_only_suggestions(&parsed));
     }
 
     #[test]
     fn test_has_only_suggestions_with_warning() {
-        let inline = vec!["warning".to_string()];
-        assert!(!has_only_suggestions(&inline, &[]));
+        let parsed = ParsedReviewerOutput {
+            inline_severities: vec!["warning".to_string()],
+            ..Default::default()
+        };
+        assert!(!has_only_suggestions(&parsed));
     }
 
     #[test]
     fn test_has_only_suggestions_with_critical() {
-        let inline = vec!["critical".to_string()];
-        assert!(!has_only_suggestions(&inline, &[]));
+        let parsed = ParsedReviewerOutput {
+            inline_severities: vec!["critical".to_string()],
+            ..Default::default()
+        };
+        assert!(!has_only_suggestions(&parsed));
     }
 
     #[test]
     fn test_has_only_suggestions_no_findings() {
         // No severity markers at all — should return false (don't override verdict)
-        assert!(!has_only_suggestions(&[], &[]));
+        assert!(!has_only_suggestions(&ParsedReviewerOutput::default()));
     }
 
     #[test]
@@ -1774,7 +1774,11 @@ mod tests {
             body: "Consider renaming".to_string(),
             reviewer: "architecture".to_string(),
         }];
-        assert!(has_only_suggestions(&[], &findings));
+        let parsed = ParsedReviewerOutput {
+            off_diff_findings: findings,
+            ..Default::default()
+        };
+        assert!(has_only_suggestions(&parsed));
     }
 
     #[test]
@@ -1788,7 +1792,11 @@ mod tests {
             body: "This could be a bug".to_string(),
             reviewer: "security".to_string(),
         }];
-        assert!(!has_only_suggestions(&[], &findings));
+        let parsed = ParsedReviewerOutput {
+            off_diff_findings: findings,
+            ..Default::default()
+        };
+        assert!(!has_only_suggestions(&parsed));
     }
 
     #[test]
@@ -1803,7 +1811,11 @@ mod tests {
             body: "Minor issue".to_string(),
             reviewer: "architecture".to_string(),
         }];
-        assert!(has_only_suggestions(&inline, &findings));
+        let parsed = ParsedReviewerOutput {
+            inline_severities: inline,
+            off_diff_findings: findings,
+        };
+        assert!(has_only_suggestions(&parsed));
     }
 
     #[test]
@@ -1853,8 +1865,11 @@ mod tests {
                  VERDICT: REQUEST_CHANGES",
             ),
         );
-        let inline = vec!["suggestion".to_string()];
-        assert!(is_review_approved(&run, &[], &inline));
+        let parsed = ParsedReviewerOutput {
+            inline_severities: vec!["suggestion".to_string()],
+            ..Default::default()
+        };
+        assert!(is_review_approved(&run, &parsed));
     }
 
     #[test]
@@ -1868,8 +1883,11 @@ mod tests {
                  VERDICT: REQUEST_CHANGES",
             ),
         );
-        let inline = vec!["warning".to_string()];
-        assert!(!is_review_approved(&run, &[], &inline));
+        let parsed = ParsedReviewerOutput {
+            inline_severities: vec!["warning".to_string()],
+            ..Default::default()
+        };
+        assert!(!is_review_approved(&run, &parsed));
     }
 
     #[test]
@@ -1909,7 +1927,11 @@ mod tests {
             body: "Minor".to_string(),
             reviewer: "arch".to_string(),
         }];
-        assert!(is_review_approved(&run, &findings, &[]));
+        let parsed = ParsedReviewerOutput {
+            off_diff_findings: findings,
+            ..Default::default()
+        };
+        assert!(is_review_approved(&run, &parsed));
     }
 
     #[test]
