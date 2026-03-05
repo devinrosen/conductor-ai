@@ -8,7 +8,11 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::pr_review::PR_REVIEW_SWARM_PROMPT_PREFIX;
+
+/// Prefix used for the parent run prompt when launching a PR review swarm.
+/// Lives here (data layer) so that `pr_review.rs` (orchestration layer) can
+/// import it upward, keeping the dependency flow unidirectional.
+pub const PR_REVIEW_SWARM_PROMPT_PREFIX: &str = "PR review swarm";
 
 /// A single step in an agent's two-phase execution plan.
 /// Stored as individual records in the `agent_run_steps` table.

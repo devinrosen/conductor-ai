@@ -13,17 +13,13 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 
-use crate::agent::{AgentManager, AgentRun, PlanStep};
+use crate::agent::{AgentManager, AgentRun, PlanStep, PR_REVIEW_SWARM_PROMPT_PREFIX};
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::github;
 use crate::merge_queue::MergeQueueManager;
 use crate::review_config::{ReviewConfigManager, ReviewerRole};
 use crate::worktree::WorktreeManager;
-
-/// Prefix used for the parent run prompt when launching a PR review swarm.
-/// Exported so other modules can identify review-swarm runs by prompt content.
-pub const PR_REVIEW_SWARM_PROMPT_PREFIX: &str = "PR review swarm";
 
 /// A finding in unchanged/removed code that should be filed as a GH issue
 /// rather than blocking the PR.
@@ -147,7 +143,7 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
 
     // Create the parent review run
     let parent_prompt = format!(
-        "PR review swarm for branch '{}'. Coordinating {} reviewer agents.",
+        "{PR_REVIEW_SWARM_PROMPT_PREFIX} for branch '{}'. Coordinating {} reviewer agents.",
         pr_branch,
         roles.len()
     );
