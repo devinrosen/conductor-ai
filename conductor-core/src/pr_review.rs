@@ -486,14 +486,14 @@ fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFindin
                 const MAX_FILE: usize = 512;
                 const KNOWN_SEVERITIES: &[&str] = &["critical", "warning", "suggestion"];
                 let capped_title = if title.len() > MAX_TITLE {
-                    let mut t = title[..MAX_TITLE].to_string();
+                    let mut t = truncate_str(&title, MAX_TITLE).to_string();
                     t.push('…');
                     t
                 } else {
                     title.clone()
                 };
                 let capped_file = if file.len() > MAX_FILE {
-                    file[..MAX_FILE].to_string()
+                    truncate_str(&file, MAX_FILE).to_string()
                 } else {
                     file.clone()
                 };
@@ -507,7 +507,7 @@ fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFindin
                 };
                 let trimmed_body = body.trim().to_string();
                 let capped_body = if trimmed_body.len() > MAX_BODY {
-                    let mut b = trimmed_body[..MAX_BODY].to_string();
+                    let mut b = truncate_str(&trimmed_body, MAX_BODY).to_string();
                     b.push_str("\n\n*(truncated)*");
                     b
                 } else {
@@ -1585,6 +1585,76 @@ mod tests {
         let findings = parse_off_diff_findings(text, "test");
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, "warning");
+    }
+
+    #[test]
+    fn test_truncate_str_multibyte() {
+        // 'é' is 2 bytes; truncating at byte 3 must not split it
+        assert_eq!(truncate_str("ééé", 3), "é"); // 3 < 4, backs up to 2
+        assert_eq!(truncate_str("ééé", 4), "éé");
+        // '🦀' is 4 bytes
+        assert_eq!(truncate_str("🦀x", 2), ""); // can't fit the crab
+        assert_eq!(truncate_str("🦀x", 4), "🦀");
+        assert_eq!(truncate_str("🦀x", 5), "🦀x");
+        // ASCII passthrough
+        assert_eq!(truncate_str("hello", 10), "hello");
+        assert_eq!(truncate_str("hello", 3), "hel");
+    }
+
+    #[test]
+    fn test_parse_off_diff_findings_title_multibyte_truncation() {
+        // Build a title of 130 × 'é' (2 bytes each = 260 bytes > MAX_TITLE 256)
+        let long_title: String = "é".repeat(130);
+        let text = format!(
+            "OFF-DIFF-FINDING\ntitle: {}\nfile: a.rs\nline: 1\nseverity: warning\nbody: desc\nEND-OFF-DIFF-FINDING",
+            long_title
+        );
+        let findings = parse_off_diff_findings(&text, "test");
+        assert_eq!(findings.len(), 1);
+        // Must be valid UTF-8 and ≤ MAX_TITLE + len('…')
+        assert!(findings[0].title.len() <= 256 + '…'.len_utf8());
+        assert!(findings[0].title.ends_with('…'));
+        // Should not have split a multi-byte char
+        for c in findings[0].title.chars() {
+            assert!(c == 'é' || c == '…');
+        }
+    }
+
+    #[test]
+    fn test_parse_off_diff_findings_file_multibyte_truncation() {
+        // Build a file path with multi-byte chars exceeding MAX_FILE (512)
+        let long_file: String = "é".repeat(300); // 600 bytes > 512
+        let text = format!(
+            "OFF-DIFF-FINDING\ntitle: Test\nfile: {}\nline: 1\nseverity: warning\nbody: desc\nEND-OFF-DIFF-FINDING",
+            long_file
+        );
+        let findings = parse_off_diff_findings(&text, "test");
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].file.len() <= 512);
+        // Must be valid UTF-8 and only contain whole 'é' chars
+        for c in findings[0].file.chars() {
+            assert_eq!(c, 'é');
+        }
+    }
+
+    #[test]
+    fn test_parse_off_diff_findings_body_multibyte_truncation() {
+        // Build a body exceeding MAX_BODY (65536) with 4-byte emoji
+        let long_body: String = "🦀".repeat(16_400); // 65600 bytes > 65536
+        let text = format!(
+            "OFF-DIFF-FINDING\ntitle: Test\nfile: a.rs\nline: 1\nseverity: warning\nbody: {}\nEND-OFF-DIFF-FINDING",
+            long_body
+        );
+        let findings = parse_off_diff_findings(&text, "test");
+        assert_eq!(findings.len(), 1);
+        // Body is capped + "\n\n*(truncated)*" suffix
+        assert!(findings[0].body.ends_with("*(truncated)*"));
+        // Strip the suffix and verify the crab portion is valid UTF-8 with whole chars
+        let stripped = findings[0].body.trim_end_matches("\n\n*(truncated)*");
+        assert!(stripped.len() <= 65_536);
+        for c in stripped.chars() {
+            assert_eq!(c, '🦀');
+        }
     }
 
     #[test]
