@@ -34,6 +34,13 @@ pub struct OffDiffFinding {
     pub reviewer: String,
 }
 
+/// An off-diff finding that has been filed as a GitHub issue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FiledIssue {
+    pub finding: OffDiffFinding,
+    pub url: String,
+}
+
 /// Outcome of a single reviewer agent.
 #[derive(Debug, Clone)]
 pub struct ReviewerResult {
@@ -294,7 +301,7 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
         aggregated_comment: aggregated_comment.clone(),
         off_diff_issues_filed: off_diff_issues_filed
             .into_iter()
-            .map(|(f, _url)| f)
+            .map(|issue| issue.finding)
             .collect(),
     };
 
@@ -593,13 +600,12 @@ fn find_existing_issue(owner: &str, repo: &str, title: &str) -> Option<String> {
 }
 
 /// File off-diff findings as GitHub issues (or reference existing ones).
-/// Returns a list of (finding, issue_url) pairs.
 fn file_off_diff_issues(
     owner: &str,
     repo: &str,
     pr_branch: &str,
     findings: &[OffDiffFinding],
-) -> Vec<(OffDiffFinding, String)> {
+) -> Vec<FiledIssue> {
     let mut filed = Vec::new();
 
     for finding in findings {
@@ -609,7 +615,10 @@ fn file_off_diff_issues(
                 "[review-swarm] Off-diff finding '{}' matches existing issue: {}",
                 finding.title, existing_url
             );
-            filed.push((finding.clone(), existing_url));
+            filed.push(FiledIssue {
+                finding: finding.clone(),
+                url: existing_url,
+            });
             continue;
         }
 
@@ -640,7 +649,10 @@ fn file_off_diff_issues(
                     "[review-swarm] Filed off-diff issue '{}': {}",
                     finding.title, url
                 );
-                filed.push((finding.clone(), url));
+                filed.push(FiledIssue {
+                    finding: finding.clone(),
+                    url,
+                });
             }
             Err(e) => {
                 eprintln!(
@@ -692,7 +704,7 @@ fn is_review_approved(run: &AgentRun) -> bool {
 fn build_aggregated_comment(
     results: &[ReviewerResult],
     all_required_approved: bool,
-    off_diff_issues: &[(OffDiffFinding, String)],
+    off_diff_issues: &[FiledIssue],
 ) -> String {
     let mut comment = String::from("# Conductor PR Review\n\n");
 
@@ -746,16 +758,25 @@ fn build_aggregated_comment(
         comment.push_str(
             "The following issues were found in unchanged code and filed as separate GitHub issues:\n\n",
         );
-        for (finding, url) in off_diff_issues {
-            if url.starts_with("https://") {
+        for issue in off_diff_issues {
+            if issue.url.starts_with("https://") {
                 comment.push_str(&format!(
                     "- **{}** (`{}`:{}): [{}]({}) *({})*\n",
-                    finding.title, finding.file, finding.line, url, url, finding.severity
+                    issue.finding.title,
+                    issue.finding.file,
+                    issue.finding.line,
+                    issue.url,
+                    issue.url,
+                    issue.finding.severity
                 ));
             } else {
                 comment.push_str(&format!(
                     "- **{}** (`{}`:{}): {} *({})*\n",
-                    finding.title, finding.file, finding.line, url, finding.severity
+                    issue.finding.title,
+                    issue.finding.file,
+                    issue.finding.line,
+                    issue.url,
+                    issue.finding.severity
                 ));
             }
         }
@@ -1664,8 +1685,8 @@ mod tests {
             off_diff_findings: Vec::new(),
         }];
 
-        let off_diff = vec![(
-            OffDiffFinding {
+        let off_diff = vec![FiledIssue {
+            finding: OffDiffFinding {
                 title: "Pre-existing SQL injection".to_string(),
                 file: "src/db.rs".to_string(),
                 line: 100,
@@ -1673,8 +1694,8 @@ mod tests {
                 body: "Unparameterized query".to_string(),
                 reviewer: "security".to_string(),
             },
-            "https://github.com/test/repo/issues/99".to_string(),
-        )];
+            url: "https://github.com/test/repo/issues/99".to_string(),
+        }];
 
         let comment = build_aggregated_comment(&results, true, &off_diff);
         assert!(comment.contains("Off-Diff Findings"));
