@@ -4,8 +4,6 @@ CREATE TABLE IF NOT EXISTS review_configs (
     repo_id     TEXT NOT NULL REFERENCES repos(id),
     -- JSON array of reviewer role objects: [{name, focus, system_prompt, required}]
     roles_json  TEXT NOT NULL DEFAULT '[]',
-    -- Maximum automatic fix-review iterations before surfacing for human review.
-    retry_limit INTEGER NOT NULL DEFAULT 3,
     -- Whether to auto-post aggregated review as a GitHub PR comment.
     post_to_pr  INTEGER NOT NULL DEFAULT 1,
     -- Whether to auto-enqueue to merge queue on full approval.

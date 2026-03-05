@@ -108,7 +108,6 @@ pub struct ReviewConfig {
     pub id: String,
     pub repo_id: String,
     pub roles: Vec<ReviewerRole>,
-    pub retry_limit: i64,
     pub post_to_pr: bool,
     pub auto_merge: bool,
     pub created_at: String,
@@ -129,9 +128,8 @@ impl<'a> ReviewConfigManager<'a> {
         let result = self
             .conn
             .query_row(
-                "SELECT id, repo_id, roles_json, retry_limit, post_to_pr, auto_merge, \
-                 created_at, updated_at \
-                 FROM review_configs WHERE repo_id = ?1",
+                "SELECT id, repo_id, roles_json, post_to_pr, auto_merge, created_at, \
+                 updated_at FROM review_configs WHERE repo_id = ?1",
                 params![repo_id],
                 |row| {
                     let roles_json: String = row.get(2)?;
@@ -147,11 +145,10 @@ impl<'a> ReviewConfigManager<'a> {
                         id: row.get(0)?,
                         repo_id: row.get(1)?,
                         roles,
-                        retry_limit: row.get(3)?,
-                        post_to_pr: row.get::<_, bool>(4)?,
-                        auto_merge: row.get::<_, bool>(5)?,
-                        created_at: row.get(6)?,
-                        updated_at: row.get(7)?,
+                        post_to_pr: row.get::<_, bool>(3)?,
+                        auto_merge: row.get::<_, bool>(4)?,
+                        created_at: row.get(5)?,
+                        updated_at: row.get(6)?,
                     })
                 },
             )
@@ -169,7 +166,6 @@ impl<'a> ReviewConfigManager<'a> {
             id: String::new(),
             repo_id: repo_id.to_string(),
             roles: default_reviewer_roles(),
-            retry_limit: 3,
             post_to_pr: true,
             auto_merge: true,
             created_at: now.clone(),
@@ -182,7 +178,6 @@ impl<'a> ReviewConfigManager<'a> {
         &self,
         repo_id: &str,
         roles: &[ReviewerRole],
-        retry_limit: i64,
         post_to_pr: bool,
         auto_merge: bool,
     ) -> Result<ReviewConfig> {
@@ -196,22 +191,21 @@ impl<'a> ReviewConfigManager<'a> {
             .unwrap_or_else(|| ulid::Ulid::new().to_string());
 
         self.conn.execute(
-            "INSERT INTO review_configs (id, repo_id, roles_json, retry_limit, post_to_pr, auto_merge, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+            "INSERT INTO review_configs (id, repo_id, roles_json, post_to_pr, auto_merge, \
+             created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
              ON CONFLICT(repo_id) DO UPDATE SET
                 roles_json = excluded.roles_json,
-                retry_limit = excluded.retry_limit,
                 post_to_pr = excluded.post_to_pr,
                 auto_merge = excluded.auto_merge,
                 updated_at = excluded.updated_at",
-            params![id, repo_id, roles_json, retry_limit, post_to_pr, auto_merge, now],
+            params![id, repo_id, roles_json, post_to_pr, auto_merge, now],
         )?;
 
         Ok(ReviewConfig {
             id,
             repo_id: repo_id.to_string(),
             roles: roles.to_vec(),
-            retry_limit,
             post_to_pr,
             auto_merge,
             created_at: now.clone(),
@@ -268,7 +262,6 @@ mod tests {
         let mgr = ReviewConfigManager::new(&conn);
         let config = mgr.get_or_default(&repo_id).unwrap();
         assert_eq!(config.roles.len(), 4);
-        assert_eq!(config.retry_limit, 3);
         assert!(config.post_to_pr);
         assert!(config.auto_merge);
     }
@@ -285,16 +278,14 @@ mod tests {
             required: true,
         }];
 
-        let config = mgr.upsert(&repo_id, &roles, 5, false, true).unwrap();
+        let config = mgr.upsert(&repo_id, &roles, false, true).unwrap();
         assert_eq!(config.roles.len(), 1);
-        assert_eq!(config.retry_limit, 5);
         assert!(!config.post_to_pr);
         assert!(config.auto_merge);
 
         let fetched = mgr.get_for_repo(&repo_id).unwrap().unwrap();
         assert_eq!(fetched.roles.len(), 1);
         assert_eq!(fetched.roles[0].name, "security");
-        assert_eq!(fetched.retry_limit, 5);
     }
 
     #[test]
@@ -308,7 +299,7 @@ mod tests {
             system_prompt: "A".to_string(),
             required: true,
         }];
-        mgr.upsert(&repo_id, &roles1, 1, true, true).unwrap();
+        mgr.upsert(&repo_id, &roles1, true, true).unwrap();
 
         let roles2 = vec![
             ReviewerRole {
@@ -324,11 +315,10 @@ mod tests {
                 required: true,
             },
         ];
-        mgr.upsert(&repo_id, &roles2, 2, false, false).unwrap();
+        mgr.upsert(&repo_id, &roles2, false, false).unwrap();
 
         let config = mgr.get_for_repo(&repo_id).unwrap().unwrap();
         assert_eq!(config.roles.len(), 2);
-        assert_eq!(config.retry_limit, 2);
         assert!(!config.post_to_pr);
         assert!(!config.auto_merge);
     }
@@ -339,7 +329,7 @@ mod tests {
         let mgr = ReviewConfigManager::new(&conn);
 
         let roles = default_reviewer_roles();
-        mgr.upsert(&repo_id, &roles, 3, true, true).unwrap();
+        mgr.upsert(&repo_id, &roles, true, true).unwrap();
         assert!(mgr.get_for_repo(&repo_id).unwrap().is_some());
 
         mgr.delete_for_repo(&repo_id).unwrap();
