@@ -368,6 +368,15 @@ pub struct RunTreeTotals {
     pub total_duration_ms: i64,
 }
 
+/// A single phase in the cost breakdown (initial run, review fix #N, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CostPhase {
+    pub label: String,
+    pub model: Option<String>,
+    pub cost_usd: f64,
+    pub duration_ms: i64,
+}
+
 pub struct AgentManager<'a> {
     conn: &'a Connection,
 }
@@ -942,6 +951,44 @@ impl<'a> AgentManager<'a> {
         let mut runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         self.populate_plans(&mut runs)?;
         Ok(runs)
+    }
+
+    /// Build a per-phase cost breakdown for all runs in a worktree.
+    ///
+    /// Top-level runs (no parent) are classified as either "Initial run" or
+    /// "Review fix #N" based on prompt content. Each phase aggregates cost
+    /// from the run tree (parent + all child/grandchild runs).
+    pub fn worktree_cost_phases(&self, worktree_id: &str) -> Result<Vec<CostPhase>> {
+        // Fetch top-level runs only (no parent), ordered chronologically.
+        // We only need id, model, and prompt prefix to classify phases.
+        let mut runs = self.list_root_runs_for_worktree(worktree_id)?;
+        runs.reverse(); // list_root_runs returns DESC; we need chronological ASC
+
+        let mut phases = Vec::new();
+        let mut review_count = 0u32;
+
+        for run in &runs {
+            let totals = self.aggregate_run_tree(&run.id)?;
+
+            let is_review = run.prompt.starts_with("PR review swarm");
+            let label = if is_review {
+                review_count += 1;
+                format!("Review #{review_count}")
+            } else if review_count > 0 {
+                format!("Review fix #{review_count}")
+            } else {
+                "Initial run".to_string()
+            };
+
+            phases.push(CostPhase {
+                label,
+                model: run.model.clone(),
+                cost_usd: totals.total_cost,
+                duration_ms: totals.total_duration_ms,
+            });
+        }
+
+        Ok(phases)
     }
 
     /// Compute aggregated cost/turns/duration for a run and all its descendants.
@@ -2381,5 +2428,133 @@ mod tests {
 
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-eager"));
+    }
+
+    #[test]
+    fn test_worktree_cost_phases_empty() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let phases = mgr.worktree_cost_phases("w1").unwrap();
+        assert!(phases.is_empty());
+    }
+
+    #[test]
+    fn test_worktree_cost_phases_initial_run() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run("w1", "Fix the bug", None, Some("claude-sonnet-4-6"))
+            .unwrap();
+        mgr.update_run_completed(
+            &run.id,
+            None,
+            Some("done"),
+            Some(0.031),
+            Some(10),
+            Some(492_000),
+        )
+        .unwrap();
+
+        let phases = mgr.worktree_cost_phases("w1").unwrap();
+        assert_eq!(phases.len(), 1);
+        assert_eq!(phases[0].label, "Initial run");
+        assert_eq!(phases[0].model.as_deref(), Some("claude-sonnet-4-6"));
+        assert!((phases[0].cost_usd - 0.031).abs() < 1e-6);
+        assert_eq!(phases[0].duration_ms, 492_000);
+    }
+
+    #[test]
+    fn test_worktree_cost_phases_with_review() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Initial run
+        let run1 = mgr
+            .create_run("w1", "Implement feature", None, Some("sonnet"))
+            .unwrap();
+        mgr.update_run_completed(
+            &run1.id,
+            None,
+            Some("done"),
+            Some(0.03),
+            Some(10),
+            Some(400_000),
+        )
+        .unwrap();
+
+        // Review swarm (parent run with child)
+        let review = mgr
+            .create_run(
+                "w1",
+                "PR review swarm for branch 'feat/test'. Coordinating 2 reviewer agents.",
+                None,
+                Some("haiku"),
+            )
+            .unwrap();
+        let child = mgr
+            .create_child_run("w1", "Review correctness", None, Some("haiku"), &review.id)
+            .unwrap();
+        mgr.update_run_completed(
+            &child.id,
+            None,
+            Some("approved"),
+            Some(0.002),
+            Some(3),
+            Some(60_000),
+        )
+        .unwrap();
+        mgr.update_run_completed(
+            &review.id,
+            None,
+            Some("all approved"),
+            Some(0.001),
+            Some(1),
+            Some(70_000),
+        )
+        .unwrap();
+
+        let phases = mgr.worktree_cost_phases("w1").unwrap();
+        assert_eq!(phases.len(), 2);
+        assert_eq!(phases[0].label, "Initial run");
+        assert_eq!(phases[1].label, "Review #1");
+        // Review phase should aggregate parent + child costs
+        assert!((phases[1].cost_usd - 0.003).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_worktree_cost_phases_excludes_child_runs() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Parent run
+        let parent = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let child = mgr
+            .create_child_run("w1", "Sub-task", None, None, &parent.id)
+            .unwrap();
+        mgr.update_run_completed(
+            &parent.id,
+            None,
+            Some("done"),
+            Some(0.01),
+            Some(5),
+            Some(100_000),
+        )
+        .unwrap();
+        mgr.update_run_completed(
+            &child.id,
+            None,
+            Some("done"),
+            Some(0.005),
+            Some(2),
+            Some(50_000),
+        )
+        .unwrap();
+
+        let phases = mgr.worktree_cost_phases("w1").unwrap();
+        // Only 1 phase (the parent), but it should aggregate the child's cost
+        assert_eq!(phases.len(), 1);
+        assert!((phases[0].cost_usd - 0.015).abs() < 1e-6);
     }
 }
