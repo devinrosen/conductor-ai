@@ -457,20 +457,54 @@ fn build_reviewer_prompt(role: &ReviewerRole, diff: &str, branch: &str) -> Strin
     )
 }
 
+/// Block delimiter constants for OFF-DIFF-FINDING sections.
+const OFF_DIFF_START: &str = "OFF-DIFF-FINDING";
+const OFF_DIFF_END: &str = "END-OFF-DIFF-FINDING";
+
+/// Classify each line of `text` as inside or outside an OFF-DIFF-FINDING block.
+///
+/// Yields `(trimmed_line, inside_block)` pairs.  Block delimiter lines
+/// (`OFF-DIFF-FINDING` / `END-OFF-DIFF-FINDING`) are emitted with the
+/// corresponding flag so callers can use them as reset/flush signals.
+fn classify_off_diff_lines(text: &str) -> impl Iterator<Item = (&str, OffDiffLineKind)> {
+    let mut in_block = false;
+    text.lines().map(move |raw| {
+        let trimmed = raw.trim();
+        if trimmed == OFF_DIFF_START {
+            in_block = true;
+            return (trimmed, OffDiffLineKind::BlockStart);
+        }
+        if trimmed == OFF_DIFF_END {
+            in_block = false;
+            return (trimmed, OffDiffLineKind::BlockEnd);
+        }
+        if in_block {
+            (trimmed, OffDiffLineKind::InsideBlock)
+        } else {
+            (trimmed, OffDiffLineKind::OutsideBlock)
+        }
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OffDiffLineKind {
+    BlockStart,
+    BlockEnd,
+    InsideBlock,
+    OutsideBlock,
+}
+
 /// Parse OFF-DIFF-FINDING blocks from a reviewer's output text.
 fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFinding> {
     let mut findings = Vec::new();
-    let mut in_block = false;
     let mut title = String::new();
     let mut file = String::new();
     let mut line: u64 = 0;
     let mut severity = String::new();
     let mut body = String::new();
 
-    for raw_line in text.lines() {
-        let trimmed = raw_line.trim();
-        if trimmed == "OFF-DIFF-FINDING" {
-            in_block = true;
+    for (trimmed, kind) in classify_off_diff_lines(text) {
+        if kind == OffDiffLineKind::BlockStart {
             title.clear();
             file.clear();
             line = 0;
@@ -478,8 +512,8 @@ fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFindin
             body.clear();
             continue;
         }
-        if trimmed == "END-OFF-DIFF-FINDING" {
-            if in_block && !title.is_empty() {
+        if kind == OffDiffLineKind::BlockEnd {
+            if !title.is_empty() {
                 // Cap AI-generated fields to prevent oversized gh CLI args.
                 const MAX_TITLE: usize = 256;
                 const MAX_BODY: usize = 65_536;
@@ -522,10 +556,9 @@ fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFindin
                     reviewer: reviewer_name.to_string(),
                 });
             }
-            in_block = false;
             continue;
         }
-        if in_block {
+        if kind == OffDiffLineKind::InsideBlock {
             if let Some(val) = trimmed.strip_prefix("title:") {
                 title = val.trim().to_string();
             } else if let Some(val) = trimmed.strip_prefix("file:") {
@@ -555,19 +588,9 @@ fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFindin
 /// Returns the lowercased severity values found (e.g. "critical", "suggestion").
 fn parse_inline_severities(text: &str) -> Vec<String> {
     let mut severities = Vec::new();
-    let mut in_off_diff_block = false;
 
-    for raw_line in text.lines() {
-        let trimmed = raw_line.trim();
-        if trimmed == "OFF-DIFF-FINDING" {
-            in_off_diff_block = true;
-            continue;
-        }
-        if trimmed == "END-OFF-DIFF-FINDING" {
-            in_off_diff_block = false;
-            continue;
-        }
-        if in_off_diff_block {
+    for (trimmed, kind) in classify_off_diff_lines(text) {
+        if kind != OffDiffLineKind::OutsideBlock {
             continue;
         }
 
