@@ -4,6 +4,12 @@ Rebase the current branch onto main, then address all on-diff PR review comments
 
 ## Steps
 
+0. **Guard: refuse if on main**
+   ```
+   git branch --show-current
+   ```
+   If the current branch is `main`, stop immediately and tell the user to check out the feature branch first. Do not proceed.
+
 1. **Rebase onto main**
    ```
    git fetch origin
@@ -39,8 +45,9 @@ Rebase the current branch onto main, then address all on-diff PR review comments
 
 7. **Push the branch**
    ```
-   git push
+   git push --force-with-lease
    ```
+   Force push is required after a rebase since history is rewritten. `--force-with-lease` is preferred over `--force` — it refuses if the remote has commits you haven't fetched, preventing accidental overwrites.
 
 ## Notes
 - On-diff = comments tied to a specific file + line (have `path` + `position`/`line` fields in the GitHub API response)
