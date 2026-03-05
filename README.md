@@ -11,46 +11,68 @@ A local-first orchestration tool for managing multiple git repos, worktrees, tic
 
 ## Build
 
-```bash
-cargo build                     # Build all crates
-cargo build --release           # Release build
-cargo test                      # Run all tests
-cargo clippy -- -D warnings     # Lint
-```
-
-The web UI requires building the frontend first:
+The recommended way to build everything (frontend + all Rust crates):
 
 ```bash
-cd conductor-web/frontend && npm install && npm run build
-cargo build --bin conductor-web
+./build.sh
 ```
+
+This installs the web frontend dependencies, builds the React bundle, then runs `cargo build --workspace`. Run it after pulling `main` or setting up a new worktree.
+
+Individual commands for day-to-day development:
+
+```bash
+cargo build                                              # Build all crates (without frontend)
+cargo build --release                                    # Release build
+cargo test                                               # Run all tests
+cargo clippy --workspace --all-targets -- -D warnings    # Lint (CI enforces -D warnings)
+cargo fmt --all                                          # Auto-format
+```
+
+## Install
+
+After running `./build.sh`, install the binaries to `~/.cargo/bin`:
+
+```bash
+cargo install --path conductor-cli
+cargo install --path conductor-tui
+cargo install --path conductor-web   # requires frontend already built by ./build.sh
+```
+
+During development you can skip the install step and use `cargo run --bin <name>` instead (see examples below).
 
 ## Usage
 
 ### CLI
 
 ```bash
+# After install
 conductor repo add <remote-url>           # Register a repo
 conductor repo list                       # List registered repos
 conductor worktree create <repo> <name>   # Create a worktree
 conductor tickets sync <repo>             # Sync tickets from GitHub/Jira
+
+# Without installing
+cargo run --bin conductor -- repo list
 ```
 
 ### TUI
 
-```bash
-conductor-tui
-```
-
 Interactive terminal UI for browsing repos, worktrees, and tickets. Supports launching Claude agent sessions in tmux.
+
+```bash
+conductor-tui                        # After install
+cargo run --bin conductor-tui        # Without installing
+```
 
 ### Web UI
 
-```bash
-conductor-web
-```
-
 Opens a local web server with a React-based dashboard.
+
+```bash
+conductor-web                        # After install
+cargo run --bin conductor-web        # Without installing
+```
 
 ## Architecture
 
@@ -64,6 +86,16 @@ Four crates in a Cargo workspace:
 | **conductor-web** | Web UI using axum + React (Vite + Tailwind, embedded via `rust_embed`) |
 
 Data lives in `~/.conductor/` — a single SQLite database and per-repo worktree directories. No daemon or background process; the CLI and TUI link directly against `conductor-core`.
+
+## Contributing
+
+One-time setup after cloning — enables a pre-commit hook that enforces formatting:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+CI runs format, clippy, and tests on every PR to `main`. Squash or rebase merges only (no merge commits).
 
 ## License
 
