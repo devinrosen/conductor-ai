@@ -332,6 +332,12 @@ pub fn create_pr_with_body(
     Ok(url)
 }
 
+/// Extract the PR number from a GitHub PR URL (e.g. `https://github.com/owner/repo/pull/123`).
+pub fn parse_pr_number_from_url(url: &str) -> Option<i64> {
+    let segment = url.rsplit('/').next()?;
+    segment.parse().ok()
+}
+
 /// Get on-diff review comments on a PR via the `gh` CLI.
 /// Returns `true` if there are unresolved review comments with file positions.
 pub fn has_on_diff_comments(owner: &str, repo: &str, pr_number: i64) -> Result<bool> {
@@ -453,5 +459,22 @@ mod tests {
         let default_branch = item["defaultBranchRef"]["name"].as_str().unwrap_or("main");
         assert_eq!(default_branch, "main");
         assert!(item["isPrivate"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_parse_pr_number_from_url() {
+        assert_eq!(
+            parse_pr_number_from_url("https://github.com/owner/repo/pull/42"),
+            Some(42)
+        );
+        assert_eq!(
+            parse_pr_number_from_url("https://github.com/owner/repo/pull/999"),
+            Some(999)
+        );
+        assert_eq!(
+            parse_pr_number_from_url("https://github.com/owner/repo/pull/"),
+            None
+        );
+        assert_eq!(parse_pr_number_from_url("not-a-url"), None);
     }
 }

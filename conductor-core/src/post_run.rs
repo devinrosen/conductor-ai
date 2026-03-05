@@ -13,8 +13,9 @@ use rusqlite::Connection;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::github;
-use crate::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
+use crate::pr_review::{self, truncate_str, ReviewSwarmConfig, ReviewSwarmInput};
 use crate::repo::RepoManager;
+use crate::tickets::{Ticket, TicketSyncer};
 use crate::worktree::WorktreeManager;
 
 /// Outcome of the post-run lifecycle.
@@ -92,10 +93,25 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
     }
 
     let diff = get_staged_or_all_diff(&wt.path)?;
-    let ticket_context = get_ticket_context(conn, &wt);
-    let commit_msg =
-        generate_commit_message(&wt.path, &diff, &ticket_context, &post_cfg.commit_style)?;
-    let pr_description = generate_pr_description(&wt.path, &diff, &ticket_context, &commit_msg)?;
+    let ticket = fetch_linked_ticket(conn, &wt);
+    let ticket_context = ticket
+        .as_ref()
+        .map(format_ticket_context)
+        .unwrap_or_default();
+    let commit_msg = generate_commit_message(
+        &wt.path,
+        &diff,
+        &ticket_context,
+        &post_cfg.commit_style,
+        &post_cfg.commit_model,
+    )?;
+    let pr_description = generate_pr_description(
+        &wt.path,
+        &diff,
+        &ticket_context,
+        &commit_msg,
+        &post_cfg.commit_model,
+    )?;
 
     stage_and_commit(&wt.path, &commit_msg)?;
     eprintln!("[post-run] Committed: {}", first_line(&commit_msg));
@@ -120,9 +136,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
                 pr_title,
                 &pr_description,
             )?;
-            let num = github::detect_pr(&owner, &repo_name, &wt.branch)?
-                .map(|(n, _)| n)
-                .unwrap_or(0);
+            let num = github::parse_pr_number_from_url(&url).unwrap_or(0);
             eprintln!("[post-run] Created PR #{num}: {url}");
             (num, url)
         }
@@ -166,7 +180,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
         // Not approved — run fix agent if we have iterations left
         if iteration < post_cfg.review_loop_max {
             eprintln!("[post-run] Running rebase-and-fix-review...");
-            let fix_result = run_fix_review(input.conductor_bin, &wt.path);
+            let fix_result = run_fix_review(&wt.path);
             match fix_result {
                 Ok(()) => {
                     // Push the fixes
@@ -210,24 +224,24 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
     }
 
     // ── Phase 4: Merge decision ──────────────────────────────────────
-    let issue_labels = get_issue_labels(conn, &wt);
+    let issue_labels = ticket
+        .as_ref()
+        .map(|t| parse_labels(&t.labels))
+        .unwrap_or_default();
     let should_auto_merge = classify_merge_behavior(&issue_labels, post_cfg);
 
     if should_auto_merge {
         eprintln!("[post-run] Phase 4a: Auto-merge");
 
-        github::squash_merge_pr(&owner, &repo_name, pr_number)?;
-        eprintln!("[post-run] PR #{pr_number} squash-merged");
-
-        // Close linked issue if applicable
-        if let Some(issue_number) = get_linked_issue_number(conn, &wt) {
-            let _ = github::close_github_issue(&owner, &repo_name, &issue_number);
-            eprintln!("[post-run] Closed issue #{issue_number}");
-        }
-
-        // Clean up local worktree
-        let _ = wt_mgr.delete_by_id(&wt.id);
-        eprintln!("[post-run] Cleaned up worktree '{}'", wt.slug);
+        merge_and_cleanup(
+            &owner,
+            &repo_name,
+            pr_number,
+            &ticket,
+            &wt,
+            &wt_mgr,
+            "[post-run]",
+        )?;
 
         Ok(PostRunResult {
             phase: PostRunPhase::Merged,
@@ -279,16 +293,16 @@ pub fn approve_and_merge(input: &PostRunInput<'_>) -> Result<PostRunResult> {
     let (pr_number, pr_url) = github::detect_pr(&owner, &repo_name, &wt.branch)?
         .ok_or_else(|| ConductorError::Agent(format!("No PR found for branch {}", wt.branch)))?;
 
-    github::squash_merge_pr(&owner, &repo_name, pr_number)?;
-    eprintln!("[approve] PR #{pr_number} squash-merged");
-
-    if let Some(issue_number) = get_linked_issue_number(conn, &wt) {
-        let _ = github::close_github_issue(&owner, &repo_name, &issue_number);
-        eprintln!("[approve] Closed issue #{issue_number}");
-    }
-
-    let _ = wt_mgr.delete_by_id(&wt.id);
-    eprintln!("[approve] Cleaned up worktree '{}'", wt.slug);
+    let ticket = fetch_linked_ticket(conn, &wt);
+    merge_and_cleanup(
+        &owner,
+        &repo_name,
+        pr_number,
+        &ticket,
+        &wt,
+        &wt_mgr,
+        "[approve]",
+    )?;
 
     Ok(PostRunResult {
         phase: PostRunPhase::Merged,
@@ -324,26 +338,59 @@ fn get_staged_or_all_diff(worktree_path: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn get_ticket_context(conn: &Connection, wt: &crate::worktree::Worktree) -> String {
-    let ticket_id = match wt.ticket_id {
-        Some(ref id) => id,
-        None => return String::new(),
-    };
+/// Fetch the linked ticket for a worktree, if any.
+fn fetch_linked_ticket(conn: &Connection, wt: &crate::worktree::Worktree) -> Option<Ticket> {
+    let ticket_id = wt.ticket_id.as_ref()?;
+    TicketSyncer::new(conn).get_by_id(ticket_id).ok()
+}
 
-    conn.query_row(
-        "SELECT source_type, source_id, title, body FROM tickets WHERE id = ?1",
-        rusqlite::params![ticket_id],
-        |row| {
-            let source_type: String = row.get(0)?;
-            let source_id: String = row.get(1)?;
-            let title: String = row.get(2)?;
-            let body: String = row.get(3)?;
-            Ok(format!(
-                "Ticket: {source_type} #{source_id} — {title}\n\n{body}"
-            ))
-        },
+/// Format a ticket into context text for AI prompts.
+fn format_ticket_context(ticket: &Ticket) -> String {
+    format!(
+        "Ticket: {} #{} — {}\n\n{}",
+        ticket.source_type, ticket.source_id, ticket.title, ticket.body
     )
-    .unwrap_or_default()
+}
+
+/// Parse labels JSON string into a Vec<String>.
+fn parse_labels(labels_json: &str) -> Vec<String> {
+    serde_json::from_str(labels_json).unwrap_or_default()
+}
+
+/// Truncate diff to `MAX_DIFF_BYTES` on a char boundary.
+const MAX_DIFF_BYTES: usize = 10_000;
+
+fn truncate_diff(diff: &str) -> &str {
+    truncate_str(diff, MAX_DIFF_BYTES)
+}
+
+/// Call `claude -p` with a prompt and return the text result.
+/// Uses `--allowedTools ""` to prevent tool use (text generation only).
+fn call_claude(prompt: &str, worktree_path: &str, model: &str) -> Result<Option<String>> {
+    let mut cmd = Command::new("claude");
+    cmd.arg("-p")
+        .arg(prompt)
+        .arg("--output-format")
+        .arg("json")
+        .arg("--allowedTools")
+        .arg("")
+        .current_dir(worktree_path);
+    if !model.is_empty() {
+        cmd.arg("--model").arg(model);
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| ConductorError::Agent(format!("failed to run claude: {e}")))?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_default();
+    Ok(response
+        .get("result")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string()))
 }
 
 fn generate_commit_message(
@@ -351,6 +398,7 @@ fn generate_commit_message(
     diff: &str,
     ticket_context: &str,
     commit_style: &str,
+    model: &str,
 ) -> Result<String> {
     let style_instruction = if commit_style == "conventional" {
         "Use Conventional Commits format (e.g. 'feat:', 'fix:', 'refactor:', etc.)."
@@ -358,13 +406,7 @@ fn generate_commit_message(
         "Write a clear, descriptive commit message in free-form style."
     };
 
-    // Truncate diff for the prompt to stay within limits
-    let max_diff = 10_000;
-    let truncated_diff = if diff.len() > max_diff {
-        &diff[..max_diff]
-    } else {
-        diff
-    };
+    let truncated_diff = truncate_diff(diff);
 
     let prompt = format!(
         "Generate a git commit message for the following changes. {style_instruction}\n\
@@ -380,33 +422,9 @@ fn generate_commit_message(
         diff = truncated_diff,
     );
 
-    let output = Command::new("claude")
-        .arg("-p")
-        .arg(&prompt)
-        .arg("--output-format")
-        .arg("json")
-        .arg("--dangerously-skip-permissions")
-        .current_dir(worktree_path)
-        .output()
-        .map_err(|e| ConductorError::Agent(format!("failed to run claude for commit msg: {e}")))?;
-
-    if !output.status.success() {
-        return Err(ConductorError::Agent(
-            "Claude failed to generate commit message".to_string(),
-        ));
-    }
-
-    let response: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| ConductorError::Agent(format!("failed to parse claude output: {e}")))?;
-
-    let result = response
-        .get("result")
-        .and_then(|v| v.as_str())
-        .unwrap_or("chore: automated changes")
-        .trim()
-        .to_string();
-
-    Ok(result)
+    call_claude(&prompt, worktree_path, model)?.ok_or_else(|| {
+        ConductorError::Agent("Claude failed to generate commit message".to_string())
+    })
 }
 
 fn generate_pr_description(
@@ -414,13 +432,9 @@ fn generate_pr_description(
     diff: &str,
     ticket_context: &str,
     commit_msg: &str,
+    model: &str,
 ) -> Result<String> {
-    let max_diff = 10_000;
-    let truncated_diff = if diff.len() > max_diff {
-        &diff[..max_diff]
-    } else {
-        diff
-    };
+    let truncated_diff = truncate_diff(diff);
 
     let prompt = format!(
         "Generate a concise PR description in markdown for GitHub. \
@@ -437,30 +451,8 @@ fn generate_pr_description(
         diff = truncated_diff,
     );
 
-    let output = Command::new("claude")
-        .arg("-p")
-        .arg(&prompt)
-        .arg("--output-format")
-        .arg("json")
-        .arg("--dangerously-skip-permissions")
-        .current_dir(worktree_path)
-        .output()
-        .map_err(|e| ConductorError::Agent(format!("failed to run claude for PR desc: {e}")))?;
-
-    if !output.status.success() {
-        return Ok(format!("## Summary\n\n{commit_msg}"));
-    }
-
-    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_default();
-
-    let result = response
-        .get("result")
-        .and_then(|v| v.as_str())
-        .unwrap_or(commit_msg)
-        .trim()
-        .to_string();
-
-    Ok(result)
+    Ok(call_claude(&prompt, worktree_path, model)?
+        .unwrap_or_else(|| format!("## Summary\n\n{commit_msg}")))
 }
 
 fn stage_and_commit(worktree_path: &str, message: &str) -> Result<()> {
@@ -505,7 +497,7 @@ fn push_branch(worktree_path: &str, branch: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_fix_review(_conductor_bin: &str, worktree_path: &str) -> std::result::Result<(), String> {
+fn run_fix_review(worktree_path: &str) -> std::result::Result<(), String> {
     // Run claude with the rebase-and-fix-review skill
     let output = Command::new("claude")
         .arg("-p")
@@ -523,47 +515,33 @@ fn run_fix_review(_conductor_bin: &str, worktree_path: &str) -> std::result::Res
     }
 }
 
-fn get_issue_labels(conn: &Connection, wt: &crate::worktree::Worktree) -> Vec<String> {
-    let ticket_id = match wt.ticket_id {
-        Some(ref id) => id,
-        None => return Vec::new(),
-    };
-
-    conn.query_row(
-        "SELECT labels FROM tickets WHERE id = ?1",
-        rusqlite::params![ticket_id],
-        |row| {
-            let labels_json: String = row.get(0)?;
-            let labels: Vec<String> = serde_json::from_str(&labels_json).unwrap_or_default();
-            Ok(labels)
-        },
-    )
-    .unwrap_or_default()
-}
-
 fn classify_merge_behavior(
     issue_labels: &[String],
     post_cfg: &crate::config::PostRunConfig,
 ) -> bool {
+    // Pre-lowercase config labels once to avoid repeated allocations
+    let manual_lower: Vec<String> = post_cfg
+        .manual_merge_labels
+        .iter()
+        .map(|l| l.to_lowercase())
+        .collect();
+    let auto_lower: Vec<String> = post_cfg
+        .auto_merge_labels
+        .iter()
+        .map(|l| l.to_lowercase())
+        .collect();
+
     // If any label matches manual_merge_labels → manual
     for label in issue_labels {
         let lower = label.to_lowercase();
-        if post_cfg
-            .manual_merge_labels
-            .iter()
-            .any(|m| m.to_lowercase() == lower)
-        {
+        if manual_lower.contains(&lower) {
             return false;
         }
     }
     // If any label matches auto_merge_labels → auto
     for label in issue_labels {
         let lower = label.to_lowercase();
-        if post_cfg
-            .auto_merge_labels
-            .iter()
-            .any(|a| a.to_lowercase() == lower)
-        {
+        if auto_lower.contains(&lower) {
             return true;
         }
     }
@@ -571,14 +549,30 @@ fn classify_merge_behavior(
     true
 }
 
-fn get_linked_issue_number(conn: &Connection, wt: &crate::worktree::Worktree) -> Option<String> {
-    let ticket_id = wt.ticket_id.as_ref()?;
-    conn.query_row(
-        "SELECT source_id FROM tickets WHERE id = ?1 AND source_type = 'github'",
-        rusqlite::params![ticket_id],
-        |row| row.get::<_, String>(0),
-    )
-    .ok()
+/// Squash-merge a PR, close the linked GitHub issue (if any), and delete the local worktree.
+fn merge_and_cleanup(
+    owner: &str,
+    repo_name: &str,
+    pr_number: i64,
+    ticket: &Option<Ticket>,
+    wt: &crate::worktree::Worktree,
+    wt_mgr: &WorktreeManager,
+    log_prefix: &str,
+) -> Result<()> {
+    github::squash_merge_pr(owner, repo_name, pr_number)?;
+    eprintln!("{log_prefix} PR #{pr_number} squash-merged");
+
+    // Close linked GitHub issue if applicable
+    if let Some(ref t) = ticket {
+        if t.source_type == "github" {
+            let _ = github::close_github_issue(owner, repo_name, &t.source_id);
+            eprintln!("{log_prefix} Closed issue #{}", t.source_id);
+        }
+    }
+
+    let _ = wt_mgr.delete_by_id(&wt.id);
+    eprintln!("{log_prefix} Cleaned up worktree '{}'", wt.slug);
+    Ok(())
 }
 
 fn first_line(s: &str) -> &str {

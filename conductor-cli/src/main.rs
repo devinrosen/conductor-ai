@@ -23,6 +23,20 @@ use conductor_core::worktree::WorktreeManager;
 /// Environment variable name used to pass the current agent run ID to subprocesses.
 const CONDUCTOR_RUN_ID_ENV: &str = "CONDUCTOR_RUN_ID";
 
+/// Resolve the path to the `conductor` binary.
+/// Prefers a sibling binary next to the current executable, falls back to PATH lookup.
+fn resolve_conductor_bin() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| {
+            let sibling = p.parent()?.join("conductor");
+            sibling
+                .exists()
+                .then(|| sibling.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "conductor".to_string())
+}
+
 #[derive(Parser)]
 #[command(name = "conductor", about = "Multi-repo orchestration tool")]
 struct Cli {
@@ -757,15 +771,7 @@ fn main() -> Result<()> {
                 println!("Created issue #{source_id}: {url}");
             }
             AgentCommands::PostRun { repo, worktree } => {
-                let conductor_bin = std::env::current_exe()
-                    .ok()
-                    .and_then(|p| {
-                        let sibling = p.parent()?.join("conductor");
-                        sibling
-                            .exists()
-                            .then(|| sibling.to_string_lossy().into_owned())
-                    })
-                    .unwrap_or_else(|| "conductor".to_string());
+                let conductor_bin = resolve_conductor_bin();
 
                 match post_run::run_post_lifecycle(&PostRunInput {
                     conn: &conn,
@@ -804,15 +810,7 @@ fn main() -> Result<()> {
                     None => github::detect_pr_number(&r.remote_url, &wt.branch),
                 };
 
-                let conductor_bin = std::env::current_exe()
-                    .ok()
-                    .and_then(|p| {
-                        let sibling = p.parent()?.join("conductor");
-                        sibling
-                            .exists()
-                            .then(|| sibling.to_string_lossy().into_owned())
-                    })
-                    .unwrap_or_else(|| "conductor".to_string());
+                let conductor_bin = resolve_conductor_bin();
 
                 let swarm_config = ReviewSwarmConfig {
                     reviewer_timeout: std::time::Duration::from_secs(reviewer_timeout_secs),
