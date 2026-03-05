@@ -22,6 +22,13 @@ fn run_gh(args: &[&str]) -> Result<Output> {
     Ok(output)
 }
 
+/// A lightweight reference to a GitHub issue (title + URL).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueRef {
+    pub title: String,
+    pub url: String,
+}
+
 /// A GitHub repository discovered via the `gh` CLI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredRepo {
@@ -181,14 +188,13 @@ pub fn create_github_issue(
 }
 
 /// Search for existing GitHub issues matching a query, filtered by label.
-/// Returns parsed JSON objects with `number`, `title`, and `url` fields.
 pub fn list_issues_by_search(
     owner: &str,
     repo: &str,
     query: &str,
     label: &str,
     limit: u32,
-) -> Result<Vec<serde_json::Value>> {
+) -> Result<Vec<IssueRef>> {
     let repo_slug = format!("{owner}/{repo}");
     let limit_str = limit.to_string();
     let output = run_gh(&[
@@ -201,13 +207,13 @@ pub fn list_issues_by_search(
         "--label",
         label,
         "--json",
-        "number,title,url",
+        "title,url",
         "--limit",
         &limit_str,
     ])?;
 
     let json_str = String::from_utf8_lossy(&output.stdout);
-    let issues: Vec<serde_json::Value> = serde_json::from_str(json_str.trim())
+    let issues: Vec<IssueRef> = serde_json::from_str(json_str.trim())
         .map_err(|e| ConductorError::TicketSync(format!("failed to parse gh output: {e}")))?;
 
     Ok(issues)

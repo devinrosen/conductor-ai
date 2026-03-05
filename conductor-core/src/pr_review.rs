@@ -583,12 +583,9 @@ fn find_existing_issue(owner: &str, repo: &str, title: &str) -> Option<String> {
     // Look for a title that matches closely (case-insensitive substring)
     let title_lower = title.to_lowercase();
     for issue in &issues {
-        if let Some(existing_title) = issue["title"].as_str() {
-            if existing_title.to_lowercase().contains(&title_lower)
-                || title_lower.contains(&existing_title.to_lowercase())
-            {
-                return issue["url"].as_str().map(String::from);
-            }
+        let existing_lower = issue.title.to_lowercase();
+        if existing_lower.contains(&title_lower) || title_lower.contains(&existing_lower) {
+            return Some(issue.url.clone());
         }
     }
 
