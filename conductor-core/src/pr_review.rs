@@ -483,12 +483,27 @@ fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFindin
                 // Cap AI-generated fields to prevent oversized gh CLI args.
                 const MAX_TITLE: usize = 256;
                 const MAX_BODY: usize = 65_536;
+                const MAX_FILE: usize = 512;
+                const KNOWN_SEVERITIES: &[&str] = &["critical", "warning", "suggestion"];
                 let capped_title = if title.len() > MAX_TITLE {
                     let mut t = title[..MAX_TITLE].to_string();
                     t.push('…');
                     t
                 } else {
                     title.clone()
+                };
+                let capped_file = if file.len() > MAX_FILE {
+                    file[..MAX_FILE].to_string()
+                } else {
+                    file.clone()
+                };
+                let validated_severity = {
+                    let s = severity.trim().to_lowercase();
+                    if KNOWN_SEVERITIES.contains(&s.as_str()) {
+                        s
+                    } else {
+                        "suggestion".to_string()
+                    }
                 };
                 let trimmed_body = body.trim().to_string();
                 let capped_body = if trimmed_body.len() > MAX_BODY {
@@ -500,9 +515,9 @@ fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFindin
                 };
                 findings.push(OffDiffFinding {
                     title: capped_title,
-                    file: file.clone(),
+                    file: capped_file,
                     line,
-                    severity: severity.clone(),
+                    severity: validated_severity,
                     body: capped_body,
                     reviewer: reviewer_name.to_string(),
                 });
@@ -1542,6 +1557,34 @@ mod tests {
         let text = "No issues found.\n\nVERDICT: APPROVE";
         let findings = parse_off_diff_findings(text, "security");
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_off_diff_findings_file_capped() {
+        let long_file = "a".repeat(600);
+        let text = format!(
+            "OFF-DIFF-FINDING\ntitle: Test\nfile: {}\nline: 1\nseverity: warning\nbody: desc\nEND-OFF-DIFF-FINDING",
+            long_file
+        );
+        let findings = parse_off_diff_findings(&text, "test");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].file.len(), 512);
+    }
+
+    #[test]
+    fn test_parse_off_diff_findings_severity_validated() {
+        let text = "OFF-DIFF-FINDING\ntitle: Test\nfile: a.rs\nline: 1\nseverity: bananas\nbody: desc\nEND-OFF-DIFF-FINDING";
+        let findings = parse_off_diff_findings(text, "test");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, "suggestion");
+    }
+
+    #[test]
+    fn test_parse_off_diff_findings_severity_case_insensitive() {
+        let text = "OFF-DIFF-FINDING\ntitle: Test\nfile: a.rs\nline: 1\nseverity: Warning\nbody: desc\nEND-OFF-DIFF-FINDING";
+        let findings = parse_off_diff_findings(text, "test");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, "warning");
     }
 
     #[test]
