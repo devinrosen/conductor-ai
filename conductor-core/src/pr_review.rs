@@ -825,26 +825,16 @@ fn build_aggregated_comment(
             "The following issues were found in unchanged code and filed as separate GitHub issues:\n\n",
         );
         for issue in off_diff_issues {
-            if issue.url.starts_with("https://") {
-                comment.push_str(&format!(
-                    "- **{}** (`{}`:{}): [{}]({}) *({})*\n",
-                    issue.finding.title,
-                    issue.finding.file,
-                    issue.finding.line,
-                    issue.url,
-                    issue.url,
-                    issue.finding.severity
-                ));
+            let f = &issue.finding;
+            let url_part = if issue.url.starts_with("https://") {
+                format!("[{}]({})", issue.url, issue.url)
             } else {
-                comment.push_str(&format!(
-                    "- **{}** (`{}`:{}): {} *({})*\n",
-                    issue.finding.title,
-                    issue.finding.file,
-                    issue.finding.line,
-                    issue.url,
-                    issue.finding.severity
-                ));
-            }
+                issue.url.clone()
+            };
+            comment.push_str(&format!(
+                "- **{}** (`{}`:{}): {} *({})*\n",
+                f.title, f.file, f.line, url_part, f.severity
+            ));
         }
         comment.push_str("\n---\n\n");
     }
