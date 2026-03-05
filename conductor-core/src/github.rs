@@ -229,6 +229,33 @@ pub fn parse_github_remote(remote_url: &str) -> Option<(String, String)> {
     None
 }
 
+/// Detect the PR number for a branch using `gh pr list`.
+pub fn detect_pr_number(remote_url: &str, branch: &str) -> Option<i64> {
+    let (owner, repo) = parse_github_remote(remote_url)?;
+    let output = Command::new("gh")
+        .args([
+            "pr",
+            "list",
+            "--repo",
+            &format!("{owner}/{repo}"),
+            "--head",
+            branch,
+            "--json",
+            "number",
+            "--limit",
+            "1",
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).ok()?;
+    json.first()?.get("number")?.as_i64()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

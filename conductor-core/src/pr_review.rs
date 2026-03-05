@@ -4,6 +4,7 @@
 //! PR diff with a different focus area. Aggregates findings into a unified
 //! review and optionally posts to the GitHub PR.
 
+use std::borrow::Cow;
 use std::io::Write;
 use std::process::Command;
 use std::thread;
@@ -300,9 +301,9 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
     // Post to PR if configured
     if review_config.post_to_pr {
         if let Some(pr_num) = pr_number {
-            let remote_url = get_repo_remote_url(conn, repo_id);
-            if let Some(url) = remote_url {
-                if let Some((owner, repo_name)) = github::parse_github_remote(&url) {
+            let repo_mgr = crate::repo::RepoManager::new(conn, config);
+            if let Ok(repo) = repo_mgr.get_by_id(repo_id) {
+                if let Some((owner, repo_name)) = github::parse_github_remote(&repo.remote_url) {
                     let _ = post_pr_comment(&owner, &repo_name, pr_num, &aggregated_comment);
                 }
             }
@@ -363,6 +364,19 @@ pub fn build_remediation_prompt(swarm_result: &ReviewSwarmResult) -> String {
     prompt
 }
 
+/// Truncate a string at a char boundary no greater than `max_bytes`.
+fn truncate_str(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    // Walk backwards from max_bytes to find a char boundary
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Get the diff for a PR branch compared to the default branch.
 fn get_pr_diff(branch: &str) -> Result<String> {
     let output = Command::new("git")
@@ -376,24 +390,24 @@ fn get_pr_diff(branch: &str) -> Result<String> {
             .args(["diff", "HEAD~1"])
             .output()
             .map_err(|e| ConductorError::Git(format!("failed to get fallback diff: {e}")))?;
-        return Ok(String::from_utf8_lossy(&fallback.stdout).to_string());
+        return Ok(String::from_utf8_lossy(&fallback.stdout).into_owned());
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Build a focused prompt for a reviewer agent.
 fn build_reviewer_prompt(role: &ReviewerRole, diff: &str, branch: &str) -> String {
     // Truncate diff if very large to stay within context limits
-    let max_diff_chars = 50_000;
-    let truncated_diff = if diff.len() > max_diff_chars {
-        format!(
-            "{}\n\n... (diff truncated, {} chars omitted)",
-            &diff[..max_diff_chars],
-            diff.len() - max_diff_chars
-        )
+    let max_diff_bytes = 50_000;
+    let truncated_diff: Cow<'_, str> = if diff.len() > max_diff_bytes {
+        let safe = truncate_str(diff, max_diff_bytes);
+        Cow::Owned(format!(
+            "{safe}\n\n... (diff truncated, {} bytes omitted)",
+            diff.len() - safe.len()
+        ))
     } else {
-        diff.to_string()
+        Cow::Borrowed(diff)
     };
 
     format!(
@@ -415,14 +429,22 @@ fn build_reviewer_prompt(role: &ReviewerRole, diff: &str, branch: &str) -> Strin
 }
 
 /// Determine if a reviewer approved based on its result text.
+///
+/// Requires the verdict to appear on the final non-empty line to prevent
+/// prompt injection from diff content that might contain verdict strings.
 fn is_review_approved(run: &AgentRun) -> bool {
     if run.status != "completed" {
         return false;
     }
     match &run.result_text {
         Some(text) => {
-            let upper = text.to_uppercase();
-            upper.contains("VERDICT: APPROVE") && !upper.contains("VERDICT: REQUEST_CHANGES")
+            let last_line = text
+                .lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("");
+            let verdict = last_line.trim().to_uppercase();
+            verdict == "VERDICT: APPROVE"
         }
         None => false,
     }
@@ -462,13 +484,14 @@ fn build_aggregated_comment(results: &[ReviewerResult], all_required_approved: b
         comment.push_str(&format!("*Focus: {}*\n\n", result.focus));
 
         if let Some(ref findings) = result.findings {
-            // Take first ~2000 chars of findings to keep comment reasonable
-            let trimmed = if findings.len() > 2000 {
-                format!("{}...\n*(truncated)*", &findings[..2000])
+            // Take first ~2000 bytes of findings to keep comment reasonable
+            if findings.len() > 2000 {
+                let safe = truncate_str(findings, 2000);
+                comment.push_str(safe);
+                comment.push_str("...\n*(truncated)*");
             } else {
-                findings.clone()
-            };
-            comment.push_str(&trimmed);
+                comment.push_str(findings);
+            }
         } else {
             comment.push_str("*(no findings reported)*");
         }
@@ -526,29 +549,25 @@ fn spawn_reviewer_tmux(
     f.write_all(prompt.as_bytes())
         .map_err(|e| format!("Failed to write prompt file: {e}"))?;
 
-    let mut model_flag = String::new();
+    // Pass args directly to tmux without sh -c to avoid shell injection
+    let mut cmd = Command::new("tmux");
+    cmd.args(["new-window", "-d", "-n", window_name, "--"]);
+    cmd.arg(conductor_bin);
+    cmd.args([
+        "agent",
+        "run",
+        "--run-id",
+        run_id,
+        "--worktree-path",
+        worktree_path,
+        "--prompt-file",
+        &prompt_file.to_string_lossy(),
+    ]);
     if let Some(m) = model {
-        model_flag = format!(" --model {m}");
+        cmd.args(["--model", m]);
     }
 
-    // Use shell -c so tmux only sees a short command string
-    let shell_cmd = format!(
-        "{conductor_bin} agent run --run-id {run_id} --worktree-path {worktree_path} \
-         --prompt-file {prompt_file}{model_flag}",
-        prompt_file = prompt_file.display(),
-    );
-
-    let result = Command::new("tmux")
-        .args([
-            "new-window",
-            "-d",
-            "-n",
-            window_name,
-            "--",
-            "sh",
-            "-c",
-            &shell_cmd,
-        ])
+    let result = cmd
         .output()
         .map_err(|e| format!("Failed to spawn tmux: {e}"))?;
 
@@ -591,16 +610,6 @@ fn poll_reviewer_completion(
 
         thread::sleep(poll_interval);
     }
-}
-
-/// Get the remote URL for a repo from the database.
-fn get_repo_remote_url(conn: &Connection, repo_id: &str) -> Option<String> {
-    conn.query_row(
-        "SELECT remote_url FROM repos WHERE id = ?1",
-        rusqlite::params![repo_id],
-        |row| row.get(0),
-    )
-    .ok()
 }
 
 #[cfg(test)]
