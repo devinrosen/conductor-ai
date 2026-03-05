@@ -8,6 +8,7 @@ pub mod jira_acli;
 pub mod merge_queue;
 pub mod models;
 pub mod orchestrator;
+pub mod post_run;
 pub mod pr_review;
 pub mod repo;
 pub mod review_config;

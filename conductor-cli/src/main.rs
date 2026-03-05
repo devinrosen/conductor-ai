@@ -14,6 +14,7 @@ use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig}
 use conductor_core::jira_acli;
 use conductor_core::merge_queue::MergeQueueManager;
 use conductor_core::orchestrator::{self, OrchestratorConfig};
+use conductor_core::post_run::{self, PostRunInput};
 use conductor_core::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
@@ -56,6 +57,13 @@ enum Commands {
     MergeQueue {
         #[command(subcommand)]
         command: MergeQueueCommands,
+    },
+    /// Approve and merge a PR that is awaiting manual approval
+    Approve {
+        /// Repo slug
+        repo: String,
+        /// Worktree slug
+        worktree: String,
     },
 }
 
@@ -163,6 +171,13 @@ enum AgentCommands {
         /// Agent run ID (defaults to $CONDUCTOR_RUN_ID env var)
         #[arg(long)]
         run_id: Option<String>,
+    },
+    /// Run the automated post-agent lifecycle (commit, PR, review loop, merge)
+    PostRun {
+        /// Repo slug
+        repo: String,
+        /// Worktree slug
+        worktree: String,
     },
     /// Run a multi-agent PR review swarm on a worktree
     Review {
@@ -741,6 +756,36 @@ fn main() -> Result<()> {
 
                 println!("Created issue #{source_id}: {url}");
             }
+            AgentCommands::PostRun { repo, worktree } => {
+                let conductor_bin = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| {
+                        let sibling = p.parent()?.join("conductor");
+                        sibling
+                            .exists()
+                            .then(|| sibling.to_string_lossy().into_owned())
+                    })
+                    .unwrap_or_else(|| "conductor".to_string());
+
+                match post_run::run_post_lifecycle(&PostRunInput {
+                    conn: &conn,
+                    config: &config,
+                    repo_slug: &repo,
+                    worktree_slug: &worktree,
+                    conductor_bin: &conductor_bin,
+                }) {
+                    Ok(result) => {
+                        println!("{}", result.summary);
+                        if let Some(ref url) = result.pr_url {
+                            println!("PR: {url}");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Post-run lifecycle failed: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
             AgentCommands::Review {
                 repo,
                 worktree,
@@ -1052,6 +1097,33 @@ fn main() -> Result<()> {
                     println!("Processing: {}", stats.processing);
                     println!("Merged:     {}", stats.merged);
                     println!("Failed:     {}", stats.failed);
+                }
+            }
+        }
+        Commands::Approve { repo, worktree } => {
+            let conductor_bin = std::env::current_exe()
+                .ok()
+                .and_then(|p| {
+                    let sibling = p.parent()?.join("conductor");
+                    sibling
+                        .exists()
+                        .then(|| sibling.to_string_lossy().into_owned())
+                })
+                .unwrap_or_else(|| "conductor".to_string());
+
+            match post_run::approve_and_merge(&PostRunInput {
+                conn: &conn,
+                config: &config,
+                repo_slug: &repo,
+                worktree_slug: &worktree,
+                conductor_bin: &conductor_bin,
+            }) {
+                Ok(result) => {
+                    println!("{}", result.summary);
+                }
+                Err(e) => {
+                    eprintln!("Approve failed: {e}");
+                    std::process::exit(1);
                 }
             }
         }
