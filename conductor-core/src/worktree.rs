@@ -170,6 +170,19 @@ impl<'a> WorktreeManager<'a> {
             })
     }
 
+    pub fn get_by_slug(&self, repo_id: &str, slug: &str) -> Result<Worktree> {
+        self.conn
+            .query_row(
+                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model
+                 FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
+                params![repo_id, slug],
+                map_worktree_row,
+            )
+            .map_err(|_| ConductorError::WorktreeNotFound {
+                slug: slug.to_string(),
+            })
+    }
+
     pub fn list_by_repo_id(&self, repo_id: &str, active_only: bool) -> Result<Vec<Worktree>> {
         let status_filter = if active_only {
             " AND status = 'active'"

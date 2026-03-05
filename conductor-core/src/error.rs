@@ -43,6 +43,9 @@ pub enum ConductorError {
 
     #[error("worktree already has a linked ticket")]
     TicketAlreadyLinked,
+
+    #[error("merge queue entry not found: {id}")]
+    MergeQueueEntryNotFound { id: String },
 }
 
 pub type Result<T> = std::result::Result<T, ConductorError>;

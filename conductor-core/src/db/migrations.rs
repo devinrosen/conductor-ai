@@ -238,5 +238,17 @@ pub fn run(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Migration 016: create merge_queue table for serializing parallel agent merges.
+    let has_merge_queue: bool = conn.prepare("SELECT id FROM merge_queue LIMIT 0").is_ok();
+    if !has_merge_queue {
+        conn.execute_batch(include_str!("migrations/016_merge_queue.sql"))?;
+    }
+    if version < 16 {
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '16')",
+            [],
+        )?;
+    }
+
     Ok(())
 }

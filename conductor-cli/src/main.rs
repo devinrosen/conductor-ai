@@ -12,6 +12,7 @@ use conductor_core::db::open_database;
 use conductor_core::github;
 use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
 use conductor_core::jira_acli;
+use conductor_core::merge_queue::MergeQueueManager;
 use conductor_core::orchestrator::{self, OrchestratorConfig};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
@@ -48,6 +49,64 @@ enum Commands {
     Agent {
         #[command(subcommand)]
         command: AgentCommands,
+    },
+    /// Manage the merge queue for serializing parallel agent merges
+    #[command(name = "merge-queue")]
+    MergeQueue {
+        #[command(subcommand)]
+        command: MergeQueueCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum MergeQueueCommands {
+    /// Add a worktree to the merge queue
+    Enqueue {
+        /// Repo slug
+        repo: String,
+        /// Worktree slug
+        worktree: String,
+        /// Target branch (defaults to main)
+        #[arg(long, default_value = "main")]
+        target: String,
+    },
+    /// List merge queue entries for a repo
+    List {
+        /// Repo slug
+        repo: String,
+        /// Show only pending entries (queued/processing)
+        #[arg(long)]
+        pending: bool,
+    },
+    /// Show details of a single merge queue entry
+    Show {
+        /// Entry ID
+        id: String,
+    },
+    /// Pop the next queued entry and mark it as processing
+    Pop {
+        /// Repo slug
+        repo: String,
+    },
+    /// Mark an entry as merged
+    Merged {
+        /// Entry ID
+        id: String,
+    },
+    /// Mark an entry as failed
+    Failed {
+        /// Entry ID
+        id: String,
+    },
+    /// Remove an entry from the queue
+    Remove {
+        /// Entry ID
+        id: String,
+    },
+    /// Show queue statistics for a repo
+    Stats {
+        /// Repo slug
+        repo: String,
     },
 }
 
@@ -800,6 +859,97 @@ fn main() -> Result<()> {
                 }
             }
         },
+        Commands::MergeQueue { command } => {
+            let mqm = MergeQueueManager::new(&conn);
+            match command {
+                MergeQueueCommands::Enqueue {
+                    repo,
+                    worktree,
+                    target,
+                } => {
+                    let repo_mgr = RepoManager::new(&conn, &config);
+                    let repo_obj = repo_mgr.get_by_slug(&repo)?;
+                    let wt_mgr = WorktreeManager::new(&conn, &config);
+                    let wt = wt_mgr.get_by_slug(&repo_obj.id, &worktree)?;
+                    let entry = mqm.enqueue(&repo_obj.id, &wt.id, None, Some(&target))?;
+                    println!(
+                        "Enqueued {} at position {} (id: {})",
+                        worktree, entry.position, entry.id
+                    );
+                }
+                MergeQueueCommands::List { repo, pending } => {
+                    let repo_mgr = RepoManager::new(&conn, &config);
+                    let repo_obj = repo_mgr.get_by_slug(&repo)?;
+                    let entries = if pending {
+                        mqm.list_pending(&repo_obj.id)?
+                    } else {
+                        mqm.list_for_repo(&repo_obj.id)?
+                    };
+                    if entries.is_empty() {
+                        println!("Merge queue is empty.");
+                    } else {
+                        println!("{:<4} {:<10} {:<26} Queued At", "Pos", "Status", "ID");
+                        for e in &entries {
+                            println!(
+                                "{:<4} {:<10} {:<26} {}",
+                                e.position, e.status, e.id, e.queued_at
+                            );
+                        }
+                    }
+                }
+                MergeQueueCommands::Show { id } => {
+                    if let Some(e) = mqm.get(&id)? {
+                        println!("ID:            {}", e.id);
+                        println!("Worktree:      {}", e.worktree_id);
+                        println!("Target branch: {}", e.target_branch);
+                        println!("Position:      {}", e.position);
+                        println!("Status:        {}", e.status);
+                        println!("Queued at:     {}", e.queued_at);
+                        if let Some(ref s) = e.started_at {
+                            println!("Started at:    {}", s);
+                        }
+                        if let Some(ref c) = e.completed_at {
+                            println!("Completed at:  {}", c);
+                        }
+                    } else {
+                        println!("Entry not found: {}", id);
+                    }
+                }
+                MergeQueueCommands::Pop { repo } => {
+                    let repo_mgr = RepoManager::new(&conn, &config);
+                    let repo_obj = repo_mgr.get_by_slug(&repo)?;
+                    if let Some(entry) = mqm.pop_next(&repo_obj.id)? {
+                        println!(
+                            "Processing entry {} (worktree: {})",
+                            entry.id, entry.worktree_id
+                        );
+                    } else {
+                        println!("Nothing to process (queue empty or entry already processing).");
+                    }
+                }
+                MergeQueueCommands::Merged { id } => {
+                    mqm.mark_merged(&id)?;
+                    println!("Marked {} as merged.", id);
+                }
+                MergeQueueCommands::Failed { id } => {
+                    mqm.mark_failed(&id)?;
+                    println!("Marked {} as failed.", id);
+                }
+                MergeQueueCommands::Remove { id } => {
+                    mqm.remove(&id)?;
+                    println!("Removed {} from merge queue.", id);
+                }
+                MergeQueueCommands::Stats { repo } => {
+                    let repo_mgr = RepoManager::new(&conn, &config);
+                    let repo_obj = repo_mgr.get_by_slug(&repo)?;
+                    let stats = mqm.queue_stats(&repo_obj.id)?;
+                    println!("Queued:     {}", stats.queued);
+                    println!("Processing: {}", stats.processing);
+                    println!("Merged:     {}", stats.merged);
+                    println!("Failed:     {}", stats.failed);
+                }
+            }
+        }
     }
 
     Ok(())
