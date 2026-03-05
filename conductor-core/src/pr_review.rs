@@ -1480,6 +1480,177 @@ mod tests {
     }
 
     #[test]
+    fn test_poll_all_reviewers_already_completed() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let parent = mgr.create_run("w1", "parent", None, None).unwrap();
+        let r1 = mgr
+            .create_child_run("w1", "review1", None, None, &parent.id)
+            .unwrap();
+        let r2 = mgr
+            .create_child_run("w1", "review2", None, None, &parent.id)
+            .unwrap();
+
+        mgr.update_run_completed(
+            &r1.id,
+            None,
+            Some("VERDICT: APPROVE"),
+            Some(0.05),
+            Some(3),
+            Some(5000),
+        )
+        .unwrap();
+        mgr.update_run_completed(
+            &r2.id,
+            None,
+            Some("VERDICT: APPROVE"),
+            Some(0.10),
+            Some(5),
+            Some(8000),
+        )
+        .unwrap();
+
+        let roles = default_reviewer_roles();
+        let child_runs: Vec<(usize, AgentRun, ReviewerRole)> =
+            vec![(0, r1, roles[0].clone()), (1, r2, roles[1].clone())];
+        let steps: Vec<PlanStep> = (0..2)
+            .map(|_| PlanStep {
+                id: None,
+                description: "review".to_string(),
+                done: false,
+                status: "pending".to_string(),
+                position: None,
+                started_at: None,
+                completed_at: None,
+            })
+            .collect();
+
+        let results = poll_all_reviewers(
+            &mgr,
+            &child_runs,
+            &steps,
+            Duration::from_millis(10),
+            Duration::from_secs(1),
+        );
+
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.approved));
+        assert!(results.iter().all(|r| r.status == "completed"));
+    }
+
+    #[test]
+    fn test_poll_all_reviewers_timeout() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let parent = mgr.create_run("w1", "parent", None, None).unwrap();
+        let r1 = mgr
+            .create_child_run("w1", "review1", None, None, &parent.id)
+            .unwrap();
+        let r2 = mgr
+            .create_child_run("w1", "review2", None, None, &parent.id)
+            .unwrap();
+
+        // r1 completes, r2 stays running (never completed)
+        mgr.update_run_completed(
+            &r1.id,
+            None,
+            Some("VERDICT: APPROVE"),
+            Some(0.05),
+            Some(3),
+            Some(5000),
+        )
+        .unwrap();
+
+        let roles = default_reviewer_roles();
+        let child_runs: Vec<(usize, AgentRun, ReviewerRole)> =
+            vec![(0, r1, roles[0].clone()), (1, r2, roles[1].clone())];
+        let steps: Vec<PlanStep> = (0..2)
+            .map(|_| PlanStep {
+                id: None,
+                description: "review".to_string(),
+                done: false,
+                status: "pending".to_string(),
+                position: None,
+                started_at: None,
+                completed_at: None,
+            })
+            .collect();
+
+        let results = poll_all_reviewers(
+            &mgr,
+            &child_runs,
+            &steps,
+            Duration::from_millis(10),
+            Duration::from_millis(50),
+        );
+
+        assert_eq!(results.len(), 2);
+        // First reviewer completed and approved
+        assert!(results[0].approved);
+        assert_eq!(results[0].status, "completed");
+        // Second reviewer timed out
+        assert!(!results[1].approved);
+        assert_eq!(results[1].status, "failed");
+        assert!(results[1].findings.as_ref().unwrap().contains("timed out"));
+    }
+
+    #[test]
+    fn test_poll_all_reviewers_mixed_statuses() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let parent = mgr.create_run("w1", "parent", None, None).unwrap();
+        let r1 = mgr
+            .create_child_run("w1", "review1", None, None, &parent.id)
+            .unwrap();
+        let r2 = mgr
+            .create_child_run("w1", "review2", None, None, &parent.id)
+            .unwrap();
+
+        mgr.update_run_completed(
+            &r1.id,
+            None,
+            Some("VERDICT: APPROVE"),
+            Some(0.05),
+            Some(3),
+            Some(5000),
+        )
+        .unwrap();
+        mgr.update_run_failed(&r2.id, "crashed").unwrap();
+
+        let roles = default_reviewer_roles();
+        let child_runs: Vec<(usize, AgentRun, ReviewerRole)> =
+            vec![(0, r1, roles[0].clone()), (1, r2, roles[1].clone())];
+        let steps: Vec<PlanStep> = (0..2)
+            .map(|_| PlanStep {
+                id: None,
+                description: "review".to_string(),
+                done: false,
+                status: "pending".to_string(),
+                position: None,
+                started_at: None,
+                completed_at: None,
+            })
+            .collect();
+
+        let results = poll_all_reviewers(
+            &mgr,
+            &child_runs,
+            &steps,
+            Duration::from_millis(10),
+            Duration::from_secs(1),
+        );
+
+        assert_eq!(results.len(), 2);
+        assert!(results[0].approved);
+        assert_eq!(results[0].status, "completed");
+        assert!(!results[1].approved);
+        assert_eq!(results[1].status, "failed");
+    }
+
+    #[test]
     fn test_poll_reviewer_completion_already_completed() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
