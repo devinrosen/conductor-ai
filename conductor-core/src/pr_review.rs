@@ -372,7 +372,7 @@ pub fn build_remediation_prompt(swarm_result: &ReviewSwarmResult) -> String {
 pub(crate) use crate::text_util::truncate_str;
 
 /// Truncate `s` to at most `max` bytes (on a char boundary) and append `suffix` when truncated.
-fn cap_with_suffix(s: &str, max: usize, suffix: &str) -> String {
+pub(crate) fn cap_with_suffix(s: &str, max: usize, suffix: &str) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
