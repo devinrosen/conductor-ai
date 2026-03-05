@@ -5,6 +5,11 @@ use serde::{Deserialize, Serialize};
 use crate::error::{ConductorError, Result};
 use crate::tickets::TicketInput;
 
+/// Build an `"owner/repo"` slug from its two components.
+fn repo_slug(owner: &str, repo: &str) -> String {
+    format!("{owner}/{repo}")
+}
+
 /// Run `gh` with the given arguments and return the output.
 /// Maps spawn failures and non-zero exit codes to `ConductorError::TicketSync`.
 fn run_gh(args: &[&str]) -> Result<Output> {
@@ -104,7 +109,7 @@ pub fn discover_github_repos(owner: Option<&str>) -> Result<Vec<DiscoveredRepo>>
 /// Sync open GitHub issues for a repo using the `gh` CLI.
 /// Returns a list of normalized TicketInputs ready for upsert.
 pub fn sync_github_issues(owner: &str, repo: &str) -> Result<Vec<TicketInput>> {
-    let repo_slug = format!("{owner}/{repo}");
+    let repo_slug = repo_slug(owner, repo);
     let output = run_gh(&[
         "issue",
         "list",
@@ -166,7 +171,7 @@ pub fn create_github_issue(
     title: &str,
     body: &str,
 ) -> Result<(String, String)> {
-    let repo_slug = format!("{owner}/{repo}");
+    let repo_slug = repo_slug(owner, repo);
     let output = run_gh(&[
         "issue", "create", "--repo", &repo_slug, "--title", title, "--body", body,
     ])?;
@@ -195,7 +200,7 @@ pub fn list_issues_by_search(
     label: &str,
     limit: u32,
 ) -> Result<Vec<IssueRef>> {
-    let repo_slug = format!("{owner}/{repo}");
+    let repo_slug = repo_slug(owner, repo);
     let limit_str = limit.to_string();
     let output = run_gh(&[
         "issue",
@@ -221,7 +226,7 @@ pub fn list_issues_by_search(
 
 /// Add a label to an existing GitHub issue (best-effort via `gh issue edit`).
 pub fn add_label_to_issue(owner: &str, repo: &str, issue_url: &str, label: &str) -> Result<()> {
-    let repo_slug = format!("{owner}/{repo}");
+    let repo_slug = repo_slug(owner, repo);
     run_gh(&[
         "issue",
         "edit",
@@ -263,9 +268,9 @@ pub fn parse_github_remote(remote_url: &str) -> Option<(String, String)> {
 /// Detect the PR number for a branch using `gh pr list`.
 pub fn detect_pr_number(remote_url: &str, branch: &str) -> Option<i64> {
     let (owner, repo) = parse_github_remote(remote_url)?;
-    let repo_slug = format!("{owner}/{repo}");
+    let slug = repo_slug(&owner, &repo);
     let output = run_gh(&[
-        "pr", "list", "--repo", &repo_slug, "--head", branch, "--json", "number", "--limit", "1",
+        "pr", "list", "--repo", &slug, "--head", branch, "--json", "number", "--limit", "1",
     ])
     .ok()?;
 
@@ -276,6 +281,11 @@ pub fn detect_pr_number(remote_url: &str, branch: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_repo_slug() {
+        assert_eq!(repo_slug("alice", "my-repo"), "alice/my-repo");
+    }
 
     #[test]
     fn test_parse_ssh_remote() {
