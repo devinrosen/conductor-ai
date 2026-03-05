@@ -1,7 +1,7 @@
 use std::io::{BufRead, Write};
 use std::process::{Command, Stdio};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use conductor_core::agent::{
@@ -14,6 +14,7 @@ use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig}
 use conductor_core::jira_acli;
 use conductor_core::merge_queue::MergeQueueManager;
 use conductor_core::orchestrator::{self, OrchestratorConfig};
+use conductor_core::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
@@ -120,9 +121,12 @@ enum AgentCommands {
         /// Path to the worktree directory
         #[arg(long)]
         worktree_path: String,
-        /// Prompt for Claude
+        /// Prompt for Claude (use --prompt-file for large prompts)
         #[arg(long)]
-        prompt: String,
+        prompt: Option<String>,
+        /// Read prompt from a file (avoids OS arg length limits for large diffs)
+        #[arg(long)]
+        prompt_file: Option<String>,
         /// Resume a previous Claude session
         #[arg(long)]
         resume: Option<String>,
@@ -159,6 +163,22 @@ enum AgentCommands {
         /// Agent run ID (defaults to $CONDUCTOR_RUN_ID env var)
         #[arg(long)]
         run_id: Option<String>,
+    },
+    /// Run a multi-agent PR review swarm on a worktree
+    Review {
+        /// Repo slug
+        repo: String,
+        /// Worktree slug
+        worktree: String,
+        /// PR number (auto-detected from branch if omitted)
+        #[arg(long)]
+        pr_number: Option<i64>,
+        /// Model to use for reviewer agents
+        #[arg(long)]
+        model: Option<String>,
+        /// Reviewer timeout in seconds (default: 900 = 15 min)
+        #[arg(long, default_value = "900")]
+        reviewer_timeout_secs: u64,
     },
 }
 
@@ -618,14 +638,21 @@ fn main() -> Result<()> {
                 run_id,
                 worktree_path,
                 prompt,
+                prompt_file,
                 resume,
                 model,
             } => {
+                let resolved_prompt = match (prompt, prompt_file) {
+                    (Some(p), _) => p,
+                    (None, Some(path)) => std::fs::read_to_string(&path)
+                        .with_context(|| format!("Failed to read prompt file: {path}"))?,
+                    (None, None) => anyhow::bail!("Either --prompt or --prompt-file is required"),
+                };
                 run_agent(
                     &conn,
                     &run_id,
                     &worktree_path,
-                    &prompt,
+                    &resolved_prompt,
                     resume.as_deref(),
                     model.as_deref(),
                 )?;
@@ -713,6 +740,84 @@ fn main() -> Result<()> {
                     .record_created_issue(&run_id, &repo_id, "github", &source_id, &title, &url)?;
 
                 println!("Created issue #{source_id}: {url}");
+            }
+            AgentCommands::Review {
+                repo,
+                worktree,
+                pr_number,
+                model,
+                reviewer_timeout_secs,
+            } => {
+                let repo_mgr = RepoManager::new(&conn, &config);
+                let r = repo_mgr.get_by_slug(&repo)?;
+                let wt_mgr = WorktreeManager::new(&conn, &config);
+                let wt = wt_mgr.get_by_slug(&r.id, &worktree)?;
+
+                // Auto-detect PR number from branch if not provided
+                let pr_num = match pr_number {
+                    Some(n) => Some(n),
+                    None => github::detect_pr_number(&r.remote_url, &wt.branch),
+                };
+
+                let conductor_bin = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| {
+                        let sibling = p.parent()?.join("conductor");
+                        sibling
+                            .exists()
+                            .then(|| sibling.to_string_lossy().into_owned())
+                    })
+                    .unwrap_or_else(|| "conductor".to_string());
+
+                let swarm_config = ReviewSwarmConfig {
+                    reviewer_timeout: std::time::Duration::from_secs(reviewer_timeout_secs),
+                    ..Default::default()
+                };
+
+                println!(
+                    "Starting PR review swarm for {}/{} (branch: {})...",
+                    repo, worktree, wt.branch
+                );
+                if let Some(n) = pr_num {
+                    println!("PR #{n}");
+                }
+
+                match pr_review::run_review_swarm(&ReviewSwarmInput {
+                    conn: &conn,
+                    config: &config,
+                    repo_id: &r.id,
+                    worktree_id: &wt.id,
+                    pr_branch: &wt.branch,
+                    pr_number: pr_num,
+                    model: model.as_deref(),
+                    conductor_bin: &conductor_bin,
+                    swarm_config: &swarm_config,
+                }) {
+                    Ok(result) => {
+                        println!("\n{}", result.aggregated_comment);
+                        if result.all_required_approved {
+                            println!("All required reviewers approved — added to merge queue.");
+                        } else {
+                            let blocking: Vec<_> = result
+                                .reviewer_results
+                                .iter()
+                                .filter(|r| r.required && !r.approved)
+                                .map(|r| r.role_name.as_str())
+                                .collect();
+                            println!("Blocking reviewers: {}", blocking.join(", "));
+                        }
+                        println!(
+                            "Total: ${:.4}, {} turns, {:.1}s",
+                            result.total_cost,
+                            result.total_turns,
+                            result.total_duration_ms as f64 / 1000.0
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("Review swarm failed: {e}");
+                        std::process::exit(1);
+                    }
+                }
             }
         },
         Commands::Tickets { command } => match command {

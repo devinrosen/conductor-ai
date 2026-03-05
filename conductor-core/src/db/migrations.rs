@@ -250,5 +250,19 @@ pub fn run(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Migration 017: create review_configs table for multi-agent PR review swarms.
+    let has_review_configs: bool = conn
+        .prepare("SELECT id FROM review_configs LIMIT 0")
+        .is_ok();
+    if !has_review_configs {
+        conn.execute_batch(include_str!("migrations/017_review_configs.sql"))?;
+    }
+    if version < 17 {
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '17')",
+            [],
+        )?;
+    }
+
     Ok(())
 }
