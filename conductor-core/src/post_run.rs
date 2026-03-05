@@ -13,8 +13,9 @@ use rusqlite::Connection;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::github;
-use crate::pr_review::{self, truncate_str, ReviewSwarmConfig, ReviewSwarmInput};
+use crate::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
 use crate::repo::RepoManager;
+use crate::text_util::truncate_str;
 use crate::tickets::{Ticket, TicketSyncer};
 use crate::worktree::WorktreeManager;
 
@@ -65,17 +66,14 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
     let config = input.config;
     let post_cfg = &config.post_run;
 
-    let repo_mgr = RepoManager::new(conn, config);
-    let repo = repo_mgr.get_by_slug(input.repo_slug)?;
-    let wt_mgr = WorktreeManager::new(conn, config);
-    let wt = wt_mgr.get_by_slug(&repo.id, input.worktree_slug)?;
-
-    let (owner, repo_name) = github::parse_github_remote(&repo.remote_url).ok_or_else(|| {
-        ConductorError::Agent(format!(
-            "Cannot determine GitHub repo from remote URL: {}",
-            repo.remote_url
-        ))
-    })?;
+    let ctx = resolve_context(input)?;
+    let ResolvedContext {
+        ref wt,
+        ref wt_mgr,
+        ref owner,
+        ref repo_name,
+        ..
+    } = ctx;
 
     // ── Phase 1: Commit ──────────────────────────────────────────────
     eprintln!("[post-run] Phase 1: Commit");
@@ -93,7 +91,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
     }
 
     let diff = get_staged_or_all_diff(&wt.path)?;
-    let ticket = fetch_linked_ticket(conn, &wt);
+    let ticket = fetch_linked_ticket(conn, wt);
     let ticket_context = ticket
         .as_ref()
         .map(format_ticket_context)
@@ -122,7 +120,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
     push_branch(&wt.path, &wt.branch)?;
 
     // Check for existing PR first
-    let (pr_number, pr_url) = match github::detect_pr(&owner, &repo_name, &wt.branch)? {
+    let (pr_number, pr_url) = match github::detect_pr(owner, repo_name, &wt.branch)? {
         Some((num, url)) => {
             eprintln!("[post-run] Existing PR found: #{num}");
             (num, url)
@@ -130,8 +128,8 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
         None => {
             let pr_title = first_line(&commit_msg);
             let url = github::create_pr_with_body(
-                &owner,
-                &repo_name,
+                owner,
+                repo_name,
                 &wt.branch,
                 pr_title,
                 &pr_description,
@@ -162,7 +160,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
         let swarm_result = pr_review::run_review_swarm(&ReviewSwarmInput {
             conn,
             config,
-            repo_id: &repo.id,
+            repo_id: &ctx.repo.id,
             worktree_id: &wt.id,
             pr_branch: &wt.branch,
             pr_number: Some(pr_number),
@@ -180,7 +178,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
         // Not approved — run fix agent if we have iterations left
         if iteration < post_cfg.review_loop_max {
             eprintln!("[post-run] Running rebase-and-fix-review...");
-            let fix_result = run_fix_review(&wt.path);
+            let fix_result = run_fix_review(&wt.path, post_cfg.dangerous_skip_permissions);
             match fix_result {
                 Ok(()) => {
                     // Push the fixes
@@ -209,7 +207,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
         eprintln!(
             "[post-run] Review loop exhausted after {iteration} iterations — marking needs-human"
         );
-        let _ = github::add_pr_label(&owner, &repo_name, pr_number, "needs-human");
+        let _ = github::add_pr_label(owner, repo_name, pr_number, "needs-human");
 
         return Ok(PostRunResult {
             phase: PostRunPhase::NeedsHuman,
@@ -234,12 +232,12 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
         eprintln!("[post-run] Phase 4a: Auto-merge");
 
         merge_and_cleanup(
-            &owner,
-            &repo_name,
+            owner,
+            repo_name,
             pr_number,
             &ticket,
-            &wt,
-            &wt_mgr,
+            wt,
+            wt_mgr,
             "[post-run]",
         )?;
 
@@ -275,32 +273,26 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
 
 /// Approve and merge a PR that was waiting for manual approval.
 pub fn approve_and_merge(input: &PostRunInput<'_>) -> Result<PostRunResult> {
-    let conn = input.conn;
-    let config = input.config;
+    let ctx = resolve_context(input)?;
+    let ResolvedContext {
+        repo: _,
+        ref wt,
+        ref wt_mgr,
+        ref owner,
+        ref repo_name,
+    } = ctx;
 
-    let repo_mgr = RepoManager::new(conn, config);
-    let repo = repo_mgr.get_by_slug(input.repo_slug)?;
-    let wt_mgr = WorktreeManager::new(conn, config);
-    let wt = wt_mgr.get_by_slug(&repo.id, input.worktree_slug)?;
-
-    let (owner, repo_name) = github::parse_github_remote(&repo.remote_url).ok_or_else(|| {
-        ConductorError::Agent(format!(
-            "Cannot determine GitHub repo from remote URL: {}",
-            repo.remote_url
-        ))
-    })?;
-
-    let (pr_number, pr_url) = github::detect_pr(&owner, &repo_name, &wt.branch)?
+    let (pr_number, pr_url) = github::detect_pr(owner, repo_name, &wt.branch)?
         .ok_or_else(|| ConductorError::Agent(format!("No PR found for branch {}", wt.branch)))?;
 
-    let ticket = fetch_linked_ticket(conn, &wt);
+    let ticket = fetch_linked_ticket(input.conn, wt);
     merge_and_cleanup(
-        &owner,
-        &repo_name,
+        owner,
+        repo_name,
         pr_number,
         &ticket,
-        &wt,
-        &wt_mgr,
+        wt,
+        wt_mgr,
         "[approve]",
     )?;
 
@@ -315,6 +307,37 @@ pub fn approve_and_merge(input: &PostRunInput<'_>) -> Result<PostRunResult> {
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────
+
+/// Resolved context shared by both `run_post_lifecycle` and `approve_and_merge`.
+struct ResolvedContext<'a> {
+    repo: crate::repo::Repo,
+    wt: crate::worktree::Worktree,
+    wt_mgr: WorktreeManager<'a>,
+    owner: String,
+    repo_name: String,
+}
+
+fn resolve_context<'a>(input: &'a PostRunInput<'a>) -> Result<ResolvedContext<'a>> {
+    let repo_mgr = RepoManager::new(input.conn, input.config);
+    let repo = repo_mgr.get_by_slug(input.repo_slug)?;
+    let wt_mgr = WorktreeManager::new(input.conn, input.config);
+    let wt = wt_mgr.get_by_slug(&repo.id, input.worktree_slug)?;
+
+    let (owner, repo_name) = github::parse_github_remote(&repo.remote_url).ok_or_else(|| {
+        ConductorError::Agent(format!(
+            "Cannot determine GitHub repo from remote URL: {}",
+            repo.remote_url
+        ))
+    })?;
+
+    Ok(ResolvedContext {
+        repo,
+        wt,
+        wt_mgr,
+        owner,
+        repo_name,
+    })
+}
 
 fn has_changes(worktree_path: &str) -> Result<bool> {
     let output = Command::new("git")
@@ -497,13 +520,19 @@ fn push_branch(worktree_path: &str, branch: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_fix_review(worktree_path: &str) -> std::result::Result<(), String> {
+fn run_fix_review(
+    worktree_path: &str,
+    dangerous_skip_permissions: bool,
+) -> std::result::Result<(), String> {
     // Run claude with the rebase-and-fix-review skill
-    let output = Command::new("claude")
-        .arg("-p")
+    let mut cmd = Command::new("claude");
+    cmd.arg("-p")
         .arg("/rebase-and-fix-review")
-        .arg("--dangerously-skip-permissions")
-        .current_dir(worktree_path)
+        .current_dir(worktree_path);
+    if dangerous_skip_permissions {
+        cmd.arg("--dangerously-skip-permissions");
+    }
+    let output = cmd
         .output()
         .map_err(|e| format!("failed to spawn fix agent: {e}"))?;
 

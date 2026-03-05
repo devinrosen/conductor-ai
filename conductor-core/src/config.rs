@@ -61,6 +61,10 @@ pub struct PostRunConfig {
     /// Issue labels that require manual approval (default: ["enhancement", "feature"]).
     #[serde(default = "default_manual_merge_labels")]
     pub manual_merge_labels: Vec<String>,
+    /// Allow `--dangerously-skip-permissions` when spawning fix agents (default: false).
+    /// Only enable this if you trust all PR reviewers, as review comments drive the fix agent.
+    #[serde(default)]
+    pub dangerous_skip_permissions: bool,
 }
 
 impl Default for PostRunConfig {
@@ -71,6 +75,7 @@ impl Default for PostRunConfig {
             commit_style: default_commit_style(),
             auto_merge_labels: default_auto_merge_labels(),
             manual_merge_labels: default_manual_merge_labels(),
+            dangerous_skip_permissions: false,
         }
     }
 }

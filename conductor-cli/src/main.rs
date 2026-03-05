@@ -1099,15 +1099,7 @@ fn main() -> Result<()> {
             }
         }
         Commands::Approve { repo, worktree } => {
-            let conductor_bin = std::env::current_exe()
-                .ok()
-                .and_then(|p| {
-                    let sibling = p.parent()?.join("conductor");
-                    sibling
-                        .exists()
-                        .then(|| sibling.to_string_lossy().into_owned())
-                })
-                .unwrap_or_else(|| "conductor".to_string());
+            let conductor_bin = resolve_conductor_bin();
 
             match post_run::approve_and_merge(&PostRunInput {
                 conn: &conn,

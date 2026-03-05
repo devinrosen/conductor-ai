@@ -1046,7 +1046,7 @@ pub fn build_startup_context(
         {
             if let Some(ref result) = last_run.result_text {
                 let truncated = if result.len() > 500 {
-                    format!("{}…", crate::pr_review::truncate_str(result, 500))
+                    format!("{}…", crate::text_util::truncate_str(result, 500))
                 } else {
                     result.clone()
                 };
