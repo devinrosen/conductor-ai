@@ -1,9 +1,26 @@
-use std::process::Command;
+use std::process::{Command, Output};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ConductorError, Result};
 use crate::tickets::TicketInput;
+
+/// Run `gh` with the given arguments and return the output.
+/// Maps spawn failures and non-zero exit codes to `ConductorError::TicketSync`.
+fn run_gh(args: &[&str]) -> Result<Output> {
+    let output = Command::new("gh")
+        .args(args)
+        .output()
+        .map_err(|e| ConductorError::TicketSync(format!("failed to run gh: {e}")))?;
+
+    if !output.status.success() {
+        return Err(ConductorError::TicketSync(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+
+    Ok(output)
+}
 
 /// A GitHub repository discovered via the `gh` CLI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,16 +40,7 @@ pub struct DiscoveredRepo {
 /// List GitHub organizations the authenticated user belongs to via the `gh` CLI.
 /// Returns org login names (e.g. `["myorg", "another-org"]`).
 pub fn list_github_orgs() -> Result<Vec<String>> {
-    let output = Command::new("gh")
-        .args(["api", "user/orgs", "--jq", ".[].login"])
-        .output()
-        .map_err(|e| ConductorError::TicketSync(format!("failed to run gh: {e}")))?;
-
-    if !output.status.success() {
-        return Err(ConductorError::TicketSync(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
-    }
+    let output = run_gh(&["api", "user/orgs", "--jq", ".[].login"])?;
 
     let orgs = String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -58,16 +66,7 @@ pub fn discover_github_repos(owner: Option<&str>) -> Result<Vec<DiscoveredRepo>>
         "name,nameWithOwner,description,url,sshUrl,defaultBranchRef,isPrivate",
     ]);
 
-    let output = Command::new("gh")
-        .args(&args)
-        .output()
-        .map_err(|e| ConductorError::TicketSync(format!("failed to run gh: {e}")))?;
-
-    if !output.status.success() {
-        return Err(ConductorError::TicketSync(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
-    }
+    let output = run_gh(&args)?;
 
     let json_str = String::from_utf8_lossy(&output.stdout);
     let items: Vec<serde_json::Value> = serde_json::from_str(&json_str)
@@ -98,27 +97,19 @@ pub fn discover_github_repos(owner: Option<&str>) -> Result<Vec<DiscoveredRepo>>
 /// Sync open GitHub issues for a repo using the `gh` CLI.
 /// Returns a list of normalized TicketInputs ready for upsert.
 pub fn sync_github_issues(owner: &str, repo: &str) -> Result<Vec<TicketInput>> {
-    let output = Command::new("gh")
-        .args([
-            "issue",
-            "list",
-            "--repo",
-            &format!("{owner}/{repo}"),
-            "--state",
-            "open",
-            "--limit",
-            "200",
-            "--json",
-            "number,title,body,labels,assignees,state,url",
-        ])
-        .output()
-        .map_err(|e| ConductorError::TicketSync(format!("failed to run gh: {e}")))?;
-
-    if !output.status.success() {
-        return Err(ConductorError::TicketSync(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
-    }
+    let repo_slug = format!("{owner}/{repo}");
+    let output = run_gh(&[
+        "issue",
+        "list",
+        "--repo",
+        &repo_slug,
+        "--state",
+        "open",
+        "--limit",
+        "200",
+        "--json",
+        "number,title,body,labels,assignees,state,url",
+    ])?;
 
     let json_str = String::from_utf8_lossy(&output.stdout);
     let issues: Vec<serde_json::Value> = serde_json::from_str(&json_str)
@@ -168,25 +159,17 @@ pub fn create_github_issue(
     title: &str,
     body: &str,
 ) -> Result<(String, String)> {
-    let output = Command::new("gh")
-        .args([
-            "issue",
-            "create",
-            "--repo",
-            &format!("{owner}/{repo}"),
-            "--title",
-            title,
-            "--body",
-            body,
-        ])
-        .output()
-        .map_err(|e| ConductorError::TicketSync(format!("failed to run gh: {e}")))?;
-
-    if !output.status.success() {
-        return Err(ConductorError::TicketSync(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
-    }
+    let repo_slug = format!("{owner}/{repo}");
+    let output = run_gh(&[
+        "issue",
+        "create",
+        "--repo",
+        &repo_slug,
+        "--title",
+        title,
+        "--body",
+        body,
+    ])?;
 
     // `gh issue create` prints the issue URL on stdout, e.g.
     // https://github.com/owner/repo/issues/42
@@ -213,29 +196,22 @@ pub fn list_issues_by_search(
     label: &str,
     limit: u32,
 ) -> Result<Vec<serde_json::Value>> {
-    let output = Command::new("gh")
-        .args([
-            "issue",
-            "list",
-            "--repo",
-            &format!("{owner}/{repo}"),
-            "--search",
-            query,
-            "--label",
-            label,
-            "--json",
-            "number,title,url",
-            "--limit",
-            &limit.to_string(),
-        ])
-        .output()
-        .map_err(|e| ConductorError::TicketSync(format!("failed to run gh: {e}")))?;
-
-    if !output.status.success() {
-        return Err(ConductorError::TicketSync(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
-    }
+    let repo_slug = format!("{owner}/{repo}");
+    let limit_str = limit.to_string();
+    let output = run_gh(&[
+        "issue",
+        "list",
+        "--repo",
+        &repo_slug,
+        "--search",
+        query,
+        "--label",
+        label,
+        "--json",
+        "number,title,url",
+        "--limit",
+        &limit_str,
+    ])?;
 
     let json_str = String::from_utf8_lossy(&output.stdout);
     let issues: Vec<serde_json::Value> = serde_json::from_str(json_str.trim())
@@ -246,24 +222,16 @@ pub fn list_issues_by_search(
 
 /// Add a label to an existing GitHub issue (best-effort via `gh issue edit`).
 pub fn add_label_to_issue(owner: &str, repo: &str, issue_url: &str, label: &str) -> Result<()> {
-    let output = Command::new("gh")
-        .args([
-            "issue",
-            "edit",
-            issue_url,
-            "--repo",
-            &format!("{owner}/{repo}"),
-            "--add-label",
-            label,
-        ])
-        .output()
-        .map_err(|e| ConductorError::TicketSync(format!("failed to run gh: {e}")))?;
-
-    if !output.status.success() {
-        return Err(ConductorError::TicketSync(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
-    }
+    let repo_slug = format!("{owner}/{repo}");
+    run_gh(&[
+        "issue",
+        "edit",
+        issue_url,
+        "--repo",
+        &repo_slug,
+        "--add-label",
+        label,
+    ])?;
 
     Ok(())
 }
@@ -296,25 +264,20 @@ pub fn parse_github_remote(remote_url: &str) -> Option<(String, String)> {
 /// Detect the PR number for a branch using `gh pr list`.
 pub fn detect_pr_number(remote_url: &str, branch: &str) -> Option<i64> {
     let (owner, repo) = parse_github_remote(remote_url)?;
-    let output = Command::new("gh")
-        .args([
-            "pr",
-            "list",
-            "--repo",
-            &format!("{owner}/{repo}"),
-            "--head",
-            branch,
-            "--json",
-            "number",
-            "--limit",
-            "1",
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
+    let repo_slug = format!("{owner}/{repo}");
+    let output = run_gh(&[
+        "pr",
+        "list",
+        "--repo",
+        &repo_slug,
+        "--head",
+        branch,
+        "--json",
+        "number",
+        "--limit",
+        "1",
+    ])
+    .ok()?;
 
     let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).ok()?;
     json.first()?.get("number")?.as_i64()

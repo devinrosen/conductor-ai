@@ -239,15 +239,16 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
         );
     }
 
-    // File off-diff findings as GH issues (if we can resolve the repo remote)
+    // Resolve owner/repo once for GH issue filing and PR commenting
     let repo_mgr = crate::repo::RepoManager::new(conn, config);
+    let gh_remote = repo_mgr
+        .get_by_id(repo_id)
+        .ok()
+        .and_then(|repo| github::parse_github_remote(&repo.remote_url));
+
     let off_diff_issues_filed = if !deduped_off_diff.is_empty() {
-        if let Ok(repo) = repo_mgr.get_by_id(repo_id) {
-            if let Some((owner, repo_name)) = github::parse_github_remote(&repo.remote_url) {
-                file_off_diff_issues(&owner, &repo_name, pr_branch, &deduped_off_diff)
-            } else {
-                Vec::new()
-            }
+        if let Some((ref owner, ref repo_name)) = gh_remote {
+            file_off_diff_issues(owner, repo_name, pr_branch, &deduped_off_diff)
         } else {
             Vec::new()
         }
@@ -300,10 +301,8 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
     // Post to PR if configured
     if review_config.post_to_pr {
         if let Some(pr_num) = pr_number {
-            if let Ok(repo) = repo_mgr.get_by_id(repo_id) {
-                if let Some((owner, repo_name)) = github::parse_github_remote(&repo.remote_url) {
-                    let _ = post_pr_comment(&owner, &repo_name, pr_num, &aggregated_comment);
-                }
+            if let Some((ref owner, ref repo_name)) = gh_remote {
+                let _ = post_pr_comment(owner, repo_name, pr_num, &aggregated_comment);
             }
         }
     }
