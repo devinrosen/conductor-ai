@@ -1045,7 +1045,7 @@ pub fn build_startup_context(
             .find(|r| r.status == "completed" || r.status == "failed")
         {
             if let Some(ref result) = last_run.result_text {
-                let truncated = crate::pr_review::cap_with_suffix(result, 500, "…");
+                let truncated = crate::text_util::cap_with_suffix(result, 500, "…");
                 sections.push(format!(
                     "**Prior run outcome ({}):** {}",
                     last_run.status, truncated

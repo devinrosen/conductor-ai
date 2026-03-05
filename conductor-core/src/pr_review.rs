@@ -368,19 +368,9 @@ pub fn build_remediation_prompt(swarm_result: &ReviewSwarmResult) -> String {
     prompt
 }
 
-// Internal use alias — canonical home is text_util.
+// Internal use aliases — canonical home is text_util.
+pub(crate) use crate::text_util::cap_with_suffix;
 pub(crate) use crate::text_util::truncate_str;
-
-/// Truncate `s` to at most `max` bytes (on a char boundary) and append `suffix` when truncated.
-pub(crate) fn cap_with_suffix(s: &str, max: usize, suffix: &str) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        let mut out = truncate_str(s, max).to_string();
-        out.push_str(suffix);
-        out
-    }
-}
 
 /// Get the diff for a PR branch compared to the default branch.
 fn get_pr_diff(branch: &str) -> Result<String> {
