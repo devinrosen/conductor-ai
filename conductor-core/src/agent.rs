@@ -8,6 +8,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+use crate::pr_review::PR_REVIEW_SWARM_PROMPT_PREFIX;
 
 /// A single step in an agent's two-phase execution plan.
 /// Stored as individual records in the `agent_run_steps` table.
@@ -959,18 +960,50 @@ impl<'a> AgentManager<'a> {
     /// "Review fix #N" based on prompt content. Each phase aggregates cost
     /// from the run tree (parent + all child/grandchild runs).
     pub fn worktree_cost_phases(&self, worktree_id: &str) -> Result<Vec<CostPhase>> {
-        // Fetch top-level runs only (no parent), ordered chronologically.
-        // We only need id, model, and prompt prefix to classify phases.
-        let mut runs = self.list_root_runs_for_worktree(worktree_id)?;
-        runs.reverse(); // list_root_runs returns DESC; we need chronological ASC
+        // Single recursive-CTE query: find all root runs and aggregate each
+        // tree's cost/duration in one round-trip instead of 1+N queries.
+        let mut stmt = self.conn.prepare(
+            "WITH RECURSIVE tree(root_id, node_id) AS ( \
+                 SELECT id, id \
+                 FROM agent_runs \
+                 WHERE worktree_id = ?1 AND parent_run_id IS NULL \
+                 UNION ALL \
+                 SELECT t.root_id, a.id \
+                 FROM agent_runs a \
+                 JOIN tree t ON a.parent_run_id = t.node_id \
+             ), \
+             agg(root_id, total_cost, total_duration_ms) AS ( \
+                 SELECT t.root_id, \
+                        COALESCE(SUM(CASE WHEN a.status = 'completed' THEN a.cost_usd ELSE 0.0 END), 0.0), \
+                        COALESCE(SUM(CASE WHEN a.status = 'completed' THEN a.duration_ms ELSE 0 END), 0) \
+                 FROM tree t \
+                 LEFT JOIN agent_runs a ON a.id = t.node_id \
+                 GROUP BY t.root_id \
+             ) \
+             SELECT r.id, r.model, r.prompt, \
+                    COALESCE(agg.total_cost, 0.0), \
+                    COALESCE(agg.total_duration_ms, 0) \
+             FROM agent_runs r \
+             LEFT JOIN agg ON agg.root_id = r.id \
+             WHERE r.worktree_id = ?1 AND r.parent_run_id IS NULL \
+             ORDER BY r.started_at ASC",
+        )?;
+
+        let rows = stmt.query_map(params![worktree_id], |row| {
+            Ok((
+                row.get::<_, Option<String>>(1)?, // model
+                row.get::<_, String>(2)?,         // prompt
+                row.get::<_, f64>(3)?,            // total_cost
+                row.get::<_, i64>(4)?,            // total_duration_ms
+            ))
+        })?;
 
         let mut phases = Vec::new();
         let mut review_count = 0u32;
 
-        for run in &runs {
-            let totals = self.aggregate_run_tree(&run.id)?;
-
-            let is_review = run.prompt.starts_with("PR review swarm");
+        for row in rows {
+            let (model, prompt, cost_usd, duration_ms) = row?;
+            let is_review = prompt.starts_with(PR_REVIEW_SWARM_PROMPT_PREFIX);
             let label = if is_review {
                 review_count += 1;
                 format!("Review #{review_count}")
@@ -982,9 +1015,9 @@ impl<'a> AgentManager<'a> {
 
             phases.push(CostPhase {
                 label,
-                model: run.model.clone(),
-                cost_usd: totals.total_cost,
-                duration_ms: totals.total_duration_ms,
+                model,
+                cost_usd,
+                duration_ms,
             });
         }
 

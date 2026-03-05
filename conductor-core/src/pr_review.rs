@@ -21,6 +21,10 @@ use crate::merge_queue::MergeQueueManager;
 use crate::review_config::{ReviewConfigManager, ReviewerRole};
 use crate::worktree::WorktreeManager;
 
+/// Prefix used for the parent run prompt when launching a PR review swarm.
+/// Exported so other modules can identify review-swarm runs by prompt content.
+pub const PR_REVIEW_SWARM_PROMPT_PREFIX: &str = "PR review swarm";
+
 /// A finding in unchanged/removed code that should be filed as a GH issue
 /// rather than blocking the PR.
 #[derive(Debug, Clone, PartialEq, Eq)]
