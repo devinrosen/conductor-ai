@@ -154,6 +154,24 @@ impl App {
             Action::PrevPanel => self.prev_panel(),
             Action::MoveUp => self.move_up(),
             Action::MoveDown => self.move_down(),
+            Action::ScrollLeft => {
+                if let Modal::EventDetail {
+                    ref mut horizontal_offset,
+                    ..
+                } = self.state.modal
+                {
+                    *horizontal_offset = horizontal_offset.saturating_sub(4);
+                }
+            }
+            Action::ScrollRight => {
+                if let Modal::EventDetail {
+                    ref mut horizontal_offset,
+                    ..
+                } = self.state.modal
+                {
+                    *horizontal_offset += 4;
+                }
+            }
             Action::Select => self.select(),
 
             // View navigation
@@ -663,13 +681,6 @@ impl App {
 
     fn move_up(&mut self) {
         match self.state.modal {
-            Modal::EventDetail {
-                ref mut horizontal_offset,
-                ..
-            } => {
-                *horizontal_offset = horizontal_offset.saturating_sub(4);
-                return;
-            }
             Modal::ModelPicker {
                 ref mut selected,
                 ref mut custom_active,
@@ -774,13 +785,6 @@ impl App {
 
     fn move_down(&mut self) {
         match self.state.modal {
-            Modal::EventDetail {
-                ref mut horizontal_offset,
-                ..
-            } => {
-                *horizontal_offset += 4;
-                return;
-            }
             Modal::ModelPicker {
                 ref mut selected,
                 ref mut custom_active,
@@ -3234,44 +3238,13 @@ impl App {
 
     fn handle_expand_agent_event(&mut self) {
         let selected = self.state.agent_list_state.borrow().selected().unwrap_or(0);
-        let events = &self.state.data.agent_events;
-        if events.is_empty() {
-            return;
-        }
 
-        // Map the visual index (which includes run separators) to the actual event
-        let run_info = &self.state.data.agent_run_info;
-        let has_multiple_runs = run_info.len() > 1;
-
-        let mut visual_idx = 0usize;
-        let mut target_event: Option<&conductor_core::agent::AgentRunEvent> = None;
-        let mut prev_run_id: Option<&str> = None;
-
-        for ev in events {
-            if has_multiple_runs {
-                let is_new = prev_run_id.is_none() || prev_run_id.is_some_and(|p| p != ev.run_id);
-                if is_new && run_info.contains_key(&ev.run_id) {
-                    if visual_idx == selected {
-                        // Selected a separator — no event to expand
-                        return;
-                    }
-                    visual_idx += 1;
-                }
-            }
-            prev_run_id = Some(&ev.run_id);
-
-            if visual_idx == selected {
-                target_event = Some(ev);
-                break;
-            }
-            visual_idx += 1;
-        }
-
-        let Some(ev) = target_event else {
+        let Some(ev) = self.state.data.event_at_visual_index(selected) else {
             return;
         };
 
-        let title = format!("[{}] {}", ev.kind, &ev.summary[..ev.summary.len().min(60)]);
+        let summary_prefix = truncate_to_char_boundary(&ev.summary, 60);
+        let title = format!("[{}] {}", ev.kind, summary_prefix);
         let body = ev.summary.clone();
         let line_count = body.lines().count();
 
@@ -3522,6 +3495,14 @@ impl App {
                 errors.len()
             ));
         }
+    }
+}
+
+/// Truncate a string to at most `max_chars` characters at a char boundary.
+fn truncate_to_char_boundary(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((byte_idx, _)) => &s[..byte_idx],
+        None => s,
     }
 }
 

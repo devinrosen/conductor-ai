@@ -1091,8 +1091,10 @@ pub fn render_event_detail(
         line_count.max(1),
     );
 
-    let title_display = if title.len() > (popup.width as usize).saturating_sub(4) {
-        format!(" {}... ", &title[..popup.width as usize - 7])
+    let max_title_chars = (popup.width as usize).saturating_sub(7);
+    let title_display = if title.chars().count() > (popup.width as usize).saturating_sub(4) {
+        let truncated: String = title.chars().take(max_title_chars).collect();
+        format!(" {truncated}... ")
     } else {
         format!(" {title} ")
     };

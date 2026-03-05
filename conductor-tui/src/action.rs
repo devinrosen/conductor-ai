@@ -100,6 +100,8 @@ pub enum Action {
     ExpandAgentEvent,
     AgentActivityDown,
     AgentActivityUp,
+    ScrollLeft,
+    ScrollRight,
 
     // Scroll navigation (all views)
     GoToTop,

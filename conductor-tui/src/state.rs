@@ -345,6 +345,34 @@ impl DataCache {
         self.agent_events.len() + separators
     }
 
+    /// Map a visual index (which may include run-separator rows) back to the
+    /// underlying `AgentRunEvent`. Returns `None` if the index points at a
+    /// separator row or is out of range.
+    pub fn event_at_visual_index(&self, visual_target: usize) -> Option<&AgentRunEvent> {
+        let has_multiple_runs = self.agent_run_info.len() > 1;
+        let mut visual_idx = 0usize;
+        let mut prev_run_id: Option<&str> = None;
+
+        for ev in &self.agent_events {
+            if has_multiple_runs {
+                let is_new = prev_run_id.is_none() || prev_run_id.is_some_and(|p| p != ev.run_id);
+                if is_new && self.agent_run_info.contains_key(&ev.run_id) {
+                    if visual_idx == visual_target {
+                        return None; // separator row
+                    }
+                    visual_idx += 1;
+                }
+            }
+            prev_run_id = Some(&ev.run_id);
+
+            if visual_idx == visual_target {
+                return Some(ev);
+            }
+            visual_idx += 1;
+        }
+        None
+    }
+
     pub fn rebuild_maps(&mut self) {
         self.repo_slug_map.clear();
         for repo in &self.repos {
