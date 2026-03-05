@@ -369,8 +369,7 @@ pub fn build_remediation_prompt(swarm_result: &ReviewSwarmResult) -> String {
 }
 
 // Internal use aliases — canonical home is text_util.
-use crate::text_util::cap_with_suffix;
-use crate::text_util::truncate_str;
+use crate::text_util::{cap_with_suffix, truncate_str};
 
 /// Get the diff for a PR branch compared to the default branch.
 fn get_pr_diff(branch: &str) -> Result<String> {
