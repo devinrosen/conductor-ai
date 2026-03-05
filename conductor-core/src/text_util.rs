@@ -16,7 +16,9 @@ pub fn cap_with_suffix(s: &str, max: usize, suffix: &str) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        let mut out = truncate_str(s, max).to_string();
+        let truncated = truncate_str(s, max);
+        let mut out = String::with_capacity(truncated.len() + suffix.len());
+        out.push_str(truncated);
         out.push_str(suffix);
         out
     }
