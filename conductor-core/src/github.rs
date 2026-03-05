@@ -161,14 +161,7 @@ pub fn create_github_issue(
 ) -> Result<(String, String)> {
     let repo_slug = format!("{owner}/{repo}");
     let output = run_gh(&[
-        "issue",
-        "create",
-        "--repo",
-        &repo_slug,
-        "--title",
-        title,
-        "--body",
-        body,
+        "issue", "create", "--repo", &repo_slug, "--title", title, "--body", body,
     ])?;
 
     // `gh issue create` prints the issue URL on stdout, e.g.
@@ -266,16 +259,7 @@ pub fn detect_pr_number(remote_url: &str, branch: &str) -> Option<i64> {
     let (owner, repo) = parse_github_remote(remote_url)?;
     let repo_slug = format!("{owner}/{repo}");
     let output = run_gh(&[
-        "pr",
-        "list",
-        "--repo",
-        &repo_slug,
-        "--head",
-        branch,
-        "--json",
-        "number",
-        "--limit",
-        "1",
+        "pr", "list", "--repo", &repo_slug, "--head", branch, "--json", "number", "--limit", "1",
     ])
     .ok()?;
 
