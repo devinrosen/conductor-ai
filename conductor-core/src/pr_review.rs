@@ -381,6 +381,17 @@ fn truncate_str(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
+/// Truncate `s` to at most `max` bytes (on a char boundary) and append `suffix` when truncated.
+fn cap_with_suffix(s: &str, max: usize, suffix: &str) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        let mut out = truncate_str(s, max).to_string();
+        out.push_str(suffix);
+        out
+    }
+}
+
 /// Get the diff for a PR branch compared to the default branch.
 fn get_pr_diff(branch: &str) -> Result<String> {
     let output = Command::new("git")
@@ -485,18 +496,8 @@ fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFindin
                 const MAX_BODY: usize = 65_536;
                 const MAX_FILE: usize = 512;
                 const KNOWN_SEVERITIES: &[&str] = &["critical", "warning", "suggestion"];
-                let capped_title = if title.len() > MAX_TITLE {
-                    let mut t = truncate_str(&title, MAX_TITLE).to_string();
-                    t.push('…');
-                    t
-                } else {
-                    title.clone()
-                };
-                let capped_file = if file.len() > MAX_FILE {
-                    truncate_str(&file, MAX_FILE).to_string()
-                } else {
-                    file.clone()
-                };
+                let capped_title = cap_with_suffix(&title, MAX_TITLE, "…");
+                let capped_file = cap_with_suffix(&file, MAX_FILE, "");
                 let validated_severity = {
                     let s = severity.trim().to_lowercase();
                     if KNOWN_SEVERITIES.contains(&s.as_str()) {
@@ -506,13 +507,7 @@ fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFindin
                     }
                 };
                 let trimmed_body = body.trim().to_string();
-                let capped_body = if trimmed_body.len() > MAX_BODY {
-                    let mut b = truncate_str(&trimmed_body, MAX_BODY).to_string();
-                    b.push_str("\n\n*(truncated)*");
-                    b
-                } else {
-                    trimmed_body
-                };
+                let capped_body = cap_with_suffix(&trimmed_body, MAX_BODY, "\n\n*(truncated)*");
                 findings.push(OffDiffFinding {
                     title: capped_title,
                     file: capped_file,
