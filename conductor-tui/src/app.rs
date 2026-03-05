@@ -585,7 +585,9 @@ impl App {
 
         // Clamp ListState selection to valid range after events reload.
         // ratatui also clamps during render, but we keep it tidy here.
-        let len = self.state.data.agent_events.len();
+        // Use agent_activity_len() (which includes run-separator rows) so the
+        // cursor isn't clamped below the last visual row when multiple runs exist.
+        let len = self.state.data.agent_activity_len();
         let cur = self.state.agent_list_state.borrow().selected();
         if let Some(idx) = cur {
             if len == 0 {
