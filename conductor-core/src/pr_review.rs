@@ -6,6 +6,7 @@
 
 use std::borrow::Cow;
 use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -509,6 +510,24 @@ fn build_aggregated_comment(results: &[ReviewerResult], all_required_approved: b
 
 /// Post a comment to a GitHub PR using the `gh` CLI.
 fn post_pr_comment(owner: &str, repo: &str, pr_number: i64, comment: &str) -> Result<()> {
+    // Write comment to a temp file to avoid exceeding command-line arg limits (~10KB+).
+    // Use mode 0o600 to prevent other local users from reading the comment.
+    let comment_file = std::env::temp_dir().join(format!(
+        "conductor-review-comment-{}.txt",
+        ulid::Ulid::new()
+    ));
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&comment_file)
+            .map_err(|e| ConductorError::Agent(format!("failed to write comment file: {e}")))?;
+        f.write_all(comment.as_bytes())
+            .map_err(|e| ConductorError::Agent(format!("failed to write comment file: {e}")))?;
+    }
+
     let output = Command::new("gh")
         .args([
             "pr",
@@ -516,11 +535,14 @@ fn post_pr_comment(owner: &str, repo: &str, pr_number: i64, comment: &str) -> Re
             &pr_number.to_string(),
             "--repo",
             &format!("{owner}/{repo}"),
-            "--body",
-            comment,
+            "--body-file",
+            &comment_file.to_string_lossy(),
         ])
         .output()
         .map_err(|e| ConductorError::Agent(format!("failed to post PR comment: {e}")))?;
+
+    // Clean up temp file
+    let _ = std::fs::remove_file(&comment_file);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -542,9 +564,15 @@ fn spawn_reviewer_tmux(
     model: Option<&str>,
     window_name: &str,
 ) -> std::result::Result<(), String> {
-    // Write prompt to a temp file so the tmux command stays short
+    // Write prompt to a temp file so the tmux command stays short.
+    // Use mode 0o600 to prevent other local users from reading the prompt.
     let prompt_file = std::env::temp_dir().join(format!("conductor-review-{run_id}.txt"));
-    let mut f = std::fs::File::create(&prompt_file)
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&prompt_file)
         .map_err(|e| format!("Failed to write prompt file: {e}"))?;
     f.write_all(prompt.as_bytes())
         .map_err(|e| format!("Failed to write prompt file: {e}"))?;

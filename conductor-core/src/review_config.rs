@@ -27,86 +27,76 @@ fn default_true() -> bool {
     true
 }
 
+/// Build a reviewer system prompt from an intro, focus points, and a "no issues" phrase.
+fn reviewer_system_prompt(intro: &str, focus_points: &str, no_issues_phrase: &str) -> String {
+    format!(
+        "{intro}\n\
+         Focus exclusively on:\n\
+         {focus_points}\n\n\
+         For each issue found, report:\n\
+         - **Issue**: one-line description\n\
+         - **Severity**: critical | warning | suggestion\n\
+         - **Location**: file:line reference\n\
+         - **Details**: explanation and recommended fix\n\n\
+         If you find no issues, state \"{no_issues_phrase}\" and explain what you reviewed."
+    )
+}
+
 /// Default reviewer roles used when no per-repo config exists.
 pub fn default_reviewer_roles() -> Vec<ReviewerRole> {
     vec![
         ReviewerRole {
             name: "architecture".to_string(),
             focus: "Coupling, cohesion, layer violations, design patterns".to_string(),
-            system_prompt: "You are a senior software architect reviewing a pull request.\n\
-                Focus exclusively on:\n\
-                - Coupling and cohesion between modules\n\
-                - Layer violations (e.g. UI code calling DB directly)\n\
-                - Design pattern misuse or missed opportunities\n\
-                - API surface consistency\n\n\
-                For each issue found, report:\n\
-                - **Issue**: one-line description\n\
-                - **Severity**: critical | warning | suggestion\n\
-                - **Location**: file:line reference\n\
-                - **Details**: explanation and recommended fix\n\n\
-                If you find no issues, state \"No architectural issues found\" and explain \
-                what you reviewed."
-                .to_string(),
+            system_prompt: reviewer_system_prompt(
+                "You are a senior software architect reviewing a pull request.",
+                "- Coupling and cohesion between modules\n\
+                 - Layer violations (e.g. UI code calling DB directly)\n\
+                 - Design pattern misuse or missed opportunities\n\
+                 - API surface consistency",
+                "No architectural issues found",
+            ),
             required: true,
         },
         ReviewerRole {
             name: "dry-abstraction".to_string(),
             focus: "Duplication, premature abstraction, missing helpers".to_string(),
-            system_prompt:
-                "You are a code quality reviewer focused on DRY principles and abstraction.\n\
-                Focus exclusively on:\n\
-                - Code duplication (copy-pasted logic)\n\
-                - Premature or over-engineered abstractions\n\
-                - Missing helper functions that would reduce repetition\n\
-                - Unnecessary indirection\n\n\
-                For each issue found, report:\n\
-                - **Issue**: one-line description\n\
-                - **Severity**: critical | warning | suggestion\n\
-                - **Location**: file:line reference\n\
-                - **Details**: explanation and recommended fix\n\n\
-                If you find no issues, state \"No DRY/abstraction issues found\" and explain \
-                what you reviewed."
-                    .to_string(),
+            system_prompt: reviewer_system_prompt(
+                "You are a code quality reviewer focused on DRY principles and abstraction.",
+                "- Code duplication (copy-pasted logic)\n\
+                 - Premature or over-engineered abstractions\n\
+                 - Missing helper functions that would reduce repetition\n\
+                 - Unnecessary indirection",
+                "No DRY/abstraction issues found",
+            ),
             required: false,
         },
         ReviewerRole {
             name: "security".to_string(),
             focus: "Input validation, auth gaps, injection risks, secrets in code".to_string(),
-            system_prompt: "You are a security-focused code reviewer.\n\
-                Focus exclusively on:\n\
-                - Input validation gaps\n\
-                - Authentication and authorization issues\n\
-                - Injection risks (SQL, command, XSS)\n\
-                - Secrets, credentials, or tokens in code\n\
-                - Unsafe deserialization\n\n\
-                For each issue found, report:\n\
-                - **Issue**: one-line description\n\
-                - **Severity**: critical | warning | suggestion\n\
-                - **Location**: file:line reference\n\
-                - **Details**: explanation and recommended fix\n\n\
-                If you find no issues, state \"No security issues found\" and explain \
-                what you reviewed."
-                .to_string(),
+            system_prompt: reviewer_system_prompt(
+                "You are a security-focused code reviewer.",
+                "- Input validation gaps\n\
+                 - Authentication and authorization issues\n\
+                 - Injection risks (SQL, command, XSS)\n\
+                 - Secrets, credentials, or tokens in code\n\
+                 - Unsafe deserialization",
+                "No security issues found",
+            ),
             required: true,
         },
         ReviewerRole {
             name: "performance".to_string(),
             focus: "Unnecessary allocations, N+1 queries, blocking calls".to_string(),
-            system_prompt: "You are a performance-focused code reviewer.\n\
-                Focus exclusively on:\n\
-                - Unnecessary memory allocations or copies\n\
-                - N+1 query patterns\n\
-                - Blocking calls in hot paths\n\
-                - Missing caching opportunities\n\
-                - Algorithmic complexity issues\n\n\
-                For each issue found, report:\n\
-                - **Issue**: one-line description\n\
-                - **Severity**: critical | warning | suggestion\n\
-                - **Location**: file:line reference\n\
-                - **Details**: explanation and recommended fix\n\n\
-                If you find no issues, state \"No performance issues found\" and explain \
-                what you reviewed."
-                .to_string(),
+            system_prompt: reviewer_system_prompt(
+                "You are a performance-focused code reviewer.",
+                "- Unnecessary memory allocations or copies\n\
+                 - N+1 query patterns\n\
+                 - Blocking calls in hot paths\n\
+                 - Missing caching opportunities\n\
+                 - Algorithmic complexity issues",
+                "No performance issues found",
+            ),
             required: false,
         },
     ]
@@ -146,7 +136,13 @@ impl<'a> ReviewConfigManager<'a> {
                 |row| {
                     let roles_json: String = row.get(2)?;
                     let roles: Vec<ReviewerRole> =
-                        serde_json::from_str(&roles_json).unwrap_or_default();
+                        serde_json::from_str(&roles_json).map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                2,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?;
                     Ok(ReviewConfig {
                         id: row.get(0)?,
                         repo_id: row.get(1)?,
