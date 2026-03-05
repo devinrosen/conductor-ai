@@ -21,6 +21,19 @@ use crate::merge_queue::MergeQueueManager;
 use crate::review_config::{ReviewConfigManager, ReviewerRole};
 use crate::worktree::WorktreeManager;
 
+/// A finding in unchanged/removed code that should be filed as a GH issue
+/// rather than blocking the PR.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OffDiffFinding {
+    pub title: String,
+    pub file: String,
+    pub line: u64,
+    pub severity: String,
+    pub body: String,
+    /// Which reviewer role produced this finding.
+    pub reviewer: String,
+}
+
 /// Outcome of a single reviewer agent.
 #[derive(Debug, Clone)]
 pub struct ReviewerResult {
@@ -34,6 +47,8 @@ pub struct ReviewerResult {
     pub cost_usd: Option<f64>,
     pub num_turns: Option<i64>,
     pub duration_ms: Option<i64>,
+    /// Off-diff findings extracted from this reviewer's output.
+    pub off_diff_findings: Vec<OffDiffFinding>,
 }
 
 /// Aggregated result of the full review swarm.
@@ -46,6 +61,8 @@ pub struct ReviewSwarmResult {
     pub total_turns: i64,
     pub total_duration_ms: i64,
     pub aggregated_comment: String,
+    /// Deduplicated off-diff findings from all reviewers, filed as GH issues.
+    pub off_diff_issues_filed: Vec<OffDiffFinding>,
 }
 
 /// Configuration for the review swarm process.
@@ -208,7 +225,41 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
     let total_turns: i64 = reviewer_results.iter().filter_map(|r| r.num_turns).sum();
     let total_duration_ms: i64 = reviewer_results.iter().filter_map(|r| r.duration_ms).sum();
 
-    let aggregated_comment = build_aggregated_comment(&reviewer_results, all_required_approved);
+    // Collect and deduplicate off-diff findings from all reviewers
+    let all_off_diff: Vec<OffDiffFinding> = reviewer_results
+        .iter()
+        .flat_map(|r| r.off_diff_findings.clone())
+        .collect();
+    let deduped_off_diff = deduplicate_off_diff_findings(all_off_diff);
+
+    if !deduped_off_diff.is_empty() {
+        eprintln!(
+            "[review-swarm] Found {} off-diff findings (after dedup)",
+            deduped_off_diff.len()
+        );
+    }
+
+    // File off-diff findings as GH issues (if we can resolve the repo remote)
+    let repo_mgr = crate::repo::RepoManager::new(conn, config);
+    let off_diff_issues_filed = if !deduped_off_diff.is_empty() {
+        if let Ok(repo) = repo_mgr.get_by_id(repo_id) {
+            if let Some((owner, repo_name)) = github::parse_github_remote(&repo.remote_url) {
+                file_off_diff_issues(&owner, &repo_name, pr_branch, &deduped_off_diff)
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    let aggregated_comment = build_aggregated_comment(
+        &reviewer_results,
+        all_required_approved,
+        &off_diff_issues_filed,
+    );
 
     // Update parent run
     let summary = format!(
@@ -240,12 +291,15 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
         total_turns,
         total_duration_ms,
         aggregated_comment: aggregated_comment.clone(),
+        off_diff_issues_filed: off_diff_issues_filed
+            .into_iter()
+            .map(|(f, _url)| f)
+            .collect(),
     };
 
     // Post to PR if configured
     if review_config.post_to_pr {
         if let Some(pr_num) = pr_number {
-            let repo_mgr = crate::repo::RepoManager::new(conn, config);
             if let Ok(repo) = repo_mgr.get_by_id(repo_id) {
                 if let Some((owner, repo_name)) = github::parse_github_remote(&repo.remote_url) {
                     let _ = post_pr_comment(&owner, &repo_name, pr_num, &aggregated_comment);
@@ -356,6 +410,29 @@ fn build_reviewer_prompt(role: &ReviewerRole, diff: &str, branch: &str) -> Strin
 
     format!(
         "{system_prompt}\n\n\
+         ## Diff Scope Rules\n\
+         - Lines starting with `+` are **added/modified code** — these are IN SCOPE for critique.\n\
+         - Lines starting with `-` are **removed code** — for context only, do NOT raise issues against them.\n\
+         - Lines starting with ` ` (space) are **unchanged context** — for understanding only, do NOT raise issues against them.\n\
+         - If you spot a genuine issue in unchanged/removed code, report it in a separate \
+         `OFF-DIFF-FINDING` block (see below) instead of including it in your main review.\n\n\
+         ## Off-Diff Findings\n\
+         For issues found in unchanged or removed code, use this exact format (one block per finding):\n\
+         ```\n\
+         OFF-DIFF-FINDING\n\
+         title: <short title>\n\
+         file: <file path>\n\
+         line: <line number or 0 if unknown>\n\
+         severity: critical | warning | suggestion\n\
+         body: <explanation of the issue>\n\
+         END-OFF-DIFF-FINDING\n\
+         ```\n\
+         Off-diff findings will be filed as separate GitHub issues and will NOT block this PR.\n\n\
+         ## Focus Scope\n\
+         Your declared focus area is: **{focus}**.\n\
+         Only raise blocking findings (critical/warning) for issues that fall within your focus area.\n\
+         If you notice something outside your focus, you may include it as a `suggestion` severity \
+         but it must not affect your verdict.\n\n\
          ## PR Branch\n\
          {branch}\n\n\
          ## PR Diff\n\
@@ -363,19 +440,248 @@ fn build_reviewer_prompt(role: &ReviewerRole, diff: &str, branch: &str) -> Strin
          {diff}\n\
          ```\n\n\
          Review the diff above. At the end of your review, include a verdict line:\n\
-         - `VERDICT: APPROVE` if no critical or warning issues found\n\
-         - `VERDICT: REQUEST_CHANGES` if any critical or warning issues found\n\n\
+         - `VERDICT: APPROVE` if no critical or warning issues found in `+` lines\n\
+         - `VERDICT: REQUEST_CHANGES` if any critical or warning issues found in `+` lines\n\n\
+         Important: `suggestion`-severity findings alone should NOT produce REQUEST_CHANGES.\n\n\
          Be thorough but concise.",
         system_prompt = role.system_prompt,
         branch = branch,
+        focus = role.focus,
         diff = truncated_diff,
     )
+}
+
+/// Parse OFF-DIFF-FINDING blocks from a reviewer's output text.
+fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFinding> {
+    let mut findings = Vec::new();
+    let mut in_block = false;
+    let mut title = String::new();
+    let mut file = String::new();
+    let mut line: u64 = 0;
+    let mut severity = String::new();
+    let mut body = String::new();
+
+    for raw_line in text.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed == "OFF-DIFF-FINDING" {
+            in_block = true;
+            title.clear();
+            file.clear();
+            line = 0;
+            severity.clear();
+            body.clear();
+            continue;
+        }
+        if trimmed == "END-OFF-DIFF-FINDING" {
+            if in_block && !title.is_empty() {
+                findings.push(OffDiffFinding {
+                    title: title.clone(),
+                    file: file.clone(),
+                    line,
+                    severity: severity.clone(),
+                    body: body.trim().to_string(),
+                    reviewer: reviewer_name.to_string(),
+                });
+            }
+            in_block = false;
+            continue;
+        }
+        if in_block {
+            if let Some(val) = trimmed.strip_prefix("title:") {
+                title = val.trim().to_string();
+            } else if let Some(val) = trimmed.strip_prefix("file:") {
+                file = val.trim().to_string();
+            } else if let Some(val) = trimmed.strip_prefix("line:") {
+                line = val.trim().parse().unwrap_or(0);
+            } else if let Some(val) = trimmed.strip_prefix("severity:") {
+                severity = val.trim().to_string();
+            } else if let Some(val) = trimmed.strip_prefix("body:") {
+                body = val.trim().to_string();
+            } else {
+                // Continuation of body
+                if !body.is_empty() {
+                    body.push('\n');
+                }
+                body.push_str(trimmed);
+            }
+        }
+    }
+
+    findings
+}
+
+/// Check if a reviewer's findings contain only suggestion-severity issues (no critical/warning).
+/// Returns true only if there are explicit suggestion-severity findings and no critical/warning.
+/// Returns false if there are no structured severity findings at all (respects the raw verdict).
+fn has_only_suggestions(result_text: &str) -> bool {
+    let text_lower = result_text.to_lowercase();
+    let has_critical =
+        text_lower.contains("severity: critical") || text_lower.contains("**severity**: critical");
+    let has_warning =
+        text_lower.contains("severity: warning") || text_lower.contains("**severity**: warning");
+    let has_suggestion = text_lower.contains("severity: suggestion")
+        || text_lower.contains("**severity**: suggestion");
+
+    // Only override the verdict if there are explicit suggestion findings
+    // but no critical/warning findings
+    has_suggestion && !has_critical && !has_warning
+}
+
+/// Deduplicate off-diff findings across reviewers by file:line.
+/// When multiple reviewers flag the same file:line, keep the highest severity one.
+fn deduplicate_off_diff_findings(findings: Vec<OffDiffFinding>) -> Vec<OffDiffFinding> {
+    use std::collections::HashMap;
+
+    let severity_rank = |s: &str| -> u8 {
+        match s.to_lowercase().as_str() {
+            "critical" => 3,
+            "warning" => 2,
+            "suggestion" => 1,
+            _ => 0,
+        }
+    };
+
+    let mut map: HashMap<(String, u64), OffDiffFinding> = HashMap::new();
+    for finding in findings {
+        let key = (finding.file.clone(), finding.line);
+        let entry = map.entry(key);
+        entry
+            .and_modify(|existing| {
+                if severity_rank(&finding.severity) > severity_rank(&existing.severity) {
+                    *existing = finding.clone();
+                }
+            })
+            .or_insert(finding);
+    }
+
+    let mut deduped: Vec<OffDiffFinding> = map.into_values().collect();
+    deduped.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
+    deduped
+}
+
+/// Search for an existing GH issue matching a finding, to avoid duplicates.
+fn find_existing_issue(owner: &str, repo: &str, title: &str) -> Option<String> {
+    let output = Command::new("gh")
+        .args([
+            "issue",
+            "list",
+            "--repo",
+            &format!("{owner}/{repo}"),
+            "--search",
+            title,
+            "--label",
+            "conductor-review",
+            "--json",
+            "number,title,url",
+            "--limit",
+            "5",
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let issues: Vec<serde_json::Value> = serde_json::from_str(stdout.trim()).ok()?;
+
+    // Look for a title that matches closely (case-insensitive substring)
+    let title_lower = title.to_lowercase();
+    for issue in &issues {
+        if let Some(existing_title) = issue["title"].as_str() {
+            if existing_title.to_lowercase().contains(&title_lower)
+                || title_lower.contains(&existing_title.to_lowercase())
+            {
+                return issue["url"].as_str().map(String::from);
+            }
+        }
+    }
+
+    None
+}
+
+/// File off-diff findings as GitHub issues (or reference existing ones).
+/// Returns a list of (finding, issue_url) pairs.
+fn file_off_diff_issues(
+    owner: &str,
+    repo: &str,
+    pr_branch: &str,
+    findings: &[OffDiffFinding],
+) -> Vec<(OffDiffFinding, String)> {
+    let mut filed = Vec::new();
+
+    for finding in findings {
+        // Check if an existing issue already covers this
+        if let Some(existing_url) = find_existing_issue(owner, repo, &finding.title) {
+            eprintln!(
+                "[review-swarm] Off-diff finding '{}' matches existing issue: {}",
+                finding.title, existing_url
+            );
+            filed.push((finding.clone(), existing_url));
+            continue;
+        }
+
+        let issue_body = format!(
+            "**Severity**: {severity}\n\
+             **File**: `{file}`:{line}\n\
+             **Found by**: {reviewer} reviewer\n\
+             **Source PR branch**: `{branch}`\n\n\
+             ## Details\n\n\
+             {body}\n\n\
+             ---\n\
+             *Filed automatically by Conductor PR review swarm. \
+             This issue was found in unchanged code during a PR review \
+             and does not block the originating PR.*",
+            severity = finding.severity,
+            file = finding.file,
+            line = finding.line,
+            reviewer = finding.reviewer,
+            branch = pr_branch,
+            body = finding.body,
+        );
+
+        match github::create_github_issue(owner, repo, &finding.title, &issue_body) {
+            Ok((_number, url)) => {
+                // Try to add the conductor-review label (best-effort)
+                let _ = Command::new("gh")
+                    .args([
+                        "issue",
+                        "edit",
+                        &url,
+                        "--repo",
+                        &format!("{owner}/{repo}"),
+                        "--add-label",
+                        "conductor-review",
+                    ])
+                    .output();
+                eprintln!(
+                    "[review-swarm] Filed off-diff issue '{}': {}",
+                    finding.title, url
+                );
+                filed.push((finding.clone(), url));
+            }
+            Err(e) => {
+                eprintln!(
+                    "[review-swarm] Failed to file off-diff issue '{}': {e}",
+                    finding.title
+                );
+            }
+        }
+    }
+
+    filed
 }
 
 /// Determine if a reviewer approved based on its result text.
 ///
 /// Requires the verdict to appear on the final non-empty line to prevent
 /// prompt injection from diff content that might contain verdict strings.
+///
+/// A reviewer is considered approved if:
+/// 1. They explicitly output `VERDICT: APPROVE`, OR
+/// 2. They output `VERDICT: REQUEST_CHANGES` but only have suggestion-severity findings
+///    (no critical or warning). Suggestion-only findings should not block.
 fn is_review_approved(run: &AgentRun) -> bool {
     if run.status != "completed" {
         return false;
@@ -388,14 +694,25 @@ fn is_review_approved(run: &AgentRun) -> bool {
                 .find(|l| !l.trim().is_empty())
                 .unwrap_or("");
             let verdict = last_line.trim().to_uppercase();
-            verdict == "VERDICT: APPROVE"
+            if verdict == "VERDICT: APPROVE" {
+                return true;
+            }
+            // If REQUEST_CHANGES but only suggestions, treat as approved
+            if verdict == "VERDICT: REQUEST_CHANGES" && has_only_suggestions(text) {
+                return true;
+            }
+            false
         }
         None => false,
     }
 }
 
 /// Build the aggregated PR comment from all reviewer results.
-fn build_aggregated_comment(results: &[ReviewerResult], all_required_approved: bool) -> String {
+fn build_aggregated_comment(
+    results: &[ReviewerResult],
+    all_required_approved: bool,
+    off_diff_issues: &[(OffDiffFinding, String)],
+) -> String {
     let mut comment = String::from("# Conductor PR Review\n\n");
 
     let approved_count = results.iter().filter(|r| r.approved).count();
@@ -440,6 +757,21 @@ fn build_aggregated_comment(results: &[ReviewerResult], all_required_approved: b
             comment.push_str("*(no findings reported)*");
         }
         comment.push_str("\n\n---\n\n");
+    }
+
+    // Include off-diff issues section if any were filed
+    if !off_diff_issues.is_empty() {
+        comment.push_str("## Off-Diff Findings (filed as issues)\n\n");
+        comment.push_str(
+            "The following issues were found in unchanged code and filed as separate GitHub issues:\n\n",
+        );
+        for (finding, url) in off_diff_issues {
+            comment.push_str(&format!(
+                "- **{}** (`{}`:{}): [{}]({}) *({})*\n",
+                finding.title, finding.file, finding.line, url, url, finding.severity
+            ));
+        }
+        comment.push_str("\n---\n\n");
     }
 
     let total_cost: f64 = results.iter().filter_map(|r| r.cost_usd).sum();
@@ -597,6 +929,7 @@ fn poll_all_reviewers(
                     cost_usd: None,
                     num_turns: None,
                     duration_ms: None,
+                    off_diff_findings: Vec::new(),
                 });
                 pending_count -= 1;
                 continue;
@@ -607,6 +940,10 @@ fn poll_all_reviewers(
                     "completed" | "failed" | "cancelled" => {
                         let findings = run.result_text.clone();
                         let approved = is_review_approved(&run);
+                        let off_diff = findings
+                            .as_deref()
+                            .map(|text| parse_off_diff_findings(text, &role.name))
+                            .unwrap_or_default();
                         if let Some(ref step_id) = steps[*step_idx].id {
                             let status = if run.status == "completed" {
                                 "completed"
@@ -616,8 +953,11 @@ fn poll_all_reviewers(
                             let _ = mgr.update_step_status(step_id, status);
                         }
                         eprintln!(
-                            "[review-swarm] {} reviewer: {} (approved={})",
-                            role.name, run.status, approved
+                            "[review-swarm] {} reviewer: {} (approved={}, off_diff={})",
+                            role.name,
+                            run.status,
+                            approved,
+                            off_diff.len()
                         );
                         results[idx] = Some(ReviewerResult {
                             role_name: role.name.clone(),
@@ -630,6 +970,7 @@ fn poll_all_reviewers(
                             cost_usd: run.cost_usd,
                             num_turns: run.num_turns,
                             duration_ms: run.duration_ms,
+                            off_diff_findings: off_diff,
                         });
                         pending_count -= 1;
                     }
@@ -651,6 +992,7 @@ fn poll_all_reviewers(
                         cost_usd: None,
                         num_turns: None,
                         duration_ms: None,
+                        off_diff_findings: Vec::new(),
                     });
                     pending_count -= 1;
                 }
@@ -667,6 +1009,7 @@ fn poll_all_reviewers(
                         cost_usd: None,
                         num_turns: None,
                         duration_ms: None,
+                        off_diff_findings: Vec::new(),
                     });
                     pending_count -= 1;
                 }
@@ -822,6 +1165,12 @@ mod tests {
         assert!(prompt.contains("+ added line"));
         assert!(prompt.contains("VERDICT: APPROVE"));
         assert!(prompt.contains("VERDICT: REQUEST_CHANGES"));
+        // New: diff scope instructions
+        assert!(prompt.contains("IN SCOPE for critique"));
+        assert!(prompt.contains("OFF-DIFF-FINDING"));
+        assert!(prompt.contains("suggestion"));
+        // New: focus scope
+        assert!(prompt.contains(&role.focus));
     }
 
     #[test]
@@ -848,6 +1197,7 @@ mod tests {
                 cost_usd: Some(0.05),
                 num_turns: Some(3),
                 duration_ms: Some(5000),
+                off_diff_findings: Vec::new(),
             },
             ReviewerResult {
                 role_name: "security".to_string(),
@@ -860,10 +1210,11 @@ mod tests {
                 cost_usd: Some(0.04),
                 num_turns: Some(2),
                 duration_ms: Some(4000),
+                off_diff_findings: Vec::new(),
             },
         ];
 
-        let comment = build_aggregated_comment(&results, true);
+        let comment = build_aggregated_comment(&results, true, &[]);
         assert!(comment.contains("2/2"));
         assert!(comment.contains("all required checks passed"));
         assert!(comment.contains("architecture"));
@@ -885,6 +1236,7 @@ mod tests {
                 cost_usd: Some(0.05),
                 num_turns: Some(3),
                 duration_ms: Some(5000),
+                off_diff_findings: Vec::new(),
             },
             ReviewerResult {
                 role_name: "performance".to_string(),
@@ -897,10 +1249,11 @@ mod tests {
                 cost_usd: Some(0.03),
                 num_turns: Some(2),
                 duration_ms: Some(3000),
+                off_diff_findings: Vec::new(),
             },
         ];
 
-        let comment = build_aggregated_comment(&results, false);
+        let comment = build_aggregated_comment(&results, false, &[]);
         assert!(comment.contains("1/2"));
         assert!(comment.contains("blocking issues found"));
         assert!(comment.contains("*(required)*"));
@@ -923,6 +1276,7 @@ mod tests {
                     cost_usd: None,
                     num_turns: None,
                     duration_ms: None,
+                    off_diff_findings: Vec::new(),
                 },
                 ReviewerResult {
                     role_name: "performance".to_string(),
@@ -935,6 +1289,7 @@ mod tests {
                     cost_usd: None,
                     num_turns: None,
                     duration_ms: None,
+                    off_diff_findings: Vec::new(),
                 },
             ],
             all_required_approved: false,
@@ -942,6 +1297,7 @@ mod tests {
             total_turns: 0,
             total_duration_ms: 0,
             aggregated_comment: String::new(),
+            off_diff_issues_filed: Vec::new(),
         };
 
         let prompt = build_remediation_prompt(&swarm_result);
@@ -967,12 +1323,14 @@ mod tests {
                 cost_usd: None,
                 num_turns: None,
                 duration_ms: None,
+                off_diff_findings: Vec::new(),
             }],
             all_required_approved: true,
             total_cost: 0.0,
             total_turns: 0,
             total_duration_ms: 0,
             aggregated_comment: String::new(),
+            off_diff_issues_filed: Vec::new(),
         };
 
         let prompt = build_remediation_prompt(&swarm_result);
@@ -1026,6 +1384,7 @@ mod tests {
             cost_usd: Some(0.05),
             num_turns: Some(3),
             duration_ms: Some(5000),
+            off_diff_findings: Vec::new(),
         };
         assert_eq!(r.role_name, "security");
         assert!(r.approved);
@@ -1090,9 +1449,10 @@ mod tests {
             cost_usd: None,
             num_turns: None,
             duration_ms: None,
+            off_diff_findings: Vec::new(),
         }];
 
-        let comment = build_aggregated_comment(&results, false);
+        let comment = build_aggregated_comment(&results, false, &[]);
         assert!(comment.contains("*(truncated)*"));
     }
 
@@ -1120,5 +1480,218 @@ mod tests {
 
         let pending = mq.list_pending("r1").unwrap();
         assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_off_diff_findings_single() {
+        let text = "Some review text.\n\
+            OFF-DIFF-FINDING\n\
+            title: Missing null check\n\
+            file: src/lib.rs\n\
+            line: 42\n\
+            severity: warning\n\
+            body: The function does not check for null input.\n\
+            END-OFF-DIFF-FINDING\n\
+            \nVERDICT: APPROVE";
+
+        let findings = parse_off_diff_findings(text, "security");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].title, "Missing null check");
+        assert_eq!(findings[0].file, "src/lib.rs");
+        assert_eq!(findings[0].line, 42);
+        assert_eq!(findings[0].severity, "warning");
+        assert!(findings[0].body.contains("does not check for null"));
+        assert_eq!(findings[0].reviewer, "security");
+    }
+
+    #[test]
+    fn test_parse_off_diff_findings_multiple() {
+        let text = "OFF-DIFF-FINDING\n\
+            title: Issue A\n\
+            file: a.rs\n\
+            line: 10\n\
+            severity: critical\n\
+            body: Description A\n\
+            END-OFF-DIFF-FINDING\n\
+            \n\
+            OFF-DIFF-FINDING\n\
+            title: Issue B\n\
+            file: b.rs\n\
+            line: 20\n\
+            severity: suggestion\n\
+            body: Description B\n\
+            END-OFF-DIFF-FINDING";
+
+        let findings = parse_off_diff_findings(text, "architecture");
+        assert_eq!(findings.len(), 2);
+        assert_eq!(findings[0].title, "Issue A");
+        assert_eq!(findings[1].title, "Issue B");
+    }
+
+    #[test]
+    fn test_parse_off_diff_findings_none() {
+        let text = "No issues found.\n\nVERDICT: APPROVE";
+        let findings = parse_off_diff_findings(text, "security");
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_off_diff_findings_incomplete_block() {
+        // Block without title should be skipped
+        let text = "OFF-DIFF-FINDING\n\
+            file: a.rs\n\
+            line: 10\n\
+            END-OFF-DIFF-FINDING";
+
+        let findings = parse_off_diff_findings(text, "test");
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn test_has_only_suggestions_true() {
+        let text = "Found a naming issue.\n\
+            **Severity**: suggestion\n\
+            Details: Consider renaming.\n\
+            VERDICT: REQUEST_CHANGES";
+        assert!(has_only_suggestions(text));
+    }
+
+    #[test]
+    fn test_has_only_suggestions_with_warning() {
+        let text = "Found an issue.\n\
+            **Severity**: warning\n\
+            Details: Potential bug.\n\
+            VERDICT: REQUEST_CHANGES";
+        assert!(!has_only_suggestions(text));
+    }
+
+    #[test]
+    fn test_has_only_suggestions_with_critical() {
+        let text = "Severity: critical\nVERDICT: REQUEST_CHANGES";
+        assert!(!has_only_suggestions(text));
+    }
+
+    #[test]
+    fn test_has_only_suggestions_no_findings() {
+        // No severity markers at all — should return false (don't override verdict)
+        let text = "No issues found.\nVERDICT: APPROVE";
+        assert!(!has_only_suggestions(text));
+    }
+
+    #[test]
+    fn test_is_review_approved_suggestion_only_treated_as_approve() {
+        // REQUEST_CHANGES with only suggestion-severity should still approve
+        let run = make_run(
+            "completed",
+            Some(
+                "Found a naming issue.\n\
+                 **Severity**: suggestion\n\
+                 Details: Consider renaming.\n\n\
+                 VERDICT: REQUEST_CHANGES",
+            ),
+        );
+        assert!(is_review_approved(&run));
+    }
+
+    #[test]
+    fn test_is_review_approved_warning_still_blocks() {
+        let run = make_run(
+            "completed",
+            Some(
+                "Found a real issue.\n\
+                 **Severity**: warning\n\
+                 Details: Potential bug.\n\n\
+                 VERDICT: REQUEST_CHANGES",
+            ),
+        );
+        assert!(!is_review_approved(&run));
+    }
+
+    #[test]
+    fn test_deduplicate_off_diff_findings_same_location() {
+        let findings = vec![
+            OffDiffFinding {
+                title: "Issue from arch".to_string(),
+                file: "src/lib.rs".to_string(),
+                line: 42,
+                severity: "suggestion".to_string(),
+                body: "Arch description".to_string(),
+                reviewer: "architecture".to_string(),
+            },
+            OffDiffFinding {
+                title: "Issue from security".to_string(),
+                file: "src/lib.rs".to_string(),
+                line: 42,
+                severity: "warning".to_string(),
+                body: "Security description".to_string(),
+                reviewer: "security".to_string(),
+            },
+        ];
+
+        let deduped = deduplicate_off_diff_findings(findings);
+        assert_eq!(deduped.len(), 1);
+        // Should keep the higher severity (warning > suggestion)
+        assert_eq!(deduped[0].severity, "warning");
+        assert_eq!(deduped[0].reviewer, "security");
+    }
+
+    #[test]
+    fn test_deduplicate_off_diff_findings_different_locations() {
+        let findings = vec![
+            OffDiffFinding {
+                title: "Issue A".to_string(),
+                file: "a.rs".to_string(),
+                line: 10,
+                severity: "warning".to_string(),
+                body: "A".to_string(),
+                reviewer: "arch".to_string(),
+            },
+            OffDiffFinding {
+                title: "Issue B".to_string(),
+                file: "b.rs".to_string(),
+                line: 20,
+                severity: "critical".to_string(),
+                body: "B".to_string(),
+                reviewer: "security".to_string(),
+            },
+        ];
+
+        let deduped = deduplicate_off_diff_findings(findings);
+        assert_eq!(deduped.len(), 2);
+    }
+
+    #[test]
+    fn test_aggregated_comment_with_off_diff_issues() {
+        let results = vec![ReviewerResult {
+            role_name: "security".to_string(),
+            focus: "Security".to_string(),
+            required: true,
+            run_id: "r1".to_string(),
+            status: "completed".to_string(),
+            findings: Some("No in-diff issues.".to_string()),
+            approved: true,
+            cost_usd: Some(0.05),
+            num_turns: Some(3),
+            duration_ms: Some(5000),
+            off_diff_findings: Vec::new(),
+        }];
+
+        let off_diff = vec![(
+            OffDiffFinding {
+                title: "Pre-existing SQL injection".to_string(),
+                file: "src/db.rs".to_string(),
+                line: 100,
+                severity: "critical".to_string(),
+                body: "Unparameterized query".to_string(),
+                reviewer: "security".to_string(),
+            },
+            "https://github.com/test/repo/issues/99".to_string(),
+        )];
+
+        let comment = build_aggregated_comment(&results, true, &off_diff);
+        assert!(comment.contains("Off-Diff Findings"));
+        assert!(comment.contains("Pre-existing SQL injection"));
+        assert!(comment.contains("src/db.rs"));
+        assert!(comment.contains("issues/99"));
     }
 }
