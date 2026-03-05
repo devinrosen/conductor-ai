@@ -10,6 +10,7 @@ use std::process::Command;
 
 use rusqlite::Connection;
 
+use crate::agent::{AgentManager, CostPhase};
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::github;
@@ -140,6 +141,9 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
         }
     };
 
+    // Post initial cost summary now that we have a PR number
+    post_cost_summary(conn, owner, repo_name, pr_number, &wt.id);
+
     // ── Phase 3: Review → Fix Loop ───────────────────────────────────
     eprintln!(
         "[post-run] Phase 3: Review loop (max {} iterations)",
@@ -193,6 +197,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
                         );
                         break;
                     }
+                    post_cost_summary(conn, owner, repo_name, pr_number, &wt.id);
                 }
                 Err(e) => {
                     eprintln!("[post-run] Fix agent failed: {e}");
@@ -607,6 +612,83 @@ fn first_line(s: &str) -> &str {
     s.lines().next().unwrap_or(s)
 }
 
+/// Format a duration in milliseconds as a human-readable string (e.g. "8m 12s").
+fn format_duration(ms: i64) -> String {
+    let total_secs = ms / 1000;
+    let mins = total_secs / 60;
+    let secs = total_secs % 60;
+    if mins > 0 {
+        format!("{mins}m {secs:02}s")
+    } else {
+        format!("{secs}s")
+    }
+}
+
+/// Build the markdown body for the sticky cost-summary PR comment.
+pub fn build_cost_comment(phases: &[CostPhase]) -> String {
+    let marker = github::COST_COMMENT_MARKER;
+    let mut comment = format!("{marker}\n## Implementation Cost\n\n");
+
+    if phases.is_empty() {
+        comment.push_str("*No cost data recorded yet.*\n");
+    } else {
+        comment.push_str("| Phase | Model | Cost | Duration |\n");
+        comment.push_str("|---|---|---|---|\n");
+
+        let mut total_cost = 0.0f64;
+        let mut total_duration = 0i64;
+
+        for phase in phases {
+            let model = phase.model.as_deref().unwrap_or("default");
+            total_cost += phase.cost_usd;
+            total_duration += phase.duration_ms;
+            comment.push_str(&format!(
+                "| {} | {} | ${:.4} | {} |\n",
+                phase.label,
+                model,
+                phase.cost_usd,
+                format_duration(phase.duration_ms),
+            ));
+        }
+
+        if phases.len() > 1 {
+            comment.push_str(&format!(
+                "| **Total** | | **${:.4}** | **{}** |\n",
+                total_cost,
+                format_duration(total_duration),
+            ));
+        }
+    }
+
+    comment.push_str("\n*Generated with [Claude Code](https://claude.ai/code) via conductor-ai*\n");
+    comment
+}
+
+/// Post (or update) the sticky cost-summary comment on a PR.
+///
+/// Reads the per-phase cost breakdown from the DB and upserts the comment.
+/// Errors are logged but do not fail the lifecycle.
+fn post_cost_summary(
+    conn: &Connection,
+    owner: &str,
+    repo_name: &str,
+    pr_number: i64,
+    worktree_id: &str,
+) {
+    let mgr = AgentManager::new(conn);
+    let phases = match mgr.worktree_cost_phases(worktree_id) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[post-run] Failed to fetch cost phases: {e}");
+            return;
+        }
+    };
+    let body = build_cost_comment(&phases);
+    if let Err(e) = github::upsert_sticky_comment(owner, repo_name, pr_number, &body) {
+        eprintln!("[post-run] Failed to post cost summary: {e}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -666,5 +748,79 @@ mod tests {
     fn test_post_run_phase_eq() {
         assert_eq!(PostRunPhase::Merged, PostRunPhase::Merged);
         assert_ne!(PostRunPhase::Merged, PostRunPhase::NeedsHuman);
+    }
+
+    #[test]
+    fn test_format_duration_seconds_only() {
+        assert_eq!(format_duration(45_000), "45s");
+    }
+
+    #[test]
+    fn test_format_duration_minutes_and_seconds() {
+        assert_eq!(format_duration(492_000), "8m 12s");
+    }
+
+    #[test]
+    fn test_format_duration_zero() {
+        assert_eq!(format_duration(0), "0s");
+    }
+
+    #[test]
+    fn test_build_cost_comment_empty() {
+        let comment = build_cost_comment(&[]);
+        assert!(comment.contains("No cost data recorded yet."));
+        assert!(comment.contains("<!-- conductor-cost-summary -->"));
+    }
+
+    #[test]
+    fn test_build_cost_comment_single_phase() {
+        let phases = vec![CostPhase {
+            label: "Initial run".to_string(),
+            model: Some("claude-sonnet-4-6".to_string()),
+            cost_usd: 0.031,
+            duration_ms: 492_000,
+        }];
+        let comment = build_cost_comment(&phases);
+        assert!(comment.contains("<!-- conductor-cost-summary -->"));
+        assert!(comment.contains("Initial run"));
+        assert!(comment.contains("claude-sonnet-4-6"));
+        assert!(comment.contains("$0.0310"));
+        assert!(comment.contains("8m 12s"));
+        // Single phase: no total row
+        assert!(!comment.contains("**Total**"));
+    }
+
+    #[test]
+    fn test_build_cost_comment_multiple_phases_has_total() {
+        let phases = vec![
+            CostPhase {
+                label: "Initial run".to_string(),
+                model: Some("claude-sonnet-4-6".to_string()),
+                cost_usd: 0.031,
+                duration_ms: 492_000,
+            },
+            CostPhase {
+                label: "Review #1".to_string(),
+                model: Some("claude-haiku-4-5".to_string()),
+                cost_usd: 0.002,
+                duration_ms: 138_000,
+            },
+        ];
+        let comment = build_cost_comment(&phases);
+        assert!(comment.contains("**Total**"));
+        assert!(comment.contains("**$0.0330**"));
+        assert!(comment.contains("**10m 30s**"));
+    }
+
+    #[test]
+    fn test_build_cost_comment_default_model() {
+        let phases = vec![CostPhase {
+            label: "Initial run".to_string(),
+            model: None,
+            cost_usd: 0.01,
+            duration_ms: 60_000,
+        }];
+        let comment = build_cost_comment(&phases);
+        assert!(comment.contains("| default |"));
     }
 }

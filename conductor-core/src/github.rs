@@ -386,6 +386,63 @@ pub fn detect_pr(owner: &str, repo: &str, branch: &str) -> Result<Option<(i64, S
     Ok(None)
 }
 
+/// Marker embedded in sticky comments so we can find them later.
+pub const COST_COMMENT_MARKER: &str = "<!-- conductor-cost-summary -->";
+
+/// Find the comment ID of an existing sticky cost-summary comment on a PR.
+/// Returns `None` if no such comment exists yet.
+pub fn find_sticky_comment(owner: &str, repo: &str, pr_number: i64) -> Result<Option<i64>> {
+    let slug = repo_slug(owner, repo);
+    let pr_str = pr_number.to_string();
+    // Fetch issue comments (not review comments) and search for the marker
+    let output = run_gh(&[
+        "api",
+        &format!("repos/{slug}/issues/{pr_str}/comments"),
+        "--jq",
+        &format!("[.[] | select(.body | contains(\"{COST_COMMENT_MARKER}\"))] | first | .id"),
+    ])?;
+    let id_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if id_str.is_empty() || id_str == "null" {
+        return Ok(None);
+    }
+    Ok(id_str.parse::<i64>().ok())
+}
+
+/// Create or update the sticky cost-summary comment on a PR.
+/// If a comment with the marker already exists, it is edited in place;
+/// otherwise a new comment is created.
+pub fn upsert_sticky_comment(owner: &str, repo: &str, pr_number: i64, body: &str) -> Result<()> {
+    let slug = repo_slug(owner, repo);
+
+    match find_sticky_comment(owner, repo, pr_number)? {
+        Some(comment_id) => {
+            // Edit existing comment
+            let comment_id_str = comment_id.to_string();
+            run_gh(&[
+                "api",
+                "--method",
+                "PATCH",
+                &format!("repos/{slug}/issues/comments/{comment_id_str}"),
+                "-f",
+                &format!("body={body}"),
+            ])?;
+        }
+        None => {
+            // Create new comment
+            let pr_str = pr_number.to_string();
+            run_gh(&[
+                "api",
+                "--method",
+                "POST",
+                &format!("repos/{slug}/issues/{pr_str}/comments"),
+                "-f",
+                &format!("body={body}"),
+            ])?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

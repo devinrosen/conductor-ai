@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 
-use crate::agent::{AgentManager, AgentRun, PlanStep};
+use crate::agent::{AgentManager, AgentRun, PlanStep, PR_REVIEW_SWARM_PROMPT_PREFIX};
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::github;
@@ -143,7 +143,7 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
 
     // Create the parent review run
     let parent_prompt = format!(
-        "PR review swarm for branch '{}'. Coordinating {} reviewer agents.",
+        "{PR_REVIEW_SWARM_PROMPT_PREFIX} for branch '{}'. Coordinating {} reviewer agents.",
         pr_branch,
         roles.len()
     );
