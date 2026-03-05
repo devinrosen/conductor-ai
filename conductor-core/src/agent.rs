@@ -1046,7 +1046,7 @@ pub fn build_startup_context(
         {
             if let Some(ref result) = last_run.result_text {
                 let truncated = if result.len() > 500 {
-                    format!("{}…", &result[..500])
+                    format!("{}…", crate::pr_review::truncate_str(result, 500))
                 } else {
                     result.clone()
                 };
@@ -2154,6 +2154,35 @@ mod tests {
         assert!(ctx.contains(&"x".repeat(500)));
         assert!(ctx.contains('…'));
         assert!(!ctx.contains(&"x".repeat(501)));
+    }
+
+    #[test]
+    fn test_startup_context_truncates_multibyte_result() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // 'é' is 2 bytes; 300 copies = 600 bytes > 500 byte limit
+        let prior = mgr.create_run("w1", "Prior task", None, None).unwrap();
+        let long_result = "é".repeat(300);
+        mgr.update_run_completed(&prior.id, None, Some(&long_result), None, None, None)
+            .unwrap();
+
+        let current = mgr.create_run("w1", "Next", None, None).unwrap();
+
+        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp").unwrap();
+        assert!(ctx.contains('…'));
+        // Extract the truncated 'é' portion before the ellipsis
+        let ellipsis_pos = ctx.find('…').unwrap();
+        // Walk backwards from the ellipsis to find the start of the 'é' run
+        let before_ellipsis = &ctx[..ellipsis_pos];
+        let e_start = before_ellipsis.rfind(|c: char| c != 'é').map_or(0, |i| {
+            i + before_ellipsis[i..].chars().next().unwrap().len_utf8()
+        });
+        let truncated_part = &before_ellipsis[e_start..];
+        assert!(!truncated_part.is_empty());
+        for c in truncated_part.chars() {
+            assert_eq!(c, 'é');
+        }
     }
 
     // ── Auto-resume tests ────────────────────────────────────────────

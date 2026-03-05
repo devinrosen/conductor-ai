@@ -369,7 +369,7 @@ pub fn build_remediation_prompt(swarm_result: &ReviewSwarmResult) -> String {
 }
 
 /// Truncate a string at a char boundary no greater than `max_bytes`.
-fn truncate_str(s: &str, max_bytes: usize) -> &str {
+pub(crate) fn truncate_str(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
     }
