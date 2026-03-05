@@ -93,6 +93,7 @@ pub enum Action {
 
     // Agent triggers (tmux-based)
     LaunchAgent,
+    OrchestrateAgent,
     StopAgent,
     ViewAgentLog,
     AgentActivityDown,

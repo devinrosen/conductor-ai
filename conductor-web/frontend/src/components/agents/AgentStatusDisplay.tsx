@@ -26,6 +26,7 @@ interface AgentStatusDisplayProps {
   runs: AgentRun[];
   childRuns?: AgentRun[];
   onLaunch: () => void;
+  onOrchestrate?: () => void;
   onStop: () => void;
 }
 
@@ -34,6 +35,7 @@ export function AgentStatusDisplay({
   runs,
   childRuns,
   onLaunch,
+  onOrchestrate,
   onStop,
 }: AgentStatusDisplayProps) {
   const color = statusColors[run.status] ?? "bg-gray-100 text-gray-600";
@@ -103,12 +105,22 @@ export function AgentStatusDisplay({
               Stop Agent
             </button>
           ) : (
-            <button
-              onClick={onLaunch}
-              className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
-            >
-              {run.claude_session_id ? "Launch / Resume" : "Launch Agent"}
-            </button>
+            <>
+              <button
+                onClick={onLaunch}
+                className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
+              >
+                {run.claude_session_id ? "Launch / Resume" : "Launch Agent"}
+              </button>
+              {onOrchestrate && (
+                <button
+                  onClick={onOrchestrate}
+                  className="px-3 py-1.5 text-sm rounded-md border border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                >
+                  Orchestrate
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>

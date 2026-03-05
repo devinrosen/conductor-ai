@@ -53,6 +53,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         )),
         Line::from(""),
         help_line("r", "Run Claude agent (tmux)"),
+        help_line("o", "Orchestrate (multi-step child agents)"),
         help_line("a", "Attach to running agent"),
         help_line("x", "Stop running agent"),
         help_line("j / k", "Scroll activity line by line"),
