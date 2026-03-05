@@ -723,10 +723,14 @@ fn file_off_diff_issues(
             body = finding.body,
         );
 
-        match github::create_github_issue(owner, repo, &finding.title, &issue_body) {
+        match github::create_github_issue(
+            owner,
+            repo,
+            &finding.title,
+            &issue_body,
+            &["conductor-review"],
+        ) {
             Ok((_number, url)) => {
-                // Try to add the conductor-review label (best-effort)
-                let _ = github::add_label_to_issue(owner, repo, &url, "conductor-review");
                 eprintln!(
                     "[review-swarm] Filed off-diff issue '{}': {}",
                     finding.title, url

@@ -170,11 +170,17 @@ pub fn create_github_issue(
     repo: &str,
     title: &str,
     body: &str,
+    labels: &[&str],
 ) -> Result<(String, String)> {
     let repo_slug = repo_slug(owner, repo);
-    let output = run_gh(&[
+    let mut args = vec![
         "issue", "create", "--repo", &repo_slug, "--title", title, "--body", body,
-    ])?;
+    ];
+    for label in labels {
+        args.push("--label");
+        args.push(label);
+    }
+    let output = run_gh(&args)?;
 
     // `gh issue create` prints the issue URL on stdout, e.g.
     // https://github.com/owner/repo/issues/42
@@ -222,22 +228,6 @@ pub fn list_issues_by_search(
         .map_err(|e| ConductorError::TicketSync(format!("failed to parse gh output: {e}")))?;
 
     Ok(issues)
-}
-
-/// Add a label to an existing GitHub issue (best-effort via `gh issue edit`).
-pub fn add_label_to_issue(owner: &str, repo: &str, issue_url: &str, label: &str) -> Result<()> {
-    let repo_slug = repo_slug(owner, repo);
-    run_gh(&[
-        "issue",
-        "edit",
-        issue_url,
-        "--repo",
-        &repo_slug,
-        "--add-label",
-        label,
-    ])?;
-
-    Ok(())
 }
 
 /// Parse a GitHub remote URL to extract owner and repo name.
