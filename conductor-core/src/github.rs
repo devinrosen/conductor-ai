@@ -204,6 +204,70 @@ pub fn create_github_issue(
     Ok((number, url))
 }
 
+/// Search for existing GitHub issues matching a query, filtered by label.
+/// Returns parsed JSON objects with `number`, `title`, and `url` fields.
+pub fn list_issues_by_search(
+    owner: &str,
+    repo: &str,
+    query: &str,
+    label: &str,
+    limit: u32,
+) -> Result<Vec<serde_json::Value>> {
+    let output = Command::new("gh")
+        .args([
+            "issue",
+            "list",
+            "--repo",
+            &format!("{owner}/{repo}"),
+            "--search",
+            query,
+            "--label",
+            label,
+            "--json",
+            "number,title,url",
+            "--limit",
+            &limit.to_string(),
+        ])
+        .output()
+        .map_err(|e| ConductorError::TicketSync(format!("failed to run gh: {e}")))?;
+
+    if !output.status.success() {
+        return Err(ConductorError::TicketSync(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let issues: Vec<serde_json::Value> = serde_json::from_str(json_str.trim())
+        .map_err(|e| ConductorError::TicketSync(format!("failed to parse gh output: {e}")))?;
+
+    Ok(issues)
+}
+
+/// Add a label to an existing GitHub issue (best-effort via `gh issue edit`).
+pub fn add_label_to_issue(owner: &str, repo: &str, issue_url: &str, label: &str) -> Result<()> {
+    let output = Command::new("gh")
+        .args([
+            "issue",
+            "edit",
+            issue_url,
+            "--repo",
+            &format!("{owner}/{repo}"),
+            "--add-label",
+            label,
+        ])
+        .output()
+        .map_err(|e| ConductorError::TicketSync(format!("failed to run gh: {e}")))?;
+
+    if !output.status.success() {
+        return Err(ConductorError::TicketSync(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 /// Parse a GitHub remote URL to extract owner and repo name.
 /// Handles both SSH (git@github.com:owner/repo.git) and HTTPS (https://github.com/owner/repo.git).
 pub fn parse_github_remote(remote_url: &str) -> Option<(String, String)> {

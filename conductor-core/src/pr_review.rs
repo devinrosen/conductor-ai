@@ -474,12 +474,30 @@ fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFindin
         }
         if trimmed == "END-OFF-DIFF-FINDING" {
             if in_block && !title.is_empty() {
+                // Cap AI-generated fields to prevent oversized gh CLI args.
+                const MAX_TITLE: usize = 256;
+                const MAX_BODY: usize = 65_536;
+                let capped_title = if title.len() > MAX_TITLE {
+                    let mut t = title[..MAX_TITLE].to_string();
+                    t.push('…');
+                    t
+                } else {
+                    title.clone()
+                };
+                let trimmed_body = body.trim().to_string();
+                let capped_body = if trimmed_body.len() > MAX_BODY {
+                    let mut b = trimmed_body[..MAX_BODY].to_string();
+                    b.push_str("\n\n*(truncated)*");
+                    b
+                } else {
+                    trimmed_body
+                };
                 findings.push(OffDiffFinding {
-                    title: title.clone(),
+                    title: capped_title,
                     file: file.clone(),
                     line,
                     severity: severity.clone(),
-                    body: body.trim().to_string(),
+                    body: capped_body,
                     reviewer: reviewer_name.to_string(),
                 });
             }
@@ -561,30 +579,7 @@ fn deduplicate_off_diff_findings(findings: Vec<OffDiffFinding>) -> Vec<OffDiffFi
 
 /// Search for an existing GH issue matching a finding, to avoid duplicates.
 fn find_existing_issue(owner: &str, repo: &str, title: &str) -> Option<String> {
-    let output = Command::new("gh")
-        .args([
-            "issue",
-            "list",
-            "--repo",
-            &format!("{owner}/{repo}"),
-            "--search",
-            title,
-            "--label",
-            "conductor-review",
-            "--json",
-            "number,title,url",
-            "--limit",
-            "5",
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let issues: Vec<serde_json::Value> = serde_json::from_str(stdout.trim()).ok()?;
+    let issues = github::list_issues_by_search(owner, repo, title, "conductor-review", 5).ok()?;
 
     // Look for a title that matches closely (case-insensitive substring)
     let title_lower = title.to_lowercase();
@@ -644,17 +639,7 @@ fn file_off_diff_issues(
         match github::create_github_issue(owner, repo, &finding.title, &issue_body) {
             Ok((_number, url)) => {
                 // Try to add the conductor-review label (best-effort)
-                let _ = Command::new("gh")
-                    .args([
-                        "issue",
-                        "edit",
-                        &url,
-                        "--repo",
-                        &format!("{owner}/{repo}"),
-                        "--add-label",
-                        "conductor-review",
-                    ])
-                    .output();
+                let _ = github::add_label_to_issue(owner, repo, &url, "conductor-review");
                 eprintln!(
                     "[review-swarm] Filed off-diff issue '{}': {}",
                     finding.title, url
@@ -766,10 +751,17 @@ fn build_aggregated_comment(
             "The following issues were found in unchanged code and filed as separate GitHub issues:\n\n",
         );
         for (finding, url) in off_diff_issues {
-            comment.push_str(&format!(
-                "- **{}** (`{}`:{}): [{}]({}) *({})*\n",
-                finding.title, finding.file, finding.line, url, url, finding.severity
-            ));
+            if url.starts_with("https://") {
+                comment.push_str(&format!(
+                    "- **{}** (`{}`:{}): [{}]({}) *({})*\n",
+                    finding.title, finding.file, finding.line, url, url, finding.severity
+                ));
+            } else {
+                comment.push_str(&format!(
+                    "- **{}** (`{}`:{}): {} *({})*\n",
+                    finding.title, finding.file, finding.line, url, finding.severity
+                ));
+            }
         }
         comment.push_str("\n---\n\n");
     }
