@@ -75,6 +75,20 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::EventDetail { .. } => {
+            return match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => Action::DismissModal,
+                KeyCode::Char('j') | KeyCode::Down => Action::AgentActivityDown,
+                KeyCode::Char('k') | KeyCode::Up => Action::AgentActivityUp,
+                KeyCode::Char('h') | KeyCode::Left => Action::MoveUp,
+                KeyCode::Char('l') | KeyCode::Right => Action::MoveDown,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
+                KeyCode::Char('g') if state.pending_g => Action::GoToTop,
+                KeyCode::Char('g') => Action::PendingG,
+                KeyCode::Home => Action::GoToTop,
+                _ => Action::None,
+            };
+        }
         Modal::ModelPicker { custom_active, .. } => {
             if *custom_active {
                 // In custom input mode: type characters, backspace, enter to confirm, esc to leave custom mode
@@ -233,6 +247,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('o') if !has_running_agent => return Action::OrchestrateAgent,
             KeyCode::Char('x') if has_running_agent => return Action::StopAgent,
             KeyCode::Char('L') if has_log => return Action::ViewAgentLog,
+            KeyCode::Char('y') if has_log => return Action::CopyLastCodeBlock,
+            KeyCode::Char('e') => return Action::ExpandAgentEvent,
             KeyCode::Char('j') => return Action::AgentActivityDown,
             KeyCode::Char('k') => return Action::AgentActivityUp,
             KeyCode::Char('m') => return Action::SetModel,

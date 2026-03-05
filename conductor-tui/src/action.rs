@@ -96,6 +96,8 @@ pub enum Action {
     OrchestrateAgent,
     StopAgent,
     ViewAgentLog,
+    CopyLastCodeBlock,
+    ExpandAgentEvent,
     AgentActivityDown,
     AgentActivityUp,
 

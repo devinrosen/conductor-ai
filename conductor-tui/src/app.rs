@@ -294,18 +294,46 @@ impl App {
             Action::OrchestrateAgent => self.handle_orchestrate_agent(),
             Action::StopAgent => self.handle_stop_agent(),
             Action::ViewAgentLog => self.handle_view_agent_log(),
-            Action::AgentActivityDown => {
-                let len = self.state.data.agent_activity_len();
-                let cur = self.state.agent_list_state.borrow().selected().unwrap_or(0);
-                if len > 0 && cur + 1 < len {
-                    self.state.agent_list_state.borrow_mut().select_next();
+            Action::CopyLastCodeBlock => self.handle_copy_last_code_block(),
+            Action::ExpandAgentEvent => self.handle_expand_agent_event(),
+            Action::AgentActivityDown => match self.state.modal {
+                Modal::EventDetail {
+                    ref mut scroll_offset,
+                    ref body,
+                    ..
+                } => {
+                    let max = body.lines().count().saturating_sub(1) as u16;
+                    *scroll_offset = (*scroll_offset + 1).min(max);
                 }
-            }
-            Action::AgentActivityUp => {
-                self.state.agent_list_state.borrow_mut().select_previous();
-            }
+                _ => {
+                    let len = self.state.data.agent_activity_len();
+                    let cur = self.state.agent_list_state.borrow().selected().unwrap_or(0);
+                    if len > 0 && cur + 1 < len {
+                        self.state.agent_list_state.borrow_mut().select_next();
+                    }
+                }
+            },
+            Action::AgentActivityUp => match self.state.modal {
+                Modal::EventDetail {
+                    ref mut scroll_offset,
+                    ..
+                } => {
+                    *scroll_offset = scroll_offset.saturating_sub(1);
+                }
+                _ => {
+                    self.state.agent_list_state.borrow_mut().select_previous();
+                }
+            },
             // Scroll navigation (all views + discover modals)
             Action::GoToTop => match self.state.modal {
+                Modal::EventDetail {
+                    ref mut scroll_offset,
+                    ref mut horizontal_offset,
+                    ..
+                } => {
+                    *scroll_offset = 0;
+                    *horizontal_offset = 0;
+                }
                 Modal::GithubDiscoverOrgs { ref mut cursor, .. }
                 | Modal::GithubDiscover { ref mut cursor, .. } => {
                     *cursor = 0;
@@ -315,6 +343,13 @@ impl App {
                 }
             },
             Action::GoToBottom => match self.state.modal {
+                Modal::EventDetail {
+                    ref mut scroll_offset,
+                    ref body,
+                    ..
+                } => {
+                    *scroll_offset = body.lines().count().saturating_sub(1) as u16;
+                }
                 Modal::GithubDiscoverOrgs {
                     ref orgs,
                     ref mut cursor,
@@ -628,6 +663,13 @@ impl App {
 
     fn move_up(&mut self) {
         match self.state.modal {
+            Modal::EventDetail {
+                ref mut horizontal_offset,
+                ..
+            } => {
+                *horizontal_offset = horizontal_offset.saturating_sub(4);
+                return;
+            }
             Modal::ModelPicker {
                 ref mut selected,
                 ref mut custom_active,
@@ -732,6 +774,13 @@ impl App {
 
     fn move_down(&mut self) {
         match self.state.modal {
+            Modal::EventDetail {
+                ref mut horizontal_offset,
+                ..
+            } => {
+                *horizontal_offset += 4;
+                return;
+            }
             Modal::ModelPicker {
                 ref mut selected,
                 ref mut custom_active,
@@ -3119,6 +3168,118 @@ impl App {
         }
     }
 
+    fn handle_copy_last_code_block(&mut self) {
+        let wt_id = self.state.selected_worktree_id.as_ref();
+        let run = wt_id.and_then(|id| self.state.data.latest_agent_runs.get(id));
+
+        let log_path = run.and_then(|r| r.log_file.as_deref());
+        let Some(log_path) = log_path else {
+            self.state.status_message = Some("No agent log available".to_string());
+            return;
+        };
+
+        let content = match std::fs::read_to_string(log_path) {
+            Ok(c) => c,
+            Err(e) => {
+                self.state.status_message = Some(format!("Failed to read log: {e}"));
+                return;
+            }
+        };
+
+        let Some(code_block) = extract_last_code_block(&content) else {
+            self.state.status_message = Some("No code block found in log".to_string());
+            return;
+        };
+
+        // Try pbcopy (macOS), then xclip, then xsel
+        let copy_result = Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .or_else(|_| {
+                Command::new("xclip")
+                    .args(["-selection", "clipboard"])
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+            })
+            .or_else(|_| {
+                Command::new("xsel")
+                    .arg("--clipboard")
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+            });
+
+        match copy_result {
+            Ok(mut child) => {
+                use std::io::Write;
+                if let Some(ref mut stdin) = child.stdin {
+                    let _ = stdin.write_all(code_block.as_bytes());
+                }
+                match child.wait() {
+                    Ok(status) if status.success() => {
+                        self.state.status_message = Some("Copied to clipboard".to_string());
+                    }
+                    _ => {
+                        self.state.status_message = Some("Clipboard command failed".to_string());
+                    }
+                }
+            }
+            Err(_) => {
+                self.state.status_message =
+                    Some("No clipboard tool found (pbcopy/xclip/xsel)".to_string());
+            }
+        }
+    }
+
+    fn handle_expand_agent_event(&mut self) {
+        let selected = self.state.agent_list_state.borrow().selected().unwrap_or(0);
+        let events = &self.state.data.agent_events;
+        if events.is_empty() {
+            return;
+        }
+
+        // Map the visual index (which includes run separators) to the actual event
+        let run_info = &self.state.data.agent_run_info;
+        let has_multiple_runs = run_info.len() > 1;
+
+        let mut visual_idx = 0usize;
+        let mut target_event: Option<&conductor_core::agent::AgentRunEvent> = None;
+        let mut prev_run_id: Option<&str> = None;
+
+        for ev in events {
+            if has_multiple_runs {
+                let is_new = prev_run_id.is_none() || prev_run_id.is_some_and(|p| p != ev.run_id);
+                if is_new && run_info.contains_key(&ev.run_id) {
+                    if visual_idx == selected {
+                        // Selected a separator — no event to expand
+                        return;
+                    }
+                    visual_idx += 1;
+                }
+            }
+            prev_run_id = Some(&ev.run_id);
+
+            if visual_idx == selected {
+                target_event = Some(ev);
+                break;
+            }
+            visual_idx += 1;
+        }
+
+        let Some(ev) = target_event else {
+            return;
+        };
+
+        let title = format!("[{}] {}", ev.kind, &ev.summary[..ev.summary.len().min(60)]);
+        let body = ev.summary.clone();
+
+        self.state.modal = Modal::EventDetail {
+            title,
+            body,
+            scroll_offset: 0,
+            horizontal_offset: 0,
+        };
+    }
+
     // ── GitHub repo discovery ────────────────────────────────────────────────
 
     fn handle_discover_github_orgs(&mut self) {
@@ -3360,6 +3521,35 @@ impl App {
     }
 }
 
+/// Extract the last fenced code block (```...```) from log content.
+fn extract_last_code_block(content: &str) -> Option<String> {
+    let mut last_block: Option<String> = None;
+    let mut in_block = false;
+    let mut current_block = String::new();
+
+    for line in content.lines() {
+        if line.trim_start().starts_with("```") {
+            if in_block {
+                // Closing fence — save the block
+                last_block = Some(current_block.clone());
+                current_block.clear();
+                in_block = false;
+            } else {
+                // Opening fence
+                in_block = true;
+                current_block.clear();
+            }
+        } else if in_block {
+            if !current_block.is_empty() {
+                current_block.push('\n');
+            }
+            current_block.push_str(line);
+        }
+    }
+
+    last_block
+}
+
 /// Best-effort capture of tmux scrollback to `~/.conductor/agent-logs/<run_id>.log`.
 fn capture_agent_log(mgr: &AgentManager, run_id: &str, tmux_window: &str) {
     let log_dir = conductor_core::config::conductor_dir().join("agent-logs");
@@ -3392,5 +3582,39 @@ fn capture_agent_log(mgr: &AgentManager, run_id: &str, tmux_window: &str) {
             let _ = mgr.update_run_log_file(run_id, &path_str);
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_last_code_block_single() {
+        let content = "some text\n```bash\necho hello\n```\nmore text";
+        assert_eq!(
+            extract_last_code_block(content),
+            Some("echo hello".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_last_code_block_multiple() {
+        let content = "```\nfirst\n```\nstuff\n```python\nsecond\nthird\n```\n";
+        assert_eq!(
+            extract_last_code_block(content),
+            Some("second\nthird".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_last_code_block_none() {
+        assert_eq!(extract_last_code_block("no code here"), None);
+    }
+
+    #[test]
+    fn test_extract_last_code_block_unclosed() {
+        let content = "```\nclosed\n```\n```\nunclosed";
+        assert_eq!(extract_last_code_block(content), Some("closed".to_string()));
     }
 }

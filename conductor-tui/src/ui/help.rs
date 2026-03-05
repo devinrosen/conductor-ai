@@ -56,6 +56,8 @@ pub fn render(frame: &mut Frame, area: Rect) {
         help_line("o", "Orchestrate (multi-step child agents)"),
         help_line("a", "Attach to running agent"),
         help_line("x", "Stop running agent"),
+        help_line("y", "Copy last code block to clipboard"),
+        help_line("e", "Expand selected event (detail view)"),
         help_line("j / k", "Scroll activity line by line"),
         Line::from(""),
         Line::from(Span::styled(

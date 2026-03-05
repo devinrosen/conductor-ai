@@ -1068,6 +1068,57 @@ pub fn render_github_discover(
     frame.render_widget(content, popup);
 }
 
+pub fn render_event_detail(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    body: &str,
+    scroll_offset: u16,
+    horizontal_offset: u16,
+) {
+    let popup = centered_rect(85, 85, area);
+    frame.render_widget(Clear, popup);
+
+    let lines: Vec<Line> = body
+        .lines()
+        .map(|l| Line::from(Span::raw(l.to_string())))
+        .collect();
+
+    let hint = format!(
+        " j/k=scroll  h/l=pan  gg/G=top/bot  q/Esc=close  (line {}/{})",
+        scroll_offset + 1,
+        lines.len().max(1),
+    );
+
+    let title_display = if title.len() > (popup.width as usize).saturating_sub(4) {
+        format!(" {}... ", &title[..popup.width as usize - 7])
+    } else {
+        format!(" {title} ")
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(title_display);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    // Split: body (fill) + hint line (1)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+
+    let body_widget = Paragraph::new(lines).scroll((scroll_offset, horizontal_offset));
+    frame.render_widget(body_widget, chunks[0]);
+
+    let hint_widget = Paragraph::new(Line::from(Span::styled(
+        hint,
+        Style::default().fg(Color::DarkGray),
+    )));
+    frame.render_widget(hint_widget, chunks[1]);
+}
+
 fn format_source_config_lines(source: &IssueSource) -> Vec<String> {
     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&source.config_json) {
         match source.source_type.as_str() {

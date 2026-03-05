@@ -108,6 +108,13 @@ pub enum Modal {
         sources: Vec<IssueSource>,
         selected: usize,
     },
+    /// Full-screen detail view for a single agent event.
+    EventDetail {
+        title: String,
+        body: String,
+        scroll_offset: u16,
+        horizontal_offset: u16,
+    },
     /// First level: pick a GitHub org (or personal account) to browse repos from.
     GithubDiscoverOrgs {
         /// Org login names; "Personal" (displayed) maps to empty owner string internally.
@@ -173,6 +180,7 @@ impl fmt::Debug for Modal {
             } => {
                 write!(f, "Modal::ModelPicker(ctx={context_label:?})")
             }
+            Modal::EventDetail { .. } => write!(f, "Modal::EventDetail"),
             Modal::GithubDiscoverOrgs { loading, .. } => {
                 write!(f, "Modal::GithubDiscoverOrgs(loading={loading})")
             }

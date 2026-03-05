@@ -100,6 +100,14 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             *custom_active,
             suggested.as_deref(),
         ),
+        Modal::EventDetail {
+            title,
+            body,
+            scroll_offset,
+            horizontal_offset,
+        } => {
+            modal::render_event_detail(frame, area, title, body, *scroll_offset, *horizontal_offset)
+        }
         Modal::GithubDiscoverOrgs {
             orgs,
             cursor,
