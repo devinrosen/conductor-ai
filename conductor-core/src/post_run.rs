@@ -141,6 +141,9 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
         }
     };
 
+    // Post initial cost summary now that we have a PR number
+    post_cost_summary(conn, owner, repo_name, pr_number, &wt.id);
+
     // ── Phase 3: Review → Fix Loop ───────────────────────────────────
     eprintln!(
         "[post-run] Phase 3: Review loop (max {} iterations)",
@@ -194,6 +197,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
                         );
                         break;
                     }
+                    post_cost_summary(conn, owner, repo_name, pr_number, &wt.id);
                 }
                 Err(e) => {
                     eprintln!("[post-run] Fix agent failed: {e}");
@@ -202,9 +206,6 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
             }
         }
     }
-
-    // Post cost summary (best-effort, non-blocking)
-    post_cost_summary(conn, owner, repo_name, pr_number, &wt.id);
 
     if !all_approved {
         // Exhaustion: label PR and notify
