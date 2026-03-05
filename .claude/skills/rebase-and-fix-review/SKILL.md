@@ -1,3 +1,8 @@
+---
+name: rebase-and-fix-review
+description: Rebase the current branch onto main and address all on-diff PR review comments.
+---
+
 # rebase-and-fix-review
 
 Rebase the current branch onto main, then address all on-diff PR review comments.
