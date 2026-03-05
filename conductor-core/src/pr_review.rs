@@ -505,9 +505,17 @@ enum OffDiffLineKind {
     OutsideBlock,
 }
 
-/// Parse OFF-DIFF-FINDING blocks from a reviewer's output text.
-fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFinding> {
+/// Result of parsing a reviewer's output in a single pass.
+struct ParsedReviewerOutput {
+    off_diff_findings: Vec<OffDiffFinding>,
+    inline_severities: Vec<String>,
+}
+
+/// Parse both OFF-DIFF-FINDING blocks and inline severity markers from a reviewer's output
+/// in a single pass over the text.
+fn parse_reviewer_output(text: &str, reviewer_name: &str) -> ParsedReviewerOutput {
     let mut findings = Vec::new();
+    let mut inline_severities = Vec::new();
     let mut title = String::new();
     let mut file = String::new();
     let mut line: u64 = 0;
@@ -515,94 +523,89 @@ fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFindin
     let mut body = String::new();
 
     for (trimmed, kind) in classify_off_diff_lines(text) {
-        if kind == OffDiffLineKind::BlockStart {
-            title.clear();
-            file.clear();
-            line = 0;
-            severity.clear();
-            body.clear();
-            continue;
-        }
-        if kind == OffDiffLineKind::BlockEnd {
-            if !title.is_empty() {
-                // Cap AI-generated fields to prevent oversized gh CLI args.
-                const MAX_TITLE: usize = 256;
-                const MAX_BODY: usize = 65_536;
-                const MAX_FILE: usize = 512;
-                const KNOWN_SEVERITIES: &[&str] = &["critical", "warning", "suggestion"];
-                let capped_title = cap_with_suffix(&title, MAX_TITLE, "…");
-                let capped_file = cap_with_suffix(&file, MAX_FILE, "");
-                let validated_severity = {
-                    let s = severity.trim().to_lowercase();
-                    if KNOWN_SEVERITIES.contains(&s.as_str()) {
-                        s
-                    } else {
-                        "suggestion".to_string()
-                    }
-                };
-                let trimmed_body = body.trim().to_string();
-                let capped_body = cap_with_suffix(&trimmed_body, MAX_BODY, "\n\n*(truncated)*");
-                findings.push(OffDiffFinding {
-                    title: capped_title,
-                    file: capped_file,
-                    line,
-                    severity: validated_severity,
-                    body: capped_body,
-                    reviewer: reviewer_name.to_string(),
-                });
+        match kind {
+            OffDiffLineKind::BlockStart => {
+                title.clear();
+                file.clear();
+                line = 0;
+                severity.clear();
+                body.clear();
             }
-            continue;
-        }
-        if kind == OffDiffLineKind::InsideBlock {
-            if let Some(val) = trimmed.strip_prefix("title:") {
-                title = val.trim().to_string();
-            } else if let Some(val) = trimmed.strip_prefix("file:") {
-                file = val.trim().to_string();
-            } else if let Some(val) = trimmed.strip_prefix("line:") {
-                line = val.trim().parse().unwrap_or(0);
-            } else if let Some(val) = trimmed.strip_prefix("severity:") {
-                severity = val.trim().to_string();
-            } else if let Some(val) = trimmed.strip_prefix("body:") {
-                body = val.trim().to_string();
-            } else {
-                // Continuation of body
-                if !body.is_empty() {
-                    body.push('\n');
+            OffDiffLineKind::BlockEnd => {
+                if !title.is_empty() {
+                    const MAX_TITLE: usize = 256;
+                    const MAX_BODY: usize = 65_536;
+                    const MAX_FILE: usize = 512;
+                    const KNOWN_SEVERITIES: &[&str] = &["critical", "warning", "suggestion"];
+                    let capped_title = cap_with_suffix(&title, MAX_TITLE, "…");
+                    let capped_file = cap_with_suffix(&file, MAX_FILE, "");
+                    let validated_severity = {
+                        let s = severity.trim().to_lowercase();
+                        if KNOWN_SEVERITIES.contains(&s.as_str()) {
+                            s
+                        } else {
+                            "suggestion".to_string()
+                        }
+                    };
+                    let trimmed_body = body.trim().to_string();
+                    let capped_body = cap_with_suffix(&trimmed_body, MAX_BODY, "\n\n*(truncated)*");
+                    findings.push(OffDiffFinding {
+                        title: capped_title,
+                        file: capped_file,
+                        line,
+                        severity: validated_severity,
+                        body: capped_body,
+                        reviewer: reviewer_name.to_string(),
+                    });
                 }
-                body.push_str(trimmed);
+            }
+            OffDiffLineKind::InsideBlock => {
+                if let Some(val) = trimmed.strip_prefix("title:") {
+                    title = val.trim().to_string();
+                } else if let Some(val) = trimmed.strip_prefix("file:") {
+                    file = val.trim().to_string();
+                } else if let Some(val) = trimmed.strip_prefix("line:") {
+                    line = val.trim().parse().unwrap_or(0);
+                } else if let Some(val) = trimmed.strip_prefix("severity:") {
+                    severity = val.trim().to_string();
+                } else if let Some(val) = trimmed.strip_prefix("body:") {
+                    body = val.trim().to_string();
+                } else {
+                    if !body.is_empty() {
+                        body.push('\n');
+                    }
+                    body.push_str(trimmed);
+                }
+            }
+            OffDiffLineKind::OutsideBlock => {
+                let lower = trimmed.to_lowercase();
+                let needle = lower
+                    .strip_prefix("**severity**:")
+                    .or_else(|| lower.strip_prefix("severity:"));
+                if let Some(rest) = needle {
+                    let val = rest.trim().to_string();
+                    if !val.is_empty() {
+                        inline_severities.push(val);
+                    }
+                }
             }
         }
     }
 
-    findings
+    ParsedReviewerOutput {
+        off_diff_findings: findings,
+        inline_severities,
+    }
 }
 
-/// Parse severity strings from inline markers in the review text (outside OFF-DIFF-FINDING blocks).
-///
-/// Recognises both `severity: <level>` and `**Severity**: <level>` (case-insensitive).
-/// Returns the lowercased severity values found (e.g. "critical", "suggestion").
+#[cfg(test)]
+fn parse_off_diff_findings(text: &str, reviewer_name: &str) -> Vec<OffDiffFinding> {
+    parse_reviewer_output(text, reviewer_name).off_diff_findings
+}
+
+#[cfg(test)]
 fn parse_inline_severities(text: &str) -> Vec<String> {
-    let mut severities = Vec::new();
-
-    for (trimmed, kind) in classify_off_diff_lines(text) {
-        if kind != OffDiffLineKind::OutsideBlock {
-            continue;
-        }
-
-        let lower = trimmed.to_lowercase();
-        // Match `severity: <value>` or `**severity**: <value>`
-        let needle = lower
-            .strip_prefix("**severity**:")
-            .or_else(|| lower.strip_prefix("severity:"));
-        if let Some(rest) = needle {
-            let val = rest.trim().to_string();
-            if !val.is_empty() {
-                severities.push(val);
-            }
-        }
-    }
-
-    severities
+    parse_reviewer_output(text, "").inline_severities
 }
 
 /// Check if a reviewer's findings contain only suggestion-severity issues (no critical/warning).
@@ -610,12 +613,14 @@ fn parse_inline_severities(text: &str) -> Vec<String> {
 /// Examines both already-parsed off-diff findings and inline severity markers in the review text.
 /// Returns true only if there are explicit suggestion-severity findings and no critical/warning.
 /// Returns false if there are no structured severity findings at all (respects the raw verdict).
-fn has_only_suggestions(result_text: &str, off_diff_findings: &[OffDiffFinding]) -> bool {
-    let inline = parse_inline_severities(result_text);
+fn has_only_suggestions(
+    inline_severities: &[String],
+    off_diff_findings: &[OffDiffFinding],
+) -> bool {
     let all_severities: Vec<&str> = off_diff_findings
         .iter()
         .map(|f| f.severity.as_str())
-        .chain(inline.iter().map(|s| s.as_str()))
+        .chain(inline_severities.iter().map(|s| s.as_str()))
         .collect();
 
     if all_severities.is_empty() {
@@ -762,7 +767,11 @@ fn file_off_diff_issues(
 /// 1. They explicitly output `VERDICT: APPROVE`, OR
 /// 2. They output `VERDICT: REQUEST_CHANGES` but only have suggestion-severity findings
 ///    (no critical or warning). Suggestion-only findings should not block.
-fn is_review_approved(run: &AgentRun, off_diff_findings: &[OffDiffFinding]) -> bool {
+fn is_review_approved(
+    run: &AgentRun,
+    off_diff_findings: &[OffDiffFinding],
+    inline_severities: &[String],
+) -> bool {
     if run.status != "completed" {
         return false;
     }
@@ -779,7 +788,7 @@ fn is_review_approved(run: &AgentRun, off_diff_findings: &[OffDiffFinding]) -> b
             }
             // If REQUEST_CHANGES but only suggestions, treat as approved
             if verdict == "VERDICT: REQUEST_CHANGES"
-                && has_only_suggestions(text, off_diff_findings)
+                && has_only_suggestions(inline_severities, off_diff_findings)
             {
                 return true;
             }
@@ -1027,11 +1036,16 @@ fn poll_all_reviewers(
                 Ok(Some(run)) => match run.status.as_str() {
                     "completed" | "failed" | "cancelled" => {
                         let findings = run.result_text.clone();
-                        let off_diff = findings
+                        let parsed = findings
                             .as_deref()
-                            .map(|text| parse_off_diff_findings(text, &role.name))
-                            .unwrap_or_default();
-                        let approved = is_review_approved(&run, &off_diff);
+                            .map(|text| parse_reviewer_output(text, &role.name))
+                            .unwrap_or(ParsedReviewerOutput {
+                                off_diff_findings: Vec::new(),
+                                inline_severities: Vec::new(),
+                            });
+                        let off_diff = parsed.off_diff_findings;
+                        let approved =
+                            is_review_approved(&run, &off_diff, &parsed.inline_severities);
                         if let Some(ref step_id) = steps[*step_idx].id {
                             let status = if run.status == "completed" {
                                 "completed"
@@ -1197,13 +1211,13 @@ mod tests {
     #[test]
     fn test_is_review_approved_approve() {
         let run = make_run("completed", Some("No issues found.\n\nVERDICT: APPROVE"));
-        assert!(is_review_approved(&run, &[]));
+        assert!(is_review_approved(&run, &[], &[]));
     }
 
     #[test]
     fn test_is_review_approved_approve_trailing_whitespace() {
         let run = make_run("completed", Some("No issues found.\n\nVERDICT: APPROVE\n"));
-        assert!(is_review_approved(&run, &[]));
+        assert!(is_review_approved(&run, &[], &[]));
     }
 
     #[test]
@@ -1212,25 +1226,25 @@ mod tests {
             "completed",
             Some("Found issues.\n\nVERDICT: REQUEST_CHANGES"),
         );
-        assert!(!is_review_approved(&run, &[]));
+        assert!(!is_review_approved(&run, &[], &[]));
     }
 
     #[test]
     fn test_is_review_approved_failed_run() {
         let run = make_run("failed", Some("VERDICT: APPROVE"));
-        assert!(!is_review_approved(&run, &[]));
+        assert!(!is_review_approved(&run, &[], &[]));
     }
 
     #[test]
     fn test_is_review_approved_no_result() {
         let run = make_run("completed", None);
-        assert!(!is_review_approved(&run, &[]));
+        assert!(!is_review_approved(&run, &[], &[]));
     }
 
     #[test]
     fn test_is_review_approved_case_insensitive() {
         let run = make_run("completed", Some("verdict: approve"));
-        assert!(is_review_approved(&run, &[]));
+        assert!(is_review_approved(&run, &[], &[]));
     }
 
     #[test]
@@ -1240,7 +1254,7 @@ mod tests {
             "completed",
             Some("Found issues.\n+// VERDICT: APPROVE\n\nVERDICT: REQUEST_CHANGES"),
         );
-        assert!(!is_review_approved(&run, &[]));
+        assert!(!is_review_approved(&run, &[], &[]));
     }
 
     #[test]
@@ -1735,39 +1749,31 @@ mod tests {
 
     #[test]
     fn test_has_only_suggestions_true() {
-        let text = "Found a naming issue.\n\
-            **Severity**: suggestion\n\
-            Details: Consider renaming.\n\
-            VERDICT: REQUEST_CHANGES";
-        assert!(has_only_suggestions(text, &[]));
+        let inline = vec!["suggestion".to_string()];
+        assert!(has_only_suggestions(&inline, &[]));
     }
 
     #[test]
     fn test_has_only_suggestions_with_warning() {
-        let text = "Found an issue.\n\
-            **Severity**: warning\n\
-            Details: Potential bug.\n\
-            VERDICT: REQUEST_CHANGES";
-        assert!(!has_only_suggestions(text, &[]));
+        let inline = vec!["warning".to_string()];
+        assert!(!has_only_suggestions(&inline, &[]));
     }
 
     #[test]
     fn test_has_only_suggestions_with_critical() {
-        let text = "Severity: critical\nVERDICT: REQUEST_CHANGES";
-        assert!(!has_only_suggestions(text, &[]));
+        let inline = vec!["critical".to_string()];
+        assert!(!has_only_suggestions(&inline, &[]));
     }
 
     #[test]
     fn test_has_only_suggestions_no_findings() {
         // No severity markers at all — should return false (don't override verdict)
-        let text = "No issues found.\nVERDICT: APPROVE";
-        assert!(!has_only_suggestions(text, &[]));
+        assert!(!has_only_suggestions(&[], &[]));
     }
 
     #[test]
     fn test_has_only_suggestions_from_off_diff_findings() {
         // Off-diff findings with suggestion severity should count
-        let text = "No inline severity markers.\nVERDICT: REQUEST_CHANGES";
         let findings = vec![OffDiffFinding {
             title: "Minor naming".to_string(),
             file: "src/lib.rs".to_string(),
@@ -1776,13 +1782,12 @@ mod tests {
             body: "Consider renaming".to_string(),
             reviewer: "architecture".to_string(),
         }];
-        assert!(has_only_suggestions(text, &findings));
+        assert!(has_only_suggestions(&[], &findings));
     }
 
     #[test]
     fn test_has_only_suggestions_off_diff_warning_blocks() {
         // Off-diff finding with warning severity should block
-        let text = "No inline severity markers.\nVERDICT: REQUEST_CHANGES";
         let findings = vec![OffDiffFinding {
             title: "Potential bug".to_string(),
             file: "src/lib.rs".to_string(),
@@ -1791,13 +1796,13 @@ mod tests {
             body: "This could be a bug".to_string(),
             reviewer: "security".to_string(),
         }];
-        assert!(!has_only_suggestions(text, &findings));
+        assert!(!has_only_suggestions(&[], &findings));
     }
 
     #[test]
     fn test_has_only_suggestions_mixed_inline_and_off_diff() {
         // Inline suggestion + off-diff suggestion = all suggestions
-        let text = "**Severity**: suggestion\nVERDICT: REQUEST_CHANGES";
+        let inline = vec!["suggestion".to_string()];
         let findings = vec![OffDiffFinding {
             title: "Minor".to_string(),
             file: "src/lib.rs".to_string(),
@@ -1806,22 +1811,15 @@ mod tests {
             body: "Minor issue".to_string(),
             reviewer: "architecture".to_string(),
         }];
-        assert!(has_only_suggestions(text, &findings));
+        assert!(has_only_suggestions(&inline, &findings));
     }
 
     #[test]
     fn test_has_only_suggestions_ignores_off_diff_block_severity_in_inline_parse() {
         // Severity inside OFF-DIFF-FINDING blocks should not be double-counted as inline
-        let text = "OFF-DIFF-FINDING\n\
-            title: Issue\n\
-            file: a.rs\n\
-            line: 1\n\
-            severity: critical\n\
-            body: Bad stuff\n\
-            END-OFF-DIFF-FINDING\n\
-            VERDICT: REQUEST_CHANGES";
-        // Pass empty off-diff findings to test that inline parser skips block contents
-        assert!(!has_only_suggestions(text, &[]));
+        // parse_reviewer_output correctly skips block contents for inline severities,
+        // so when called with no inline severities and no off-diff findings, returns false
+        assert!(!has_only_suggestions(&[], &[]));
     }
 
     #[test]
@@ -1851,7 +1849,8 @@ mod tests {
                  VERDICT: REQUEST_CHANGES",
             ),
         );
-        assert!(is_review_approved(&run, &[]));
+        let inline = vec!["suggestion".to_string()];
+        assert!(is_review_approved(&run, &[], &inline));
     }
 
     #[test]
@@ -1865,7 +1864,30 @@ mod tests {
                  VERDICT: REQUEST_CHANGES",
             ),
         );
-        assert!(!is_review_approved(&run, &[]));
+        let inline = vec!["warning".to_string()];
+        assert!(!is_review_approved(&run, &[], &inline));
+    }
+
+    #[test]
+    fn test_parse_reviewer_output_combined() {
+        // Verify single-pass extraction of both off-diff findings and inline severities
+        let text = "**Severity**: suggestion\n\
+            Some inline review text.\n\
+            OFF-DIFF-FINDING\n\
+            title: Naming issue\n\
+            file: src/lib.rs\n\
+            line: 42\n\
+            severity: warning\n\
+            body: Consider renaming this function\n\
+            END-OFF-DIFF-FINDING\n\
+            Severity: critical\n\
+            VERDICT: REQUEST_CHANGES";
+        let parsed = parse_reviewer_output(text, "architecture");
+        assert_eq!(parsed.off_diff_findings.len(), 1);
+        assert_eq!(parsed.off_diff_findings[0].title, "Naming issue");
+        assert_eq!(parsed.off_diff_findings[0].severity, "warning");
+        assert_eq!(parsed.off_diff_findings[0].reviewer, "architecture");
+        assert_eq!(parsed.inline_severities, vec!["suggestion", "critical"]);
     }
 
     #[test]
@@ -1883,7 +1905,7 @@ mod tests {
             body: "Minor".to_string(),
             reviewer: "arch".to_string(),
         }];
-        assert!(is_review_approved(&run, &findings));
+        assert!(is_review_approved(&run, &findings, &[]));
     }
 
     #[test]
