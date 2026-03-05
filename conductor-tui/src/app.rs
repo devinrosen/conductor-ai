@@ -24,6 +24,11 @@ use crate::state::{
 };
 use crate::ui;
 
+/// Maximum scroll offset for a text body (total lines minus one visible line).
+fn max_scroll(line_count: usize) -> u16 {
+    line_count.saturating_sub(1) as u16
+}
+
 /// Derive a worktree slug from a ticket's source_id and title.
 /// Format: `{source_id}-{slugified-title}`, e.g. `15-tui-create-worktree`.
 /// Title portion is truncated to keep the total slug under ~40 chars.
@@ -314,34 +319,16 @@ impl App {
             Action::ViewAgentLog => self.handle_view_agent_log(),
             Action::CopyLastCodeBlock => self.handle_copy_last_code_block(),
             Action::ExpandAgentEvent => self.handle_expand_agent_event(),
-            Action::AgentActivityDown => match self.state.modal {
-                Modal::EventDetail {
-                    ref mut scroll_offset,
-                    line_count,
-                    ..
-                } => {
-                    let max = line_count.saturating_sub(1) as u16;
-                    *scroll_offset = (*scroll_offset + 1).min(max);
+            Action::AgentActivityDown => {
+                let len = self.state.data.agent_activity_len();
+                let cur = self.state.agent_list_state.borrow().selected().unwrap_or(0);
+                if len > 0 && cur + 1 < len {
+                    self.state.agent_list_state.borrow_mut().select_next();
                 }
-                _ => {
-                    let len = self.state.data.agent_activity_len();
-                    let cur = self.state.agent_list_state.borrow().selected().unwrap_or(0);
-                    if len > 0 && cur + 1 < len {
-                        self.state.agent_list_state.borrow_mut().select_next();
-                    }
-                }
-            },
-            Action::AgentActivityUp => match self.state.modal {
-                Modal::EventDetail {
-                    ref mut scroll_offset,
-                    ..
-                } => {
-                    *scroll_offset = scroll_offset.saturating_sub(1);
-                }
-                _ => {
-                    self.state.agent_list_state.borrow_mut().select_previous();
-                }
-            },
+            }
+            Action::AgentActivityUp => {
+                self.state.agent_list_state.borrow_mut().select_previous();
+            }
             // Scroll navigation (all views + discover modals)
             Action::GoToTop => match self.state.modal {
                 Modal::EventDetail {
@@ -366,7 +353,7 @@ impl App {
                     line_count,
                     ..
                 } => {
-                    *scroll_offset = line_count.saturating_sub(1) as u16;
+                    *scroll_offset = max_scroll(line_count);
                 }
                 Modal::GithubDiscoverOrgs {
                     ref orgs,
@@ -681,6 +668,13 @@ impl App {
 
     fn move_up(&mut self) {
         match self.state.modal {
+            Modal::EventDetail {
+                ref mut scroll_offset,
+                ..
+            } => {
+                *scroll_offset = scroll_offset.saturating_sub(1);
+                return;
+            }
             Modal::ModelPicker {
                 ref mut selected,
                 ref mut custom_active,
@@ -785,6 +779,14 @@ impl App {
 
     fn move_down(&mut self) {
         match self.state.modal {
+            Modal::EventDetail {
+                ref mut scroll_offset,
+                line_count,
+                ..
+            } => {
+                *scroll_offset = scroll_offset.saturating_add(1).min(max_scroll(line_count));
+                return;
+            }
             Modal::ModelPicker {
                 ref mut selected,
                 ref mut custom_active,

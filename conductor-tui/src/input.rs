@@ -78,8 +78,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         Modal::EventDetail { .. } => {
             return match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => Action::DismissModal,
-                KeyCode::Char('j') | KeyCode::Down => Action::AgentActivityDown,
-                KeyCode::Char('k') | KeyCode::Up => Action::AgentActivityUp,
+                KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
+                KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
                 KeyCode::Char('h') | KeyCode::Left => Action::ScrollLeft,
                 KeyCode::Char('l') | KeyCode::Right => Action::ScrollRight,
                 KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,

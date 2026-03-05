@@ -325,52 +325,58 @@ pub struct AgentTotals {
     pub live_turns: i64,
 }
 
+/// A row in the agent activity list: either a run-group separator or an event.
+pub enum VisualRow<'a> {
+    /// Separator row for a run group: (run_number, model, started_at).
+    RunSeparator(usize, Option<&'a str>, &'a str),
+    /// An actual agent event.
+    Event(&'a AgentRunEvent),
+}
+
 impl DataCache {
+    /// Iterate the agent activity list as visual rows, interleaving run-group
+    /// separators when there are multiple runs. This is the single source of
+    /// truth for the visual-index ↔ event mapping used by both the renderer
+    /// and the action handler.
+    pub fn visual_rows(&self) -> Vec<VisualRow<'_>> {
+        let has_multiple_runs = self.agent_run_info.len() > 1;
+        let mut rows = Vec::with_capacity(self.agent_events.len() + self.agent_run_info.len());
+        let mut prev_run_id: Option<&str> = None;
+
+        for ev in &self.agent_events {
+            if has_multiple_runs {
+                let is_new = prev_run_id.is_none() || prev_run_id.is_some_and(|p| p != ev.run_id);
+                if is_new {
+                    if let Some((run_num, model, started_at)) = self.agent_run_info.get(&ev.run_id)
+                    {
+                        rows.push(VisualRow::RunSeparator(
+                            *run_num,
+                            model.as_deref(),
+                            started_at.as_str(),
+                        ));
+                    }
+                }
+            }
+            prev_run_id = Some(&ev.run_id);
+            rows.push(VisualRow::Event(ev));
+        }
+        rows
+    }
+
     /// Total number of items in the agent activity list, including run boundary
     /// separators. Must match the item count built in `render_agent_activity`.
     pub fn agent_activity_len(&self) -> usize {
-        let has_multiple_runs = self.agent_run_info.len() > 1;
-        if !has_multiple_runs || self.agent_events.is_empty() {
-            return self.agent_events.len();
-        }
-        let mut separators = 0usize;
-        let mut prev_run_id: Option<&str> = None;
-        for ev in &self.agent_events {
-            let new_group = prev_run_id.is_none() || prev_run_id.is_some_and(|p| p != ev.run_id);
-            if new_group && self.agent_run_info.contains_key(&ev.run_id) {
-                separators += 1;
-            }
-            prev_run_id = Some(&ev.run_id);
-        }
-        self.agent_events.len() + separators
+        self.visual_rows().len()
     }
 
     /// Map a visual index (which may include run-separator rows) back to the
     /// underlying `AgentRunEvent`. Returns `None` if the index points at a
     /// separator row or is out of range.
     pub fn event_at_visual_index(&self, visual_target: usize) -> Option<&AgentRunEvent> {
-        let has_multiple_runs = self.agent_run_info.len() > 1;
-        let mut visual_idx = 0usize;
-        let mut prev_run_id: Option<&str> = None;
-
-        for ev in &self.agent_events {
-            if has_multiple_runs {
-                let is_new = prev_run_id.is_none() || prev_run_id.is_some_and(|p| p != ev.run_id);
-                if is_new && self.agent_run_info.contains_key(&ev.run_id) {
-                    if visual_idx == visual_target {
-                        return None; // separator row
-                    }
-                    visual_idx += 1;
-                }
-            }
-            prev_run_id = Some(&ev.run_id);
-
-            if visual_idx == visual_target {
-                return Some(ev);
-            }
-            visual_idx += 1;
+        match self.visual_rows().into_iter().nth(visual_target)? {
+            VisualRow::Event(ev) => Some(ev),
+            VisualRow::RunSeparator(..) => None,
         }
-        None
     }
 
     pub fn rebuild_maps(&mut self) {

@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
-use crate::state::AppState;
+use crate::state::{AppState, VisualRow};
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let wt = state
@@ -232,62 +232,54 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
         .map(|wt| wt.path.as_str())
         .unwrap_or("");
 
-    let run_info = &state.data.agent_run_info;
-    let has_multiple_runs = run_info.len() > 1;
-
     let mut items: Vec<ListItem> = Vec::new();
-    let mut prev_run_id: Option<&str> = None;
 
-    for ev in events {
-        // Insert a run boundary separator when run_id changes
-        if has_multiple_runs {
-            let is_new_run = prev_run_id.is_some_and(|prev| prev != ev.run_id);
-            let is_first = prev_run_id.is_none();
-            if is_first || is_new_run {
-                if let Some((run_num, model, started_at)) = run_info.get(&ev.run_id) {
-                    let ts = started_at
-                        .get(..16)
-                        .unwrap_or(started_at)
-                        .replacen('T', " ", 1);
-                    let model_str = model.as_deref().unwrap_or("default");
-                    let header = format!("── Run {run_num}  {ts}  {model_str} ");
-                    let pad = "─".repeat(60usize.saturating_sub(header.len()));
-                    items.push(ListItem::new(Line::from(Span::styled(
-                        format!("{header}{pad}"),
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::DIM),
-                    ))));
+    for row in state.data.visual_rows() {
+        match row {
+            VisualRow::RunSeparator(run_num, model, started_at) => {
+                let ts = started_at
+                    .get(..16)
+                    .unwrap_or(started_at)
+                    .replacen('T', " ", 1);
+                let model_str = model.unwrap_or("default");
+                let header = format!("── Run {run_num}  {ts}  {model_str} ");
+                let pad = "─".repeat(60usize.saturating_sub(header.len()));
+                items.push(ListItem::new(Line::from(Span::styled(
+                    format!("{header}{pad}"),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::DIM),
+                ))));
+            }
+            VisualRow::Event(ev) => {
+                let style = event_style(&ev.kind);
+                let (display_text, effective_style) = if ev.kind == "prompt" {
+                    let step_label = extract_step_label(&ev.summary);
+                    let is_step = step_label.is_some();
+                    let label =
+                        step_label.unwrap_or_else(|| shorten_paths(&ev.summary, worktree_path));
+                    let s = if is_step {
+                        Style::default().fg(Color::Magenta)
+                    } else {
+                        style
+                    };
+                    (label, s)
+                } else {
+                    (shorten_paths(&ev.summary, worktree_path), style)
+                };
+                let mut spans = vec![Span::styled(display_text, effective_style)];
+                if let Some(dur) = ev.duration_ms() {
+                    if dur >= 100 {
+                        let dur_s = dur as f64 / 1000.0;
+                        spans.push(Span::styled(
+                            format!("  ({dur_s:.1}s)"),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
                 }
+                items.push(ListItem::new(Line::from(spans)));
             }
         }
-        prev_run_id = Some(&ev.run_id);
-
-        let style = event_style(&ev.kind);
-        let (display_text, effective_style) = if ev.kind == "prompt" {
-            let step_label = extract_step_label(&ev.summary);
-            let is_step = step_label.is_some();
-            let label = step_label.unwrap_or_else(|| shorten_paths(&ev.summary, worktree_path));
-            let s = if is_step {
-                Style::default().fg(Color::Magenta)
-            } else {
-                style
-            };
-            (label, s)
-        } else {
-            (shorten_paths(&ev.summary, worktree_path), style)
-        };
-        let mut spans = vec![Span::styled(display_text, effective_style)];
-        if let Some(dur) = ev.duration_ms() {
-            if dur >= 100 {
-                let dur_s = dur as f64 / 1000.0;
-                spans.push(Span::styled(
-                    format!("  ({dur_s:.1}s)"),
-                    Style::default().fg(Color::DarkGray),
-                ));
-            }
-        }
-        items.push(ListItem::new(Line::from(spans)));
     }
 
     let list = List::new(items)
@@ -331,8 +323,9 @@ fn extract_step_label(prompt: &str) -> Option<String> {
                 .join(" ");
             let desc = desc.trim();
             if !desc.is_empty() {
-                let truncated = if desc.len() > 80 {
-                    format!("{}...", &desc[..80])
+                let truncated = if desc.chars().count() > 80 {
+                    let s: String = desc.chars().take(80).collect();
+                    format!("{s}...")
                 } else {
                     desc.to_string()
                 };
@@ -426,7 +419,7 @@ fn render_agent_status_line(
                     Style::default().fg(Color::Yellow),
                 ));
             } else if let Some(ref err) = run.result_text {
-                let truncated = if err.len() > 60 { &err[..60] } else { err };
+                let truncated: String = err.chars().take(60).collect();
                 spans.push(Span::styled(
                     format!(" {truncated}"),
                     Style::default().fg(Color::DarkGray),
@@ -467,8 +460,9 @@ fn render_child_run_line(run: &conductor_core::agent::AgentRun) -> Line<'static>
     let status_str = format!("[{status_text}]");
 
     let prompt = extract_step_label(&run.prompt).unwrap_or_else(|| {
-        if run.prompt.len() > 50 {
-            format!("{}...", &run.prompt[..50])
+        if run.prompt.chars().count() > 50 {
+            let s: String = run.prompt.chars().take(50).collect();
+            format!("{s}...")
         } else {
             run.prompt.clone()
         }

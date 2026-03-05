@@ -121,8 +121,9 @@ pub fn render_ticket_info(
 
     let body_text = if ticket.body.is_empty() {
         "(no description)".to_string()
-    } else if ticket.body.len() > 500 {
-        format!("{}...", &ticket.body[..500])
+    } else if ticket.body.chars().count() > 500 {
+        let s: String = ticket.body.chars().take(500).collect();
+        format!("{s}...")
     } else {
         ticket.body.clone()
     };
@@ -1002,8 +1003,9 @@ pub fn render_github_discover(
             lines.push(Line::from(spans));
 
             if !repo.description.is_empty() {
-                let desc = if repo.description.len() > 60 {
-                    format!("{}...", &repo.description[..57])
+                let desc = if repo.description.chars().count() > 60 {
+                    let s: String = repo.description.chars().take(57).collect();
+                    format!("{s}...")
                 } else {
                     repo.description.clone()
                 };
