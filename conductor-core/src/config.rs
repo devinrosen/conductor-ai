@@ -41,12 +41,12 @@ pub struct Config {
     #[serde(default)]
     pub post_run: PostRunConfig,
     #[serde(default)]
-    pub github: GitHubConfig,
+    pub github: GitHubSettings,
 }
 
 /// Top-level `[github]` section, currently containing only the optional App config.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct GitHubConfig {
+pub struct GitHubSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<GitHubAppConfig>,
 }
