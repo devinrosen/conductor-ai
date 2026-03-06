@@ -22,6 +22,13 @@ pub fn parse_feedback_marker(text: &str) -> Option<&str> {
     text.strip_prefix(FEEDBACK_MARKER)
 }
 
+/// Maximum allowed length (in bytes) for feedback prompts and responses.
+const FEEDBACK_MAX_LEN: usize = 10_240; // 10 KB
+
+/// Shared SELECT column list for the `feedback_requests` table.
+const FEEDBACK_SELECT: &str =
+    "SELECT id, run_id, prompt, response, status, created_at, responded_at FROM feedback_requests";
+
 /// A single step in an agent's two-phase execution plan.
 /// Stored as individual records in the `agent_run_steps` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1084,6 +1091,7 @@ impl<'a> AgentManager<'a> {
 
     /// Transition a run to "waiting_for_feedback" and create a feedback request.
     pub fn request_feedback(&self, run_id: &str, prompt: &str) -> Result<FeedbackRequest> {
+        let prompt = &prompt[..prompt.len().min(FEEDBACK_MAX_LEN)];
         let id = ulid::Ulid::new().to_string();
         let now = Utc::now().to_rfc3339();
 
@@ -1114,6 +1122,7 @@ impl<'a> AgentManager<'a> {
 
     /// Submit a response to a pending feedback request and resume the run.
     pub fn submit_feedback(&self, feedback_id: &str, response: &str) -> Result<FeedbackRequest> {
+        let response = &response[..response.len().min(FEEDBACK_MAX_LEN)];
         let now = Utc::now().to_rfc3339();
 
         // Update feedback request
@@ -1127,8 +1136,7 @@ impl<'a> AgentManager<'a> {
 
         // Return updated feedback request
         let req = self.conn.query_row(
-            "SELECT id, run_id, prompt, response, status, created_at, responded_at \
-             FROM feedback_requests WHERE id = ?1",
+            &format!("{FEEDBACK_SELECT} WHERE id = ?1"),
             params![feedback_id],
             row_to_feedback_request,
         )?;
@@ -1165,9 +1173,10 @@ impl<'a> AgentManager<'a> {
     /// Get the pending feedback request for a run (if any).
     pub fn pending_feedback_for_run(&self, run_id: &str) -> Result<Option<FeedbackRequest>> {
         let result = self.conn.query_row(
-            "SELECT id, run_id, prompt, response, status, created_at, responded_at \
-             FROM feedback_requests WHERE run_id = ?1 AND status = 'pending' \
-             ORDER BY created_at DESC LIMIT 1",
+            &format!(
+                "{FEEDBACK_SELECT} WHERE run_id = ?1 AND status = 'pending' \
+                 ORDER BY created_at DESC LIMIT 1"
+            ),
             params![run_id],
             row_to_feedback_request,
         );
@@ -1178,8 +1187,7 @@ impl<'a> AgentManager<'a> {
     /// Get a feedback request by ID.
     pub fn get_feedback(&self, feedback_id: &str) -> Result<Option<FeedbackRequest>> {
         let result = self.conn.query_row(
-            "SELECT id, run_id, prompt, response, status, created_at, responded_at \
-             FROM feedback_requests WHERE id = ?1",
+            &format!("{FEEDBACK_SELECT} WHERE id = ?1"),
             params![feedback_id],
             row_to_feedback_request,
         );
@@ -1189,10 +1197,9 @@ impl<'a> AgentManager<'a> {
 
     /// List all feedback requests for a run, newest first.
     pub fn list_feedback_for_run(&self, run_id: &str) -> Result<Vec<FeedbackRequest>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, run_id, prompt, response, status, created_at, responded_at \
-             FROM feedback_requests WHERE run_id = ?1 ORDER BY created_at DESC",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "{FEEDBACK_SELECT} WHERE run_id = ?1 ORDER BY created_at DESC"
+        ))?;
         let rows = stmt.query_map(params![run_id], row_to_feedback_request)?;
         let reqs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(reqs)

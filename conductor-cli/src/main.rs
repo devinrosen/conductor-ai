@@ -1526,6 +1526,9 @@ fn wait_for_feedback_response(mgr: &AgentManager, feedback_id: &str) -> Option<S
 }
 
 /// Run the orchestration: generate a plan, then spawn child agents for each step.
+/// Note: feedback detection (`[NEEDS_FEEDBACK]`) is intentionally omitted here.
+/// The orchestrator manages a plan and spawns child `run_agent` invocations;
+/// each child has its own event loop that handles feedback markers.
 fn run_orchestrate(
     conn: &rusqlite::Connection,
     config: &conductor_core::config::Config,
