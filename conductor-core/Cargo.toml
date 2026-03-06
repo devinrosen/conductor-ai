@@ -16,7 +16,7 @@ ulid = "1"
 toml = "0.8"
 dirs = "6"
 jsonwebtoken = "9"
-serde_yaml = "0.9"
+serde_yml = "0.0"
 
 [dev-dependencies]
 tempfile = "3"

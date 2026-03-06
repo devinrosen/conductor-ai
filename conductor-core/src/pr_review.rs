@@ -18,7 +18,8 @@ use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::github;
 use crate::merge_queue::MergeQueueManager;
-use crate::review_config::{load_reviewer_roles, ReviewerRole};
+use crate::repo::RepoManager;
+use crate::review_config::{load_review_settings, load_reviewer_roles, ReviewerRole};
 use crate::worktree::WorktreeManager;
 
 /// A finding in unchanged/removed code that should be filed as a GH issue
@@ -127,9 +128,12 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
 
     let mgr = AgentManager::new(conn);
     let wt_mgr = WorktreeManager::new(conn, config);
+    let repo_mgr = RepoManager::new(conn, config);
 
     let worktree = wt_mgr.get_by_id(worktree_id)?;
-    let roles = load_reviewer_roles(&worktree.path)?;
+    let repo = repo_mgr.get_by_id(repo_id)?;
+    let roles = load_reviewer_roles(&repo.local_path)?;
+    let review_settings = load_review_settings(&repo.local_path)?;
 
     if roles.is_empty() {
         return Err(ConductorError::Agent(
@@ -304,21 +308,23 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
             .collect(),
     };
 
-    // Post review comment to PR
-    if let Some(pr_num) = pr_number {
-        if let Some((ref owner, ref repo_name)) = gh_remote {
-            let _ = post_pr_comment(
-                owner,
-                repo_name,
-                pr_num,
-                &aggregated_comment,
-                input.app_token,
-            );
+    // Post review comment to PR if configured
+    if review_settings.post_to_pr {
+        if let Some(pr_num) = pr_number {
+            if let Some((ref owner, ref repo_name)) = gh_remote {
+                let _ = post_pr_comment(
+                    owner,
+                    repo_name,
+                    pr_num,
+                    &aggregated_comment,
+                    input.app_token,
+                );
+            }
         }
     }
 
-    // Auto-merge if all required reviewers approved
-    if all_required_approved {
+    // Auto-merge if all required approved and config allows it
+    if all_required_approved && review_settings.auto_merge {
         let mq = MergeQueueManager::new(conn);
         let _ = mq.enqueue(repo_id, worktree_id, Some(&parent_run.id), None);
         eprintln!("[review-swarm] All required reviewers approved — added to merge queue");
@@ -1475,7 +1481,7 @@ mod tests {
         let conn = setup_db();
         let config = Config::default();
 
-        // The worktree path /tmp/ws/feat-test has no .conductor/reviewers/ dir
+        // The repo local_path /tmp/repo has no .conductor/reviewers/ dir
         let swarm_config = ReviewSwarmConfig::default();
         let result = run_review_swarm(&ReviewSwarmInput {
             conn: &conn,

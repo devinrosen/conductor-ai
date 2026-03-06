@@ -1,7 +1,8 @@
 //! File-based reviewer configuration for multi-agent PR review swarms.
 //!
-//! Reads `.conductor/reviewers/*.md` from the repo worktree. Each file uses
-//! YAML frontmatter + markdown body (same format as the claude-plugin-marketplace).
+//! Reads `.conductor/reviewers/*.md` from the repo root (not the PR worktree)
+//! and `.conductor/review.toml` for swarm-level settings.
+//! Each reviewer file uses YAML frontmatter + markdown body.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,18 +11,38 @@ use serde::Deserialize;
 
 use crate::error::{ConductorError, Result};
 
+const REVIEWER_HINT: &str = "See .conductor/reviewers/ in conductor-ai for reference roles.";
+
+/// Swarm-level review settings from `.conductor/review.toml`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReviewSettings {
+    /// Whether to post an aggregated review comment to the PR (default: true).
+    #[serde(default = "default_true")]
+    pub post_to_pr: bool,
+    /// Whether to auto-enqueue for merge when all required reviewers approve (default: true).
+    #[serde(default = "default_true")]
+    pub auto_merge: bool,
+}
+
+impl Default for ReviewSettings {
+    fn default() -> Self {
+        Self {
+            post_to_pr: true,
+            auto_merge: true,
+        }
+    }
+}
+
 /// YAML frontmatter fields for a reviewer role `.md` file.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct ReviewerFrontmatter {
     name: Option<String>,
     description: Option<String>,
-    #[allow(dead_code)]
     model: Option<String>,
     #[serde(default = "default_true")]
     required: bool,
-    #[allow(dead_code)]
     color: Option<String>,
-    #[allow(dead_code)]
     source: Option<String>,
 }
 
@@ -61,7 +82,7 @@ fn parse_reviewer_file(path: &Path) -> Result<ReviewerRole> {
         ))
     })?;
 
-    let fm: ReviewerFrontmatter = serde_yaml::from_str(frontmatter).map_err(|e| {
+    let fm: ReviewerFrontmatter = serde_yml::from_str(frontmatter).map_err(|e| {
         ConductorError::Config(format!(
             "Invalid YAML frontmatter in {}: {e}",
             path.display()
@@ -103,20 +124,43 @@ fn parse_frontmatter(content: &str) -> Option<(&str, &str)> {
     Some((yaml, body))
 }
 
-/// Load all reviewer roles from `.conductor/reviewers/*.md` in the given worktree path.
+/// Load review settings from `.conductor/review.toml` in the given repo path.
+///
+/// Returns `ReviewSettings::default()` if the file doesn't exist.
+pub fn load_review_settings(repo_path: &str) -> Result<ReviewSettings> {
+    let settings_path = PathBuf::from(repo_path)
+        .join(".conductor")
+        .join("review.toml");
+
+    if !settings_path.is_file() {
+        return Ok(ReviewSettings::default());
+    }
+
+    let content = fs::read_to_string(&settings_path).map_err(|e| {
+        ConductorError::Config(format!("Failed to read {}: {e}", settings_path.display()))
+    })?;
+
+    toml::from_str(&content).map_err(|e| {
+        ConductorError::Config(format!("Invalid TOML in {}: {e}", settings_path.display()))
+    })
+}
+
+/// Load all reviewer roles from `.conductor/reviewers/*.md` in the given repo path.
+///
+/// Reads from the repo root (not the PR worktree) so that a PR cannot inject
+/// its own reviewer prompts.
 ///
 /// Returns an error with a helpful message if the directory doesn't exist.
-pub fn load_reviewer_roles(worktree_path: &str) -> Result<Vec<ReviewerRole>> {
-    let reviewers_dir = PathBuf::from(worktree_path)
+pub fn load_reviewer_roles(repo_path: &str) -> Result<Vec<ReviewerRole>> {
+    let reviewers_dir = PathBuf::from(repo_path)
         .join(".conductor")
         .join("reviewers");
 
     if !reviewers_dir.is_dir() {
         return Err(ConductorError::Config(format!(
             "No .conductor/reviewers/ directory found in {}. \
-             Create it and add reviewer role .md files. \
-             See .conductor/reviewers/ in conductor-ai for reference roles.",
-            worktree_path
+             Create it and add reviewer role .md files. {REVIEWER_HINT}",
+            repo_path
         )));
     }
 
@@ -138,8 +182,7 @@ pub fn load_reviewer_roles(worktree_path: &str) -> Result<Vec<ReviewerRole>> {
 
     if roles.is_empty() {
         return Err(ConductorError::Config(format!(
-            "No .md files found in {}. Add reviewer role files. \
-             See .conductor/reviewers/ in conductor-ai for reference roles.",
+            "No .md files found in {}. Add reviewer role files. {REVIEWER_HINT}",
             reviewers_dir.display()
         )));
     }
@@ -274,6 +317,42 @@ mod tests {
     }
 
     #[test]
+    fn test_load_review_settings_defaults() {
+        let tmp = TempDir::new().unwrap();
+        let settings = load_review_settings(tmp.path().to_str().unwrap()).unwrap();
+        assert!(settings.post_to_pr);
+        assert!(settings.auto_merge);
+    }
+
+    #[test]
+    fn test_load_review_settings_from_file() {
+        let tmp = TempDir::new().unwrap();
+        let conductor_dir = tmp.path().join(".conductor");
+        fs::create_dir_all(&conductor_dir).unwrap();
+        fs::write(
+            conductor_dir.join("review.toml"),
+            "post_to_pr = false\nauto_merge = false\n",
+        )
+        .unwrap();
+
+        let settings = load_review_settings(tmp.path().to_str().unwrap()).unwrap();
+        assert!(!settings.post_to_pr);
+        assert!(!settings.auto_merge);
+    }
+
+    #[test]
+    fn test_load_review_settings_partial() {
+        let tmp = TempDir::new().unwrap();
+        let conductor_dir = tmp.path().join(".conductor");
+        fs::create_dir_all(&conductor_dir).unwrap();
+        fs::write(conductor_dir.join("review.toml"), "auto_merge = false\n").unwrap();
+
+        let settings = load_review_settings(tmp.path().to_str().unwrap()).unwrap();
+        assert!(settings.post_to_pr); // default
+        assert!(!settings.auto_merge);
+    }
+
+    #[test]
     fn test_frontmatter_with_all_fields() {
         let content = "---\n\
             name: security\n\
@@ -286,7 +365,7 @@ mod tests {
             You are a security reviewer.";
         let (yaml, body) = parse_frontmatter(content).unwrap();
 
-        let fm: ReviewerFrontmatter = serde_yaml::from_str(yaml).unwrap();
+        let fm: ReviewerFrontmatter = serde_yml::from_str(yaml).unwrap();
         assert_eq!(fm.name.unwrap(), "security");
         assert_eq!(
             fm.description.unwrap(),
