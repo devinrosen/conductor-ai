@@ -18,7 +18,7 @@ use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::github;
 use crate::merge_queue::MergeQueueManager;
-use crate::review_config::{ReviewConfigManager, ReviewerRole};
+use crate::review_config::{load_reviewer_roles, ReviewerRole};
 use crate::worktree::WorktreeManager;
 
 /// A finding in unchanged/removed code that should be filed as a GH issue
@@ -127,11 +127,9 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
 
     let mgr = AgentManager::new(conn);
     let wt_mgr = WorktreeManager::new(conn, config);
-    let review_cfg_mgr = ReviewConfigManager::new(conn);
 
     let worktree = wt_mgr.get_by_id(worktree_id)?;
-    let review_config = review_cfg_mgr.get_or_default(repo_id)?;
-    let roles = &review_config.roles;
+    let roles = load_reviewer_roles(&worktree.path)?;
 
     if roles.is_empty() {
         return Err(ConductorError::Agent(
@@ -306,23 +304,21 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
             .collect(),
     };
 
-    // Post to PR if configured
-    if review_config.post_to_pr {
-        if let Some(pr_num) = pr_number {
-            if let Some((ref owner, ref repo_name)) = gh_remote {
-                let _ = post_pr_comment(
-                    owner,
-                    repo_name,
-                    pr_num,
-                    &aggregated_comment,
-                    input.app_token,
-                );
-            }
+    // Post review comment to PR
+    if let Some(pr_num) = pr_number {
+        if let Some((ref owner, ref repo_name)) = gh_remote {
+            let _ = post_pr_comment(
+                owner,
+                repo_name,
+                pr_num,
+                &aggregated_comment,
+                input.app_token,
+            );
         }
     }
 
-    // Auto-merge if all required approved and config says so
-    if all_required_approved && review_config.auto_merge {
+    // Auto-merge if all required reviewers approved
+    if all_required_approved {
         let mq = MergeQueueManager::new(conn);
         let _ = mq.enqueue(repo_id, worktree_id, Some(&parent_run.id), None);
         eprintln!("[review-swarm] All required reviewers approved — added to merge queue");
@@ -1144,7 +1140,6 @@ fn poll_reviewer_completion(
 mod tests {
     use super::*;
     use crate::db;
-    use crate::review_config::default_reviewer_roles;
     use chrono::Utc;
     use tempfile::NamedTempFile;
 
@@ -1201,6 +1196,24 @@ mod tests {
             .collect()
     }
 
+    fn test_reviewer_roles() -> Vec<ReviewerRole> {
+        vec![
+            ReviewerRole {
+                name: "architecture".to_string(),
+                focus: "Coupling, cohesion, design patterns".to_string(),
+                system_prompt: "You are a senior software architect reviewing a pull request."
+                    .to_string(),
+                required: true,
+            },
+            ReviewerRole {
+                name: "security".to_string(),
+                focus: "Input validation, auth gaps, injection risks".to_string(),
+                system_prompt: "You are a security-focused code reviewer.".to_string(),
+                required: true,
+            },
+        ]
+    }
+
     fn setup_two_child_runs(
         mgr: &AgentManager,
     ) -> (AgentRun, AgentRun, Vec<(usize, AgentRun, ReviewerRole)>) {
@@ -1211,7 +1224,7 @@ mod tests {
         let r2 = mgr
             .create_child_run("w1", "review2", None, None, &parent.id)
             .unwrap();
-        let roles = default_reviewer_roles();
+        let roles = test_reviewer_roles();
         let child_runs: Vec<(usize, AgentRun, ReviewerRole)> = vec![
             (0, r1.clone(), roles[0].clone()),
             (1, r2.clone(), roles[1].clone()),
@@ -1270,7 +1283,7 @@ mod tests {
 
     #[test]
     fn test_build_reviewer_prompt() {
-        let role = &default_reviewer_roles()[0]; // architecture
+        let role = &test_reviewer_roles()[0]; // architecture
         let prompt = build_reviewer_prompt(role, "+ added line\n- removed line", "feat/test");
 
         assert!(prompt.contains("architect"));
@@ -1278,17 +1291,17 @@ mod tests {
         assert!(prompt.contains("+ added line"));
         assert!(prompt.contains("VERDICT: APPROVE"));
         assert!(prompt.contains("VERDICT: REQUEST_CHANGES"));
-        // New: diff scope instructions
+        // Diff scope instructions
         assert!(prompt.contains("IN SCOPE for critique"));
         assert!(prompt.contains("OFF-DIFF-FINDING"));
         assert!(prompt.contains("suggestion"));
-        // New: focus scope
+        // Focus scope
         assert!(prompt.contains(&role.focus));
     }
 
     #[test]
     fn test_build_reviewer_prompt_truncation() {
-        let role = &default_reviewer_roles()[0];
+        let role = &test_reviewer_roles()[0];
         let large_diff = "x".repeat(60_000);
         let prompt = build_reviewer_prompt(role, &large_diff, "feat/test");
 
@@ -1458,14 +1471,11 @@ mod tests {
     }
 
     #[test]
-    fn test_review_swarm_no_roles() {
+    fn test_review_swarm_no_reviewers_dir() {
         let conn = setup_db();
         let config = Config::default();
 
-        // Create a review config with empty roles
-        let review_mgr = ReviewConfigManager::new(&conn);
-        review_mgr.upsert("r1", &[], true, true).unwrap();
-
+        // The worktree path /tmp/ws/feat-test has no .conductor/reviewers/ dir
         let swarm_config = ReviewSwarmConfig::default();
         let result = run_review_swarm(&ReviewSwarmInput {
             conn: &conn,
@@ -1482,7 +1492,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
-        assert!(err.contains("No reviewer roles"));
+        assert!(err.contains(".conductor/reviewers/"));
     }
 
     #[test]
@@ -1684,16 +1694,6 @@ mod tests {
     #[test]
     fn test_auto_merge_on_approval() {
         let conn = setup_db();
-
-        // Set up review config with auto_merge enabled
-        let review_mgr = ReviewConfigManager::new(&conn);
-        let roles = vec![ReviewerRole {
-            name: "test".to_string(),
-            focus: "Test".to_string(),
-            system_prompt: "Test".to_string(),
-            required: true,
-        }];
-        review_mgr.upsert("r1", &roles, false, true).unwrap();
 
         // We can't fully test the swarm (needs tmux), but we can verify
         // that the merge queue manager correctly enqueues

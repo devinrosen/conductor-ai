@@ -317,5 +317,14 @@ pub fn run(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Migration 019: drop review_configs table (reviewer roles now file-based).
+    if version < 19 {
+        conn.execute_batch(include_str!("migrations/019_drop_review_configs.sql"))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '19')",
+            [],
+        )?;
+    }
+
     Ok(())
 }
