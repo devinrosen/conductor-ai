@@ -74,6 +74,61 @@ conductor-web                        # After install
 cargo run --bin conductor-web        # Without installing
 ```
 
+## PR Review Swarm
+
+Conductor can run a multi-agent review swarm against a PR — spawning one AI reviewer per role and aggregating the results into a single PR comment.
+
+### Reviewer roles
+
+Each reviewer is a Markdown file in `.conductor/reviewers/` at the repo root. The filename (minus `.md`) is used as the role name if no `name` is set in the frontmatter.
+
+**File format** — YAML frontmatter + Markdown body:
+
+```markdown
+---
+name: security
+description: Input validation, auth gaps, injection risks, secrets in code
+model: opus
+required: true
+---
+
+You are a security-focused code reviewer working on a Rust CLI tool.
+Focus exclusively on:
+- Command injection risks in subprocess calls
+- Path traversal in file system operations
+- Authentication and authorization issues
+...
+```
+
+**Frontmatter fields:**
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `name` | no | filename stem | Short identifier used in output and PR comments |
+| `description` | no | filename stem | Human-readable focus area shown in the PR comment |
+| `model` | no | — | Claude model to use (e.g. `opus`, `sonnet`) |
+| `required` | no | `true` | If `true`, blocking findings from this reviewer prevent auto-merge |
+
+The Markdown body becomes the reviewer's system prompt.
+
+### Swarm settings
+
+Create `.conductor/review.toml` in the repo root to control swarm-level behavior:
+
+```toml
+# Post an aggregated review comment to the GitHub PR (default: true).
+post_to_pr = true
+
+# Auto-enqueue for merge when all required reviewers approve (default: true).
+auto_merge = true
+```
+
+Both settings default to `true` — the file is optional.
+
+### Lookup order
+
+When a review runs, Conductor looks for `.conductor/reviewers/` in the PR branch worktree first, then falls back to the main repo checkout. This lets you develop and test new reviewer roles in a branch before merging them. See the trust model note in `conductor-core/src/review_config.rs` if your repo has untrusted external contributors.
+
 ## Architecture
 
 Four crates in a Cargo workspace:

@@ -151,6 +151,20 @@ pub fn load_review_settings(repo_path: &str) -> Result<ReviewSettings> {
 /// branch before merging), then falls back to `repo_path` (the main checkout).
 ///
 /// Returns an error with a helpful message if neither location has the directory.
+///
+/// # Trust model
+///
+/// Reviewer files are treated as trusted repository content. This tool is
+/// designed for single-owner or small-team repos where all contributors with
+/// push access are trusted. In that context, a PR author may include
+/// `.conductor/reviewers/*.md` changes in their branch, and those changes will
+/// be used when reviewing that PR — intentionally, so that reviewer roles can be
+/// developed and tested in-branch before being merged.
+///
+/// If you run this against repos with untrusted external contributors, be aware
+/// that a PR author could modify reviewer system prompts for their own PR. In
+/// that environment, either restrict the review swarm to protected branches or
+/// remove the worktree-first lookup so only the main-branch reviewers are used.
 pub fn load_reviewer_roles(worktree_path: &str, repo_path: &str) -> Result<Vec<ReviewerRole>> {
     // Prefer the worktree so new/modified reviewer files can be tested in-branch.
     // Fall back to the main repo checkout when the worktree doesn't have them.
