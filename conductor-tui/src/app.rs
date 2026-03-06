@@ -424,14 +424,7 @@ impl App {
                 self.state.data.tickets = payload.tickets;
                 self.state.data.latest_agent_runs = payload.latest_agent_runs;
                 self.state.data.ticket_agent_totals = payload.ticket_agent_totals;
-                // Fetch pending feedback for the selected worktree
-                self.state.data.pending_feedback =
-                    self.state.selected_worktree_id.as_ref().and_then(|wt_id| {
-                        AgentManager::new(&self.conn)
-                            .pending_feedback_for_worktree(wt_id)
-                            .ok()
-                            .flatten()
-                    });
+                self.refresh_pending_feedback();
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();
                 self.clamp_indices();
@@ -477,14 +470,7 @@ impl App {
 
         self.state.data.latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
 
-        // Fetch pending feedback for the currently selected worktree
-        self.state.data.pending_feedback =
-            self.state.selected_worktree_id.as_ref().and_then(|wt_id| {
-                agent_mgr
-                    .pending_feedback_for_worktree(wt_id)
-                    .ok()
-                    .flatten()
-            });
+        self.refresh_pending_feedback();
 
         self.state.data.rebuild_maps();
         self.reload_agent_events();
@@ -2713,6 +2699,16 @@ impl App {
     }
 
     // ── Agent handlers (tmux-based) ────────────────────────────────────
+
+    fn refresh_pending_feedback(&mut self) {
+        self.state.data.pending_feedback =
+            self.state.selected_worktree_id.as_ref().and_then(|wt_id| {
+                AgentManager::new(&self.conn)
+                    .pending_feedback_for_worktree(wt_id)
+                    .ok()
+                    .flatten()
+            });
+    }
 
     /// Returns `true` (and sets a status message) if the worktree already has
     /// an active agent, meaning the caller should abort.

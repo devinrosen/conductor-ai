@@ -1115,13 +1115,7 @@ impl<'a> AgentManager<'a> {
             params![response, now, feedback_id],
         )?;
 
-        // Transition the run back to "running"
-        self.conn.execute(
-            "UPDATE agent_runs SET status = 'running' \
-             WHERE id = (SELECT run_id FROM feedback_requests WHERE id = ?1) \
-             AND status = 'waiting_for_feedback'",
-            params![feedback_id],
-        )?;
+        self.resume_run_after_feedback(feedback_id)?;
 
         // Return updated feedback request
         let req = self.conn.query_row(
@@ -1144,14 +1138,19 @@ impl<'a> AgentManager<'a> {
             params![now, feedback_id],
         )?;
 
-        // Transition the run back to "running"
+        self.resume_run_after_feedback(feedback_id)?;
+
+        Ok(())
+    }
+
+    /// Transition a run back to "running" after feedback is resolved.
+    fn resume_run_after_feedback(&self, feedback_id: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE agent_runs SET status = 'running' \
              WHERE id = (SELECT run_id FROM feedback_requests WHERE id = ?1) \
              AND status = 'waiting_for_feedback'",
             params![feedback_id],
         )?;
-
         Ok(())
     }
 
