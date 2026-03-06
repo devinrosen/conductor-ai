@@ -1,5 +1,6 @@
 import type { AgentRun } from "../../api/types";
 import { isActiveRun, statusColors, statusLabels } from "../../utils/agentStats";
+import { StatusPulseBadge } from "../shared/StatusPulseBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 import { ChildRunsList } from "./ChildRunsList";
 
@@ -83,12 +84,7 @@ export function AgentStatusDisplay({
           >
             {statusLabels[run.status] ?? run.status}
           </span>
-          {run.status === "running" && (
-            <span className="inline-block w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
-          )}
-          {run.status === "waiting_for_feedback" && (
-            <span className="inline-block w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
-          )}
+          <StatusPulseBadge status={run.status} />
           {hasChildren && (
             <span className="inline-block px-2 py-0.5 text-xs font-medium rounded-full bg-indigo-100 text-indigo-700">
               {childRuns.length} child{childRuns.length !== 1 ? "ren" : ""}
