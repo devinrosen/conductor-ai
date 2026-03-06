@@ -98,6 +98,23 @@ pub fn api_router() -> Router<AppState> {
             "/api/worktrees/{id}/agent/created-issues",
             get(agents::list_created_issues),
         )
+        // Agent feedback (human-in-the-loop)
+        .route(
+            "/api/worktrees/{id}/agent/feedback",
+            get(agents::get_pending_feedback).post(agents::request_feedback),
+        )
+        .route(
+            "/api/worktrees/{id}/agent/feedback/{feedback_id}/respond",
+            post(agents::submit_feedback),
+        )
+        .route(
+            "/api/worktrees/{id}/agent/feedback/{feedback_id}/dismiss",
+            post(agents::dismiss_feedback),
+        )
+        .route(
+            "/api/worktrees/{id}/agent/runs/{run_id}/feedback",
+            get(agents::list_run_feedback),
+        )
         // Issue Sources
         .route(
             "/api/repos/{id}/sources",

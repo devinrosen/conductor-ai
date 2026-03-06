@@ -4,7 +4,7 @@ CREATE TABLE agent_runs (
     claude_session_id TEXT,
     prompt            TEXT NOT NULL,
     status            TEXT NOT NULL DEFAULT 'running'
-                      CHECK (status IN ('running','completed','failed','cancelled')),
+                      CHECK (status IN ('running','completed','failed','cancelled','waiting_for_feedback')),
     result_text       TEXT,
     cost_usd          REAL,
     num_turns         INTEGER,

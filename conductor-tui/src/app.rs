@@ -316,6 +316,8 @@ impl App {
             Action::LaunchAgent => self.handle_launch_agent(),
             Action::OrchestrateAgent => self.handle_orchestrate_agent(),
             Action::StopAgent => self.handle_stop_agent(),
+            Action::SubmitFeedback => self.handle_submit_feedback(),
+            Action::DismissFeedback => self.handle_dismiss_feedback(),
             Action::ViewAgentLog => self.handle_view_agent_log(),
             Action::CopyLastCodeBlock => self.handle_copy_last_code_block(),
             Action::ExpandAgentEvent => self.handle_expand_agent_event(),
@@ -422,6 +424,15 @@ impl App {
                 self.state.data.tickets = payload.tickets;
                 self.state.data.latest_agent_runs = payload.latest_agent_runs;
                 self.state.data.ticket_agent_totals = payload.ticket_agent_totals;
+                // Fetch pending feedback for the selected worktree if not provided
+                self.state.data.pending_feedback = payload.pending_feedback.or_else(|| {
+                    self.state.selected_worktree_id.as_ref().and_then(|wt_id| {
+                        AgentManager::new(&self.conn)
+                            .pending_feedback_for_worktree(wt_id)
+                            .ok()
+                            .flatten()
+                    })
+                });
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();
                 self.clamp_indices();
@@ -466,6 +477,16 @@ impl App {
         self.state.data.tickets = ticket_syncer.list(None).unwrap_or_default();
 
         self.state.data.latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
+
+        // Fetch pending feedback for the currently selected worktree
+        self.state.data.pending_feedback =
+            self.state.selected_worktree_id.as_ref().and_then(|wt_id| {
+                agent_mgr
+                    .pending_feedback_for_worktree(wt_id)
+                    .ok()
+                    .flatten()
+            });
+
         self.state.data.rebuild_maps();
         self.reload_agent_events();
         self.clamp_indices();
@@ -1436,6 +1457,29 @@ impl App {
                     }
                 }
                 let _ = repo_id;
+            }
+            InputAction::FeedbackResponse {
+                feedback_id,
+                run_id,
+            } => {
+                if value.is_empty() {
+                    return;
+                }
+                let mgr = AgentManager::new(&self.conn);
+                match mgr.submit_feedback(&feedback_id, &value) {
+                    Ok(_) => {
+                        self.state.status_message =
+                            Some("Feedback submitted — agent resumed".to_string());
+                        self.state.data.pending_feedback = None;
+                        self.refresh_data();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Failed to submit feedback: {e}"),
+                        };
+                    }
+                }
+                let _ = run_id;
             }
         }
     }
@@ -2684,17 +2728,26 @@ impl App {
             return;
         };
 
-        // Check if there's already a running agent for this worktree
-        let has_running = self
+        // Check if there's already a running or waiting agent for this worktree
+        let agent_status = self
             .state
             .data
             .latest_agent_runs
             .get(&wt.id)
-            .is_some_and(|run| run.status == "running");
+            .map(|run| run.status.clone());
 
-        if has_running {
-            self.state.status_message = Some("Agent already running — press x to stop".to_string());
-            return;
+        match agent_status.as_deref() {
+            Some("running") => {
+                self.state.status_message =
+                    Some("Agent already running — press x to stop".to_string());
+                return;
+            }
+            Some("waiting_for_feedback") => {
+                self.state.status_message =
+                    Some("Agent waiting for feedback — press f to respond".to_string());
+                return;
+            }
+            _ => {}
         }
 
         // Check for existing session to resume (from DB)
@@ -2758,7 +2811,7 @@ impl App {
             return;
         };
 
-        if run.status != "running" {
+        if !matches!(run.status.as_str(), "running" | "waiting_for_feedback") {
             return;
         }
 
@@ -2786,6 +2839,48 @@ impl App {
         self.refresh_data();
     }
 
+    fn handle_submit_feedback(&mut self) {
+        let feedback = self.state.data.pending_feedback.clone();
+        let Some(fb) = feedback else {
+            self.state.status_message = Some("No pending feedback request".to_string());
+            return;
+        };
+
+        // Open a text area modal for the user to type their response
+        let mut textarea = tui_textarea::TextArea::default();
+        textarea.set_placeholder_text("Type your feedback response...");
+
+        self.state.modal = Modal::AgentPrompt {
+            title: format!("Agent Feedback: {}", &fb.prompt),
+            prompt: fb.prompt.clone(),
+            textarea: Box::new(textarea),
+            on_submit: InputAction::FeedbackResponse {
+                feedback_id: fb.id.clone(),
+                run_id: fb.run_id.clone(),
+            },
+        };
+    }
+
+    fn handle_dismiss_feedback(&mut self) {
+        let feedback = self.state.data.pending_feedback.clone();
+        let Some(fb) = feedback else {
+            self.state.status_message = Some("No pending feedback request".to_string());
+            return;
+        };
+
+        let mgr = AgentManager::new(&self.conn);
+        match mgr.dismiss_feedback(&fb.id) {
+            Ok(()) => {
+                self.state.status_message = Some("Feedback dismissed — agent resumed".to_string());
+                self.state.data.pending_feedback = None;
+                self.refresh_data();
+            }
+            Err(e) => {
+                self.state.status_message = Some(format!("Failed to dismiss feedback: {e}"));
+            }
+        }
+    }
+
     fn handle_orchestrate_agent(&mut self) {
         let wt = self
             .state
@@ -2799,17 +2894,26 @@ impl App {
             return;
         };
 
-        // Check if there's already a running agent for this worktree
-        let has_running = self
+        // Check if there's already a running or waiting agent for this worktree
+        let agent_status = self
             .state
             .data
             .latest_agent_runs
             .get(&wt.id)
-            .is_some_and(|run| run.status == "running");
+            .map(|run| run.status.clone());
 
-        if has_running {
-            self.state.status_message = Some("Agent already running — press x to stop".to_string());
-            return;
+        match agent_status.as_deref() {
+            Some("running") => {
+                self.state.status_message =
+                    Some("Agent already running — press x to stop".to_string());
+                return;
+            }
+            Some("waiting_for_feedback") => {
+                self.state.status_message =
+                    Some("Agent waiting for feedback — press f to respond".to_string());
+                return;
+            }
+            _ => {}
         }
 
         // Pre-fill prompt from linked ticket if available

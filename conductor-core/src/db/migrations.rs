@@ -264,5 +264,57 @@ pub fn run(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Migration 018: feedback_requests table + update agent_runs CHECK constraint.
+    // The agent_runs table must be recreated to add 'waiting_for_feedback' to the
+    // status CHECK constraint. PRAGMA foreign_keys = OFF must be set outside a
+    // transaction, so we handle the table swap in Rust code.
+    let has_feedback_requests: bool = conn
+        .prepare("SELECT id FROM feedback_requests LIMIT 0")
+        .is_ok();
+    if !has_feedback_requests {
+        // Temporarily disable FK enforcement for the table swap
+        conn.pragma_update(None, "foreign_keys", "off")?;
+
+        conn.execute_batch(
+            "CREATE TABLE agent_runs_new (
+                id                TEXT PRIMARY KEY,
+                worktree_id       TEXT NOT NULL REFERENCES worktrees(id) ON DELETE CASCADE,
+                claude_session_id TEXT,
+                prompt            TEXT NOT NULL,
+                status            TEXT NOT NULL DEFAULT 'running'
+                                  CHECK (status IN ('running','completed','failed','cancelled','waiting_for_feedback')),
+                result_text       TEXT,
+                cost_usd          REAL,
+                num_turns         INTEGER,
+                duration_ms       INTEGER,
+                started_at        TEXT NOT NULL,
+                ended_at          TEXT,
+                tmux_window       TEXT,
+                log_file          TEXT,
+                model             TEXT,
+                plan              TEXT,
+                parent_run_id     TEXT REFERENCES agent_runs_new(id) ON DELETE SET NULL
+            );
+            INSERT INTO agent_runs_new SELECT id, worktree_id, claude_session_id, prompt, status,
+                result_text, cost_usd, num_turns, duration_ms, started_at, ended_at,
+                tmux_window, log_file, model, plan, parent_run_id FROM agent_runs;
+            DROP TABLE agent_runs;
+            ALTER TABLE agent_runs_new RENAME TO agent_runs;
+            CREATE INDEX IF NOT EXISTS idx_agent_runs_parent ON agent_runs(parent_run_id);",
+        )?;
+
+        // Re-enable FK enforcement
+        conn.pragma_update(None, "foreign_keys", "on")?;
+
+        // Now create the feedback_requests table
+        conn.execute_batch(include_str!("migrations/018_feedback_requests.sql"))?;
+    }
+    if version < 18 {
+        conn.execute(
+            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '18')",
+            [],
+        )?;
+    }
+
     Ok(())
 }

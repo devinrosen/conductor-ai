@@ -21,6 +21,18 @@ pub enum ConductorEvent {
     AgentStopped { run_id: String, worktree_id: String },
     #[serde(rename = "agent_event")]
     AgentEvent { run_id: String, worktree_id: String },
+    #[serde(rename = "feedback_requested")]
+    FeedbackRequested {
+        run_id: String,
+        worktree_id: String,
+        feedback_id: String,
+    },
+    #[serde(rename = "feedback_submitted")]
+    FeedbackSubmitted {
+        run_id: String,
+        worktree_id: String,
+        feedback_id: String,
+    },
     #[serde(rename = "work_targets_changed")]
     WorkTargetsChanged,
     #[serde(rename = "issue_sources_changed")]
@@ -39,6 +51,8 @@ impl ConductorEvent {
             Self::AgentStarted { .. } => "agent_started",
             Self::AgentStopped { .. } => "agent_stopped",
             Self::AgentEvent { .. } => "agent_event",
+            Self::FeedbackRequested { .. } => "feedback_requested",
+            Self::FeedbackSubmitted { .. } => "feedback_submitted",
             Self::WorkTargetsChanged => "work_targets_changed",
             Self::IssueSourcesChanged { .. } => "issue_sources_changed",
         }
@@ -150,6 +164,22 @@ mod tests {
                     worktree_id: "".into(),
                 },
                 "agent_event",
+            ),
+            (
+                ConductorEvent::FeedbackRequested {
+                    run_id: "".into(),
+                    worktree_id: "".into(),
+                    feedback_id: "".into(),
+                },
+                "feedback_requested",
+            ),
+            (
+                ConductorEvent::FeedbackSubmitted {
+                    run_id: "".into(),
+                    worktree_id: "".into(),
+                    feedback_id: "".into(),
+                },
+                "feedback_submitted",
             ),
             (ConductorEvent::WorkTargetsChanged, "work_targets_changed"),
             (

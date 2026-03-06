@@ -114,6 +114,14 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         lines.push(Line::from(""));
         lines.push(render_agent_status_line(run, &state.data.agent_totals));
 
+        // Show pending feedback request prompt
+        if let Some(ref fb) = state.data.pending_feedback {
+            lines.push(Line::from(vec![
+                Span::styled("  Feedback: ", Style::default().fg(Color::Magenta)),
+                Span::styled(fb.prompt.clone(), Style::default().fg(Color::White)),
+            ]));
+        }
+
         // Show child runs if this is a parent (supervisor) run
         for child in &state.data.child_runs {
             lines.push(render_child_run_line(child));
@@ -170,12 +178,19 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     lines.push(Line::from(""));
 
     let actions_text = if wt.is_active() {
+        let has_waiting = state
+            .data
+            .latest_agent_runs
+            .get(&wt.id)
+            .is_some_and(|run| run.status == "waiting_for_feedback");
         let has_log = state
             .data
             .latest_agent_runs
             .get(&wt.id)
             .is_some_and(|run| run.log_file.is_some());
-        if has_log {
+        if has_waiting {
+            "Actions: f=respond  F=dismiss  x=stop  r=agent  e=expand  m=model  j/k=scroll  w=work  p=push  P=PR  l=link  d=del  Esc=back"
+        } else if has_log {
             "Actions: r=agent  x=stop  L=log  y=copy  e=expand  m=model  j/k=scroll  w=work  p=push  P=PR  l=link  d=del  Esc=back"
         } else {
             "Actions: r=agent  x=stop  e=expand  m=model  j/k=scroll  w=work  p=push  P=PR  l=link  d=del  Esc=back"
@@ -387,6 +402,17 @@ fn render_agent_status_line(
                 Span::styled(" — press x to stop", Style::default().fg(Color::DarkGray)),
             ])
         }
+        "waiting_for_feedback" => Line::from(vec![
+            Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "[waiting for feedback]",
+                Style::default().fg(Color::Magenta),
+            ),
+            Span::styled(
+                " — press f to respond, F to dismiss",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
         "completed" => {
             let mut spans = vec![
                 Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
@@ -455,6 +481,7 @@ fn render_child_run_line(run: &conductor_core::agent::AgentRun) -> Line<'static>
         "completed" => ("completed", Color::Green),
         "failed" => ("failed", Color::Red),
         "cancelled" => ("cancelled", Color::DarkGray),
+        "waiting_for_feedback" => ("waiting", Color::Magenta),
         other => (other, Color::White),
     };
     let status_str = format!("[{status_text}]");

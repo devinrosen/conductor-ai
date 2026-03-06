@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use conductor_core::agent::{
     parse_agent_log, AgentCreatedIssue, AgentEvent, AgentManager, AgentRun, AgentRunEvent,
-    RunTreeTotals, TicketAgentTotals,
+    FeedbackRequest, RunTreeTotals, TicketAgentTotals,
 };
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
@@ -95,7 +95,7 @@ pub async fn start_agent(
     // Check if there's already a running agent
     let agent_mgr = AgentManager::new(&db);
     if let Some(existing) = agent_mgr.latest_for_worktree(&worktree_id)? {
-        if existing.status == "running" {
+        if matches!(existing.status.as_str(), "running" | "waiting_for_feedback") {
             return Err(conductor_core::error::ConductorError::Agent(
                 "Agent already running for this worktree".to_string(),
             )
@@ -213,7 +213,7 @@ pub async fn stop_agent(
             )
         })?;
 
-    if run.status != "running" {
+    if !matches!(run.status.as_str(), "running" | "waiting_for_feedback") {
         return Err(conductor_core::error::ConductorError::Agent(
             "Agent is not running".to_string(),
         )
@@ -524,7 +524,7 @@ pub async fn orchestrate_agent(
     // Check if there's already a running agent
     let agent_mgr = AgentManager::new(&db);
     if let Some(existing) = agent_mgr.latest_for_worktree(&worktree_id)? {
-        if existing.status == "running" {
+        if matches!(existing.status.as_str(), "running" | "waiting_for_feedback") {
             return Err(conductor_core::error::ConductorError::Agent(
                 "Agent already running for this worktree".to_string(),
             )
@@ -614,6 +614,117 @@ pub async fn orchestrate_agent(
             )
         }
     }
+}
+
+// ── Feedback (human-in-the-loop) ──────────────────────────────────────
+
+/// Get the pending feedback request for a worktree's running agent (if any).
+pub async fn get_pending_feedback(
+    State(state): State<AppState>,
+    Path(worktree_id): Path<String>,
+) -> Result<Json<Option<FeedbackRequest>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+    let feedback = mgr.pending_feedback_for_worktree(&worktree_id)?;
+    Ok(Json(feedback))
+}
+
+/// List all feedback requests for a specific run.
+pub async fn list_run_feedback(
+    State(state): State<AppState>,
+    Path((_worktree_id, run_id)): Path<(String, String)>,
+) -> Result<Json<Vec<FeedbackRequest>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+    let feedback = mgr.list_feedback_for_run(&run_id)?;
+    Ok(Json(feedback))
+}
+
+#[derive(Deserialize)]
+pub struct RequestFeedbackBody {
+    pub prompt: String,
+}
+
+/// Create a feedback request for a running agent (pauses the agent).
+pub async fn request_feedback(
+    State(state): State<AppState>,
+    Path(worktree_id): Path<String>,
+    Json(body): Json<RequestFeedbackBody>,
+) -> Result<(StatusCode, Json<FeedbackRequest>), ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+
+    let run = mgr.latest_for_worktree(&worktree_id)?.ok_or_else(|| {
+        conductor_core::error::ConductorError::Agent(
+            "No agent run found for this worktree".to_string(),
+        )
+    })?;
+
+    if run.status != "running" {
+        return Err(conductor_core::error::ConductorError::Agent(
+            "Agent is not running".to_string(),
+        )
+        .into());
+    }
+
+    let feedback = mgr.request_feedback(&run.id, &body.prompt)?;
+
+    state.events.emit(ConductorEvent::FeedbackRequested {
+        run_id: run.id.clone(),
+        worktree_id: worktree_id.clone(),
+        feedback_id: feedback.id.clone(),
+    });
+
+    Ok((StatusCode::CREATED, Json(feedback)))
+}
+
+#[derive(Deserialize)]
+pub struct SubmitFeedbackBody {
+    pub response: String,
+}
+
+/// Submit a response to a pending feedback request (resumes the agent).
+pub async fn submit_feedback(
+    State(state): State<AppState>,
+    Path((worktree_id, feedback_id)): Path<(String, String)>,
+    Json(body): Json<SubmitFeedbackBody>,
+) -> Result<Json<FeedbackRequest>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+
+    let feedback = mgr.submit_feedback(&feedback_id, &body.response)?;
+
+    state.events.emit(ConductorEvent::FeedbackSubmitted {
+        run_id: feedback.run_id.clone(),
+        worktree_id: worktree_id.clone(),
+        feedback_id: feedback.id.clone(),
+    });
+
+    Ok(Json(feedback))
+}
+
+/// Dismiss a pending feedback request without responding (resumes the agent).
+pub async fn dismiss_feedback(
+    State(state): State<AppState>,
+    Path((worktree_id, feedback_id)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+
+    // Get the feedback to find the run_id for the SSE event
+    let feedback = mgr.get_feedback(&feedback_id)?;
+
+    mgr.dismiss_feedback(&feedback_id)?;
+
+    if let Some(fb) = feedback {
+        state.events.emit(ConductorEvent::FeedbackSubmitted {
+            run_id: fb.run_id,
+            worktree_id: worktree_id.clone(),
+            feedback_id: feedback_id.clone(),
+        });
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {

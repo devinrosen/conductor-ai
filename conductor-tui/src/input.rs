@@ -240,12 +240,18 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             .and_then(|wt_id| state.data.latest_agent_runs.get(wt_id));
 
         let has_running_agent = agent_run.is_some_and(|run| run.status == "running");
+        let has_waiting_feedback =
+            agent_run.is_some_and(|run| run.status == "waiting_for_feedback");
         let has_log = agent_run.is_some_and(|run| run.log_file.is_some());
 
         match key.code {
             KeyCode::Char('r') => return Action::LaunchAgent,
             KeyCode::Char('o') if !has_running_agent => return Action::OrchestrateAgent,
-            KeyCode::Char('x') if has_running_agent => return Action::StopAgent,
+            KeyCode::Char('x') if has_running_agent || has_waiting_feedback => {
+                return Action::StopAgent
+            }
+            KeyCode::Char('f') if has_waiting_feedback => return Action::SubmitFeedback,
+            KeyCode::Char('F') if has_waiting_feedback => return Action::DismissFeedback,
             KeyCode::Char('L') if has_log => return Action::ViewAgentLog,
             KeyCode::Char('y') if has_log => return Action::CopyLastCodeBlock,
             KeyCode::Char('e') => return Action::ExpandAgentEvent,

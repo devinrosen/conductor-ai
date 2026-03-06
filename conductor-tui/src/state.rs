@@ -2,7 +2,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 
-use conductor_core::agent::{AgentCreatedIssue, AgentRun, AgentRunEvent, TicketAgentTotals};
+use conductor_core::agent::{
+    AgentCreatedIssue, AgentRun, AgentRunEvent, FeedbackRequest, TicketAgentTotals,
+};
 use conductor_core::config::WorkTarget;
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::issue_source::IssueSource;
@@ -283,6 +285,11 @@ pub enum InputAction {
         repo_id: String,
         slug: String,
     },
+    /// Submit a response to a pending feedback request.
+    FeedbackResponse {
+        feedback_id: String,
+        run_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -312,6 +319,8 @@ pub struct DataCache {
     pub ticket_worktrees: HashMap<String, Vec<Worktree>>,
     /// Issues created by agents for the currently viewed worktree
     pub agent_created_issues: Vec<AgentCreatedIssue>,
+    /// Pending feedback request for the currently viewed worktree (if any)
+    pub pending_feedback: Option<FeedbackRequest>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.

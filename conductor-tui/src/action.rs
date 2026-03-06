@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use conductor_core::agent::{AgentRun, TicketAgentTotals};
+use conductor_core::agent::{AgentRun, FeedbackRequest, TicketAgentTotals};
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::Ticket;
@@ -25,6 +25,8 @@ pub struct DataRefreshedPayload {
     pub tickets: Vec<Ticket>,
     pub latest_agent_runs: HashMap<String, AgentRun>,
     pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
+    /// Pending feedback request for the currently selected worktree (if any).
+    pub pending_feedback: Option<FeedbackRequest>,
 }
 
 /// Every user intent or background result flows through this enum.
@@ -100,6 +102,8 @@ pub enum Action {
     ExpandAgentEvent,
     AgentActivityDown,
     AgentActivityUp,
+    SubmitFeedback,
+    DismissFeedback,
     ScrollLeft,
     ScrollRight,
 

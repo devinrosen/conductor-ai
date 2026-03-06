@@ -1403,6 +1403,44 @@ fn run_agent(
                         Ok(db_ev) => last_event_id = Some(db_ev.id),
                         Err(e) => eprintln!("[conductor] Warning: could not persist event: {e}"),
                     }
+
+                    // Detect feedback request markers in agent text output.
+                    // Format: "[NEEDS_FEEDBACK] <prompt text>"
+                    if ev.kind == "text" {
+                        if let Some(feedback_prompt) = ev.summary.strip_prefix("[NEEDS_FEEDBACK] ")
+                        {
+                            eprintln!("[conductor] Agent requesting feedback: {feedback_prompt}");
+                            match mgr.request_feedback(run_id, feedback_prompt) {
+                                Ok(fb) => {
+                                    eprintln!(
+                                        "[conductor] Waiting for human feedback (id: {})...",
+                                        fb.id
+                                    );
+                                    // Poll for feedback response
+                                    if let Some(response) = wait_for_feedback_response(&mgr, &fb.id)
+                                    {
+                                        eprintln!("[conductor] Feedback received: {response}");
+                                        // Inject feedback as a user event
+                                        let fb_now = chrono::Utc::now().to_rfc3339();
+                                        let _ = mgr.create_event(
+                                            run_id,
+                                            "feedback",
+                                            &format!("Human feedback: {response}"),
+                                            &fb_now,
+                                            None,
+                                        );
+                                    } else {
+                                        eprintln!("[conductor] Feedback dismissed, continuing...");
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "[conductor] Warning: could not create feedback request: {e}"
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1464,6 +1502,31 @@ fn run_agent(
     );
 
     Ok(())
+}
+
+/// Poll the database for a feedback response. Returns the response text if responded,
+/// or None if dismissed. Polls every 2 seconds for up to 1 hour.
+fn wait_for_feedback_response(mgr: &AgentManager, feedback_id: &str) -> Option<String> {
+    let max_polls = 1800; // 2s * 1800 = 1 hour
+    for _ in 0..max_polls {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        match mgr.get_feedback(feedback_id) {
+            Ok(Some(fb)) => match fb.status.as_str() {
+                "responded" => return fb.response,
+                "dismissed" => return None,
+                _ => continue, // still pending
+            },
+            Ok(None) => return None, // feedback request deleted
+            Err(e) => {
+                eprintln!("[conductor] Warning: error polling feedback: {e}");
+                continue;
+            }
+        }
+    }
+
+    eprintln!("[conductor] Feedback request timed out after 1 hour");
+    None
 }
 
 /// Run the orchestration: generate a plan, then spawn child agents for each step.
