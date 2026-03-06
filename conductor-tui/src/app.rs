@@ -1443,10 +1443,7 @@ impl App {
                 }
                 let _ = repo_id;
             }
-            InputAction::FeedbackResponse {
-                feedback_id,
-                run_id,
-            } => {
+            InputAction::FeedbackResponse { feedback_id } => {
                 if value.is_empty() {
                     return;
                 }
@@ -1464,7 +1461,6 @@ impl App {
                         };
                     }
                 }
-                let _ = run_id;
             }
         }
     }
@@ -2857,7 +2853,6 @@ impl App {
             textarea: Box::new(textarea),
             on_submit: InputAction::FeedbackResponse {
                 feedback_id: fb.id.clone(),
-                run_id: fb.run_id.clone(),
             },
         };
     }

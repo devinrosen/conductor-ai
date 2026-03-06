@@ -300,7 +300,8 @@ pub fn run(conn: &Connection) -> Result<()> {
                 tmux_window, log_file, model, plan, parent_run_id FROM agent_runs;
             DROP TABLE agent_runs;
             ALTER TABLE agent_runs_new RENAME TO agent_runs;
-            CREATE INDEX IF NOT EXISTS idx_agent_runs_parent ON agent_runs(parent_run_id);",
+            CREATE INDEX IF NOT EXISTS idx_agent_runs_parent ON agent_runs(parent_run_id);
+            CREATE INDEX IF NOT EXISTS idx_agent_runs_worktree ON agent_runs(worktree_id);",
         )?;
 
         // Re-enable FK enforcement

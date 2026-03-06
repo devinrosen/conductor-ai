@@ -1405,9 +1405,9 @@ fn run_agent(
                     }
 
                     // Detect feedback request markers in agent text output.
-                    // Format: "[NEEDS_FEEDBACK] <prompt text>"
                     if ev.kind == "text" {
-                        if let Some(feedback_prompt) = ev.summary.strip_prefix("[NEEDS_FEEDBACK] ")
+                        if let Some(feedback_prompt) =
+                            conductor_core::agent::parse_feedback_marker(&ev.summary)
                         {
                             eprintln!("[conductor] Agent requesting feedback: {feedback_prompt}");
                             match mgr.request_feedback(run_id, feedback_prompt) {

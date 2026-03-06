@@ -14,6 +14,14 @@ use crate::error::Result;
 /// import it upward, keeping the dependency flow unidirectional.
 pub const PR_REVIEW_SWARM_PROMPT_PREFIX: &str = "PR review swarm";
 
+/// Protocol marker that agents emit to request human feedback.
+pub const FEEDBACK_MARKER: &str = "[NEEDS_FEEDBACK] ";
+
+/// If `text` is a feedback request line, return the prompt portion.
+pub fn parse_feedback_marker(text: &str) -> Option<&str> {
+    text.strip_prefix(FEEDBACK_MARKER)
+}
+
 /// A single step in an agent's two-phase execution plan.
 /// Stored as individual records in the `agent_run_steps` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1164,11 +1172,7 @@ impl<'a> AgentManager<'a> {
             row_to_feedback_request,
         );
 
-        match result {
-            Ok(req) => Ok(Some(req)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        optional_row(result)
     }
 
     /// Get a feedback request by ID.
@@ -1180,11 +1184,7 @@ impl<'a> AgentManager<'a> {
             row_to_feedback_request,
         );
 
-        match result {
-            Ok(req) => Ok(Some(req)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        optional_row(result)
     }
 
     /// List all feedback requests for a run, newest first.
@@ -1213,11 +1213,7 @@ impl<'a> AgentManager<'a> {
             row_to_feedback_request,
         );
 
-        match result {
-            Ok(req) => Ok(Some(req)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        optional_row(result)
     }
 }
 
@@ -1337,6 +1333,16 @@ pub fn build_startup_context(
     );
 
     Some(format!("## Session Context\n\n{}", sections.join("\n\n")))
+}
+
+/// Convert a `rusqlite::Result<T>` into `Result<Option<T>>`, treating
+/// `QueryReturnedNoRows` as `Ok(None)`.
+fn optional_row<T>(result: rusqlite::Result<T>) -> Result<Option<T>> {
+    match result {
+        Ok(val) => Ok(Some(val)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn row_to_feedback_request(row: &rusqlite::Row) -> rusqlite::Result<FeedbackRequest> {

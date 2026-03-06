@@ -279,7 +279,7 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
                         style
                     };
                     (label, s)
-                } else if ev.summary.starts_with("[NEEDS_FEEDBACK]") {
+                } else if conductor_core::agent::parse_feedback_marker(&ev.summary).is_some() {
                     (
                         shorten_paths(&ev.summary, worktree_path),
                         Style::default().fg(Color::Magenta),

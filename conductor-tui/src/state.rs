@@ -288,7 +288,6 @@ pub enum InputAction {
     /// Submit a response to a pending feedback request.
     FeedbackResponse {
         feedback_id: String,
-        run_id: String,
     },
 }
 
