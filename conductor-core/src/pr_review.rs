@@ -978,20 +978,18 @@ struct LogResult {
     is_error: bool,
 }
 
-/// Scan an agent log file for the `result` event (the final JSON line with a `result` field).
-/// Returns `None` if the file doesn't exist or contains no result event.
-fn scan_log_for_result(run_id: &str) -> Option<LogResult> {
-    let path = config::agent_log_path(run_id);
+/// Scan an agent log file at the given path for the `result` event (the final JSON line
+/// with a `result` field). Returns `None` if the file doesn't exist or contains no result.
+fn scan_log_for_result_at(path: &std::path::Path) -> Option<LogResult> {
     let file = std::fs::File::open(path).ok()?;
     let reader = std::io::BufReader::new(file);
-    let mut found: Option<LogResult> = None;
     for line in reader.lines() {
         let Ok(line) = line else { continue };
         let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
         if event.get("result").is_some() {
-            found = Some(LogResult {
+            return Some(LogResult {
                 result_text: event
                     .get("result")
                     .and_then(|v| v.as_str())
@@ -1006,7 +1004,12 @@ fn scan_log_for_result(run_id: &str) -> Option<LogResult> {
             });
         }
     }
-    found
+    None
+}
+
+/// Scan the canonical log file for a given run ID.
+fn scan_log_for_result(run_id: &str) -> Option<LogResult> {
+    scan_log_for_result_at(&config::agent_log_path(run_id))
 }
 
 /// Try to recover a stuck run by scanning its log file for a result event.
@@ -2350,8 +2353,7 @@ mod tests {
     #[test]
     fn test_scan_log_for_result_success() {
         let dir = tempfile::tempdir().unwrap();
-        let run_id = "test-scan-success";
-        let log_path = dir.path().join(format!("{run_id}.log"));
+        let log_path = dir.path().join("test-scan-success.log");
         std::fs::write(
             &log_path,
             r#"{"type":"init","session_id":"s1"}
@@ -2361,33 +2363,7 @@ mod tests {
         )
         .unwrap();
 
-        // Temporarily override the log path by testing scan_log_for_result_from_path
-        // Since scan_log_for_result uses config::agent_log_path, we test the underlying logic
-        let file = std::fs::File::open(&log_path).unwrap();
-        let reader = std::io::BufReader::new(file);
-        let mut found: Option<super::LogResult> = None;
-        for line in reader.lines() {
-            let Ok(line) = line else { continue };
-            let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
-                continue;
-            };
-            if event.get("result").is_some() {
-                found = Some(super::LogResult {
-                    result_text: event
-                        .get("result")
-                        .and_then(|v| v.as_str())
-                        .map(String::from),
-                    cost_usd: event.get("total_cost_usd").and_then(|v| v.as_f64()),
-                    num_turns: event.get("num_turns").and_then(|v| v.as_i64()),
-                    duration_ms: event.get("duration_ms").and_then(|v| v.as_i64()),
-                    is_error: event
-                        .get("is_error")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                });
-            }
-        }
-        let result = found.unwrap();
+        let result = super::scan_log_for_result_at(&log_path).unwrap();
         assert_eq!(result.result_text.as_deref(), Some("All done"));
         assert_eq!(result.cost_usd, Some(0.05));
         assert_eq!(result.num_turns, Some(3));
@@ -2406,31 +2382,7 @@ mod tests {
         )
         .unwrap();
 
-        let file = std::fs::File::open(&log_path).unwrap();
-        let reader = std::io::BufReader::new(file);
-        let mut found: Option<super::LogResult> = None;
-        for line in reader.lines() {
-            let Ok(line) = line else { continue };
-            let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
-                continue;
-            };
-            if event.get("result").is_some() {
-                found = Some(super::LogResult {
-                    result_text: event
-                        .get("result")
-                        .and_then(|v| v.as_str())
-                        .map(String::from),
-                    cost_usd: event.get("total_cost_usd").and_then(|v| v.as_f64()),
-                    num_turns: event.get("num_turns").and_then(|v| v.as_i64()),
-                    duration_ms: event.get("duration_ms").and_then(|v| v.as_i64()),
-                    is_error: event
-                        .get("is_error")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                });
-            }
-        }
-        let result = found.unwrap();
+        let result = super::scan_log_for_result_at(&log_path).unwrap();
         assert!(result.is_error);
         assert_eq!(result.result_text.as_deref(), Some("Something went wrong"));
     }
@@ -2447,31 +2399,7 @@ mod tests {
         )
         .unwrap();
 
-        let file = std::fs::File::open(&log_path).unwrap();
-        let reader = std::io::BufReader::new(file);
-        let mut found: Option<super::LogResult> = None;
-        for line in reader.lines() {
-            let Ok(line) = line else { continue };
-            let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
-                continue;
-            };
-            if event.get("result").is_some() {
-                found = Some(super::LogResult {
-                    result_text: event
-                        .get("result")
-                        .and_then(|v| v.as_str())
-                        .map(String::from),
-                    cost_usd: event.get("total_cost_usd").and_then(|v| v.as_f64()),
-                    num_turns: event.get("num_turns").and_then(|v| v.as_i64()),
-                    duration_ms: event.get("duration_ms").and_then(|v| v.as_i64()),
-                    is_error: event
-                        .get("is_error")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false),
-                });
-            }
-        }
-        assert!(found.is_none());
+        assert!(super::scan_log_for_result_at(&log_path).is_none());
     }
 
     #[test]
