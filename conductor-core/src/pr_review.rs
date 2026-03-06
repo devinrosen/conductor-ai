@@ -988,9 +988,10 @@ fn poll_all_reviewers(
     let watched_ids: HashSet<String> = child_runs.iter().map(|(_, r, _)| r.id.clone()).collect();
 
     // Set up file watcher on the agent-logs directory.
-    // Notifications wake us up so we can scan log files instead of only relying on DB.
-    let (notify_tx, notify_rx) = mpsc::channel::<()>();
-    let _watcher = {
+    // Notifications send the specific run ID that changed so we only scan that file.
+    let (notify_tx, notify_rx) = mpsc::channel::<String>();
+    // Must stay alive: dropping stops the watcher.
+    let _watcher_guard = {
         let log_dir = config::agent_log_dir();
         let _ = std::fs::create_dir_all(&log_dir);
         let ids = watched_ids.clone();
@@ -998,14 +999,12 @@ fn poll_all_reviewers(
         let mut watcher =
             notify::recommended_watcher(move |res: std::result::Result<NotifyEvent, _>| {
                 if let Ok(event) = res {
-                    // Only wake up for files that match our watched run IDs.
-                    let dominated = event.paths.iter().any(|p| {
-                        p.file_stem()
-                            .and_then(|s| s.to_str())
-                            .is_some_and(|stem| ids.contains(stem))
-                    });
-                    if dominated {
-                        let _ = tx.send(());
+                    for p in &event.paths {
+                        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                            if ids.contains(stem) {
+                                let _ = tx.send(stem.to_owned());
+                            }
+                        }
                     }
                 }
             });
@@ -1021,6 +1020,11 @@ fn poll_all_reviewers(
         }
         watcher.ok()
     };
+
+    // Run IDs notified by the file watcher since last poll cycle.
+    // When empty (timeout or first iteration), all pending runs are scanned as a fallback.
+    let mut notified_ids: HashSet<String> = HashSet::new();
+    let mut watcher_triggered = false;
 
     // Helper closure to resolve a completed/failed/cancelled run into a ReviewerResult.
     let resolve_run = |run: &AgentRun, step_idx: usize, role: &ReviewerRole| -> ReviewerResult {
@@ -1112,18 +1116,24 @@ fn poll_all_reviewers(
                         continue;
                     }
                     _ => {
-                        // DB says still running — try recovering from the log file
-                        // in case the producer was killed before updating the DB.
-                        if let Some(recovered) = try_recover_from_log(mgr, &child_run.id) {
-                            match recovered.status {
-                                AgentRunStatus::Completed
-                                | AgentRunStatus::Failed
-                                | AgentRunStatus::Cancelled => {
-                                    results[idx] = Some(resolve_run(&recovered, *step_idx, role));
-                                    pending_count -= 1;
-                                    continue;
+                        // DB says still running — only scan the log file if the
+                        // watcher reported a change for this specific run (or if
+                        // we woke from a timeout, in which case scan all as fallback).
+                        let should_scan =
+                            !watcher_triggered || notified_ids.contains(&child_run.id);
+                        if should_scan {
+                            if let Some(recovered) = try_recover_from_log(mgr, &child_run.id) {
+                                match recovered.status {
+                                    AgentRunStatus::Completed
+                                    | AgentRunStatus::Failed
+                                    | AgentRunStatus::Cancelled => {
+                                        results[idx] =
+                                            Some(resolve_run(&recovered, *step_idx, role));
+                                        pending_count -= 1;
+                                        continue;
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
                         }
                     }
@@ -1170,9 +1180,17 @@ fn poll_all_reviewers(
 
         if pending_count > 0 {
             // Wait for either a file notification or the poll interval, whichever comes first.
-            let _ = notify_rx.recv_timeout(poll_interval);
+            // Collect notified run IDs so only those are log-scanned on the next iteration.
+            notified_ids.clear();
+            watcher_triggered = false;
+            if let Ok(id) = notify_rx.recv_timeout(poll_interval) {
+                notified_ids.insert(id);
+                watcher_triggered = true;
+            }
             // Drain any extra queued notifications before re-checking.
-            while notify_rx.try_recv().is_ok() {}
+            while let Ok(id) = notify_rx.try_recv() {
+                notified_ids.insert(id);
+            }
         }
     }
 
