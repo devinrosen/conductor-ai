@@ -1,18 +1,7 @@
 import type { AgentRun } from "../../api/types";
+import { statusColors, statusLabels } from "../../utils/agentStats";
 import { TimeAgo } from "../shared/TimeAgo";
 import { ChildRunsList } from "./ChildRunsList";
-
-const statusColors: Record<string, string> = {
-  running: "bg-yellow-100 text-yellow-700",
-  waiting_for_feedback: "bg-purple-100 text-purple-700",
-  completed: "bg-green-100 text-green-700",
-  failed: "bg-red-100 text-red-700",
-  cancelled: "bg-gray-100 text-gray-600",
-};
-
-const statusLabels: Record<string, string> = {
-  waiting_for_feedback: "waiting for feedback",
-};
 
 function formatDuration(ms: number): string {
   const seconds = Math.floor(ms / 1000);

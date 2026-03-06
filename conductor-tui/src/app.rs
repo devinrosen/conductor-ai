@@ -424,15 +424,14 @@ impl App {
                 self.state.data.tickets = payload.tickets;
                 self.state.data.latest_agent_runs = payload.latest_agent_runs;
                 self.state.data.ticket_agent_totals = payload.ticket_agent_totals;
-                // Fetch pending feedback for the selected worktree if not provided
-                self.state.data.pending_feedback = payload.pending_feedback.or_else(|| {
+                // Fetch pending feedback for the selected worktree
+                self.state.data.pending_feedback =
                     self.state.selected_worktree_id.as_ref().and_then(|wt_id| {
                         AgentManager::new(&self.conn)
                             .pending_feedback_for_worktree(wt_id)
                             .ok()
                             .flatten()
-                    })
-                });
+                    });
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();
                 self.clamp_indices();
@@ -2715,6 +2714,30 @@ impl App {
 
     // ── Agent handlers (tmux-based) ────────────────────────────────────
 
+    /// Returns `true` (and sets a status message) if the worktree already has
+    /// an active agent, meaning the caller should abort.
+    fn agent_busy_guard(&mut self, worktree_id: &str) -> bool {
+        let status = self
+            .state
+            .data
+            .latest_agent_runs
+            .get(worktree_id)
+            .map(|run| run.status.as_str());
+        match status {
+            Some("running") => {
+                self.state.status_message =
+                    Some("Agent already running — press x to stop".to_string());
+                true
+            }
+            Some("waiting_for_feedback") => {
+                self.state.status_message =
+                    Some("Agent waiting for feedback — press f to respond".to_string());
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn handle_launch_agent(&mut self) {
         let wt = self
             .state
@@ -2728,26 +2751,8 @@ impl App {
             return;
         };
 
-        // Check if there's already a running or waiting agent for this worktree
-        let agent_status = self
-            .state
-            .data
-            .latest_agent_runs
-            .get(&wt.id)
-            .map(|run| run.status.clone());
-
-        match agent_status.as_deref() {
-            Some("running") => {
-                self.state.status_message =
-                    Some("Agent already running — press x to stop".to_string());
-                return;
-            }
-            Some("waiting_for_feedback") => {
-                self.state.status_message =
-                    Some("Agent waiting for feedback — press f to respond".to_string());
-                return;
-            }
-            _ => {}
+        if self.agent_busy_guard(&wt.id) {
+            return;
         }
 
         // Check for existing session to resume (from DB)
@@ -2894,26 +2899,8 @@ impl App {
             return;
         };
 
-        // Check if there's already a running or waiting agent for this worktree
-        let agent_status = self
-            .state
-            .data
-            .latest_agent_runs
-            .get(&wt.id)
-            .map(|run| run.status.clone());
-
-        match agent_status.as_deref() {
-            Some("running") => {
-                self.state.status_message =
-                    Some("Agent already running — press x to stop".to_string());
-                return;
-            }
-            Some("waiting_for_feedback") => {
-                self.state.status_message =
-                    Some("Agent waiting for feedback — press f to respond".to_string());
-                return;
-            }
-            _ => {}
+        if self.agent_busy_guard(&wt.id) {
+            return;
         }
 
         // Pre-fill prompt from linked ticket if available

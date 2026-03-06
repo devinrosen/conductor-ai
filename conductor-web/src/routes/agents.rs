@@ -10,6 +10,7 @@ use conductor_core::agent::{
     parse_agent_log, AgentCreatedIssue, AgentEvent, AgentManager, AgentRun, AgentRunEvent,
     FeedbackRequest, RunTreeTotals, TicketAgentTotals,
 };
+use conductor_core::error::ConductorError;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
@@ -692,6 +693,9 @@ pub async fn submit_feedback(
     let db = state.db.lock().await;
     let mgr = AgentManager::new(&db);
 
+    // Verify the feedback belongs to this worktree
+    verify_feedback_ownership(&mgr, &feedback_id, &worktree_id)?;
+
     let feedback = mgr.submit_feedback(&feedback_id, &body.response)?;
 
     state.events.emit(ConductorEvent::FeedbackSubmitted {
@@ -711,6 +715,9 @@ pub async fn dismiss_feedback(
     let db = state.db.lock().await;
     let mgr = AgentManager::new(&db);
 
+    // Verify the feedback belongs to this worktree
+    verify_feedback_ownership(&mgr, &feedback_id, &worktree_id)?;
+
     // Get the feedback to find the run_id for the SSE event
     let feedback = mgr.get_feedback(&feedback_id)?;
 
@@ -725,6 +732,26 @@ pub async fn dismiss_feedback(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Verify that a feedback request belongs to the given worktree (via its run).
+fn verify_feedback_ownership(
+    mgr: &AgentManager,
+    feedback_id: &str,
+    worktree_id: &str,
+) -> Result<(), ApiError> {
+    let fb = mgr
+        .get_feedback(feedback_id)?
+        .ok_or_else(|| ApiError(ConductorError::Agent("feedback request not found".into())))?;
+    let run = mgr
+        .get_run(&fb.run_id)?
+        .ok_or_else(|| ApiError(ConductorError::Agent("agent run not found".into())))?;
+    if run.worktree_id != worktree_id {
+        return Err(ApiError(ConductorError::Agent(
+            "feedback request does not belong to this worktree".into(),
+        )));
+    }
+    Ok(())
 }
 
 fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {

@@ -1,5 +1,19 @@
 import type { AgentRun, TicketAgentTotals } from "../api/types";
 
+/** CSS class mapping for agent run status badges. */
+export const statusColors: Record<string, string> = {
+  running: "bg-yellow-100 text-yellow-700",
+  waiting_for_feedback: "bg-purple-100 text-purple-700",
+  completed: "bg-green-100 text-green-700",
+  failed: "bg-red-100 text-red-700",
+  cancelled: "bg-gray-100 text-gray-600",
+};
+
+/** Human-readable labels for statuses that differ from the raw key. */
+export const statusLabels: Record<string, string> = {
+  waiting_for_feedback: "waiting for feedback",
+};
+
 /** Format cost as $X.XXXX (4 decimal places). */
 export function formatCost(cost: number): string {
   return `$${cost.toFixed(4)}`;

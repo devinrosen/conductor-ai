@@ -49,7 +49,6 @@ pub fn poll_data() -> Option<Action> {
         tickets,
         latest_agent_runs,
         ticket_agent_totals,
-        pending_feedback: None, // fetched by app.rs based on selected worktree
     })))
 }
 
