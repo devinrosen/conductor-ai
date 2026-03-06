@@ -132,7 +132,7 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
 
     let worktree = wt_mgr.get_by_id(worktree_id)?;
     let repo = repo_mgr.get_by_id(repo_id)?;
-    let roles = load_reviewer_roles(&repo.local_path)?;
+    let roles = load_reviewer_roles(&worktree.path, &repo.local_path)?;
     let review_settings = load_review_settings(&repo.local_path)?;
 
     if roles.is_empty() {

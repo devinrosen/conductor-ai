@@ -145,24 +145,33 @@ pub fn load_review_settings(repo_path: &str) -> Result<ReviewSettings> {
     })
 }
 
-/// Load all reviewer roles from `.conductor/reviewers/*.md` in the given repo path.
+/// Load all reviewer roles from `.conductor/reviewers/*.md`.
 ///
-/// Reads from the repo root (not the PR worktree) so that a PR cannot inject
-/// its own reviewer prompts.
+/// Checks `worktree_path` first (supports developing/testing reviewer files in a
+/// branch before merging), then falls back to `repo_path` (the main checkout).
 ///
-/// Returns an error with a helpful message if the directory doesn't exist.
-pub fn load_reviewer_roles(repo_path: &str) -> Result<Vec<ReviewerRole>> {
-    let reviewers_dir = PathBuf::from(repo_path)
+/// Returns an error with a helpful message if neither location has the directory.
+pub fn load_reviewer_roles(worktree_path: &str, repo_path: &str) -> Result<Vec<ReviewerRole>> {
+    // Prefer the worktree so new/modified reviewer files can be tested in-branch.
+    // Fall back to the main repo checkout when the worktree doesn't have them.
+    let worktree_dir = PathBuf::from(worktree_path)
         .join(".conductor")
         .join("reviewers");
-
-    if !reviewers_dir.is_dir() {
-        return Err(ConductorError::Config(format!(
-            "No .conductor/reviewers/ directory found in {}. \
-             Create it and add reviewer role .md files. {REVIEWER_HINT}",
-            repo_path
-        )));
-    }
+    let reviewers_dir = if worktree_dir.is_dir() {
+        worktree_dir
+    } else {
+        let repo_dir = PathBuf::from(repo_path)
+            .join(".conductor")
+            .join("reviewers");
+        if !repo_dir.is_dir() {
+            return Err(ConductorError::Config(format!(
+                "No .conductor/reviewers/ directory found in {} or {}. \
+                 Create it and add reviewer role .md files. {REVIEWER_HINT}",
+                worktree_path, repo_path
+            )));
+        }
+        repo_dir
+    };
 
     let mut roles: Vec<ReviewerRole> = Vec::new();
     let mut entries: Vec<_> = fs::read_dir(&reviewers_dir)
@@ -259,8 +268,9 @@ mod tests {
     }
 
     #[test]
-    fn test_load_reviewer_roles() {
+    fn test_load_reviewer_roles_from_worktree() {
         let tmp = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
         write_reviewer_file(
             tmp.path(),
             "architecture.md",
@@ -272,17 +282,43 @@ mod tests {
             "---\nname: security\ndescription: Security review\nrequired: false\n---\nYou review security.",
         );
 
-        let roles = load_reviewer_roles(tmp.path().to_str().unwrap()).unwrap();
+        // Worktree has reviewers — should use those regardless of repo
+        let roles =
+            load_reviewer_roles(tmp.path().to_str().unwrap(), repo.path().to_str().unwrap())
+                .unwrap();
         assert_eq!(roles.len(), 2);
-        // Sorted by filename
         assert_eq!(roles[0].name, "architecture");
         assert_eq!(roles[1].name, "security");
     }
 
     #[test]
+    fn test_load_reviewer_roles_falls_back_to_repo() {
+        let worktree = TempDir::new().unwrap(); // no .conductor/reviewers/
+        let repo = TempDir::new().unwrap();
+        write_reviewer_file(
+            repo.path(),
+            "security.md",
+            "---\nname: security\ndescription: Security review\nrequired: true\n---\nYou review security.",
+        );
+
+        // Worktree has no reviewers — should fall back to repo
+        let roles = load_reviewer_roles(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(roles.len(), 1);
+        assert_eq!(roles[0].name, "security");
+    }
+
+    #[test]
     fn test_load_reviewer_roles_no_directory() {
-        let tmp = TempDir::new().unwrap();
-        let result = load_reviewer_roles(tmp.path().to_str().unwrap());
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        let result = load_reviewer_roles(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        );
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
         assert!(err.contains("No .conductor/reviewers/ directory"));
@@ -291,9 +327,14 @@ mod tests {
 
     #[test]
     fn test_load_reviewer_roles_empty_directory() {
-        let tmp = TempDir::new().unwrap();
-        fs::create_dir_all(tmp.path().join(".conductor").join("reviewers")).unwrap();
-        let result = load_reviewer_roles(tmp.path().to_str().unwrap());
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        // Put the empty dir in the worktree — it will be found and then error on no .md files
+        fs::create_dir_all(worktree.path().join(".conductor").join("reviewers")).unwrap();
+        let result = load_reviewer_roles(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        );
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
         assert!(err.contains("No .md files"));
@@ -302,6 +343,7 @@ mod tests {
     #[test]
     fn test_load_reviewer_roles_ignores_non_md_files() {
         let tmp = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
         let reviewers_dir = tmp.path().join(".conductor").join("reviewers");
         fs::create_dir_all(&reviewers_dir).unwrap();
         fs::write(
@@ -311,7 +353,9 @@ mod tests {
         .unwrap();
         fs::write(reviewers_dir.join("README.txt"), "not a reviewer").unwrap();
 
-        let roles = load_reviewer_roles(tmp.path().to_str().unwrap()).unwrap();
+        let roles =
+            load_reviewer_roles(tmp.path().to_str().unwrap(), repo.path().to_str().unwrap())
+                .unwrap();
         assert_eq!(roles.len(), 1);
         assert_eq!(roles[0].name, "security");
     }
