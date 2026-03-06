@@ -1225,8 +1225,8 @@ impl<'a> AgentManager<'a> {
 /// Build a startup context block to prepend to the agent prompt.
 ///
 /// Pulls worktree info, linked ticket, prior run plans, recent commits,
-/// and prior run summaries from the database. Returns `None` if there is
-/// no useful context to inject (e.g. first run with no linked ticket).
+/// and prior run summaries from the database. Always includes the feedback
+/// protocol so agents know how to request human input mid-run.
 pub fn build_startup_context(
     conn: &Connection,
     worktree_id: &str,
@@ -1328,9 +1328,14 @@ pub fn build_startup_context(
         }
     }
 
-    if sections.is_empty() {
-        return None;
-    }
+    // Always include the feedback protocol so agents know how to request input.
+    sections.push(
+        "**Feedback protocol:** If you need human input to continue (e.g. a decision, \
+         clarification, or approval), output `[NEEDS_FEEDBACK] <your question>` as a \
+         standalone line. The conductor will pause your run and surface the question to \
+         the user. When they respond, your run will resume with their answer."
+            .to_string(),
+    );
 
     Some(format!("## Session Context\n\n{}", sections.join("\n\n")))
 }
@@ -2274,7 +2279,7 @@ mod tests {
     // --- build_startup_context tests ---
 
     #[test]
-    fn test_startup_context_returns_none_when_no_useful_data() {
+    fn test_startup_context_always_includes_feedback_protocol() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
@@ -2282,12 +2287,13 @@ mod tests {
         let current = mgr.create_run("w1", "Do stuff", None, None).unwrap();
 
         // worktree_path is /tmp which has no git repo → commits section will be empty
-        // but the branch is still known from the DB
         let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
-        // Should have at least the worktree branch
+        // Always returns Some now (feedback protocol is always injected)
         assert!(ctx.is_some());
         let text = ctx.unwrap();
         assert!(text.contains("**Worktree:** feat/test"));
+        assert!(text.contains("**Feedback protocol:**"));
+        assert!(text.contains("[NEEDS_FEEDBACK]"));
         // No ticket, no prior runs
         assert!(!text.contains("**Ticket:**"));
         assert!(!text.contains("**Plan steps"));
