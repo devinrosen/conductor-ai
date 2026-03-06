@@ -16,16 +16,25 @@ fn run_gh(args: &[&str]) -> Result<Output> {
     run_gh_with_token(args, None)
 }
 
-/// Run `gh` with the given arguments and an optional explicit token.
-/// When `token` is `Some`, the `GH_TOKEN` env var is set so that
-/// `gh` authenticates as that identity (e.g. a GitHub App installation).
-fn run_gh_with_token(args: &[&str], token: Option<&str>) -> Result<Output> {
+/// Build a `gh` [`Command`] with the given arguments and optional token.
+///
+/// When `token` is `Some`, the `GH_TOKEN` env var is set so that `gh`
+/// authenticates as that identity (e.g. a GitHub App installation).
+/// The caller is responsible for spawning and handling the output.
+pub(crate) fn build_gh_cmd(args: &[&str], token: Option<&str>) -> Command {
     let mut cmd = Command::new("gh");
     cmd.args(args);
     if let Some(tok) = token {
         cmd.env("GH_TOKEN", tok);
     }
-    let output = cmd
+    cmd
+}
+
+/// Run `gh` with the given arguments and an optional explicit token.
+/// When `token` is `Some`, the `GH_TOKEN` env var is set so that
+/// `gh` authenticates as that identity (e.g. a GitHub App installation).
+fn run_gh_with_token(args: &[&str], token: Option<&str>) -> Result<Output> {
+    let output = build_gh_cmd(args, token)
         .output()
         .map_err(|e| ConductorError::TicketSync(format!("failed to run gh: {e}")))?;
 

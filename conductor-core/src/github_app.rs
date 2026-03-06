@@ -4,7 +4,6 @@
 //! short-lived installation tokens so that PR comments appear under the bot
 //! identity (e.g. `conductor-ai[bot]`) instead of the human `gh` user.
 
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
@@ -70,9 +69,7 @@ fn exchange_installation_token(app_config: &GitHubAppConfig, jwt: &str) -> Resul
         app_config.installation_id
     );
 
-    let output = Command::new("gh")
-        .args(["api", "--method", "POST", &url])
-        .env("GH_TOKEN", jwt)
+    let output = crate::github::build_gh_cmd(&["api", "--method", "POST", &url], Some(jwt))
         .output()
         .map_err(|e| {
             ConductorError::TicketSync(format!(

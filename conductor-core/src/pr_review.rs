@@ -878,22 +878,23 @@ fn post_pr_comment(
             .map_err(|e| ConductorError::Agent(format!("failed to write comment file: {e}")))?;
     }
 
-    let mut cmd = Command::new("gh");
-    cmd.args([
-        "pr",
-        "comment",
-        &pr_number.to_string(),
-        "--repo",
-        &format!("{owner}/{repo}"),
-        "--body-file",
-        &comment_file.to_string_lossy(),
-    ]);
-    if let Some(tok) = token {
-        cmd.env("GH_TOKEN", tok);
-    }
-    let output = cmd
-        .output()
-        .map_err(|e| ConductorError::Agent(format!("failed to post PR comment: {e}")))?;
+    let pr_str = pr_number.to_string();
+    let repo_slug = format!("{owner}/{repo}");
+    let file_path = comment_file.to_string_lossy();
+    let output = crate::github::build_gh_cmd(
+        &[
+            "pr",
+            "comment",
+            &pr_str,
+            "--repo",
+            &repo_slug,
+            "--body-file",
+            &file_path,
+        ],
+        token,
+    )
+    .output()
+    .map_err(|e| ConductorError::Agent(format!("failed to post PR comment: {e}")))?;
 
     // Clean up temp file
     let _ = std::fs::remove_file(&comment_file);
