@@ -17,6 +17,7 @@ use crate::agent::{AgentManager, AgentRun, PlanStep, PR_REVIEW_SWARM_PROMPT_PREF
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::github;
+use crate::github_app;
 use crate::merge_queue::MergeQueueManager;
 use crate::review_config::{ReviewConfigManager, ReviewerRole};
 use crate::worktree::WorktreeManager;
@@ -309,7 +310,14 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
     if review_config.post_to_pr {
         if let Some(pr_num) = pr_number {
             if let Some((ref owner, ref repo_name)) = gh_remote {
-                let _ = post_pr_comment(owner, repo_name, pr_num, &aggregated_comment);
+                let app_token = resolve_app_token(config);
+                let _ = post_pr_comment(
+                    owner,
+                    repo_name,
+                    pr_num,
+                    &aggregated_comment,
+                    app_token.as_deref(),
+                );
             }
         }
     }
@@ -843,7 +851,16 @@ fn build_aggregated_comment(
 }
 
 /// Post a comment to a GitHub PR using the `gh` CLI.
-fn post_pr_comment(owner: &str, repo: &str, pr_number: i64, comment: &str) -> Result<()> {
+///
+/// When `token` is `Some`, the comment is posted under that identity
+/// (e.g. a GitHub App bot). When `None`, uses the default `gh` user.
+fn post_pr_comment(
+    owner: &str,
+    repo: &str,
+    pr_number: i64,
+    comment: &str,
+    token: Option<&str>,
+) -> Result<()> {
     // Write comment to a temp file to avoid exceeding command-line arg limits (~10KB+).
     // Use mode 0o600 to prevent other local users from reading the comment.
     let comment_file = std::env::temp_dir().join(format!(
@@ -862,16 +879,20 @@ fn post_pr_comment(owner: &str, repo: &str, pr_number: i64, comment: &str) -> Re
             .map_err(|e| ConductorError::Agent(format!("failed to write comment file: {e}")))?;
     }
 
-    let output = Command::new("gh")
-        .args([
-            "pr",
-            "comment",
-            &pr_number.to_string(),
-            "--repo",
-            &format!("{owner}/{repo}"),
-            "--body-file",
-            &comment_file.to_string_lossy(),
-        ])
+    let mut cmd = Command::new("gh");
+    cmd.args([
+        "pr",
+        "comment",
+        &pr_number.to_string(),
+        "--repo",
+        &format!("{owner}/{repo}"),
+        "--body-file",
+        &comment_file.to_string_lossy(),
+    ]);
+    if let Some(tok) = token {
+        cmd.env("GH_TOKEN", tok);
+    }
+    let output = cmd
         .output()
         .map_err(|e| ConductorError::Agent(format!("failed to post PR comment: {e}")))?;
 
@@ -1116,6 +1137,20 @@ fn poll_reviewer_completion(
         }
 
         thread::sleep(poll_interval);
+    }
+}
+
+/// Attempt to obtain a GitHub App installation token from the config.
+/// Returns `None` (graceful fallback) if the app is not configured or
+/// token generation fails.
+fn resolve_app_token(config: &Config) -> Option<String> {
+    let app_config = config.github.app.as_ref()?;
+    match github_app::get_app_token(app_config) {
+        Ok(token) => Some(token),
+        Err(e) => {
+            eprintln!("[review-swarm] GitHub App token failed, falling back to gh user: {e}");
+            None
+        }
     }
 }
 

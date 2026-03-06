@@ -13,8 +13,19 @@ fn repo_slug(owner: &str, repo: &str) -> String {
 /// Run `gh` with the given arguments and return the output.
 /// Maps spawn failures and non-zero exit codes to `ConductorError::TicketSync`.
 fn run_gh(args: &[&str]) -> Result<Output> {
-    let output = Command::new("gh")
-        .args(args)
+    run_gh_with_token(args, None)
+}
+
+/// Run `gh` with the given arguments and an optional explicit token.
+/// When `token` is `Some`, the `GH_TOKEN` env var is set so that
+/// `gh` authenticates as that identity (e.g. a GitHub App installation).
+fn run_gh_with_token(args: &[&str], token: Option<&str>) -> Result<Output> {
+    let mut cmd = Command::new("gh");
+    cmd.args(args);
+    if let Some(tok) = token {
+        cmd.env("GH_TOKEN", tok);
+    }
+    let output = cmd
         .output()
         .map_err(|e| ConductorError::TicketSync(format!("failed to run gh: {e}")))?;
 
@@ -391,16 +402,24 @@ pub const COST_COMMENT_MARKER: &str = "<!-- conductor-cost-summary -->";
 
 /// Find the comment ID of an existing sticky cost-summary comment on a PR.
 /// Returns `None` if no such comment exists yet.
-pub fn find_sticky_comment(owner: &str, repo: &str, pr_number: i64) -> Result<Option<i64>> {
+pub fn find_sticky_comment(
+    owner: &str,
+    repo: &str,
+    pr_number: i64,
+    token: Option<&str>,
+) -> Result<Option<i64>> {
     let slug = repo_slug(owner, repo);
     let pr_str = pr_number.to_string();
     // Fetch issue comments (not review comments) and search for the marker
-    let output = run_gh(&[
-        "api",
-        &format!("repos/{slug}/issues/{pr_str}/comments"),
-        "--jq",
-        &format!("[.[] | select(.body | contains(\"{COST_COMMENT_MARKER}\"))] | first | .id"),
-    ])?;
+    let output = run_gh_with_token(
+        &[
+            "api",
+            &format!("repos/{slug}/issues/{pr_str}/comments"),
+            "--jq",
+            &format!("[.[] | select(.body | contains(\"{COST_COMMENT_MARKER}\"))] | first | .id"),
+        ],
+        token,
+    )?;
     let id_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if id_str.is_empty() || id_str == "null" {
         return Ok(None);
@@ -411,33 +430,49 @@ pub fn find_sticky_comment(owner: &str, repo: &str, pr_number: i64) -> Result<Op
 /// Create or update the sticky cost-summary comment on a PR.
 /// If a comment with the marker already exists, it is edited in place;
 /// otherwise a new comment is created.
-pub fn upsert_sticky_comment(owner: &str, repo: &str, pr_number: i64, body: &str) -> Result<()> {
+///
+/// When `token` is `Some`, the comment is posted under the corresponding
+/// identity (e.g. a GitHub App bot). When `None`, falls back to the
+/// default `gh` CLI user.
+pub fn upsert_sticky_comment(
+    owner: &str,
+    repo: &str,
+    pr_number: i64,
+    body: &str,
+    token: Option<&str>,
+) -> Result<()> {
     let slug = repo_slug(owner, repo);
 
-    match find_sticky_comment(owner, repo, pr_number)? {
+    match find_sticky_comment(owner, repo, pr_number, token)? {
         Some(comment_id) => {
             // Edit existing comment
             let comment_id_str = comment_id.to_string();
-            run_gh(&[
-                "api",
-                "--method",
-                "PATCH",
-                &format!("repos/{slug}/issues/comments/{comment_id_str}"),
-                "-f",
-                &format!("body={body}"),
-            ])?;
+            run_gh_with_token(
+                &[
+                    "api",
+                    "--method",
+                    "PATCH",
+                    &format!("repos/{slug}/issues/comments/{comment_id_str}"),
+                    "-f",
+                    &format!("body={body}"),
+                ],
+                token,
+            )?;
         }
         None => {
             // Create new comment
             let pr_str = pr_number.to_string();
-            run_gh(&[
-                "api",
-                "--method",
-                "POST",
-                &format!("repos/{slug}/issues/{pr_str}/comments"),
-                "-f",
-                &format!("body={body}"),
-            ])?;
+            run_gh_with_token(
+                &[
+                    "api",
+                    "--method",
+                    "POST",
+                    &format!("repos/{slug}/issues/{pr_str}/comments"),
+                    "-f",
+                    &format!("body={body}"),
+                ],
+                token,
+            )?;
         }
     }
     Ok(())

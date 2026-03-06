@@ -14,6 +14,7 @@ use crate::agent::{AgentManager, CostPhase};
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::github;
+use crate::github_app;
 use crate::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
 use crate::repo::RepoManager;
 use crate::text_util::truncate_str;
@@ -141,8 +142,18 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
         }
     };
 
+    // Resolve GitHub App token (if configured) for bot-identity comments
+    let app_token = resolve_app_token(config);
+
     // Post initial cost summary now that we have a PR number
-    post_cost_summary(conn, owner, repo_name, pr_number, &wt.id);
+    post_cost_summary(
+        conn,
+        owner,
+        repo_name,
+        pr_number,
+        &wt.id,
+        app_token.as_deref(),
+    );
 
     // ── Phase 3: Review → Fix Loop ───────────────────────────────────
     eprintln!(
@@ -197,7 +208,14 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
                         );
                         break;
                     }
-                    post_cost_summary(conn, owner, repo_name, pr_number, &wt.id);
+                    post_cost_summary(
+                        conn,
+                        owner,
+                        repo_name,
+                        pr_number,
+                        &wt.id,
+                        app_token.as_deref(),
+                    );
                 }
                 Err(e) => {
                     eprintln!("[post-run] Fix agent failed: {e}");
@@ -608,6 +626,20 @@ fn merge_and_cleanup(
     Ok(())
 }
 
+/// Attempt to obtain a GitHub App installation token from the config.
+/// Returns `None` (graceful fallback) if the app is not configured or
+/// token generation fails.
+fn resolve_app_token(config: &Config) -> Option<String> {
+    let app_config = config.github.app.as_ref()?;
+    match github_app::get_app_token(app_config) {
+        Ok(token) => Some(token),
+        Err(e) => {
+            eprintln!("[post-run] GitHub App token failed, falling back to gh user: {e}");
+            None
+        }
+    }
+}
+
 fn first_line(s: &str) -> &str {
     s.lines().next().unwrap_or(s)
 }
@@ -674,6 +706,7 @@ fn post_cost_summary(
     repo_name: &str,
     pr_number: i64,
     worktree_id: &str,
+    token: Option<&str>,
 ) {
     let mgr = AgentManager::new(conn);
     let phases = match mgr.worktree_cost_phases(worktree_id) {
@@ -684,7 +717,7 @@ fn post_cost_summary(
         }
     };
     let body = build_cost_comment(&phases);
-    if let Err(e) = github::upsert_sticky_comment(owner, repo_name, pr_number, &body) {
+    if let Err(e) = github::upsert_sticky_comment(owner, repo_name, pr_number, &body, token) {
         eprintln!("[post-run] Failed to post cost summary: {e}");
     }
 }

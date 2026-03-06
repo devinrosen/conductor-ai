@@ -3,6 +3,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod github;
+pub mod github_app;
 pub mod issue_source;
 pub mod jira_acli;
 pub mod merge_queue;

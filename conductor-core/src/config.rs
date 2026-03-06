@@ -40,6 +40,30 @@ pub struct Config {
     pub defaults: DefaultsConfig,
     #[serde(default)]
     pub post_run: PostRunConfig,
+    #[serde(default)]
+    pub github: GitHubConfig,
+}
+
+/// Top-level `[github]` section, currently containing only the optional App config.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GitHubConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<GitHubAppConfig>,
+}
+
+/// Configuration for posting comments as a GitHub App bot identity.
+///
+/// ```toml
+/// [github.app]
+/// app_id = 123456
+/// private_key_path = "~/.conductor/conductor-ai.pem"
+/// installation_id = 789012
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubAppConfig {
+    pub app_id: u64,
+    pub private_key_path: String,
+    pub installation_id: u64,
 }
 
 /// Configuration for the automated post-agent lifecycle
@@ -369,5 +393,39 @@ mod tests {
         assert_eq!(config.post_run.commit_style, "free-form");
         assert_eq!(config.post_run.auto_merge_labels, vec!["bug"]);
         assert_eq!(config.post_run.manual_merge_labels, vec!["feature", "epic"]);
+    }
+
+    #[test]
+    fn test_github_app_default_none() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.github.app.is_none());
+    }
+
+    #[test]
+    fn test_github_app_configured() {
+        let config: Config = toml::from_str(
+            r#"
+            [github.app]
+            app_id = 123456
+            private_key_path = "~/.conductor/conductor-ai.pem"
+            installation_id = 789012
+        "#,
+        )
+        .unwrap();
+        let app = config.github.app.unwrap();
+        assert_eq!(app.app_id, 123456);
+        assert_eq!(app.private_key_path, "~/.conductor/conductor-ai.pem");
+        assert_eq!(app.installation_id, 789012);
+    }
+
+    #[test]
+    fn test_github_section_without_app() {
+        let config: Config = toml::from_str(
+            r#"
+            [github]
+        "#,
+        )
+        .unwrap();
+        assert!(config.github.app.is_none());
     }
 }
