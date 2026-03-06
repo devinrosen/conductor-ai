@@ -9,6 +9,9 @@ export const statusColors: Record<string, string> = {
   cancelled: "bg-gray-100 text-gray-600",
 };
 
+/** Protocol marker that agents emit to request human feedback. */
+export const FEEDBACK_MARKER = "[NEEDS_FEEDBACK]";
+
 /** Human-readable labels for statuses that differ from the raw key. */
 export const statusLabels: Record<string, string> = {
   waiting_for_feedback: "waiting for feedback",
@@ -43,20 +46,7 @@ export function liveElapsedMs(startedAt: string): number {
 
 /** Status color classes for agent run statuses. */
 export function agentStatusColor(status: string): string {
-  switch (status) {
-    case "running":
-      return "bg-yellow-100 text-yellow-700";
-    case "waiting_for_feedback":
-      return "bg-purple-100 text-purple-700";
-    case "completed":
-      return "bg-green-100 text-green-700";
-    case "failed":
-      return "bg-red-100 text-red-700";
-    case "cancelled":
-      return "bg-gray-100 text-gray-500";
-    default:
-      return "bg-gray-100 text-gray-600";
-  }
+  return statusColors[status] ?? "bg-gray-100 text-gray-600";
 }
 
 /** Build a compact stats string for ticket agent totals: "$X.XX Xt". */

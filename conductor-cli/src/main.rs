@@ -1220,13 +1220,9 @@ fn run_agent(
     // Build effective prompt with optional startup context
     let config = load_config().unwrap_or_default();
     let effective_prompt = if config.general.inject_startup_context {
-        match build_startup_context(conn, &run.worktree_id, run_id, worktree_path) {
-            Some(context) => {
-                eprintln!("[conductor] Injecting session context into prompt");
-                format!("{context}\n\n---\n\n{prompt}")
-            }
-            None => prompt.to_string(),
-        }
+        let context = build_startup_context(conn, &run.worktree_id, run_id, worktree_path);
+        eprintln!("[conductor] Injecting session context into prompt");
+        format!("{context}\n\n---\n\n{prompt}")
     } else {
         prompt.to_string()
     };
@@ -1550,13 +1546,9 @@ fn run_orchestrate(
 
     // Build effective prompt with startup context
     let effective_prompt = if config.general.inject_startup_context {
-        match build_startup_context(conn, &run.worktree_id, run_id, worktree_path) {
-            Some(context) => {
-                eprintln!("[orchestrator] Injecting session context into prompt");
-                format!("{context}\n\n---\n\n{}", run.prompt)
-            }
-            None => run.prompt.clone(),
-        }
+        let context = build_startup_context(conn, &run.worktree_id, run_id, worktree_path);
+        eprintln!("[orchestrator] Injecting session context into prompt");
+        format!("{context}\n\n---\n\n{}", run.prompt)
     } else {
         run.prompt.clone()
     };

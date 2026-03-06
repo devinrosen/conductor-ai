@@ -72,6 +72,7 @@ export function WorktreeDetailPage() {
     : null;
 
   const isActive = worktree?.status === "active";
+  const isRunning = latestRun?.status === "running" || latestRun?.status === "waiting_for_feedback";
 
   // Tickets available for linking: same repo, not already linked to this worktree
   const availableTickets = tickets?.filter(
@@ -115,10 +116,10 @@ export function WorktreeDetailPage() {
 
   // Poll for updates when agent is running or waiting for feedback
   useEffect(() => {
-    if (latestRun?.status !== "running" && latestRun?.status !== "waiting_for_feedback") return;
+    if (!isRunning) return;
     const interval = setInterval(refreshAgent, 5000);
     return () => clearInterval(interval);
-  }, [latestRun?.status, refreshAgent]);
+  }, [isRunning, refreshAgent]);
 
   // SSE: auto-refresh worktrees, tickets, and agent data on relevant events
   const sseHandlers = useMemo(() => {
@@ -295,8 +296,6 @@ export function WorktreeDetailPage() {
       </div>
     );
   }
-
-  const isRunning = latestRun?.status === "running" || latestRun?.status === "waiting_for_feedback";
 
   return (
     <div className="space-y-6">

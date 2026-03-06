@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { AgentEvent, AgentRun } from "../../api/types";
+import { FEEDBACK_MARKER } from "../../utils/agentStats";
 
 const kindConfig: Record<
   string,
@@ -153,7 +154,7 @@ export function AgentActivityLog({ events, runs, isRunning }: AgentActivityLogPr
       prevKind !== null && prevKind !== event.kind && events[i - 1].run_id === event.run_id;
 
     const stepLabel = event.kind === "prompt" ? extractStepLabel(event.summary) : null;
-    const isFeedback = event.summary.startsWith("[NEEDS_FEEDBACK]");
+    const isFeedback = event.summary.startsWith(FEEDBACK_MARKER);
     const displayLabel = stepLabel ? "STEP" : isFeedback ? "WAIT" : cfg.label;
     const displayText = stepLabel ?? event.summary;
     const effectiveCfg = stepLabel

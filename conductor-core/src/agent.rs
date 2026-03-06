@@ -1227,7 +1227,7 @@ pub fn build_startup_context(
     worktree_id: &str,
     current_run_id: &str,
     worktree_path: &str,
-) -> Option<String> {
+) -> String {
     let mut sections = Vec::new();
 
     // 1. Worktree branch
@@ -1332,7 +1332,7 @@ pub fn build_startup_context(
             .to_string(),
     );
 
-    Some(format!("## Session Context\n\n{}", sections.join("\n\n")))
+    format!("## Session Context\n\n{}", sections.join("\n\n"))
 }
 
 /// Convert a `rusqlite::Result<T>` into `Result<Option<T>>`, treating
@@ -2292,10 +2292,7 @@ mod tests {
         let current = mgr.create_run("w1", "Do stuff", None, None).unwrap();
 
         // worktree_path is /tmp which has no git repo → commits section will be empty
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
-        // Always returns Some now (feedback protocol is always injected)
-        assert!(ctx.is_some());
-        let text = ctx.unwrap();
+        let text = build_startup_context(&conn, "w1", &current.id, "/tmp");
         assert!(text.contains("**Worktree:** feat/test"));
         assert!(text.contains("**Feedback protocol:**"));
         assert!(text.contains("[NEEDS_FEEDBACK]"));
@@ -2321,7 +2318,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
         let current = mgr.create_run("w1", "Fix it", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp").unwrap();
+        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
         assert!(ctx.contains("**Ticket:** #42 — Fix payment bug"));
     }
 
@@ -2357,7 +2354,7 @@ mod tests {
         // Create current run
         let current = mgr.create_run("w1", "Continue work", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp").unwrap();
+        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
         assert!(ctx.contains("**Plan steps (from prior run):**"));
         assert!(ctx.contains("1. ✅ Read the code"));
         assert!(ctx.contains("2. ✅ Write tests"));
@@ -2384,7 +2381,7 @@ mod tests {
         // Create current run
         let current = mgr.create_run("w1", "Next task", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp").unwrap();
+        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
         assert!(ctx.contains("**Prior run outcome (completed):**"));
         assert!(ctx.contains("Successfully implemented the payment module"));
     }
@@ -2397,7 +2394,7 @@ mod tests {
         // Only the current run exists (no prior runs)
         let current = mgr.create_run("w1", "My prompt", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp").unwrap();
+        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
         // Should NOT include any prior run info
         assert!(!ctx.contains("**Plan steps"));
         assert!(!ctx.contains("**Prior run outcome"));
@@ -2416,7 +2413,7 @@ mod tests {
 
         let current = mgr.create_run("w1", "Next", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp").unwrap();
+        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
         assert!(ctx.contains("**Prior run outcome (completed):**"));
         // Should be truncated to 500 chars + ellipsis
         assert!(ctx.contains(&"x".repeat(500)));
@@ -2437,7 +2434,7 @@ mod tests {
 
         let current = mgr.create_run("w1", "Next", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp").unwrap();
+        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
         assert!(ctx.contains('…'));
         // Extract the truncated 'é' portion before the ellipsis
         let ellipsis_pos = ctx.find('…').unwrap();

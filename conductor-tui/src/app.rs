@@ -6,7 +6,7 @@ use ratatui::widgets::ListState;
 use ratatui::DefaultTerminal;
 use rusqlite::Connection;
 
-use conductor_core::agent::AgentManager;
+use conductor_core::agent::{AgentManager, FeedbackRequest};
 use conductor_core::config::{save_config, AutoStartAgent, Config, WorkTarget};
 use conductor_core::github;
 use conductor_core::issue_source::IssueSourceManager;
@@ -2836,10 +2836,18 @@ impl App {
         self.refresh_data();
     }
 
+    fn require_pending_feedback(&mut self) -> Option<FeedbackRequest> {
+        match self.state.data.pending_feedback.clone() {
+            Some(fb) => Some(fb),
+            None => {
+                self.state.status_message = Some("No pending feedback request".to_string());
+                None
+            }
+        }
+    }
+
     fn handle_submit_feedback(&mut self) {
-        let feedback = self.state.data.pending_feedback.clone();
-        let Some(fb) = feedback else {
-            self.state.status_message = Some("No pending feedback request".to_string());
+        let Some(fb) = self.require_pending_feedback() else {
             return;
         };
 
@@ -2858,9 +2866,7 @@ impl App {
     }
 
     fn handle_dismiss_feedback(&mut self) {
-        let feedback = self.state.data.pending_feedback.clone();
-        let Some(fb) = feedback else {
-            self.state.status_message = Some("No pending feedback request".to_string());
+        let Some(fb) = self.require_pending_feedback() else {
             return;
         };
 
