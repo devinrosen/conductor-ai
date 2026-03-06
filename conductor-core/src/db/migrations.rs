@@ -11,6 +11,14 @@ struct LegacyPlanStep {
     done: bool,
 }
 
+fn bump_version(conn: &Connection, v: u32) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', ?1)",
+        params![v.to_string()],
+    )?;
+    Ok(())
+}
+
 /// Run all schema migrations. Uses a simple version counter in a meta table.
 pub fn run(conn: &Connection) -> Result<()> {
     conn.execute_batch(
@@ -31,10 +39,7 @@ pub fn run(conn: &Connection) -> Result<()> {
 
     if version < 1 {
         conn.execute_batch(include_str!("migrations/001_initial.sql"))?;
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '1')",
-            [],
-        )?;
+        bump_version(conn, 1)?;
     }
 
     // Migration 002: add completed_at to worktrees.
@@ -47,18 +52,12 @@ pub fn run(conn: &Connection) -> Result<()> {
         conn.execute_batch(include_str!("migrations/002_worktree_completed_at.sql"))?;
     }
     if version < 2 {
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '2')",
-            [],
-        )?;
+        bump_version(conn, 2)?;
     }
 
     if version < 3 {
         conn.execute_batch(include_str!("migrations/003_agent_runs.sql"))?;
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '3')",
-            [],
-        )?;
+        bump_version(conn, 3)?;
     }
 
     // Migration 004: add tmux_window to agent_runs.
@@ -70,10 +69,7 @@ pub fn run(conn: &Connection) -> Result<()> {
         conn.execute_batch(include_str!("migrations/004_agent_tmux.sql"))?;
     }
     if version < 4 {
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '4')",
-            [],
-        )?;
+        bump_version(conn, 4)?;
     }
 
     // Migration 005: add log_file to agent_runs.
@@ -84,19 +80,13 @@ pub fn run(conn: &Connection) -> Result<()> {
         conn.execute_batch(include_str!("migrations/005_agent_log_file.sql"))?;
     }
     if version < 5 {
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '5')",
-            [],
-        )?;
+        bump_version(conn, 5)?;
     }
 
     // Migration 006: drop sessions and session_worktrees tables.
     if version < 6 {
         conn.execute_batch(include_str!("migrations/006_drop_sessions.sql"))?;
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '6')",
-            [],
-        )?;
+        bump_version(conn, 6)?;
     }
 
     // Migration 007: add agent_run_events table (trace/span model).
@@ -107,10 +97,7 @@ pub fn run(conn: &Connection) -> Result<()> {
         conn.execute_batch(include_str!("migrations/007_agent_run_events.sql"))?;
     }
     if version < 7 {
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '7')",
-            [],
-        )?;
+        bump_version(conn, 7)?;
     }
 
     // Migration 008: add model column to worktrees.
@@ -119,10 +106,7 @@ pub fn run(conn: &Connection) -> Result<()> {
         conn.execute_batch(include_str!("migrations/008_worktree_model.sql"))?;
     }
     if version < 8 {
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '8')",
-            [],
-        )?;
+        bump_version(conn, 8)?;
     }
 
     // Migration 009: add model column to agent_runs.
@@ -131,10 +115,7 @@ pub fn run(conn: &Connection) -> Result<()> {
         conn.execute_batch(include_str!("migrations/009_agent_run_model.sql"))?;
     }
     if version < 9 {
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '9')",
-            [],
-        )?;
+        bump_version(conn, 9)?;
     }
 
     // Migration 010: add model column to repos.
@@ -143,10 +124,7 @@ pub fn run(conn: &Connection) -> Result<()> {
         conn.execute_batch(include_str!("migrations/010_repo_model.sql"))?;
     }
     if version < 10 {
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '10')",
-            [],
-        )?;
+        bump_version(conn, 10)?;
     }
 
     // Migration 011: add plan column to agent_runs.
@@ -155,10 +133,7 @@ pub fn run(conn: &Connection) -> Result<()> {
         conn.execute_batch(include_str!("migrations/011_agent_plan.sql"))?;
     }
     if version < 11 {
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '11')",
-            [],
-        )?;
+        bump_version(conn, 11)?;
     }
 
     // Migration 012: add parent_run_id to agent_runs for parent/child relationships.
@@ -169,10 +144,7 @@ pub fn run(conn: &Connection) -> Result<()> {
         conn.execute_batch(include_str!("migrations/012_parent_run_id.sql"))?;
     }
     if version < 12 {
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '12')",
-            [],
-        )?;
+        bump_version(conn, 12)?;
     }
 
     // Migration 013: add agent_created_issues table.
@@ -183,10 +155,7 @@ pub fn run(conn: &Connection) -> Result<()> {
         conn.execute_batch(include_str!("migrations/007_agent_created_issues.sql"))?;
     }
     if version < 13 {
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '13')",
-            [],
-        )?;
+        bump_version(conn, 13)?;
     }
 
     // Migration 014: add allow_agent_issue_creation to repos.
@@ -197,10 +166,7 @@ pub fn run(conn: &Connection) -> Result<()> {
         conn.execute_batch(include_str!("migrations/008_repo_allow_agent_issues.sql"))?;
     }
     if version < 14 {
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '14')",
-            [],
-        )?;
+        bump_version(conn, 14)?;
     }
 
     // Migration 015: create agent_run_steps table and migrate JSON plan data.
@@ -232,10 +198,7 @@ pub fn run(conn: &Connection) -> Result<()> {
         }
     }
     if version < 15 {
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '15')",
-            [],
-        )?;
+        bump_version(conn, 15)?;
     }
 
     // Migration 016: create merge_queue table for serializing parallel agent merges.
@@ -244,10 +207,7 @@ pub fn run(conn: &Connection) -> Result<()> {
         conn.execute_batch(include_str!("migrations/016_merge_queue.sql"))?;
     }
     if version < 16 {
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '16')",
-            [],
-        )?;
+        bump_version(conn, 16)?;
     }
 
     // Migration 017: create review_configs table for multi-agent PR review swarms.
@@ -258,10 +218,7 @@ pub fn run(conn: &Connection) -> Result<()> {
         conn.execute_batch(include_str!("migrations/017_review_configs.sql"))?;
     }
     if version < 17 {
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '17')",
-            [],
-        )?;
+        bump_version(conn, 17)?;
     }
 
     // Migration 018: feedback_requests table + update agent_runs CHECK constraint.
@@ -311,19 +268,13 @@ pub fn run(conn: &Connection) -> Result<()> {
         conn.execute_batch(include_str!("migrations/018_feedback_requests.sql"))?;
     }
     if version < 18 {
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '18')",
-            [],
-        )?;
+        bump_version(conn, 18)?;
     }
 
     // Migration 019: drop review_configs table (reviewer roles now file-based).
     if version < 19 {
         conn.execute_batch(include_str!("migrations/019_drop_review_configs.sql"))?;
-        conn.execute(
-            "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', '19')",
-            [],
-        )?;
+        bump_version(conn, 19)?;
     }
 
     Ok(())
