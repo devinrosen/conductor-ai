@@ -1374,22 +1374,19 @@ fn run_agent(
             // Capture result from final message and eagerly update DB to
             // narrow the race window if the process is killed before child.wait().
             if event.get("result").is_some() {
-                result_text = event
-                    .get("result")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                cost_usd = event.get("total_cost_usd").and_then(|v| v.as_f64());
-                num_turns = event.get("num_turns").and_then(|v| v.as_i64());
-                duration_ms = event.get("duration_ms").and_then(|v| v.as_i64());
-                is_error = event
-                    .get("is_error")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                let parsed = conductor_core::agent::parse_result_event(&event);
+                result_text = parsed.result_text;
+                cost_usd = parsed.cost_usd;
+                num_turns = parsed.num_turns;
+                duration_ms = parsed.duration_ms;
+                is_error = parsed.is_error;
 
                 // Eagerly persist completion/failure so the consumer sees it
                 // even if this process is killed before child.wait() returns.
                 if is_error {
-                    let error_msg = result_text.as_deref().unwrap_or("Claude reported an error");
+                    let error_msg = result_text
+                        .as_deref()
+                        .unwrap_or(conductor_core::agent::DEFAULT_AGENT_ERROR_MSG);
                     if let Err(e) = mgr.update_run_failed_with_session(
                         run_id,
                         error_msg,
@@ -1504,7 +1501,9 @@ fn run_agent(
         }
         Ok(_) if is_error => {
             if !db_updated_eagerly {
-                let error_msg = result_text.as_deref().unwrap_or("Claude reported an error");
+                let error_msg = result_text
+                    .as_deref()
+                    .unwrap_or(conductor_core::agent::DEFAULT_AGENT_ERROR_MSG);
                 mgr.update_run_failed_with_session(
                     run_id,
                     error_msg,
@@ -1513,7 +1512,9 @@ fn run_agent(
             }
             eprintln!(
                 "[conductor] Agent failed: {}",
-                result_text.as_deref().unwrap_or("Claude reported an error")
+                result_text
+                    .as_deref()
+                    .unwrap_or(conductor_core::agent::DEFAULT_AGENT_ERROR_MSG)
             );
         }
         Ok(s) => {

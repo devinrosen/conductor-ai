@@ -6,7 +6,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashSet;
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::process::Command;
 use std::sync::mpsc;
@@ -17,7 +17,8 @@ use notify::{Event as NotifyEvent, RecursiveMode, Watcher};
 use rusqlite::Connection;
 
 use crate::agent::{
-    AgentManager, AgentRun, AgentRunStatus, PlanStep, StepStatus, PR_REVIEW_SWARM_PROMPT_PREFIX,
+    parse_result_event, AgentManager, AgentRun, AgentRunStatus, LogResult, PlanStep, StepStatus,
+    DEFAULT_AGENT_ERROR_MSG, PR_REVIEW_SWARM_PROMPT_PREFIX,
 };
 use crate::config::{self, Config};
 use crate::error::{ConductorError, Result};
@@ -969,39 +970,30 @@ fn spawn_reviewer_tmux(
     }
 }
 
-/// Parsed result event from an agent log file.
-struct LogResult {
-    result_text: Option<String>,
-    cost_usd: Option<f64>,
-    num_turns: Option<i64>,
-    duration_ms: Option<i64>,
-    is_error: bool,
-}
-
-/// Scan an agent log file at the given path for the `result` event (the final JSON line
-/// with a `result` field). Returns `None` if the file doesn't exist or contains no result.
+/// Scan an agent log file at the given path for the `result` event.
+///
+/// Reads the last 4 KB of the file (the result event is always the final line),
+/// keeping the scan O(1) regardless of log size.
 fn scan_log_for_result_at(path: &std::path::Path) -> Option<LogResult> {
-    let file = std::fs::File::open(path).ok()?;
-    let reader = std::io::BufReader::new(file);
-    for line in reader.lines() {
-        let Ok(line) = line else { continue };
-        let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+    use std::io::{Read as _, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+
+    // Read at most the last 4 KB — generous for a single JSON line.
+    const TAIL_BYTES: u64 = 4096;
+    let start = len.saturating_sub(TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf).ok()?;
+
+    // Walk lines in reverse so we find the result event quickly.
+    for line in buf.lines().rev() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
         if event.get("result").is_some() {
-            return Some(LogResult {
-                result_text: event
-                    .get("result")
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                cost_usd: event.get("total_cost_usd").and_then(|v| v.as_f64()),
-                num_turns: event.get("num_turns").and_then(|v| v.as_i64()),
-                duration_ms: event.get("duration_ms").and_then(|v| v.as_i64()),
-                is_error: event
-                    .get("is_error")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
-            });
+            return Some(parse_result_event(&event));
         }
     }
     None
@@ -1020,7 +1012,7 @@ fn try_recover_from_log(mgr: &AgentManager<'_>, run_id: &str) -> Option<AgentRun
         let error_msg = log_result
             .result_text
             .as_deref()
-            .unwrap_or("Claude reported an error");
+            .unwrap_or(DEFAULT_AGENT_ERROR_MSG);
         let _ = mgr.update_run_failed(run_id, error_msg);
     } else {
         let _ = mgr.update_run_completed(
@@ -1033,11 +1025,6 @@ fn try_recover_from_log(mgr: &AgentManager<'_>, run_id: &str) -> Option<AgentRun
         );
     }
     mgr.get_run(run_id).ok().flatten()
-}
-
-/// Collect the set of run IDs whose log files are in `child_runs`.
-fn run_id_set(child_runs: &[(usize, AgentRun, ReviewerRole)]) -> HashSet<String> {
-    child_runs.iter().map(|(_, r, _)| r.id.clone()).collect()
 }
 
 /// Poll all reviewer runs in a single shared loop, collecting results as each completes.
@@ -1055,7 +1042,7 @@ fn poll_all_reviewers(
     let start = std::time::Instant::now();
     let mut results: Vec<Option<ReviewerResult>> = vec![None; child_runs.len()];
     let mut pending_count = child_runs.len();
-    let watched_ids = run_id_set(child_runs);
+    let watched_ids: HashSet<String> = child_runs.iter().map(|(_, r, _)| r.id.clone()).collect();
 
     // Set up file watcher on the agent-logs directory.
     // Notifications wake us up so we can scan log files instead of only relying on DB.
@@ -1736,7 +1723,7 @@ mod tests {
             &child_runs,
             &steps,
             Duration::from_millis(10),
-            Duration::from_millis(50),
+            Duration::from_secs(2),
         );
 
         assert_eq!(results.len(), 2);

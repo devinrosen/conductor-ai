@@ -14,6 +14,9 @@ use crate::error::Result;
 /// import it upward, keeping the dependency flow unidirectional.
 pub const PR_REVIEW_SWARM_PROMPT_PREFIX: &str = "PR review swarm";
 
+/// Default error message used when the agent reports an error without a message.
+pub const DEFAULT_AGENT_ERROR_MSG: &str = "Claude reported an error";
+
 /// Protocol marker that agents emit to request human feedback.
 pub const FEEDBACK_MARKER: &str = "[NEEDS_FEEDBACK] ";
 
@@ -41,6 +44,32 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
 /// Shared SELECT column list for the `feedback_requests` table.
 const FEEDBACK_SELECT: &str =
     "SELECT id, run_id, prompt, response, status, created_at, responded_at FROM feedback_requests";
+
+/// Parsed result event from an agent log file or streaming JSON.
+pub struct LogResult {
+    pub result_text: Option<String>,
+    pub cost_usd: Option<f64>,
+    pub num_turns: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub is_error: bool,
+}
+
+/// Extract the five protocol fields from a `result` JSON event.
+pub fn parse_result_event(event: &serde_json::Value) -> LogResult {
+    LogResult {
+        result_text: event
+            .get("result")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        cost_usd: event.get("total_cost_usd").and_then(|v| v.as_f64()),
+        num_turns: event.get("num_turns").and_then(|v| v.as_i64()),
+        duration_ms: event.get("duration_ms").and_then(|v| v.as_i64()),
+        is_error: event
+            .get("is_error")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    }
+}
 
 /// Status of an agent run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
