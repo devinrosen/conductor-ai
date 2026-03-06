@@ -661,7 +661,7 @@ pub async fn request_feedback(
         )
     })?;
 
-    if run.status != "running" {
+    if run.status != conductor_core::agent::AgentRunStatus::Running {
         return Err(conductor_core::error::ConductorError::Agent(
             "Agent is not running".to_string(),
         )

@@ -1508,9 +1508,9 @@ fn wait_for_feedback_response(mgr: &AgentManager, feedback_id: &str) -> Option<S
         std::thread::sleep(std::time::Duration::from_secs(2));
 
         match mgr.get_feedback(feedback_id) {
-            Ok(Some(fb)) => match fb.status.as_str() {
-                "responded" => return fb.response,
-                "dismissed" => return None,
+            Ok(Some(fb)) => match fb.status {
+                conductor_core::agent::FeedbackStatus::Responded => return fb.response,
+                conductor_core::agent::FeedbackStatus::Dismissed => return None,
                 _ => continue, // still pending
             },
             Ok(None) => return None, // feedback request deleted

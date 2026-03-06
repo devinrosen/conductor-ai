@@ -240,9 +240,11 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             .and_then(|wt_id| state.data.latest_agent_runs.get(wt_id));
 
         let is_active = agent_run.is_some_and(|run| run.is_active());
-        let has_running_agent = agent_run.is_some_and(|run| run.status == "running");
-        let has_waiting_feedback =
-            agent_run.is_some_and(|run| run.status == "waiting_for_feedback");
+        let has_running_agent = agent_run
+            .is_some_and(|run| run.status == conductor_core::agent::AgentRunStatus::Running);
+        let has_waiting_feedback = agent_run.is_some_and(|run| {
+            run.status == conductor_core::agent::AgentRunStatus::WaitingForFeedback
+        });
         let has_log = agent_run.is_some_and(|run| run.log_file.is_some());
 
         match key.code {

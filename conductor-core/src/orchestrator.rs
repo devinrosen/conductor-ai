@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 
-use crate::agent::{AgentManager, AgentRun};
+use crate::agent::{AgentManager, AgentRun, AgentRunStatus, StepStatus};
 use crate::config::Config;
 use crate::error::Result;
 use crate::worktree::WorktreeManager;
@@ -42,7 +42,7 @@ pub struct ChildRunResult {
     pub step_index: usize,
     pub step_description: String,
     pub run_id: String,
-    pub status: String,
+    pub status: AgentRunStatus,
     pub result_text: Option<String>,
     pub cost_usd: Option<f64>,
     pub num_turns: Option<i64>,
@@ -103,7 +103,7 @@ pub fn orchestrate_run(
 
     for (i, step) in steps.iter().enumerate() {
         // Skip already-completed steps (e.g. from a resumed orchestration)
-        if step.status == "completed" {
+        if step.status == StepStatus::Completed {
             eprintln!(
                 "[orchestrator] Step {}/{}: already completed — {}",
                 i + 1,
@@ -122,7 +122,7 @@ pub fn orchestrate_run(
 
         // Mark step as in_progress
         if let Some(ref step_id) = step.id {
-            let _ = mgr.update_step_status(step_id, "in_progress");
+            let _ = mgr.update_step_status(step_id, StepStatus::InProgress);
         }
 
         // Build prompt for the child agent from the step description and parent context
@@ -157,7 +157,7 @@ pub fn orchestrate_run(
             eprintln!("[orchestrator] Failed to spawn child: {e}");
             let _ = mgr.update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
             if let Some(ref step_id) = step.id {
-                let _ = mgr.update_step_status(step_id, "failed");
+                let _ = mgr.update_step_status(step_id, StepStatus::Failed);
             }
             all_succeeded = false;
 
@@ -165,7 +165,7 @@ pub fn orchestrate_run(
                 step_index: i,
                 step_description: step.description.clone(),
                 run_id: child_run.id,
-                status: "failed".to_string(),
+                status: AgentRunStatus::Failed,
                 result_text: Some(format!("spawn failed: {e}")),
                 cost_usd: None,
                 num_turns: None,
@@ -189,7 +189,7 @@ pub fn orchestrate_run(
 
         match result {
             Ok(completed_run) => {
-                let succeeded = completed_run.status == "completed";
+                let succeeded = completed_run.status == AgentRunStatus::Completed;
                 if succeeded {
                     eprintln!(
                         "[orchestrator] Step {}/{} completed: cost=${:.4}, {} turns",
@@ -199,7 +199,7 @@ pub fn orchestrate_run(
                         completed_run.num_turns.unwrap_or(0)
                     );
                     if let Some(ref step_id) = step.id {
-                        let _ = mgr.update_step_status(step_id, "completed");
+                        let _ = mgr.update_step_status(step_id, StepStatus::Completed);
                     }
                 } else {
                     eprintln!(
@@ -212,7 +212,7 @@ pub fn orchestrate_run(
                             .unwrap_or("unknown error")
                     );
                     if let Some(ref step_id) = step.id {
-                        let _ = mgr.update_step_status(step_id, "failed");
+                        let _ = mgr.update_step_status(step_id, StepStatus::Failed);
                     }
                     all_succeeded = false;
                 }
@@ -236,7 +236,7 @@ pub fn orchestrate_run(
             Err(e) => {
                 eprintln!("[orchestrator] Step {}/{} error: {e}", i + 1, steps.len());
                 if let Some(ref step_id) = step.id {
-                    let _ = mgr.update_step_status(step_id, "failed");
+                    let _ = mgr.update_step_status(step_id, StepStatus::Failed);
                 }
                 // Cancel the child run if it timed out
                 let _ = mgr.update_run_cancelled(&child_run.id);
@@ -251,7 +251,7 @@ pub fn orchestrate_run(
                     step_index: i,
                     step_description: step.description.clone(),
                     run_id: child_run.id,
-                    status: "failed".to_string(),
+                    status: AgentRunStatus::Failed,
                     result_text: Some(e.to_string()),
                     cost_usd: None,
                     num_turns: None,
@@ -350,13 +350,12 @@ fn poll_child_completion(
         let mgr = AgentManager::new(conn);
         match mgr.get_run(child_run_id) {
             Ok(Some(run)) => {
-                match run.status.as_str() {
-                    "completed" | "failed" | "cancelled" => return Ok(run),
-                    "running" => {
+                match run.status {
+                    AgentRunStatus::Completed
+                    | AgentRunStatus::Failed
+                    | AgentRunStatus::Cancelled => return Ok(run),
+                    AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback => {
                         // Still running — wait and poll again
-                    }
-                    other => {
-                        return Err(format!("Unexpected run status: {other}"));
                     }
                 }
             }
@@ -428,7 +427,7 @@ fn build_orchestration_summary(result: &OrchestrationResult) -> String {
     let succeeded = result
         .child_results
         .iter()
-        .filter(|r| r.status == "completed")
+        .filter(|r| r.status == AgentRunStatus::Completed)
         .count();
     let failed = total - succeeded;
 
@@ -442,7 +441,7 @@ fn build_orchestration_summary(result: &OrchestrationResult) -> String {
     ));
 
     for r in &result.child_results {
-        let status_marker = if r.status == "completed" {
+        let status_marker = if r.status == AgentRunStatus::Completed {
             "ok"
         } else {
             "FAIL"
@@ -492,7 +491,7 @@ mod tests {
             worktree_id: "w1".to_string(),
             claude_session_id: None,
             prompt: prompt.to_string(),
-            status: "running".to_string(),
+            status: AgentRunStatus::Running,
             result_text: None,
             cost_usd: None,
             num_turns: None,
@@ -545,7 +544,7 @@ mod tests {
                     step_index: 0,
                     step_description: "Read the code".to_string(),
                     run_id: "c1".to_string(),
-                    status: "completed".to_string(),
+                    status: AgentRunStatus::Completed,
                     result_text: None,
                     cost_usd: Some(0.05),
                     num_turns: Some(3),
@@ -555,7 +554,7 @@ mod tests {
                     step_index: 1,
                     step_description: "Write tests".to_string(),
                     run_id: "c2".to_string(),
-                    status: "failed".to_string(),
+                    status: AgentRunStatus::Failed,
                     result_text: Some("timeout".to_string()),
                     cost_usd: Some(0.10),
                     num_turns: Some(5),
@@ -585,7 +584,7 @@ mod tests {
                     step_index: 0,
                     step_description: "Step A".to_string(),
                     run_id: "c1".to_string(),
-                    status: "completed".to_string(),
+                    status: AgentRunStatus::Completed,
                     result_text: None,
                     cost_usd: Some(0.01),
                     num_turns: Some(2),
@@ -595,7 +594,7 @@ mod tests {
                     step_index: 1,
                     step_description: "Step B".to_string(),
                     run_id: "c2".to_string(),
-                    status: "completed".to_string(),
+                    status: AgentRunStatus::Completed,
                     result_text: None,
                     cost_usd: Some(0.02),
                     num_turns: Some(3),
@@ -669,7 +668,7 @@ mod tests {
         );
         assert!(result.is_ok());
         let completed = result.unwrap();
-        assert_eq!(completed.status, "completed");
+        assert_eq!(completed.status, AgentRunStatus::Completed);
         assert_eq!(completed.result_text.as_deref(), Some("done"));
     }
 
@@ -689,7 +688,7 @@ mod tests {
         );
         assert!(result.is_ok());
         let failed = result.unwrap();
-        assert_eq!(failed.status, "failed");
+        assert_eq!(failed.status, AgentRunStatus::Failed);
     }
 
     #[test]
@@ -708,7 +707,7 @@ mod tests {
         );
         assert!(result.is_ok());
         let cancelled = result.unwrap();
-        assert_eq!(cancelled.status, "cancelled");
+        assert_eq!(cancelled.status, AgentRunStatus::Cancelled);
     }
 
     #[test]
@@ -732,7 +731,7 @@ mod tests {
 
         // Create a run that stays in "running" status
         let run = mgr.create_run("w1", "test", None, None).unwrap();
-        assert_eq!(run.status, "running");
+        assert_eq!(run.status, AgentRunStatus::Running);
 
         let result = poll_child_completion(
             &conn,
@@ -791,14 +790,14 @@ mod tests {
             step_index: 2,
             step_description: "Implement feature".to_string(),
             run_id: "run-123".to_string(),
-            status: "completed".to_string(),
+            status: AgentRunStatus::Completed,
             result_text: Some("All good".to_string()),
             cost_usd: Some(0.1234),
             num_turns: Some(10),
             duration_ms: Some(30000),
         };
         assert_eq!(r.step_index, 2);
-        assert_eq!(r.status, "completed");
+        assert_eq!(r.status, AgentRunStatus::Completed);
         assert_eq!(r.cost_usd, Some(0.1234));
         assert_eq!(r.duration_ms, Some(30000));
     }
@@ -812,7 +811,7 @@ mod tests {
                     step_index: 0,
                     step_description: "A".to_string(),
                     run_id: "c1".to_string(),
-                    status: "completed".to_string(),
+                    status: AgentRunStatus::Completed,
                     result_text: None,
                     cost_usd: Some(0.10),
                     num_turns: Some(5),
@@ -822,7 +821,7 @@ mod tests {
                     step_index: 1,
                     step_description: "B".to_string(),
                     run_id: "c2".to_string(),
-                    status: "completed".to_string(),
+                    status: AgentRunStatus::Completed,
                     result_text: None,
                     cost_usd: Some(0.20),
                     num_turns: Some(10),
@@ -832,7 +831,7 @@ mod tests {
                     step_index: 2,
                     step_description: "C".to_string(),
                     run_id: "c3".to_string(),
-                    status: "failed".to_string(),
+                    status: AgentRunStatus::Failed,
                     result_text: None,
                     cost_usd: None,
                     num_turns: None,

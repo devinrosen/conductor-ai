@@ -135,17 +135,22 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 Style::default().fg(Color::DarkGray),
             )));
             for step in steps {
-                let (checkbox, checkbox_color, style) = match step.status.as_str() {
-                    "completed" => (
+                use conductor_core::agent::StepStatus;
+                let (checkbox, checkbox_color, style) = match step.status {
+                    StepStatus::Completed => (
                         "[x]",
                         Color::Green,
                         Style::default()
                             .fg(Color::Green)
                             .add_modifier(Modifier::DIM),
                     ),
-                    "in_progress" => ("[>]", Color::Blue, Style::default().fg(Color::Blue)),
-                    "failed" => ("[!]", Color::Red, Style::default().fg(Color::Red)),
-                    _ => ("[ ]", Color::DarkGray, Style::default().fg(Color::White)),
+                    StepStatus::InProgress => {
+                        ("[>]", Color::Blue, Style::default().fg(Color::Blue))
+                    }
+                    StepStatus::Failed => ("[!]", Color::Red, Style::default().fg(Color::Red)),
+                    StepStatus::Pending => {
+                        ("[ ]", Color::DarkGray, Style::default().fg(Color::White))
+                    }
                 };
                 lines.push(Line::from(vec![
                     Span::styled(
@@ -178,11 +183,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     lines.push(Line::from(""));
 
     let actions_text = if wt.is_active() {
-        let has_waiting = state
-            .data
-            .latest_agent_runs
-            .get(&wt.id)
-            .is_some_and(|run| run.status == "waiting_for_feedback");
+        let has_waiting = state.data.latest_agent_runs.get(&wt.id).is_some_and(|run| {
+            run.status == conductor_core::agent::AgentRunStatus::WaitingForFeedback
+        });
         let has_log = state
             .data
             .latest_agent_runs
@@ -381,8 +384,9 @@ fn render_agent_status_line(
         String::new()
     };
 
-    match run.status.as_str() {
-        "running" => {
+    use conductor_core::agent::AgentRunStatus;
+    match run.status {
+        AgentRunStatus::Running => {
             let turns = totals.total_turns + totals.live_turns;
             let live_elapsed_ms = chrono::DateTime::parse_from_rfc3339(&run.started_at)
                 .ok()
@@ -407,7 +411,7 @@ fn render_agent_status_line(
                 Span::styled(" — press x to stop", Style::default().fg(Color::DarkGray)),
             ])
         }
-        "waiting_for_feedback" => Line::from(vec![
+        AgentRunStatus::WaitingForFeedback => Line::from(vec![
             Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 "[waiting for feedback]",
@@ -418,7 +422,7 @@ fn render_agent_status_line(
                 Style::default().fg(Color::DarkGray),
             ),
         ]),
-        "completed" => {
+        AgentRunStatus::Completed => {
             let mut spans = vec![
                 Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
                 Span::styled("[completed]", Style::default().fg(Color::Green)),
@@ -438,7 +442,7 @@ fn render_agent_status_line(
             }
             Line::from(spans)
         }
-        "failed" => {
+        AgentRunStatus::Failed => {
             let mut spans = vec![
                 Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
                 Span::styled("[failed]", Style::default().fg(Color::Red)),
@@ -458,7 +462,7 @@ fn render_agent_status_line(
             }
             Line::from(spans)
         }
-        "cancelled" => {
+        AgentRunStatus::Cancelled => {
             let mut spans = vec![
                 Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
                 Span::styled("[cancelled]", Style::default().fg(Color::DarkGray)),
@@ -472,22 +476,18 @@ fn render_agent_status_line(
             }
             Line::from(spans)
         }
-        other => Line::from(vec![
-            Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("[{other}]")),
-        ]),
     }
 }
 
 /// Render a single child run as an indented line under the parent agent status.
 fn render_child_run_line(run: &conductor_core::agent::AgentRun) -> Line<'static> {
-    let (status_text, status_color) = match run.status.as_str() {
-        "running" => ("running", Color::Yellow),
-        "completed" => ("completed", Color::Green),
-        "failed" => ("failed", Color::Red),
-        "cancelled" => ("cancelled", Color::DarkGray),
-        "waiting_for_feedback" => ("waiting", Color::Magenta),
-        other => (other, Color::White),
+    use conductor_core::agent::AgentRunStatus;
+    let (status_text, status_color) = match run.status {
+        AgentRunStatus::Running => ("running", Color::Yellow),
+        AgentRunStatus::Completed => ("completed", Color::Green),
+        AgentRunStatus::Failed => ("failed", Color::Red),
+        AgentRunStatus::Cancelled => ("cancelled", Color::DarkGray),
+        AgentRunStatus::WaitingForFeedback => ("waiting", Color::Magenta),
     };
     let status_str = format!("[{status_text}]");
 
