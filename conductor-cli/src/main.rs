@@ -1500,22 +1500,17 @@ fn run_agent(
             }
         }
         Ok(_) if is_error => {
+            let error_msg = result_text
+                .as_deref()
+                .unwrap_or(conductor_core::agent::DEFAULT_AGENT_ERROR_MSG);
             if !db_updated_eagerly {
-                let error_msg = result_text
-                    .as_deref()
-                    .unwrap_or(conductor_core::agent::DEFAULT_AGENT_ERROR_MSG);
                 mgr.update_run_failed_with_session(
                     run_id,
                     error_msg,
                     session_id_parsed.as_deref(),
                 )?;
             }
-            eprintln!(
-                "[conductor] Agent failed: {}",
-                result_text
-                    .as_deref()
-                    .unwrap_or(conductor_core::agent::DEFAULT_AGENT_ERROR_MSG)
-            );
+            eprintln!("[conductor] Agent failed: {}", error_msg);
         }
         Ok(s) => {
             // Non-zero exit without is_error — override any eager update
