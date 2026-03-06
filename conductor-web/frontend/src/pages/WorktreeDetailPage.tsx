@@ -8,6 +8,7 @@ import { TimeAgo } from "../components/shared/TimeAgo";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { AgentPromptModal } from "../components/agents/AgentPromptModal";
+import { isActiveRun } from "../utils/agentStats";
 import { ModelPicker } from "../components/shared/ModelPicker";
 import { AgentStatusDisplay } from "../components/agents/AgentStatusDisplay";
 import { AgentActivityLog } from "../components/agents/AgentActivityLog";
@@ -72,7 +73,7 @@ export function WorktreeDetailPage() {
     : null;
 
   const isActive = worktree?.status === "active";
-  const isRunning = latestRun?.status === "running" || latestRun?.status === "waiting_for_feedback";
+  const isRunning = latestRun ? isActiveRun(latestRun) : false;
 
   // Tickets available for linking: same repo, not already linked to this worktree
   const availableTickets = tickets?.filter(

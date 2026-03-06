@@ -2808,7 +2808,7 @@ impl App {
             return;
         };
 
-        if !matches!(run.status.as_str(), "running" | "waiting_for_feedback") {
+        if !run.is_active() {
             return;
         }
 

@@ -96,7 +96,7 @@ pub async fn start_agent(
     // Check if there's already a running agent
     let agent_mgr = AgentManager::new(&db);
     if let Some(existing) = agent_mgr.latest_for_worktree(&worktree_id)? {
-        if matches!(existing.status.as_str(), "running" | "waiting_for_feedback") {
+        if existing.is_active() {
             return Err(conductor_core::error::ConductorError::Agent(
                 "Agent already running for this worktree".to_string(),
             )
@@ -214,7 +214,7 @@ pub async fn stop_agent(
             )
         })?;
 
-    if !matches!(run.status.as_str(), "running" | "waiting_for_feedback") {
+    if !run.is_active() {
         return Err(conductor_core::error::ConductorError::Agent(
             "Agent is not running".to_string(),
         )
@@ -525,7 +525,7 @@ pub async fn orchestrate_agent(
     // Check if there's already a running agent
     let agent_mgr = AgentManager::new(&db);
     if let Some(existing) = agent_mgr.latest_for_worktree(&worktree_id)? {
-        if matches!(existing.status.as_str(), "running" | "waiting_for_feedback") {
+        if existing.is_active() {
             return Err(conductor_core::error::ConductorError::Agent(
                 "Agent already running for this worktree".to_string(),
             )

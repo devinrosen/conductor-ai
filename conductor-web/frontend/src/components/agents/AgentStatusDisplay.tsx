@@ -1,5 +1,5 @@
 import type { AgentRun } from "../../api/types";
-import { statusColors, statusLabels } from "../../utils/agentStats";
+import { isActiveRun, statusColors, statusLabels } from "../../utils/agentStats";
 import { TimeAgo } from "../shared/TimeAgo";
 import { ChildRunsList } from "./ChildRunsList";
 
@@ -45,8 +45,7 @@ export function AgentStatusDisplay({
   );
 
   // Include in-progress run's turns in the total
-  const isActive =
-    run.status === "running" || run.status === "waiting_for_feedback";
+  const isActive = isActiveRun(run);
   const displayCost = isActive
     ? totalCost + (run.cost_usd ?? 0)
     : totalCost;

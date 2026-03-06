@@ -25,6 +25,19 @@ pub fn parse_feedback_marker(text: &str) -> Option<&str> {
 /// Maximum allowed length (in bytes) for feedback prompts and responses.
 const FEEDBACK_MAX_LEN: usize = 10_240; // 10 KB
 
+/// Truncate a string to at most `max_bytes` bytes, ensuring the cut falls on a
+/// valid UTF-8 character boundary (avoids panics on multi-byte characters).
+fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Shared SELECT column list for the `feedback_requests` table.
 const FEEDBACK_SELECT: &str =
     "SELECT id, run_id, prompt, response, status, created_at, responded_at FROM feedback_requests";
@@ -94,6 +107,11 @@ pub struct AgentRun {
 }
 
 impl AgentRun {
+    /// Returns true if this run is currently active (running or waiting for feedback).
+    pub fn is_active(&self) -> bool {
+        matches!(self.status.as_str(), "running" | "waiting_for_feedback")
+    }
+
     /// Returns true if this run ended (failed/cancelled) with incomplete plan steps
     /// and has a session_id available for resume.
     pub fn needs_resume(&self) -> bool {
@@ -1091,7 +1109,7 @@ impl<'a> AgentManager<'a> {
 
     /// Transition a run to "waiting_for_feedback" and create a feedback request.
     pub fn request_feedback(&self, run_id: &str, prompt: &str) -> Result<FeedbackRequest> {
-        let prompt = &prompt[..prompt.len().min(FEEDBACK_MAX_LEN)];
+        let prompt = truncate_utf8(prompt, FEEDBACK_MAX_LEN);
         let id = ulid::Ulid::new().to_string();
         let now = Utc::now().to_rfc3339();
 
@@ -1122,7 +1140,7 @@ impl<'a> AgentManager<'a> {
 
     /// Submit a response to a pending feedback request and resume the run.
     pub fn submit_feedback(&self, feedback_id: &str, response: &str) -> Result<FeedbackRequest> {
-        let response = &response[..response.len().min(FEEDBACK_MAX_LEN)];
+        let response = truncate_utf8(response, FEEDBACK_MAX_LEN);
         let now = Utc::now().to_rfc3339();
 
         // Update feedback request
@@ -1211,11 +1229,11 @@ impl<'a> AgentManager<'a> {
         worktree_id: &str,
     ) -> Result<Option<FeedbackRequest>> {
         let result = self.conn.query_row(
-            "SELECT f.id, f.run_id, f.prompt, f.response, f.status, f.created_at, f.responded_at \
-             FROM feedback_requests f \
-             JOIN agent_runs r ON f.run_id = r.id \
-             WHERE r.worktree_id = ?1 AND f.status = 'pending' \
-             ORDER BY f.created_at DESC LIMIT 1",
+            &format!(
+                "{FEEDBACK_SELECT} WHERE run_id IN \
+                 (SELECT id FROM agent_runs WHERE worktree_id = ?1) \
+                 AND status = 'pending' ORDER BY created_at DESC LIMIT 1"
+            ),
             params![worktree_id],
             row_to_feedback_request,
         );

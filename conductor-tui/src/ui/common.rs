@@ -53,9 +53,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
                     .selected_worktree_id
                     .as_ref()
                     .and_then(|wt_id| state.data.latest_agent_runs.get(wt_id))
-                    .is_some_and(|run| {
-                        matches!(run.status.as_str(), "running" | "waiting_for_feedback")
-                    });
+                    .is_some_and(|run| run.is_active());
                 if has_running {
                     "r:agent  x:stop  o:ticket  Esc:back  ?:help".to_string()
                 } else {

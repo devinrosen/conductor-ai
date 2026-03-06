@@ -9,6 +9,11 @@ export const statusColors: Record<string, string> = {
   cancelled: "bg-gray-100 text-gray-600",
 };
 
+/** Returns true if the run is currently active (running or waiting for feedback). */
+export function isActiveRun(run: { status: string }): boolean {
+  return run.status === "running" || run.status === "waiting_for_feedback";
+}
+
 /** Protocol marker that agents emit to request human feedback. */
 export const FEEDBACK_MARKER = "[NEEDS_FEEDBACK]";
 
