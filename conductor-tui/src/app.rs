@@ -531,7 +531,7 @@ impl App {
 
         // For running agents, count live turns from the log file
         if let Some(run) = runs.last() {
-            if run.status == "running" {
+            if run.status == conductor_core::agent::AgentRunStatus::Running {
                 if let Some(ref path) = run.log_file {
                     totals.live_turns = count_turns_in_log(path);
                 }
@@ -2709,19 +2709,20 @@ impl App {
     /// Returns `true` (and sets a status message) if the worktree already has
     /// an active agent, meaning the caller should abort.
     fn agent_busy_guard(&mut self, worktree_id: &str) -> bool {
+        use conductor_core::agent::AgentRunStatus;
         let status = self
             .state
             .data
             .latest_agent_runs
             .get(worktree_id)
-            .map(|run| run.status.as_str());
+            .map(|run| &run.status);
         match status {
-            Some("running") => {
+            Some(AgentRunStatus::Running) => {
                 self.state.status_message =
                     Some("Agent already running — press x to stop".to_string());
                 true
             }
-            Some("waiting_for_feedback") => {
+            Some(AgentRunStatus::WaitingForFeedback) => {
                 self.state.status_message =
                     Some("Agent waiting for feedback — press f to respond".to_string());
                 true

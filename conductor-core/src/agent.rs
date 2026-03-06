@@ -42,6 +42,166 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
 const FEEDBACK_SELECT: &str =
     "SELECT id, run_id, prompt, response, status, created_at, responded_at FROM feedback_requests";
 
+/// Status of an agent run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRunStatus {
+    Running,
+    WaitingForFeedback,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl std::fmt::Display for AgentRunStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Running => "running",
+            Self::WaitingForFeedback => "waiting_for_feedback",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl std::str::FromStr for AgentRunStatus {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "running" => Ok(Self::Running),
+            "waiting_for_feedback" => Ok(Self::WaitingForFeedback),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            _ => Err(format!("unknown AgentRunStatus: {s}")),
+        }
+    }
+}
+
+impl rusqlite::types::ToSql for AgentRunStatus {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
+    }
+}
+
+impl rusqlite::types::FromSql for AgentRunStatus {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let s = String::column_result(value)?;
+        s.parse().map_err(|e: String| {
+            rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e,
+            )))
+        })
+    }
+}
+
+/// Status of a human-in-the-loop feedback request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedbackStatus {
+    Pending,
+    Responded,
+    Dismissed,
+}
+
+impl std::fmt::Display for FeedbackStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Pending => "pending",
+            Self::Responded => "responded",
+            Self::Dismissed => "dismissed",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl std::str::FromStr for FeedbackStatus {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "responded" => Ok(Self::Responded),
+            "dismissed" => Ok(Self::Dismissed),
+            _ => Err(format!("unknown FeedbackStatus: {s}")),
+        }
+    }
+}
+
+impl rusqlite::types::ToSql for FeedbackStatus {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
+    }
+}
+
+impl rusqlite::types::FromSql for FeedbackStatus {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let s = String::column_result(value)?;
+        s.parse().map_err(|e: String| {
+            rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e,
+            )))
+        })
+    }
+}
+
+/// Status of a single plan step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StepStatus {
+    #[default]
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+impl std::fmt::Display for StepStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Pending => "pending",
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl std::str::FromStr for StepStatus {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "in_progress" => Ok(Self::InProgress),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            _ => Err(format!("unknown StepStatus: {s}")),
+        }
+    }
+}
+
+impl rusqlite::types::ToSql for StepStatus {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
+    }
+}
+
+impl rusqlite::types::FromSql for StepStatus {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let s = String::column_result(value)?;
+        s.parse().map_err(|e: String| {
+            rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e,
+            )))
+        })
+    }
+}
+
 /// A single step in an agent's two-phase execution plan.
 /// Stored as individual records in the `agent_run_steps` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,12 +210,11 @@ pub struct PlanStep {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub description: String,
-    /// Backward-compat flag derived from `status == "completed"`.
+    /// Backward-compat flag derived from `status == StepStatus::Completed`.
     #[serde(default)]
     pub done: bool,
-    /// One of: pending, in_progress, completed, failed.
-    #[serde(default = "default_step_status")]
-    pub status: String,
+    #[serde(default)]
+    pub status: StepStatus,
     /// Ordering within the run's plan (0-based).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<i64>,
@@ -65,17 +224,13 @@ pub struct PlanStep {
     pub completed_at: Option<String>,
 }
 
-fn default_step_status() -> String {
-    "pending".to_string()
-}
-
 impl Default for PlanStep {
     fn default() -> Self {
         Self {
             id: None,
             description: String::new(),
             done: false,
-            status: default_step_status(),
+            status: StepStatus::Pending,
             position: None,
             started_at: None,
             completed_at: None,
@@ -89,7 +244,7 @@ pub struct AgentRun {
     pub worktree_id: String,
     pub claude_session_id: Option<String>,
     pub prompt: String,
-    pub status: String,
+    pub status: AgentRunStatus,
     pub result_text: Option<String>,
     pub cost_usd: Option<f64>,
     pub num_turns: Option<i64>,
@@ -109,14 +264,19 @@ pub struct AgentRun {
 impl AgentRun {
     /// Returns true if this run is currently active (running or waiting for feedback).
     pub fn is_active(&self) -> bool {
-        matches!(self.status.as_str(), "running" | "waiting_for_feedback")
+        matches!(
+            self.status,
+            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
+        )
     }
 
     /// Returns true if this run ended (failed/cancelled) with incomplete plan steps
     /// and has a session_id available for resume.
     pub fn needs_resume(&self) -> bool {
-        matches!(self.status.as_str(), "failed" | "cancelled")
-            && self.claude_session_id.is_some()
+        matches!(
+            self.status,
+            AgentRunStatus::Failed | AgentRunStatus::Cancelled
+        ) && self.claude_session_id.is_some()
             && self.has_incomplete_plan_steps()
     }
 
@@ -395,10 +555,9 @@ pub struct FeedbackRequest {
     pub run_id: String,
     /// The question or context the agent is asking about.
     pub prompt: String,
-    /// The user's response (populated when status changes to "responded").
+    /// The user's response (populated when status changes to `FeedbackStatus::Responded`).
     pub response: Option<String>,
-    /// One of: pending, responded, dismissed.
-    pub status: String,
+    pub status: FeedbackStatus,
     pub created_at: String,
     pub responded_at: Option<String>,
 }
@@ -477,7 +636,7 @@ impl<'a> AgentManager<'a> {
             worktree_id: worktree_id.to_string(),
             claude_session_id: None,
             prompt: prompt.to_string(),
-            status: "running".to_string(),
+            status: AgentRunStatus::Running,
             result_text: None,
             cost_usd: None,
             num_turns: None,
@@ -616,7 +775,11 @@ impl<'a> AgentManager<'a> {
 
         for (i, step) in steps.iter().enumerate() {
             let step_id = ulid::Ulid::new().to_string();
-            let status = if step.done { "completed" } else { "pending" };
+            let status = if step.done {
+                StepStatus::Completed
+            } else {
+                StepStatus::Pending
+            };
             self.conn.execute(
                 "INSERT INTO agent_run_steps (id, run_id, position, description, status) \
                  VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -639,16 +802,16 @@ impl<'a> AgentManager<'a> {
     }
 
     /// Update the status of a single plan step.
-    pub fn update_step_status(&self, step_id: &str, status: &str) -> Result<()> {
+    pub fn update_step_status(&self, step_id: &str, status: StepStatus) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         match status {
-            "in_progress" => {
+            StepStatus::InProgress => {
                 self.conn.execute(
                     "UPDATE agent_run_steps SET status = ?1, started_at = ?2 WHERE id = ?3",
                     params![status, now, step_id],
                 )?;
             }
-            "completed" | "failed" => {
+            StepStatus::Completed | StepStatus::Failed => {
                 self.conn.execute(
                     "UPDATE agent_run_steps SET status = ?1, completed_at = ?2 WHERE id = ?3",
                     params![status, now, step_id],
@@ -1124,7 +1287,7 @@ impl<'a> AgentManager<'a> {
             run_id: run_id.to_string(),
             prompt: prompt.to_string(),
             response: None,
-            status: "pending".to_string(),
+            status: FeedbackStatus::Pending,
             created_at: now.clone(),
             responded_at: None,
         };
@@ -1311,7 +1474,7 @@ pub fn build_startup_context(
         // Prior run summary (from last completed or failed run)
         if let Some(last_run) = prior_runs
             .iter()
-            .find(|r| r.status == "completed" || r.status == "failed")
+            .find(|r| r.status == AgentRunStatus::Completed || r.status == AgentRunStatus::Failed)
         {
             if let Some(ref result) = last_run.result_text {
                 let truncated = crate::text_util::cap_with_suffix(result, 500, "…");
@@ -1431,8 +1594,8 @@ fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun> {
 }
 
 fn row_to_plan_step(row: &rusqlite::Row) -> rusqlite::Result<PlanStep> {
-    let status: String = row.get(4)?;
-    let done = status == "completed";
+    let status: StepStatus = row.get(4)?;
+    let done = status == StepStatus::Completed;
     Ok(PlanStep {
         id: Some(row.get(0)?),
         description: row.get(3)?,
@@ -1479,7 +1642,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
-        assert_eq!(run.status, "running");
+        assert_eq!(run.status, AgentRunStatus::Running);
         assert_eq!(run.prompt, "Fix the bug");
         assert!(run.tmux_window.is_none());
 
@@ -1533,7 +1696,7 @@ mod tests {
         .unwrap();
 
         let latest = mgr.latest_for_worktree("w1").unwrap().unwrap();
-        assert_eq!(latest.status, "completed");
+        assert_eq!(latest.status, AgentRunStatus::Completed);
         assert_eq!(latest.claude_session_id.as_deref(), Some("sess-123"));
         assert_eq!(latest.cost_usd, Some(0.05));
     }
@@ -1548,7 +1711,7 @@ mod tests {
             .unwrap();
 
         let latest = mgr.latest_for_worktree("w1").unwrap().unwrap();
-        assert_eq!(latest.status, "failed");
+        assert_eq!(latest.status, AgentRunStatus::Failed);
         assert_eq!(latest.result_text.as_deref(), Some("Something went wrong"));
     }
 
@@ -1561,7 +1724,7 @@ mod tests {
         mgr.update_run_cancelled(&run.id).unwrap();
 
         let latest = mgr.latest_for_worktree("w1").unwrap().unwrap();
-        assert_eq!(latest.status, "cancelled");
+        assert_eq!(latest.status, AgentRunStatus::Cancelled);
         assert!(latest.ended_at.is_some());
     }
 
@@ -1700,7 +1863,7 @@ mod tests {
         assert_eq!(plan.len(), 2);
         assert_eq!(plan[0].description, "Investigate the issue");
         assert!(!plan[0].done);
-        assert_eq!(plan[0].status, "pending");
+        assert_eq!(plan[0].status, StepStatus::Pending);
         assert!(plan[0].id.is_some());
         assert_eq!(plan[0].position, Some(0));
         assert_eq!(plan[1].description, "Write a fix");
@@ -1730,10 +1893,10 @@ mod tests {
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         let plan = fetched.plan.unwrap();
         assert!(plan[0].done);
-        assert_eq!(plan[0].status, "completed");
+        assert_eq!(plan[0].status, StepStatus::Completed);
         assert!(plan[0].completed_at.is_some());
         assert!(plan[1].done);
-        assert_eq!(plan[1].status, "completed");
+        assert_eq!(plan[1].status, StepStatus::Completed);
         assert!(plan[1].completed_at.is_some());
     }
 
@@ -1759,7 +1922,7 @@ mod tests {
         let steps = vec![PlanStep {
             description: "Do the thing".to_string(),
             done: true,
-            status: "completed".to_string(),
+            status: StepStatus::Completed,
             ..Default::default()
         }];
         mgr.update_run_plan(&run.id, &steps).unwrap();
@@ -1796,20 +1959,22 @@ mod tests {
 
         // Mark first step in_progress
         let step_id = stored[0].id.as_ref().unwrap();
-        mgr.update_step_status(step_id, "in_progress").unwrap();
+        mgr.update_step_status(step_id, StepStatus::InProgress)
+            .unwrap();
         let updated = mgr.get_run_steps(&run.id).unwrap();
-        assert_eq!(updated[0].status, "in_progress");
+        assert_eq!(updated[0].status, StepStatus::InProgress);
         assert!(updated[0].started_at.is_some());
         assert!(!updated[0].done);
 
         // Mark first step completed
-        mgr.update_step_status(step_id, "completed").unwrap();
+        mgr.update_step_status(step_id, StepStatus::Completed)
+            .unwrap();
         let updated = mgr.get_run_steps(&run.id).unwrap();
-        assert_eq!(updated[0].status, "completed");
+        assert_eq!(updated[0].status, StepStatus::Completed);
         assert!(updated[0].completed_at.is_some());
         assert!(updated[0].done);
         // Second step still pending
-        assert_eq!(updated[1].status, "pending");
+        assert_eq!(updated[1].status, StepStatus::Pending);
         assert!(!updated[1].done);
     }
 
@@ -1827,10 +1992,10 @@ mod tests {
 
         let stored = mgr.get_run_steps(&run.id).unwrap();
         let step_id = stored[0].id.as_ref().unwrap();
-        mgr.update_step_status(step_id, "failed").unwrap();
+        mgr.update_step_status(step_id, StepStatus::Failed).unwrap();
 
         let updated = mgr.get_run_steps(&run.id).unwrap();
-        assert_eq!(updated[0].status, "failed");
+        assert_eq!(updated[0].status, StepStatus::Failed);
         assert!(updated[0].completed_at.is_some());
         assert!(!updated[0].done);
     }
@@ -2358,13 +2523,13 @@ mod tests {
             PlanStep {
                 description: "Read the code".to_string(),
                 done: true,
-                status: "completed".to_string(),
+                status: StepStatus::Completed,
                 ..Default::default()
             },
             PlanStep {
                 description: "Write tests".to_string(),
                 done: true,
-                status: "completed".to_string(),
+                status: StepStatus::Completed,
                 ..Default::default()
             },
             PlanStep {
@@ -2598,7 +2763,7 @@ mod tests {
             worktree_id: "w1".to_string(),
             claude_session_id: Some("sess-abc".to_string()),
             prompt: "Fix the bug".to_string(),
-            status: "failed".to_string(),
+            status: AgentRunStatus::Failed,
             result_text: None,
             cost_usd: None,
             num_turns: None,
@@ -2643,7 +2808,7 @@ mod tests {
             .unwrap();
 
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
-        assert_eq!(fetched.status, "failed");
+        assert_eq!(fetched.status, AgentRunStatus::Failed);
         assert_eq!(fetched.result_text.as_deref(), Some("Context exhausted"));
         assert_eq!(fetched.claude_session_id.as_deref(), Some("sess-456"));
     }
@@ -2813,20 +2978,20 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
-        assert_eq!(run.status, "running");
+        assert_eq!(run.status, AgentRunStatus::Running);
 
         let fb = mgr
             .request_feedback(&run.id, "Should I refactor this module?")
             .unwrap();
         assert_eq!(fb.run_id, run.id);
         assert_eq!(fb.prompt, "Should I refactor this module?");
-        assert_eq!(fb.status, "pending");
+        assert_eq!(fb.status, FeedbackStatus::Pending);
         assert!(fb.response.is_none());
         assert!(fb.responded_at.is_none());
 
         // Run status should be waiting_for_feedback
         let fetched_run = mgr.get_run(&run.id).unwrap().unwrap();
-        assert_eq!(fetched_run.status, "waiting_for_feedback");
+        assert_eq!(fetched_run.status, AgentRunStatus::WaitingForFeedback);
     }
 
     #[test]
@@ -2840,13 +3005,13 @@ mod tests {
             .unwrap();
 
         let updated = mgr.submit_feedback(&fb.id, "Yes, go ahead").unwrap();
-        assert_eq!(updated.status, "responded");
+        assert_eq!(updated.status, FeedbackStatus::Responded);
         assert_eq!(updated.response.as_deref(), Some("Yes, go ahead"));
         assert!(updated.responded_at.is_some());
 
         // Run should be back to running
         let fetched_run = mgr.get_run(&run.id).unwrap().unwrap();
-        assert_eq!(fetched_run.status, "running");
+        assert_eq!(fetched_run.status, AgentRunStatus::Running);
     }
 
     #[test]
@@ -2861,11 +3026,11 @@ mod tests {
 
         // Feedback should be dismissed
         let fetched_fb = mgr.get_feedback(&fb.id).unwrap().unwrap();
-        assert_eq!(fetched_fb.status, "dismissed");
+        assert_eq!(fetched_fb.status, FeedbackStatus::Dismissed);
 
         // Run should be back to running
         let fetched_run = mgr.get_run(&run.id).unwrap().unwrap();
-        assert_eq!(fetched_run.status, "running");
+        assert_eq!(fetched_run.status, AgentRunStatus::Running);
     }
 
     #[test]
@@ -2924,9 +3089,9 @@ mod tests {
         assert_eq!(all.len(), 2);
         // Newest first
         assert_eq!(all[0].prompt, "Question 2");
-        assert_eq!(all[0].status, "pending");
+        assert_eq!(all[0].status, FeedbackStatus::Pending);
         assert_eq!(all[1].prompt, "Question 1");
-        assert_eq!(all[1].status, "responded");
+        assert_eq!(all[1].status, FeedbackStatus::Responded);
 
         // Different run should have no feedback
         let run2 = mgr.create_run("w2", "Other task", None, None).unwrap();

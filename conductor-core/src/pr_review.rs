@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 
-use crate::agent::{AgentManager, AgentRun, PlanStep, PR_REVIEW_SWARM_PROMPT_PREFIX};
+use crate::agent::{
+    AgentManager, AgentRun, AgentRunStatus, PlanStep, StepStatus, PR_REVIEW_SWARM_PROMPT_PREFIX,
+};
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::github;
@@ -49,7 +51,7 @@ pub struct ReviewerResult {
     pub focus: String,
     pub required: bool,
     pub run_id: String,
-    pub status: String,
+    pub status: AgentRunStatus,
     pub findings: Option<String>,
     pub approved: bool,
     pub cost_usd: Option<f64>,
@@ -160,7 +162,7 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
             id: None,
             description: format!("{} review: {}", role.name, role.focus),
             done: false,
-            status: "pending".to_string(),
+            status: StepStatus::Pending,
             position: Some(i as i64),
             started_at: None,
             completed_at: None,
@@ -180,7 +182,7 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
 
         // Mark step as in_progress
         if let Some(ref step_id) = steps[i].id {
-            let _ = mgr.update_step_status(step_id, "in_progress");
+            let _ = mgr.update_step_status(step_id, StepStatus::InProgress);
         }
 
         let child_run = mgr.create_child_run(
@@ -209,7 +211,7 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
             eprintln!("[review-swarm] Failed to spawn {} reviewer: {e}", role.name);
             let _ = mgr.update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
             if let Some(ref step_id) = steps[i].id {
-                let _ = mgr.update_step_status(step_id, "failed");
+                let _ = mgr.update_step_status(step_id, StepStatus::Failed);
             }
         }
 
@@ -745,7 +747,7 @@ fn file_off_diff_issues(
 /// 2. They output `VERDICT: REQUEST_CHANGES` but only have suggestion-severity findings
 ///    (no critical or warning). Suggestion-only findings should not block.
 fn is_review_approved(run: &AgentRun, parsed: &ParsedReviewerOutput) -> bool {
-    if run.status != "completed" {
+    if run.status != AgentRunStatus::Completed {
         return false;
     }
     match &run.result_text {
@@ -997,7 +999,7 @@ fn poll_all_reviewers(
                 );
                 eprintln!("[review-swarm] {} reviewer error: {err}", role.name);
                 if let Some(ref step_id) = steps[*step_idx].id {
-                    let _ = mgr.update_step_status(step_id, "failed");
+                    let _ = mgr.update_step_status(step_id, StepStatus::Failed);
                 }
                 let _ = mgr.update_run_cancelled(&child_run.id);
                 results[idx] = Some(ReviewerResult {
@@ -1005,7 +1007,7 @@ fn poll_all_reviewers(
                     focus: role.focus.clone(),
                     required: role.required,
                     run_id: child_run.id.clone(),
-                    status: "failed".to_string(),
+                    status: AgentRunStatus::Failed,
                     findings: Some(err),
                     approved: false,
                     cost_usd: None,
@@ -1018,8 +1020,10 @@ fn poll_all_reviewers(
             }
 
             match mgr.get_run(&child_run.id) {
-                Ok(Some(run)) => match run.status.as_str() {
-                    "completed" | "failed" | "cancelled" => {
+                Ok(Some(run)) => match run.status {
+                    AgentRunStatus::Completed
+                    | AgentRunStatus::Failed
+                    | AgentRunStatus::Cancelled => {
                         let findings = run.result_text.clone();
                         let parsed = findings
                             .as_deref()
@@ -1028,12 +1032,12 @@ fn poll_all_reviewers(
                         let approved = is_review_approved(&run, &parsed);
                         let off_diff = parsed.off_diff_findings;
                         if let Some(ref step_id) = steps[*step_idx].id {
-                            let status = if run.status == "completed" {
-                                "completed"
+                            let step_status = if run.status == AgentRunStatus::Completed {
+                                StepStatus::Completed
                             } else {
-                                "failed"
+                                StepStatus::Failed
                             };
-                            let _ = mgr.update_step_status(step_id, status);
+                            let _ = mgr.update_step_status(step_id, step_status);
                         }
                         eprintln!(
                             "[review-swarm] {} reviewer: {} (approved={}, off_diff={})",
@@ -1069,7 +1073,7 @@ fn poll_all_reviewers(
                         focus: role.focus.clone(),
                         required: role.required,
                         run_id: child_run.id.clone(),
-                        status: "failed".to_string(),
+                        status: AgentRunStatus::Failed,
                         findings: Some(format!("Run {} not found", child_run.id)),
                         approved: false,
                         cost_usd: None,
@@ -1086,7 +1090,7 @@ fn poll_all_reviewers(
                         focus: role.focus.clone(),
                         required: role.required,
                         run_id: child_run.id.clone(),
-                        status: "failed".to_string(),
+                        status: AgentRunStatus::Failed,
                         findings: Some(format!("Database error: {e}")),
                         approved: false,
                         cost_usd: None,
@@ -1129,10 +1133,11 @@ fn poll_reviewer_completion(
         }
 
         match mgr.get_run(run_id) {
-            Ok(Some(run)) => match run.status.as_str() {
-                "completed" | "failed" | "cancelled" => return Ok(run),
-                "running" => {}
-                other => return Err(format!("Unexpected run status: {other}")),
+            Ok(Some(run)) => match run.status {
+                AgentRunStatus::Completed | AgentRunStatus::Failed | AgentRunStatus::Cancelled => {
+                    return Ok(run)
+                }
+                AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback => {}
             },
             Ok(None) => return Err(format!("Reviewer run {run_id} not found")),
             Err(e) => return Err(format!("Database error: {e}")),
@@ -1167,13 +1172,13 @@ mod tests {
         conn
     }
 
-    fn make_run(status: &str, result_text: Option<&str>) -> AgentRun {
+    fn make_run(status: AgentRunStatus, result_text: Option<&str>) -> AgentRun {
         AgentRun {
             id: "test-run".to_string(),
             worktree_id: "w1".to_string(),
             claude_session_id: None,
             prompt: "test".to_string(),
-            status: status.to_string(),
+            status,
             result_text: result_text.map(String::from),
             cost_usd: None,
             num_turns: None,
@@ -1194,7 +1199,7 @@ mod tests {
                 id: None,
                 description: "review".to_string(),
                 done: false,
-                status: "pending".to_string(),
+                status: StepStatus::Pending,
                 position: None,
                 started_at: None,
                 completed_at: None,
@@ -1240,20 +1245,26 @@ mod tests {
 
     #[test]
     fn test_is_review_approved_approve() {
-        let run = make_run("completed", Some("No issues found.\n\nVERDICT: APPROVE"));
+        let run = make_run(
+            AgentRunStatus::Completed,
+            Some("No issues found.\n\nVERDICT: APPROVE"),
+        );
         assert!(is_review_approved(&run, &ParsedReviewerOutput::default()));
     }
 
     #[test]
     fn test_is_review_approved_approve_trailing_whitespace() {
-        let run = make_run("completed", Some("No issues found.\n\nVERDICT: APPROVE\n"));
+        let run = make_run(
+            AgentRunStatus::Completed,
+            Some("No issues found.\n\nVERDICT: APPROVE\n"),
+        );
         assert!(is_review_approved(&run, &ParsedReviewerOutput::default()));
     }
 
     #[test]
     fn test_is_review_approved_request_changes() {
         let run = make_run(
-            "completed",
+            AgentRunStatus::Completed,
             Some("Found issues.\n\nVERDICT: REQUEST_CHANGES"),
         );
         assert!(!is_review_approved(&run, &ParsedReviewerOutput::default()));
@@ -1261,19 +1272,19 @@ mod tests {
 
     #[test]
     fn test_is_review_approved_failed_run() {
-        let run = make_run("failed", Some("VERDICT: APPROVE"));
+        let run = make_run(AgentRunStatus::Failed, Some("VERDICT: APPROVE"));
         assert!(!is_review_approved(&run, &ParsedReviewerOutput::default()));
     }
 
     #[test]
     fn test_is_review_approved_no_result() {
-        let run = make_run("completed", None);
+        let run = make_run(AgentRunStatus::Completed, None);
         assert!(!is_review_approved(&run, &ParsedReviewerOutput::default()));
     }
 
     #[test]
     fn test_is_review_approved_case_insensitive() {
-        let run = make_run("completed", Some("verdict: approve"));
+        let run = make_run(AgentRunStatus::Completed, Some("verdict: approve"));
         assert!(is_review_approved(&run, &ParsedReviewerOutput::default()));
     }
 
@@ -1281,7 +1292,7 @@ mod tests {
     fn test_is_review_approved_rejects_mid_text_verdict() {
         // Verdict embedded in diff content should NOT count as approval
         let run = make_run(
-            "completed",
+            AgentRunStatus::Completed,
             Some("Found issues.\n+// VERDICT: APPROVE\n\nVERDICT: REQUEST_CHANGES"),
         );
         assert!(!is_review_approved(&run, &ParsedReviewerOutput::default()));
@@ -1323,7 +1334,7 @@ mod tests {
                 focus: "Design".to_string(),
                 required: true,
                 run_id: "r1".to_string(),
-                status: "completed".to_string(),
+                status: AgentRunStatus::Completed,
                 findings: Some("No issues found.".to_string()),
                 approved: true,
                 cost_usd: Some(0.05),
@@ -1336,7 +1347,7 @@ mod tests {
                 focus: "Security".to_string(),
                 required: true,
                 run_id: "r2".to_string(),
-                status: "completed".to_string(),
+                status: AgentRunStatus::Completed,
                 findings: Some("No issues found.".to_string()),
                 approved: true,
                 cost_usd: Some(0.04),
@@ -1362,7 +1373,7 @@ mod tests {
                 focus: "Design".to_string(),
                 required: true,
                 run_id: "r1".to_string(),
-                status: "completed".to_string(),
+                status: AgentRunStatus::Completed,
                 findings: Some("Found coupling issues.".to_string()),
                 approved: false,
                 cost_usd: Some(0.05),
@@ -1375,7 +1386,7 @@ mod tests {
                 focus: "Perf".to_string(),
                 required: false,
                 run_id: "r2".to_string(),
-                status: "completed".to_string(),
+                status: AgentRunStatus::Completed,
                 findings: Some("No issues.".to_string()),
                 approved: true,
                 cost_usd: Some(0.03),
@@ -1402,7 +1413,7 @@ mod tests {
                     focus: "Security review".to_string(),
                     required: true,
                     run_id: "r1".to_string(),
-                    status: "completed".to_string(),
+                    status: AgentRunStatus::Completed,
                     findings: Some("SQL injection in user_query()".to_string()),
                     approved: false,
                     cost_usd: None,
@@ -1415,7 +1426,7 @@ mod tests {
                     focus: "Performance review".to_string(),
                     required: false,
                     run_id: "r2".to_string(),
-                    status: "completed".to_string(),
+                    status: AgentRunStatus::Completed,
                     findings: Some("N+1 query".to_string()),
                     approved: false,
                     cost_usd: None,
@@ -1449,7 +1460,7 @@ mod tests {
                 focus: "Security".to_string(),
                 required: true,
                 run_id: "r1".to_string(),
-                status: "completed".to_string(),
+                status: AgentRunStatus::Completed,
                 findings: None,
                 approved: true,
                 cost_usd: None,
@@ -1508,7 +1519,7 @@ mod tests {
             focus: "Security".to_string(),
             required: true,
             run_id: "run-1".to_string(),
-            status: "completed".to_string(),
+            status: AgentRunStatus::Completed,
             findings: Some("No issues.".to_string()),
             approved: true,
             cost_usd: Some(0.05),
@@ -1558,7 +1569,9 @@ mod tests {
 
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|r| r.approved));
-        assert!(results.iter().all(|r| r.status == "completed"));
+        assert!(results
+            .iter()
+            .all(|r| r.status == AgentRunStatus::Completed));
     }
 
     #[test]
@@ -1591,10 +1604,10 @@ mod tests {
         assert_eq!(results.len(), 2);
         // First reviewer completed and approved
         assert!(results[0].approved);
-        assert_eq!(results[0].status, "completed");
+        assert_eq!(results[0].status, AgentRunStatus::Completed);
         // Second reviewer timed out
         assert!(!results[1].approved);
-        assert_eq!(results[1].status, "failed");
+        assert_eq!(results[1].status, AgentRunStatus::Failed);
         assert!(results[1].findings.as_ref().unwrap().contains("timed out"));
     }
 
@@ -1627,9 +1640,9 @@ mod tests {
 
         assert_eq!(results.len(), 2);
         assert!(results[0].approved);
-        assert_eq!(results[0].status, "completed");
+        assert_eq!(results[0].status, AgentRunStatus::Completed);
         assert!(!results[1].approved);
-        assert_eq!(results[1].status, "failed");
+        assert_eq!(results[1].status, AgentRunStatus::Failed);
     }
 
     #[test]
@@ -1656,7 +1669,7 @@ mod tests {
         );
         assert!(result.is_ok());
         let completed = result.unwrap();
-        assert_eq!(completed.status, "completed");
+        assert_eq!(completed.status, AgentRunStatus::Completed);
     }
 
     #[test]
@@ -1684,7 +1697,7 @@ mod tests {
             focus: "Test".to_string(),
             required: true,
             run_id: "r1".to_string(),
-            status: "completed".to_string(),
+            status: AgentRunStatus::Completed,
             findings: Some(long_findings),
             approved: false,
             cost_usd: None,
@@ -1993,7 +2006,7 @@ mod tests {
     fn test_is_review_approved_suggestion_only_treated_as_approve() {
         // REQUEST_CHANGES with only suggestion-severity should still approve
         let run = make_run(
-            "completed",
+            AgentRunStatus::Completed,
             Some(
                 "Found a naming issue.\n\
                  **Severity**: suggestion\n\
@@ -2011,7 +2024,7 @@ mod tests {
     #[test]
     fn test_is_review_approved_warning_still_blocks() {
         let run = make_run(
-            "completed",
+            AgentRunStatus::Completed,
             Some(
                 "Found a real issue.\n\
                  **Severity**: warning\n\
@@ -2052,7 +2065,7 @@ mod tests {
     fn test_is_review_approved_off_diff_suggestion_only() {
         // REQUEST_CHANGES but only off-diff suggestions → should approve
         let run = make_run(
-            "completed",
+            AgentRunStatus::Completed,
             Some("No inline findings.\n\nVERDICT: REQUEST_CHANGES"),
         );
         let findings = vec![OffDiffFinding {
@@ -2130,7 +2143,7 @@ mod tests {
             focus: "Security".to_string(),
             required: true,
             run_id: "r1".to_string(),
-            status: "completed".to_string(),
+            status: AgentRunStatus::Completed,
             findings: Some("No in-diff issues.".to_string()),
             approved: true,
             cost_usd: Some(0.05),

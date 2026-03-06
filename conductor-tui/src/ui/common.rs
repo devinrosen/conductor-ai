@@ -144,13 +144,13 @@ pub fn worktree_list_item(
     }
 
     if let Some(run) = state.data.latest_agent_runs.get(&wt.id) {
-        let (symbol, color) = match run.status.as_str() {
-            "running" => ("● running", Color::Yellow),
-            "waiting_for_feedback" => ("⏸ waiting for feedback", Color::Magenta),
-            "completed" => ("✓ completed", Color::Green),
-            "failed" => ("✗ failed", Color::Red),
-            "cancelled" => ("○ cancelled", Color::DarkGray),
-            _ => ("? unknown", Color::White),
+        use conductor_core::agent::AgentRunStatus;
+        let (symbol, color) = match run.status {
+            AgentRunStatus::Running => ("● running", Color::Yellow),
+            AgentRunStatus::WaitingForFeedback => ("⏸ waiting for feedback", Color::Magenta),
+            AgentRunStatus::Completed => ("✓ completed", Color::Green),
+            AgentRunStatus::Failed => ("✗ failed", Color::Red),
+            AgentRunStatus::Cancelled => ("○ cancelled", Color::DarkGray),
         };
         spans.push(Span::raw("  "));
         spans.push(Span::styled(symbol, Style::default().fg(color)));
