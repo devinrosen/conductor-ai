@@ -232,6 +232,18 @@ pub fn config_path() -> PathBuf {
     conductor_dir().join("config.toml")
 }
 
+/// Returns the directory for agent log files.
+pub fn agent_log_dir() -> PathBuf {
+    conductor_dir().join("agent-logs")
+}
+
+/// Returns the log file path for a given agent run ID.
+///
+/// Convention: `~/.conductor/agent-logs/{run_id}.log`
+pub fn agent_log_path(run_id: &str) -> PathBuf {
+    agent_log_dir().join(format!("{run_id}.log"))
+}
+
 /// Load config from disk, returning defaults if the file doesn't exist.
 /// Handles backward compatibility: if the old `editor` field is present
 /// and `work_targets` was not explicitly set, migrates the editor value

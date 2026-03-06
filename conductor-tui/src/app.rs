@@ -3633,14 +3633,14 @@ fn extract_last_code_block(reader: impl std::io::BufRead) -> Option<String> {
 
 /// Best-effort capture of tmux scrollback to `~/.conductor/agent-logs/<run_id>.log`.
 fn capture_agent_log(mgr: &AgentManager, run_id: &str, tmux_window: &str) {
-    let log_dir = conductor_core::config::conductor_dir().join("agent-logs");
+    let log_dir = conductor_core::config::agent_log_dir();
 
     if let Err(e) = std::fs::create_dir_all(&log_dir) {
         eprintln!("[conductor] Warning: could not create agent-logs dir: {e}");
         return;
     }
 
-    let log_path = log_dir.join(format!("{run_id}.log"));
+    let log_path = conductor_core::config::agent_log_path(run_id);
 
     let output = Command::new("tmux")
         .args([

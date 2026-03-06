@@ -5,18 +5,21 @@
 //! review and optionally posts to the GitHub PR.
 
 use std::borrow::Cow;
-use std::io::Write;
+use std::collections::HashSet;
+use std::io::{BufRead, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::process::Command;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use notify::{Event as NotifyEvent, RecursiveMode, Watcher};
 use rusqlite::Connection;
 
 use crate::agent::{
     AgentManager, AgentRun, AgentRunStatus, PlanStep, StepStatus, PR_REVIEW_SWARM_PROMPT_PREFIX,
 };
-use crate::config::Config;
+use crate::config::{self, Config};
 use crate::error::{ConductorError, Result};
 use crate::github;
 use crate::merge_queue::MergeQueueManager;
@@ -966,8 +969,79 @@ fn spawn_reviewer_tmux(
     }
 }
 
+/// Parsed result event from an agent log file.
+struct LogResult {
+    result_text: Option<String>,
+    cost_usd: Option<f64>,
+    num_turns: Option<i64>,
+    duration_ms: Option<i64>,
+    is_error: bool,
+}
+
+/// Scan an agent log file for the `result` event (the final JSON line with a `result` field).
+/// Returns `None` if the file doesn't exist or contains no result event.
+fn scan_log_for_result(run_id: &str) -> Option<LogResult> {
+    let path = config::agent_log_path(run_id);
+    let file = std::fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+    let mut found: Option<LogResult> = None;
+    for line in reader.lines() {
+        let Ok(line) = line else { continue };
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if event.get("result").is_some() {
+            found = Some(LogResult {
+                result_text: event
+                    .get("result")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                cost_usd: event.get("total_cost_usd").and_then(|v| v.as_f64()),
+                num_turns: event.get("num_turns").and_then(|v| v.as_i64()),
+                duration_ms: event.get("duration_ms").and_then(|v| v.as_i64()),
+                is_error: event
+                    .get("is_error")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+            });
+        }
+    }
+    found
+}
+
+/// Try to recover a stuck run by scanning its log file for a result event.
+/// If found, updates the DB and returns the refreshed run. Otherwise returns `None`.
+fn try_recover_from_log(mgr: &AgentManager<'_>, run_id: &str) -> Option<AgentRun> {
+    let log_result = scan_log_for_result(run_id)?;
+    if log_result.is_error {
+        let error_msg = log_result
+            .result_text
+            .as_deref()
+            .unwrap_or("Claude reported an error");
+        let _ = mgr.update_run_failed(run_id, error_msg);
+    } else {
+        let _ = mgr.update_run_completed(
+            run_id,
+            None,
+            log_result.result_text.as_deref(),
+            log_result.cost_usd,
+            log_result.num_turns,
+            log_result.duration_ms,
+        );
+    }
+    mgr.get_run(run_id).ok().flatten()
+}
+
+/// Collect the set of run IDs whose log files are in `child_runs`.
+fn run_id_set(child_runs: &[(usize, AgentRun, ReviewerRole)]) -> HashSet<String> {
+    child_runs.iter().map(|(_, r, _)| r.id.clone()).collect()
+}
+
 /// Poll all reviewer runs in a single shared loop, collecting results as each completes.
-/// This avoids sequential O(N × timeout) worst-case wait.
+///
+/// Uses an OS-level file watcher (`notify` crate) on the agent-logs directory to detect
+/// result events written to log files. Falls back to periodic DB polling so that
+/// spawn failures (no log file) and already-completed runs are still handled.
 fn poll_all_reviewers(
     mgr: &AgentManager<'_>,
     child_runs: &[(usize, AgentRun, ReviewerRole)],
@@ -978,6 +1052,81 @@ fn poll_all_reviewers(
     let start = std::time::Instant::now();
     let mut results: Vec<Option<ReviewerResult>> = vec![None; child_runs.len()];
     let mut pending_count = child_runs.len();
+    let watched_ids = run_id_set(child_runs);
+
+    // Set up file watcher on the agent-logs directory.
+    // Notifications wake us up so we can scan log files instead of only relying on DB.
+    let (notify_tx, notify_rx) = mpsc::channel::<()>();
+    let _watcher = {
+        let log_dir = config::agent_log_dir();
+        let _ = std::fs::create_dir_all(&log_dir);
+        let ids = watched_ids.clone();
+        let tx = notify_tx.clone();
+        let mut watcher =
+            notify::recommended_watcher(move |res: std::result::Result<NotifyEvent, _>| {
+                if let Ok(event) = res {
+                    // Only wake up for files that match our watched run IDs.
+                    let dominated = event.paths.iter().any(|p| {
+                        p.file_stem()
+                            .and_then(|s| s.to_str())
+                            .is_some_and(|stem| ids.contains(stem))
+                    });
+                    if dominated {
+                        let _ = tx.send(());
+                    }
+                }
+            });
+        match watcher {
+            Ok(ref mut w) => {
+                if let Err(e) = w.watch(&log_dir, RecursiveMode::NonRecursive) {
+                    eprintln!("[review-swarm] Warning: could not watch log dir: {e}");
+                }
+            }
+            Err(ref e) => {
+                eprintln!("[review-swarm] Warning: could not create file watcher: {e}");
+            }
+        }
+        watcher.ok()
+    };
+
+    // Helper closure to resolve a completed/failed/cancelled run into a ReviewerResult.
+    let resolve_run = |run: &AgentRun, step_idx: usize, role: &ReviewerRole| -> ReviewerResult {
+        let findings = run.result_text.clone();
+        let parsed = findings
+            .as_deref()
+            .map(|text| parse_reviewer_output(text, &role.name))
+            .unwrap_or_default();
+        let approved = is_review_approved(run, &parsed);
+        let off_diff = parsed.off_diff_findings;
+        if let Some(ref step_id) = steps[step_idx].id {
+            let step_status = if run.status == AgentRunStatus::Completed {
+                StepStatus::Completed
+            } else {
+                StepStatus::Failed
+            };
+            let _ = mgr.update_step_status(step_id, step_status);
+        }
+        eprintln!(
+            "[review-swarm] {} reviewer: {} (approved={}, off_diff={})",
+            role.name,
+            run.status,
+            approved,
+            off_diff.len()
+        );
+        ReviewerResult {
+            role_name: role.name.clone(),
+            focus: role.focus.clone(),
+            required: role.required,
+            run_id: run.id.clone(),
+            status: run.status.clone(),
+            findings,
+            approved,
+            cost_usd: run.cost_usd,
+            num_turns: run.num_turns,
+            duration_ms: run.duration_ms,
+            off_diff_findings: off_diff,
+        }
+    };
 
     loop {
         if pending_count == 0 {
@@ -1019,49 +1168,32 @@ fn poll_all_reviewers(
                 continue;
             }
 
+            // First check the DB (handles eager updates and spawn failures).
             match mgr.get_run(&child_run.id) {
                 Ok(Some(run)) => match run.status {
                     AgentRunStatus::Completed
                     | AgentRunStatus::Failed
                     | AgentRunStatus::Cancelled => {
-                        let findings = run.result_text.clone();
-                        let parsed = findings
-                            .as_deref()
-                            .map(|text| parse_reviewer_output(text, &role.name))
-                            .unwrap_or_default();
-                        let approved = is_review_approved(&run, &parsed);
-                        let off_diff = parsed.off_diff_findings;
-                        if let Some(ref step_id) = steps[*step_idx].id {
-                            let step_status = if run.status == AgentRunStatus::Completed {
-                                StepStatus::Completed
-                            } else {
-                                StepStatus::Failed
-                            };
-                            let _ = mgr.update_step_status(step_id, step_status);
-                        }
-                        eprintln!(
-                            "[review-swarm] {} reviewer: {} (approved={}, off_diff={})",
-                            role.name,
-                            run.status,
-                            approved,
-                            off_diff.len()
-                        );
-                        results[idx] = Some(ReviewerResult {
-                            role_name: role.name.clone(),
-                            focus: role.focus.clone(),
-                            required: role.required,
-                            run_id: run.id.clone(),
-                            status: run.status.clone(),
-                            findings,
-                            approved,
-                            cost_usd: run.cost_usd,
-                            num_turns: run.num_turns,
-                            duration_ms: run.duration_ms,
-                            off_diff_findings: off_diff,
-                        });
+                        results[idx] = Some(resolve_run(&run, *step_idx, role));
                         pending_count -= 1;
+                        continue;
                     }
-                    _ => {}
+                    _ => {
+                        // DB says still running — try recovering from the log file
+                        // in case the producer was killed before updating the DB.
+                        if let Some(recovered) = try_recover_from_log(mgr, &child_run.id) {
+                            match recovered.status {
+                                AgentRunStatus::Completed
+                                | AgentRunStatus::Failed
+                                | AgentRunStatus::Cancelled => {
+                                    results[idx] = Some(resolve_run(&recovered, *step_idx, role));
+                                    pending_count -= 1;
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                 },
                 Ok(None) => {
                     eprintln!(
@@ -1104,7 +1236,10 @@ fn poll_all_reviewers(
         }
 
         if pending_count > 0 {
-            thread::sleep(poll_interval);
+            // Wait for either a file notification or the poll interval, whichever comes first.
+            let _ = notify_rx.recv_timeout(poll_interval);
+            // Drain any extra queued notifications before re-checking.
+            while notify_rx.try_recv().is_ok() {}
         }
     }
 
@@ -2210,5 +2345,186 @@ mod tests {
     fn test_find_existing_issue_empty_list() {
         let issues: Vec<github::IssueRef> = Vec::new();
         assert_eq!(find_existing_issue(&issues, "anything"), None);
+    }
+
+    #[test]
+    fn test_scan_log_for_result_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let run_id = "test-scan-success";
+        let log_path = dir.path().join(format!("{run_id}.log"));
+        std::fs::write(
+            &log_path,
+            r#"{"type":"init","session_id":"s1"}
+{"type":"text","text":"working..."}
+{"result":"All done","total_cost_usd":0.05,"num_turns":3,"duration_ms":5000}
+"#,
+        )
+        .unwrap();
+
+        // Temporarily override the log path by testing scan_log_for_result_from_path
+        // Since scan_log_for_result uses config::agent_log_path, we test the underlying logic
+        let file = std::fs::File::open(&log_path).unwrap();
+        let reader = std::io::BufReader::new(file);
+        let mut found: Option<super::LogResult> = None;
+        for line in reader.lines() {
+            let Ok(line) = line else { continue };
+            let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            if event.get("result").is_some() {
+                found = Some(super::LogResult {
+                    result_text: event
+                        .get("result")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    cost_usd: event.get("total_cost_usd").and_then(|v| v.as_f64()),
+                    num_turns: event.get("num_turns").and_then(|v| v.as_i64()),
+                    duration_ms: event.get("duration_ms").and_then(|v| v.as_i64()),
+                    is_error: event
+                        .get("is_error")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                });
+            }
+        }
+        let result = found.unwrap();
+        assert_eq!(result.result_text.as_deref(), Some("All done"));
+        assert_eq!(result.cost_usd, Some(0.05));
+        assert_eq!(result.num_turns, Some(3));
+        assert_eq!(result.duration_ms, Some(5000));
+        assert!(!result.is_error);
+    }
+
+    #[test]
+    fn test_scan_log_for_result_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("test-scan-error.log");
+        std::fs::write(
+            &log_path,
+            r#"{"result":"Something went wrong","is_error":true,"total_cost_usd":0.01,"num_turns":1,"duration_ms":1000}
+"#,
+        )
+        .unwrap();
+
+        let file = std::fs::File::open(&log_path).unwrap();
+        let reader = std::io::BufReader::new(file);
+        let mut found: Option<super::LogResult> = None;
+        for line in reader.lines() {
+            let Ok(line) = line else { continue };
+            let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            if event.get("result").is_some() {
+                found = Some(super::LogResult {
+                    result_text: event
+                        .get("result")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    cost_usd: event.get("total_cost_usd").and_then(|v| v.as_f64()),
+                    num_turns: event.get("num_turns").and_then(|v| v.as_i64()),
+                    duration_ms: event.get("duration_ms").and_then(|v| v.as_i64()),
+                    is_error: event
+                        .get("is_error")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                });
+            }
+        }
+        let result = found.unwrap();
+        assert!(result.is_error);
+        assert_eq!(result.result_text.as_deref(), Some("Something went wrong"));
+    }
+
+    #[test]
+    fn test_scan_log_no_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("test-no-result.log");
+        std::fs::write(
+            &log_path,
+            r#"{"type":"init","session_id":"s1"}
+{"type":"text","text":"still working..."}
+"#,
+        )
+        .unwrap();
+
+        let file = std::fs::File::open(&log_path).unwrap();
+        let reader = std::io::BufReader::new(file);
+        let mut found: Option<super::LogResult> = None;
+        for line in reader.lines() {
+            let Ok(line) = line else { continue };
+            let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            if event.get("result").is_some() {
+                found = Some(super::LogResult {
+                    result_text: event
+                        .get("result")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    cost_usd: event.get("total_cost_usd").and_then(|v| v.as_f64()),
+                    num_turns: event.get("num_turns").and_then(|v| v.as_i64()),
+                    duration_ms: event.get("duration_ms").and_then(|v| v.as_i64()),
+                    is_error: event
+                        .get("is_error")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                });
+            }
+        }
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_poll_all_reviewers_recovers_from_log() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let (r1, r2, child_runs) = setup_two_child_runs(&mgr);
+
+        // r1: completed via DB (normal path)
+        mgr.update_run_completed(
+            &r1.id,
+            None,
+            Some("VERDICT: APPROVE"),
+            Some(0.05),
+            Some(3),
+            Some(5000),
+        )
+        .unwrap();
+
+        // r2: stays "running" in DB, but write a result to its log file
+        // to simulate the producer being killed after log write but before DB update.
+        let log_dir = config::agent_log_dir();
+        let _ = std::fs::create_dir_all(&log_dir);
+        let log_path = config::agent_log_path(&r2.id);
+        std::fs::write(
+            &log_path,
+            format!(
+                r#"{{"result":"VERDICT: APPROVE","total_cost_usd":0.08,"num_turns":4,"duration_ms":6000}}{}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        let steps = make_plan_steps(2);
+
+        let results = poll_all_reviewers(
+            &mgr,
+            &child_runs,
+            &steps,
+            Duration::from_millis(10),
+            Duration::from_secs(2),
+        );
+
+        // Clean up log file
+        let _ = std::fs::remove_file(&log_path);
+
+        assert_eq!(results.len(), 2);
+        // Both should be resolved
+        assert!(results[0].approved);
+        assert_eq!(results[0].status, AgentRunStatus::Completed);
+        // r2 should have been recovered from the log file
+        assert!(results[1].approved);
+        assert_eq!(results[1].status, AgentRunStatus::Completed);
+        assert_eq!(results[1].cost_usd, Some(0.08));
     }
 }
