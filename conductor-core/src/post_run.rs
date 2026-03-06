@@ -142,7 +142,9 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
         }
     };
 
-    // Resolve GitHub App token (if configured) for bot-identity comments
+    // Resolve GitHub App token (if configured) for bot-identity comments.
+    // Re-acquired before each use because installation tokens expire after 1 hour
+    // and the review-fix loop may run longer than that.
     let app_token = github_app::resolve_app_token(config, "post-run");
 
     // Post initial cost summary now that we have a PR number
@@ -171,6 +173,9 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
             "[post-run] Review iteration {iteration}/{}",
             post_cfg.review_loop_max
         );
+
+        // Re-acquire app token each iteration to handle expiry during long loops
+        let app_token = github_app::resolve_app_token(config, "post-run");
 
         let swarm_result = pr_review::run_review_swarm(&ReviewSwarmInput {
             conn,
@@ -209,6 +214,8 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
                         );
                         break;
                     }
+                    // Fresh token for cost summary after fix iteration
+                    let app_token = github_app::resolve_app_token(config, "post-run");
                     post_cost_summary(
                         conn,
                         owner,
