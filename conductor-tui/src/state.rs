@@ -334,27 +334,43 @@ pub enum VisualRow<'a> {
 }
 
 impl DataCache {
+    /// Count the number of run-boundary separator rows that would be inserted
+    /// when there are multiple runs. Shared by `visual_rows` and
+    /// `agent_activity_len` so the logic lives in one place.
+    fn count_separators(&self) -> usize {
+        if self.agent_run_info.len() <= 1 {
+            return 0;
+        }
+        let mut count = 0;
+        let mut prev_run_id: Option<&str> = None;
+        for ev in &self.agent_events {
+            if prev_run_id.is_none_or(|p| p != ev.run_id)
+                && self.agent_run_info.contains_key(&ev.run_id)
+            {
+                count += 1;
+            }
+            prev_run_id = Some(&ev.run_id);
+        }
+        count
+    }
+
     /// Iterate the agent activity list as visual rows, interleaving run-group
     /// separators when there are multiple runs. This is the single source of
     /// truth for the visual-index ↔ event mapping used by both the renderer
     /// and the action handler.
     pub fn visual_rows(&self) -> Vec<VisualRow<'_>> {
         let has_multiple_runs = self.agent_run_info.len() > 1;
-        let mut rows = Vec::with_capacity(self.agent_events.len() + self.agent_run_info.len());
+        let mut rows = Vec::with_capacity(self.agent_events.len() + self.count_separators());
         let mut prev_run_id: Option<&str> = None;
 
         for ev in &self.agent_events {
-            if has_multiple_runs {
-                let is_new = prev_run_id.is_none() || prev_run_id.is_some_and(|p| p != ev.run_id);
-                if is_new {
-                    if let Some((run_num, model, started_at)) = self.agent_run_info.get(&ev.run_id)
-                    {
-                        rows.push(VisualRow::RunSeparator(
-                            *run_num,
-                            model.as_deref(),
-                            started_at.as_str(),
-                        ));
-                    }
+            if has_multiple_runs && prev_run_id.is_none_or(|p| p != ev.run_id) {
+                if let Some((run_num, model, started_at)) = self.agent_run_info.get(&ev.run_id) {
+                    rows.push(VisualRow::RunSeparator(
+                        *run_num,
+                        model.as_deref(),
+                        started_at.as_str(),
+                    ));
                 }
             }
             prev_run_id = Some(&ev.run_id);
@@ -366,20 +382,7 @@ impl DataCache {
     /// Total number of items in the agent activity list, including run boundary
     /// separators. Must match the item count built in `render_agent_activity`.
     pub fn agent_activity_len(&self) -> usize {
-        let has_multiple_runs = self.agent_run_info.len() > 1;
-        if !has_multiple_runs {
-            return self.agent_events.len();
-        }
-        let mut count = self.agent_events.len();
-        let mut prev_run_id: Option<&str> = None;
-        for ev in &self.agent_events {
-            let is_new = prev_run_id.is_none() || prev_run_id.is_some_and(|p| p != ev.run_id);
-            if is_new && self.agent_run_info.contains_key(&ev.run_id) {
-                count += 1;
-            }
-            prev_run_id = Some(&ev.run_id);
-        }
-        count
+        self.agent_events.len() + self.count_separators()
     }
 
     /// Map a visual index (which may include run-separator rows) back to the
@@ -569,8 +572,10 @@ mod tests {
 
     #[test]
     fn agent_activity_len_single_run() {
-        let mut cache = DataCache::default();
-        cache.agent_events = vec![make_event("e1", "r1"), make_event("e2", "r1")];
+        let mut cache = DataCache {
+            agent_events: vec![make_event("e1", "r1"), make_event("e2", "r1")],
+            ..Default::default()
+        };
         cache
             .agent_run_info
             .insert("r1".into(), (1, None, "2026-01-01T00:00:00Z".into()));
@@ -581,12 +586,14 @@ mod tests {
 
     #[test]
     fn agent_activity_len_multiple_runs() {
-        let mut cache = DataCache::default();
-        cache.agent_events = vec![
-            make_event("e1", "r1"),
-            make_event("e2", "r1"),
-            make_event("e3", "r2"),
-        ];
+        let mut cache = DataCache {
+            agent_events: vec![
+                make_event("e1", "r1"),
+                make_event("e2", "r1"),
+                make_event("e3", "r2"),
+            ],
+            ..Default::default()
+        };
         cache
             .agent_run_info
             .insert("r1".into(), (1, None, "2026-01-01T00:00:00Z".into()));
@@ -600,12 +607,14 @@ mod tests {
 
     #[test]
     fn agent_activity_len_interleaved_runs() {
-        let mut cache = DataCache::default();
-        cache.agent_events = vec![
-            make_event("e1", "r1"),
-            make_event("e2", "r2"),
-            make_event("e3", "r1"),
-        ];
+        let mut cache = DataCache {
+            agent_events: vec![
+                make_event("e1", "r1"),
+                make_event("e2", "r2"),
+                make_event("e3", "r1"),
+            ],
+            ..Default::default()
+        };
         cache
             .agent_run_info
             .insert("r1".into(), (1, None, "2026-01-01T00:00:00Z".into()));
