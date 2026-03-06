@@ -1,5 +1,6 @@
 import type { AgentRun } from "../../api/types";
 import { statusColors, statusLabels } from "../../utils/agentStats";
+import { StatusPulseBadge } from "../shared/StatusPulseBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 
 function formatDuration(ms: number): string {
@@ -72,12 +73,7 @@ export function ChildRunsList({ children }: ChildRunsListProps) {
               >
                 {statusLabels[child.status] ?? child.status}
               </span>
-              {child.status === "running" && (
-                <span className="inline-block w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
-              )}
-              {child.status === "waiting_for_feedback" && (
-                <span className="inline-block w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
-              )}
+              <StatusPulseBadge status={child.status} />
               <span className="text-gray-700 truncate flex-1" title={child.prompt}>
                 {extractStepLabel(child.prompt) ??
                   (child.prompt.length > 80
