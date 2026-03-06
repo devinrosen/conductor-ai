@@ -3,9 +3,14 @@ import { TimeAgo } from "../shared/TimeAgo";
 
 const statusColors: Record<string, string> = {
   running: "bg-yellow-100 text-yellow-700",
+  waiting_for_feedback: "bg-purple-100 text-purple-700",
   completed: "bg-green-100 text-green-700",
   failed: "bg-red-100 text-red-700",
   cancelled: "bg-gray-100 text-gray-600",
+};
+
+const statusLabels: Record<string, string> = {
+  waiting_for_feedback: "waiting for feedback",
 };
 
 function formatDuration(ms: number): string {
@@ -76,10 +81,13 @@ export function ChildRunsList({ children }: ChildRunsListProps) {
               <span
                 className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${color}`}
               >
-                {child.status}
+                {statusLabels[child.status] ?? child.status}
               </span>
               {child.status === "running" && (
                 <span className="inline-block w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+              )}
+              {child.status === "waiting_for_feedback" && (
+                <span className="inline-block w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
               )}
               <span className="text-gray-700 truncate flex-1" title={child.prompt}>
                 {extractStepLabel(child.prompt) ??

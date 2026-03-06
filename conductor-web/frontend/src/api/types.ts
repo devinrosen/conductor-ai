@@ -80,7 +80,7 @@ export interface AgentRun {
   worktree_id: string;
   claude_session_id: string | null;
   prompt: string;
-  status: "running" | "completed" | "failed" | "cancelled";
+  status: "running" | "completed" | "failed" | "cancelled" | "waiting_for_feedback";
   result_text: string | null;
   cost_usd: number | null;
   num_turns: number | null;

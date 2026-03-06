@@ -53,7 +53,9 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
                     .selected_worktree_id
                     .as_ref()
                     .and_then(|wt_id| state.data.latest_agent_runs.get(wt_id))
-                    .is_some_and(|run| run.status == "running");
+                    .is_some_and(|run| {
+                        matches!(run.status.as_str(), "running" | "waiting_for_feedback")
+                    });
                 if has_running {
                     "r:agent  x:stop  o:ticket  Esc:back  ?:help".to_string()
                 } else {
@@ -146,6 +148,7 @@ pub fn worktree_list_item(
     if let Some(run) = state.data.latest_agent_runs.get(&wt.id) {
         let (symbol, color) = match run.status.as_str() {
             "running" => ("● running", Color::Yellow),
+            "waiting_for_feedback" => ("⏸ waiting for feedback", Color::Magenta),
             "completed" => ("✓ completed", Color::Green),
             "failed" => ("✗ failed", Color::Red),
             "cancelled" => ("○ cancelled", Color::DarkGray),

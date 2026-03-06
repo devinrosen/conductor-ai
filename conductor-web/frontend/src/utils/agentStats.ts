@@ -32,6 +32,8 @@ export function agentStatusColor(status: string): string {
   switch (status) {
     case "running":
       return "bg-yellow-100 text-yellow-700";
+    case "waiting_for_feedback":
+      return "bg-purple-100 text-purple-700";
     case "completed":
       return "bg-green-100 text-green-700";
     case "failed":

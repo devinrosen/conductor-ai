@@ -113,9 +113,9 @@ export function WorktreeDetailPage() {
     refreshAgent();
   }, [refreshAgent]);
 
-  // Poll for updates when agent is running
+  // Poll for updates when agent is running or waiting for feedback
   useEffect(() => {
-    if (latestRun?.status !== "running") return;
+    if (latestRun?.status !== "running" && latestRun?.status !== "waiting_for_feedback") return;
     const interval = setInterval(refreshAgent, 5000);
     return () => clearInterval(interval);
   }, [latestRun?.status, refreshAgent]);
@@ -296,7 +296,7 @@ export function WorktreeDetailPage() {
     );
   }
 
-  const isRunning = latestRun?.status === "running";
+  const isRunning = latestRun?.status === "running" || latestRun?.status === "waiting_for_feedback";
 
   return (
     <div className="space-y-6">
