@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 
-use crate::config::GitHubAppConfig;
+use crate::config::{Config, GitHubAppConfig};
 use crate::error::{ConductorError, Result};
 
 /// JWT claims for GitHub App authentication (RS256).
@@ -103,6 +103,20 @@ fn exchange_installation_token(app_config: &GitHubAppConfig, jwt: &str) -> Resul
 pub fn get_app_token(app_config: &GitHubAppConfig) -> Result<String> {
     let jwt = generate_jwt(app_config)?;
     exchange_installation_token(app_config, &jwt)
+}
+
+/// Attempt to obtain a GitHub App installation token from the config.
+/// Returns `None` (graceful fallback) if the app is not configured or
+/// token generation fails.
+pub fn resolve_app_token(config: &Config, context: &str) -> Option<String> {
+    let app_config = config.github.app.as_ref()?;
+    match get_app_token(app_config) {
+        Ok(token) => Some(token),
+        Err(e) => {
+            eprintln!("[{context}] GitHub App token failed, falling back to gh user: {e}");
+            None
+        }
+    }
 }
 
 /// Expand `~` at the start of a path to the user's home directory.

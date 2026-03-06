@@ -10,6 +10,7 @@ use conductor_core::agent::{
 use conductor_core::config::{ensure_dirs, load_config};
 use conductor_core::db::open_database;
 use conductor_core::github;
+use conductor_core::github_app;
 use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
 use conductor_core::jira_acli;
 use conductor_core::merge_queue::MergeQueueManager;
@@ -825,6 +826,8 @@ fn main() -> Result<()> {
                     println!("PR #{n}");
                 }
 
+                let app_token = github_app::resolve_app_token(&config, "review");
+
                 match pr_review::run_review_swarm(&ReviewSwarmInput {
                     conn: &conn,
                     config: &config,
@@ -835,6 +838,7 @@ fn main() -> Result<()> {
                     model: model.as_deref(),
                     conductor_bin: &conductor_bin,
                     swarm_config: &swarm_config,
+                    app_token: app_token.as_deref(),
                 }) {
                     Ok(result) => {
                         println!("\n{}", result.aggregated_comment);

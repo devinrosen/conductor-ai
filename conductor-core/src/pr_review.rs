@@ -17,7 +17,6 @@ use crate::agent::{AgentManager, AgentRun, PlanStep, PR_REVIEW_SWARM_PROMPT_PREF
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::github;
-use crate::github_app;
 use crate::merge_queue::MergeQueueManager;
 use crate::review_config::{ReviewConfigManager, ReviewerRole};
 use crate::worktree::WorktreeManager;
@@ -102,6 +101,7 @@ pub struct ReviewSwarmInput<'a> {
     pub model: Option<&'a str>,
     pub conductor_bin: &'a str,
     pub swarm_config: &'a ReviewSwarmConfig,
+    pub app_token: Option<&'a str>,
 }
 
 /// Launch a PR review swarm for a worktree.
@@ -310,13 +310,12 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
     if review_config.post_to_pr {
         if let Some(pr_num) = pr_number {
             if let Some((ref owner, ref repo_name)) = gh_remote {
-                let app_token = resolve_app_token(config);
                 let _ = post_pr_comment(
                     owner,
                     repo_name,
                     pr_num,
                     &aggregated_comment,
-                    app_token.as_deref(),
+                    input.app_token,
                 );
             }
         }
@@ -1140,20 +1139,6 @@ fn poll_reviewer_completion(
     }
 }
 
-/// Attempt to obtain a GitHub App installation token from the config.
-/// Returns `None` (graceful fallback) if the app is not configured or
-/// token generation fails.
-fn resolve_app_token(config: &Config) -> Option<String> {
-    let app_config = config.github.app.as_ref()?;
-    match github_app::get_app_token(app_config) {
-        Ok(token) => Some(token),
-        Err(e) => {
-            eprintln!("[review-swarm] GitHub App token failed, falling back to gh user: {e}");
-            None
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1491,6 +1476,7 @@ mod tests {
             model: None,
             conductor_bin: "conductor",
             swarm_config: &swarm_config,
+            app_token: None,
         });
 
         assert!(result.is_err());

@@ -143,7 +143,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
     };
 
     // Resolve GitHub App token (if configured) for bot-identity comments
-    let app_token = resolve_app_token(config);
+    let app_token = github_app::resolve_app_token(config, "post-run");
 
     // Post initial cost summary now that we have a PR number
     post_cost_summary(
@@ -182,6 +182,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
             model: None,
             conductor_bin: input.conductor_bin,
             swarm_config: &swarm_config,
+            app_token: app_token.as_deref(),
         })?;
 
         if swarm_result.all_required_approved {
@@ -624,20 +625,6 @@ fn merge_and_cleanup(
     let _ = wt_mgr.delete_by_id(&wt.id);
     eprintln!("{log_prefix} Cleaned up worktree '{}'", wt.slug);
     Ok(())
-}
-
-/// Attempt to obtain a GitHub App installation token from the config.
-/// Returns `None` (graceful fallback) if the app is not configured or
-/// token generation fails.
-fn resolve_app_token(config: &Config) -> Option<String> {
-    let app_config = config.github.app.as_ref()?;
-    match github_app::get_app_token(app_config) {
-        Ok(token) => Some(token),
-        Err(e) => {
-            eprintln!("[post-run] GitHub App token failed, falling back to gh user: {e}");
-            None
-        }
-    }
 }
 
 fn first_line(s: &str) -> &str {
