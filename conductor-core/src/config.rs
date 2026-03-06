@@ -56,12 +56,22 @@ pub struct GitHubSettings {
 /// ```toml
 /// [github.app]
 /// app_id = 123456
+/// client_id = "Iv23liXXXXXXXXXXXXXX"  # from App settings — required for newer apps
 /// private_key_path = "~/.conductor/conductor-ai.pem"
 /// installation_id = 789012
 /// ```
+///
+/// The `client_id` (found on the GitHub App settings page) is used as the JWT
+/// `iss` claim. Newer GitHub Apps require it; older apps can omit it and
+/// `app_id` will be used as a fallback.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitHubAppConfig {
     pub app_id: u64,
+    /// Client ID from the GitHub App settings page (e.g. "Iv23li...").
+    /// Used as the JWT `iss` claim. Required for newer GitHub Apps;
+    /// falls back to `app_id` when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
     pub private_key_path: String,
     pub installation_id: u64,
 }
@@ -414,8 +424,26 @@ mod tests {
         .unwrap();
         let app = config.github.app.unwrap();
         assert_eq!(app.app_id, 123456);
+        assert!(app.client_id.is_none());
         assert_eq!(app.private_key_path, "~/.conductor/conductor-ai.pem");
         assert_eq!(app.installation_id, 789012);
+    }
+
+    #[test]
+    fn test_github_app_with_client_id() {
+        let config: Config = toml::from_str(
+            r#"
+            [github.app]
+            app_id = 123456
+            client_id = "Iv23liABCDEF12345678"
+            private_key_path = "~/.conductor/conductor-ai.pem"
+            installation_id = 789012
+        "#,
+        )
+        .unwrap();
+        let app = config.github.app.unwrap();
+        assert_eq!(app.app_id, 123456);
+        assert_eq!(app.client_id.as_deref(), Some("Iv23liABCDEF12345678"));
     }
 
     #[test]
