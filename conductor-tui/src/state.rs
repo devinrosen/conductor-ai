@@ -22,6 +22,13 @@ impl FilterState {
     pub fn backspace(&mut self) {
         self.text.pop();
     }
+    pub fn as_query(&self) -> Option<String> {
+        if self.active || !self.text.is_empty() {
+            Some(self.text.to_lowercase())
+        } else {
+            None
+        }
+    }
 }
 
 use conductor_core::agent::{
@@ -579,6 +586,17 @@ impl AppState {
             &mut self.detail_ticket_filter
         } else {
             &mut self.filter
+        }
+    }
+
+    /// Returns the currently active filter (immutable), or None if no filter is active.
+    pub fn active_filter(&self) -> Option<&FilterState> {
+        if self.filter.active {
+            Some(&self.filter)
+        } else if self.detail_ticket_filter.active {
+            Some(&self.detail_ticket_filter)
+        } else {
+            None
         }
     }
 

@@ -35,6 +35,14 @@ pub struct TicketInput {
     pub raw_json: String,
 }
 
+impl Ticket {
+    pub fn matches_filter(&self, query: &str) -> bool {
+        self.title.to_lowercase().contains(query)
+            || self.source_id.contains(query)
+            || self.labels.to_lowercase().contains(query)
+    }
+}
+
 pub struct TicketSyncer<'a> {
     conn: &'a Connection,
 }
