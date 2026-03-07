@@ -755,24 +755,41 @@ fn is_review_approved(run: &AgentRun, parsed: &ParsedReviewerOutput) -> bool {
         return false;
     }
     match &run.result_text {
-        Some(text) => {
-            let last_line = text
-                .lines()
-                .rev()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or("");
-            let verdict = last_line.trim().to_uppercase();
-            if verdict == "VERDICT: APPROVE" {
-                return true;
+        Some(text) => match extract_verdict(text) {
+            Some(verdict) if verdict == "VERDICT: APPROVE" => true,
+            Some(verdict)
+                if verdict == "VERDICT: REQUEST_CHANGES" && has_only_suggestions(parsed) =>
+            {
+                true
             }
-            // If REQUEST_CHANGES but only suggestions, treat as approved
-            if verdict == "VERDICT: REQUEST_CHANGES" && has_only_suggestions(parsed) {
-                return true;
-            }
-            false
-        }
+            _ => false,
+        },
         None => false,
     }
+}
+
+/// Scan lines in reverse for a verdict, skipping fenced code blocks.
+/// Strips markdown formatting (`*`, `_`) before matching.
+fn extract_verdict(text: &str) -> Option<String> {
+    let mut in_code_block = false;
+    for line in text.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+        if in_code_block {
+            continue;
+        }
+        let normalized = trimmed
+            .trim_matches(|c| c == '*' || c == '_')
+            .trim()
+            .to_uppercase();
+        if normalized == "VERDICT: APPROVE" || normalized == "VERDICT: REQUEST_CHANGES" {
+            return Some(normalized);
+        }
+    }
+    None
 }
 
 /// Build the aggregated PR comment from all reviewer results.
@@ -1376,6 +1393,71 @@ mod tests {
         let run = make_run(
             AgentRunStatus::Completed,
             Some("Found issues.\n+// VERDICT: APPROVE\n\nVERDICT: REQUEST_CHANGES"),
+        );
+        assert!(!is_review_approved(&run, &ParsedReviewerOutput::default()));
+    }
+
+    #[test]
+    fn test_is_review_approved_verdict_not_last_line() {
+        // Verdict followed by off-diff findings should still be detected
+        let run = make_run(
+            AgentRunStatus::Completed,
+            Some(
+                "Review looks good.\n\n\
+                 VERDICT: APPROVE\n\n\
+                 OFF-DIFF-FINDING\n\
+                 title: Minor naming\n\
+                 file: src/lib.rs\n\
+                 line: 10\n\
+                 severity: suggestion\n\
+                 body: Consider renaming\n\
+                 END-OFF-DIFF-FINDING",
+            ),
+        );
+        assert!(is_review_approved(&run, &ParsedReviewerOutput::default()));
+    }
+
+    #[test]
+    fn test_is_review_approved_markdown_bold_verdict() {
+        // Verdict wrapped in markdown bold should be detected
+        let run = make_run(
+            AgentRunStatus::Completed,
+            Some("No issues found.\n\n**VERDICT: APPROVE**"),
+        );
+        assert!(is_review_approved(&run, &ParsedReviewerOutput::default()));
+    }
+
+    #[test]
+    fn test_is_review_approved_markdown_bold_request_changes() {
+        let run = make_run(
+            AgentRunStatus::Completed,
+            Some("Found issues.\n\n**VERDICT: REQUEST_CHANGES**"),
+        );
+        assert!(!is_review_approved(&run, &ParsedReviewerOutput::default()));
+    }
+
+    #[test]
+    fn test_is_review_approved_verdict_inside_code_block_ignored() {
+        // Verdict inside a fenced code block should NOT count
+        let run = make_run(
+            AgentRunStatus::Completed,
+            Some(
+                "Review summary.\n\n\
+                 ```\n\
+                 VERDICT: APPROVE\n\
+                 ```\n\n\
+                 VERDICT: REQUEST_CHANGES",
+            ),
+        );
+        assert!(!is_review_approved(&run, &ParsedReviewerOutput::default()));
+    }
+
+    #[test]
+    fn test_is_review_approved_only_verdict_in_code_block() {
+        // If the only verdict is inside a code block, should not approve
+        let run = make_run(
+            AgentRunStatus::Completed,
+            Some("Review.\n\n```\nVERDICT: APPROVE\n```"),
         );
         assert!(!is_review_approved(&run, &ParsedReviewerOutput::default()));
     }
