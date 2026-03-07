@@ -867,18 +867,35 @@ pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<Wo
     Ok(defs)
 }
 
+/// Validate that a workflow name is safe for use in filesystem paths.
+///
+/// Only alphanumeric characters, hyphens, underscores, and dots (but not `..`)
+/// are allowed. This prevents path traversal when names are used to construct
+/// file paths.
+pub fn validate_workflow_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(ConductorError::Workflow(
+            "Workflow name must not be empty".to_string(),
+        ));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(ConductorError::Workflow(format!(
+            "Invalid workflow name '{name}': only alphanumeric characters, hyphens, and underscores are allowed"
+        )));
+    }
+    Ok(())
+}
+
 /// Load a single workflow definition by name.
 pub fn load_workflow_by_name(
     worktree_path: &str,
     repo_path: &str,
     name: &str,
 ) -> Result<WorkflowDef> {
-    // Reject names with path separators or traversal sequences as defense-in-depth.
-    if name.contains('/') || name.contains('\\') || name.contains("..") || name.is_empty() {
-        return Err(ConductorError::Workflow(format!(
-            "Invalid workflow name: '{name}'"
-        )));
-    }
+    validate_workflow_name(name)?;
 
     let defs = load_workflow_defs(worktree_path, repo_path)?;
     defs.into_iter().find(|d| d.name == name).ok_or_else(|| {
@@ -1334,5 +1351,47 @@ workflow lint-fix {
             WorkflowNode::Call(c) => assert_eq!(c.agent, "analyze-lint"),
             _ => panic!("Expected Call node"),
         }
+    }
+
+    #[test]
+    fn test_validate_workflow_name_valid() {
+        assert!(validate_workflow_name("ticket-to-pr").is_ok());
+        assert!(validate_workflow_name("test_coverage").is_ok());
+        assert!(validate_workflow_name("simple").is_ok());
+        assert!(validate_workflow_name("A-Z_0-9").is_ok());
+    }
+
+    #[test]
+    fn test_validate_workflow_name_empty() {
+        assert!(validate_workflow_name("").is_err());
+    }
+
+    #[test]
+    fn test_validate_workflow_name_path_traversal() {
+        assert!(validate_workflow_name("..").is_err());
+        assert!(validate_workflow_name("../etc/passwd").is_err());
+        assert!(validate_workflow_name("foo/bar").is_err());
+        assert!(validate_workflow_name("foo\\bar").is_err());
+    }
+
+    #[test]
+    fn test_validate_workflow_name_special_chars() {
+        assert!(validate_workflow_name("name with spaces").is_err());
+        assert!(validate_workflow_name("name.wf").is_err());
+        assert!(validate_workflow_name("name;rm -rf").is_err());
+        assert!(validate_workflow_name("name\0null").is_err());
+    }
+
+    #[test]
+    fn test_load_workflow_by_name_rejects_invalid() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let result = load_workflow_by_name(
+            tmp.path().to_str().unwrap(),
+            "/nonexistent",
+            "../etc/passwd",
+        );
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Invalid workflow name"));
     }
 }
