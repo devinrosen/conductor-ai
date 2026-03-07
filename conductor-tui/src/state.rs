@@ -502,6 +502,10 @@ pub struct AppState {
     pub filter_active: bool,
     pub filter_text: String,
 
+    // Repo-detail ticket filter (separate from global filter)
+    pub detail_ticket_filter_active: bool,
+    pub detail_ticket_filter_text: String,
+
     // Status bar message
     pub status_message: Option<String>,
 
@@ -540,6 +544,8 @@ impl AppState {
             pending_g: false,
             filter_active: false,
             filter_text: String::new(),
+            detail_ticket_filter_active: false,
+            detail_ticket_filter_text: String::new(),
             status_message: None,
             github_orgs_cache: Vec::new(),
             workflows_focus: WorkflowsFocus::Defs,

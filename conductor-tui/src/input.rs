@@ -216,7 +216,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
     }
 
     // Filter mode
-    if state.filter_active {
+    if state.filter_active || state.detail_ticket_filter_active {
         return match key.code {
             KeyCode::Esc => Action::ExitFilter,
             KeyCode::Enter => Action::ExitFilter,

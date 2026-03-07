@@ -115,9 +115,27 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
+    let detail_filter =
+        if state.detail_ticket_filter_active || !state.detail_ticket_filter_text.is_empty() {
+            Some(state.detail_ticket_filter_text.to_lowercase())
+        } else {
+            None
+        };
     let ticket_items: Vec<ListItem> = state
         .detail_tickets
         .iter()
+        .filter(|t| {
+            if let Some(ref f) = detail_filter {
+                if f.is_empty() {
+                    return true;
+                }
+                t.title.to_lowercase().contains(f)
+                    || t.source_id.contains(f.as_str())
+                    || t.labels.to_lowercase().contains(f)
+            } else {
+                true
+            }
+        })
         .map(|t| {
             let state_color = match t.state.as_str() {
                 "open" => Color::Green,
@@ -142,12 +160,22 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         })
         .collect();
 
+    let ticket_title = if let Some(ref f) = detail_filter {
+        if f.is_empty() {
+            " Tickets ".to_string()
+        } else {
+            format!(" Tickets (filter: {f}) ")
+        }
+    } else {
+        " Tickets ".to_string()
+    };
+
     let ticket_list = List::new(ticket_items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(ticket_border)
-                .title(" Tickets "),
+                .title(ticket_title),
         )
         .highlight_style(
             Style::default()

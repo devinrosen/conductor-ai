@@ -280,17 +280,36 @@ impl App {
 
             // Filter
             Action::EnterFilter => {
-                self.state.filter_active = true;
-                self.state.filter_text.clear();
+                if self.state.view == View::RepoDetail
+                    && self.state.repo_detail_focus == RepoDetailFocus::Tickets
+                {
+                    self.state.detail_ticket_filter_active = true;
+                    self.state.detail_ticket_filter_text.clear();
+                } else {
+                    self.state.filter_active = true;
+                    self.state.filter_text.clear();
+                }
             }
             Action::FilterChar(c) => {
-                self.state.filter_text.push(c);
+                if self.state.detail_ticket_filter_active {
+                    self.state.detail_ticket_filter_text.push(c);
+                } else {
+                    self.state.filter_text.push(c);
+                }
             }
             Action::FilterBackspace => {
-                self.state.filter_text.pop();
+                if self.state.detail_ticket_filter_active {
+                    self.state.detail_ticket_filter_text.pop();
+                } else {
+                    self.state.filter_text.pop();
+                }
             }
             Action::ExitFilter => {
-                self.state.filter_active = false;
+                if self.state.detail_ticket_filter_active {
+                    self.state.detail_ticket_filter_active = false;
+                } else {
+                    self.state.filter_active = false;
+                }
             }
 
             // Modal
