@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::{ConductorError, Result};
-use crate::text_util::parse_frontmatter;
+use crate::text_util::{parse_frontmatter, resolve_conductor_subdir};
 
 /// YAML frontmatter for an agent `.md` file.
 #[derive(Debug, Clone, Deserialize)]
@@ -194,17 +194,8 @@ pub fn load_agent(
 
 /// Load all agent definitions from `.conductor/agents/*.md`.
 pub fn load_all_agents(worktree_path: &str, repo_path: &str) -> Result<Vec<AgentDef>> {
-    let worktree_dir = PathBuf::from(worktree_path)
-        .join(".conductor")
-        .join("agents");
-    let agents_dir = if worktree_dir.is_dir() {
-        worktree_dir
-    } else {
-        let repo_dir = PathBuf::from(repo_path).join(".conductor").join("agents");
-        if !repo_dir.is_dir() {
-            return Ok(Vec::new());
-        }
-        repo_dir
+    let Some(agents_dir) = resolve_conductor_subdir(worktree_path, repo_path, "agents") else {
+        return Ok(Vec::new());
     };
 
     let mut entries: Vec<_> = fs::read_dir(&agents_dir)

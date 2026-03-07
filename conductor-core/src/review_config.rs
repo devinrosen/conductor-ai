@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::{ConductorError, Result};
-use crate::text_util::parse_frontmatter;
+use crate::text_util::{parse_frontmatter, resolve_conductor_subdir};
 
 const REVIEWER_HINT: &str = "See .conductor/reviewers/ in conductor-ai for reference roles.";
 
@@ -148,24 +148,14 @@ pub fn load_review_settings(repo_path: &str) -> Result<ReviewSettings> {
 pub fn load_reviewer_roles(worktree_path: &str, repo_path: &str) -> Result<Vec<ReviewerRole>> {
     // Prefer the worktree so new/modified reviewer files can be tested in-branch.
     // Fall back to the main repo checkout when the worktree doesn't have them.
-    let worktree_dir = PathBuf::from(worktree_path)
-        .join(".conductor")
-        .join("reviewers");
-    let reviewers_dir = if worktree_dir.is_dir() {
-        worktree_dir
-    } else {
-        let repo_dir = PathBuf::from(repo_path)
-            .join(".conductor")
-            .join("reviewers");
-        if !repo_dir.is_dir() {
-            return Err(ConductorError::Config(format!(
+    let reviewers_dir = resolve_conductor_subdir(worktree_path, repo_path, "reviewers")
+        .ok_or_else(|| {
+            ConductorError::Config(format!(
                 "No .conductor/reviewers/ directory found in {} or {}. \
                  Create it and add reviewer role .md files. {REVIEWER_HINT}",
                 worktree_path, repo_path
-            )));
-        }
-        repo_dir
-    };
+            ))
+        })?;
 
     let mut roles: Vec<ReviewerRole> = Vec::new();
     let mut entries: Vec<_> = fs::read_dir(&reviewers_dir)

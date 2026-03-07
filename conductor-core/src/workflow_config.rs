@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::agent_config::{default_role, AgentRole};
 use crate::error::{ConductorError, Result};
-use crate::text_util::parse_frontmatter;
+use crate::text_util::{parse_frontmatter, resolve_conductor_subdir};
 use crate::workflow_dsl::WorkflowTrigger;
 
 /// YAML frontmatter for a workflow `.md` file.
@@ -212,19 +212,7 @@ fn parse_sections(body: &str) -> HashMap<String, String> {
 
 /// Resolve the `.conductor/workflows/` directory, preferring worktree over repo.
 fn resolve_workflows_dir(worktree_path: &str, repo_path: &str) -> Option<PathBuf> {
-    let worktree_dir = PathBuf::from(worktree_path)
-        .join(".conductor")
-        .join("workflows");
-    if worktree_dir.is_dir() {
-        return Some(worktree_dir);
-    }
-    let repo_dir = PathBuf::from(repo_path)
-        .join(".conductor")
-        .join("workflows");
-    if repo_dir.is_dir() {
-        return Some(repo_dir);
-    }
-    None
+    resolve_conductor_subdir(worktree_path, repo_path, "workflows")
 }
 
 /// Load all workflow definitions from `.conductor/workflows/*.md`.

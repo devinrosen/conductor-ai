@@ -1,3 +1,24 @@
+use std::path::PathBuf;
+
+/// Resolve a `.conductor/<subdir>` directory, preferring `worktree_path` over `repo_path`.
+///
+/// Returns `Some(path)` for the first existing directory found, or `None` if neither exists.
+pub fn resolve_conductor_subdir(
+    worktree_path: &str,
+    repo_path: &str,
+    subdir: &str,
+) -> Option<PathBuf> {
+    let worktree_dir = PathBuf::from(worktree_path).join(".conductor").join(subdir);
+    if worktree_dir.is_dir() {
+        return Some(worktree_dir);
+    }
+    let repo_dir = PathBuf::from(repo_path).join(".conductor").join(subdir);
+    if repo_dir.is_dir() {
+        return Some(repo_dir);
+    }
+    None
+}
+
 /// Truncate a string at a char boundary no greater than `max_bytes`.
 pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {

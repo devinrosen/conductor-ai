@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ConductorError, Result};
+use crate::text_util::resolve_conductor_subdir;
 
 // ---------------------------------------------------------------------------
 // AST types
@@ -881,19 +882,7 @@ pub fn validate_workflow_name(name: &str) -> Result<()> {
 
 /// Resolve the `.conductor/workflows/` directory, preferring worktree over repo.
 fn resolve_workflows_dir(worktree_path: &str, repo_path: &str) -> Option<PathBuf> {
-    let worktree_dir = PathBuf::from(worktree_path)
-        .join(".conductor")
-        .join("workflows");
-    if worktree_dir.is_dir() {
-        return Some(worktree_dir);
-    }
-    let repo_dir = PathBuf::from(repo_path)
-        .join(".conductor")
-        .join("workflows");
-    if repo_dir.is_dir() {
-        return Some(repo_dir);
-    }
-    None
+    resolve_conductor_subdir(worktree_path, repo_path, "workflows")
 }
 
 /// Load a single workflow definition by name.
