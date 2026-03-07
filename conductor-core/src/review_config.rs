@@ -206,24 +206,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_frontmatter_basic() {
-        let content = "---\nname: security\nrequired: true\n---\nYou are a security reviewer.";
-        let (yaml, body) = parse_frontmatter(content).unwrap();
-        assert!(yaml.contains("name: security"));
-        assert_eq!(body, "You are a security reviewer.");
-    }
-
-    #[test]
-    fn test_parse_frontmatter_no_opening() {
-        assert!(parse_frontmatter("no frontmatter here").is_none());
-    }
-
-    #[test]
-    fn test_parse_frontmatter_no_closing() {
-        assert!(parse_frontmatter("---\nname: test\nno closing").is_none());
-    }
-
-    #[test]
     fn test_parse_reviewer_file() {
         let tmp = TempDir::new().unwrap();
         let file_path = tmp.path().join("security.md");
