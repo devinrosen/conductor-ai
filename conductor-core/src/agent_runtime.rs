@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use rusqlite::Connection;
 
-use crate::agent::{AgentManager, AgentRun, AgentRunStatus};
+use crate::agent::{list_live_tmux_windows, AgentManager, AgentRun, AgentRunStatus};
 
 /// Resolve the path to the `conductor` binary.
 ///
@@ -65,17 +65,8 @@ fn verify_tmux_window(window_name: &str) -> std::result::Result<(), String> {
     // Give tmux a moment to register the window.
     thread::sleep(Duration::from_millis(100));
 
-    let output = Command::new("tmux")
-        .args(["list-windows", "-a", "-F", "#{window_name}"])
-        .output()
-        .map_err(|e| format!("Failed to list tmux windows: {e}"))?;
-
-    if !output.status.success() {
-        return Err("tmux list-windows failed — tmux may not be running".to_string());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout.lines().any(|line| line.trim() == window_name) {
+    let live = list_live_tmux_windows();
+    if live.contains(window_name) {
         Ok(())
     } else {
         Err(format!(
