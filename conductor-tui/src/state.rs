@@ -356,6 +356,10 @@ pub struct DataCache {
     pub workflow_runs: Vec<WorkflowRun>,
     /// Steps for the currently viewed workflow run
     pub workflow_steps: Vec<WorkflowRunStep>,
+    /// Agent events for the currently selected workflow step's child_run_id
+    pub step_agent_events: Vec<AgentRunEvent>,
+    /// Agent run metadata for the currently selected step's child_run_id
+    pub step_agent_run: Option<AgentRun>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.

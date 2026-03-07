@@ -1,11 +1,12 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use super::common::truncate;
-use crate::state::{AppState, WorkflowsFocus};
+use crate::state::AppState;
+use crate::state::WorkflowsFocus;
 
 /// Render the Workflows split-pane view: defs (left) + runs (right).
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -136,14 +137,14 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_stateful_widget(list, area, &mut list_state);
 }
 
-/// Render the workflow run detail view: step table.
+/// Render the workflow run detail view: header + split pane (steps | agent activity).
 pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     let run_info = state
         .selected_workflow_run_id
         .as_ref()
         .and_then(|id| state.data.workflow_runs.iter().find(|r| &r.id == id));
 
-    // Header area (3 lines) + steps list
+    // Header area (3 lines) + body
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(4), Constraint::Min(0)])
@@ -187,18 +188,37 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         let header_block = Block::default()
             .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(
-            ratatui::widgets::Paragraph::new(header_lines).block(header_block),
-            chunks[0],
-        );
+        frame.render_widget(Paragraph::new(header_lines).block(header_block), chunks[0]);
     }
 
-    // Steps list
+    // Determine if the selected step has agent activity to show
+    let selected_step = state.data.workflow_steps.get(state.workflow_step_index);
+    let has_agent_activity = selected_step
+        .map(|s| s.child_run_id.is_some())
+        .unwrap_or(false);
+
+    if has_agent_activity {
+        // Split pane: steps (left 45%) | agent activity (right 55%)
+        let body_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+            .split(chunks[1]);
+
+        render_step_list(frame, body_chunks[0], state);
+        render_step_agent_activity(frame, body_chunks[1], state);
+    } else {
+        // Full-width step list when no agent activity to show
+        render_step_list(frame, chunks[1], state);
+    }
+}
+
+fn render_step_list(frame: &mut Frame, area: Rect, state: &AppState) {
     let items: Vec<ListItem> = state
         .data
         .workflow_steps
         .iter()
-        .map(|step| {
+        .enumerate()
+        .map(|(i, step)| {
             let (status_symbol, status_color) = status_display(&step.status.to_string());
             let duration = match (&step.started_at, &step.ended_at) {
                 (Some(start), Some(end)) => format_duration(start, end),
@@ -243,6 +263,30 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
                 ));
             }
 
+            // Inline detail: show snippet of result/context/markers for non-selected steps
+            if i != state.workflow_step_index {
+                if let Some(ref rt) = step.result_text {
+                    let snippet = truncate(rt.lines().next().unwrap_or(""), 40);
+                    spans.push(Span::styled(
+                        format!("  → {snippet}"),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                } else if let Some(ref ctx) = step.context_out {
+                    let snippet = truncate(ctx.lines().next().unwrap_or(""), 40);
+                    spans.push(Span::styled(
+                        format!("  ctx:{snippet}"),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+            }
+
+            if let Some(ref mk) = step.markers_out {
+                spans.push(Span::styled(
+                    format!("  [{mk}]"),
+                    Style::default().fg(Color::Cyan),
+                ));
+            }
+
             ListItem::new(Line::from(spans))
         })
         .collect();
@@ -252,7 +296,7 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan))
-                .title(" Steps "),
+                .title(" Steps (Enter=detail) "),
         )
         .highlight_style(
             Style::default()
@@ -265,7 +309,78 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     if !state.data.workflow_steps.is_empty() {
         list_state.select(Some(state.workflow_step_index));
     }
-    frame.render_stateful_widget(list, chunks[1], &mut list_state);
+    frame.render_stateful_widget(list, area, &mut list_state);
+}
+
+/// Render agent activity for the selected workflow step's child run.
+fn render_step_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
+    let events = &state.data.step_agent_events;
+    let agent_run = &state.data.step_agent_run;
+
+    // Title with run status
+    let title = if let Some(ref run) = agent_run {
+        let model = run.model.as_deref().unwrap_or("default");
+        format!(" Agent: {model} ({}) ", run.status)
+    } else {
+        " Agent Activity ".to_string()
+    };
+
+    let activity_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(title);
+
+    if events.is_empty() {
+        let msg = if agent_run
+            .as_ref()
+            .map(|r| r.status == conductor_core::agent::AgentRunStatus::Running)
+            .unwrap_or(false)
+        {
+            "Agent running — waiting for events…"
+        } else {
+            "No agent events"
+        };
+        let empty = Paragraph::new(Span::styled(msg, Style::default().fg(Color::DarkGray)))
+            .block(activity_block);
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    let items: Vec<ListItem> = events
+        .iter()
+        .map(|ev| {
+            let style = event_kind_style(&ev.kind);
+            let dur = ev
+                .duration_ms()
+                .map(|ms| format!(" ({:.1}s)", ms as f64 / 1000.0))
+                .unwrap_or_default();
+            let ts = ev.started_at.get(11..19).unwrap_or(&ev.started_at);
+            let summary = truncate(&ev.summary, 80);
+            let spans = vec![
+                Span::styled(format!("{ts} "), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:<10}", ev.kind), style),
+                Span::styled(dur, Style::default().fg(Color::DarkGray)),
+                Span::raw(" "),
+                Span::styled(summary, style),
+            ];
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+
+    let list = List::new(items).block(activity_block);
+    frame.render_widget(list, area);
+}
+
+fn event_kind_style(kind: &str) -> Style {
+    match kind {
+        "tool_use" => Style::default().fg(Color::Blue),
+        "tool_result" => Style::default().fg(Color::Green),
+        "api_request" => Style::default().fg(Color::Yellow),
+        "error" => Style::default().fg(Color::Red),
+        "prompt" => Style::default().fg(Color::Magenta),
+        "result" => Style::default().fg(Color::Cyan),
+        _ => Style::default().fg(Color::White),
+    }
 }
 
 fn status_display(status: &str) -> (String, Color) {

@@ -74,9 +74,9 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
                     .iter()
                     .any(|s| s.status.to_string() == "waiting" && s.gate_type.is_some());
                 if has_gate {
-                    "j/k:nav  g:gate  x:cancel  Esc:back  ?:help".to_string()
+                    "j/k:nav  Enter:detail  g:gate  x:cancel  Esc:back  ?:help".to_string()
                 } else {
-                    "j/k:nav  x:cancel  Esc:back  ?:help".to_string()
+                    "j/k:nav  Enter:detail  x:cancel  Esc:back  ?:help".to_string()
                 }
             }
         }

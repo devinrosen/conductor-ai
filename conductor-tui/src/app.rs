@@ -469,6 +469,8 @@ impl App {
                 self.state.data.workflow_defs = payload.workflow_defs;
                 self.state.data.workflow_runs = payload.workflow_runs;
                 self.state.data.workflow_steps = payload.workflow_steps;
+                self.state.data.step_agent_events = payload.step_agent_events;
+                self.state.data.step_agent_run = payload.step_agent_run;
                 self.clamp_workflow_indices();
                 return matches!(self.state.view, View::Workflows | View::WorkflowRunDetail);
             }
@@ -872,7 +874,11 @@ impl App {
                 }
             },
             View::WorkflowRunDetail => {
-                self.state.workflow_step_index = self.state.workflow_step_index.saturating_sub(1);
+                let old = self.state.workflow_step_index;
+                self.state.workflow_step_index = old.saturating_sub(1);
+                if self.state.workflow_step_index != old {
+                    self.reload_step_agent_events();
+                }
             }
             _ => {}
         }
@@ -1019,8 +1025,10 @@ impl App {
             },
             View::WorkflowRunDetail => {
                 let max = self.state.data.workflow_steps.len().saturating_sub(1);
-                if self.state.workflow_step_index < max {
-                    self.state.workflow_step_index += 1;
+                let old = self.state.workflow_step_index;
+                if old < max {
+                    self.state.workflow_step_index = old + 1;
+                    self.reload_step_agent_events();
                 }
             }
             _ => {}
@@ -1127,64 +1135,126 @@ impl App {
                 }
             }
             View::WorkflowRunDetail => {
-                if let Some(step) = self
+                // Clone the step to avoid borrow issues with self.reload_step_agent_events()
+                let step = self
                     .state
                     .data
                     .workflow_steps
                     .get(self.state.workflow_step_index)
-                {
-                    let title = format!("Step: {} ({})", step.step_name, step.status);
-                    let mut parts: Vec<String> = Vec::new();
-                    parts.push(format!("Status:    {}", step.status));
-                    parts.push(format!("Role:      {}", step.role));
-                    parts.push(format!("Can commit: {}", step.can_commit));
-                    parts.push(format!("Iteration: {}", step.iteration));
-                    if let Some(ref started) = step.started_at {
-                        parts.push(format!("Started:   {started}"));
+                    .cloned();
+                if let Some(step) = step {
+                    if step.child_run_id.is_some() {
+                        // Step has an agent run — show agent activity in EventDetail modal
+                        self.reload_step_agent_events();
+                        let events = &self.state.data.step_agent_events;
+                        let run = &self.state.data.step_agent_run;
+
+                        let title = format!(
+                            "Step: {} — Agent Activity ({})",
+                            step.step_name, step.status
+                        );
+                        let mut parts: Vec<String> = Vec::new();
+
+                        // Show run metadata header
+                        if let Some(ref r) = run {
+                            parts.push(format!(
+                                "Agent: {}  Model: {}  Status: {}",
+                                r.id,
+                                r.model.as_deref().unwrap_or("default"),
+                                r.status
+                            ));
+                            if let Some(cost) = r.cost_usd {
+                                parts.push(format!(
+                                    "Cost: ${cost:.4}  Turns: {}",
+                                    r.num_turns.unwrap_or(0)
+                                ));
+                            }
+                            parts.push(String::new());
+                        }
+
+                        // Show result text if available
+                        if let Some(ref rt) = step.result_text {
+                            parts.push("── Result ──".to_string());
+                            parts.push(rt.clone());
+                            parts.push(String::new());
+                        }
+
+                        // Show agent events
+                        if events.is_empty() {
+                            parts.push("No agent events recorded yet.".to_string());
+                        } else {
+                            parts.push(format!("── Events ({}) ──", events.len()));
+                            for ev in events {
+                                let ts = ev.started_at.get(11..19).unwrap_or(&ev.started_at);
+                                let dur = ev
+                                    .duration_ms()
+                                    .map(|ms| format!(" ({:.1}s)", ms as f64 / 1000.0))
+                                    .unwrap_or_default();
+                                parts.push(format!("{ts}  [{:<10}]{dur}  {}", ev.kind, ev.summary));
+                            }
+                        }
+
+                        let body = parts.join("\n");
+                        let line_count = body.lines().count();
+                        self.state.modal = Modal::EventDetail {
+                            title,
+                            body,
+                            line_count,
+                            scroll_offset: 0,
+                            horizontal_offset: 0,
+                        };
+                    } else {
+                        // No agent run — show step metadata modal
+                        let title = format!("Step: {} ({})", step.step_name, step.status);
+                        let mut parts: Vec<String> = Vec::new();
+                        parts.push(format!("Status:    {}", step.status));
+                        parts.push(format!("Role:      {}", step.role));
+                        parts.push(format!("Can commit: {}", step.can_commit));
+                        parts.push(format!("Iteration: {}", step.iteration));
+                        if let Some(ref started) = step.started_at {
+                            parts.push(format!("Started:   {started}"));
+                        }
+                        if let Some(ref ended) = step.ended_at {
+                            parts.push(format!("Ended:     {ended}"));
+                        }
+                        if let Some(ref gt) = step.gate_type {
+                            parts.push(format!("Gate type: {gt}"));
+                        }
+                        if let Some(ref gp) = step.gate_prompt {
+                            parts.push(String::new());
+                            parts.push("── Gate Prompt ──".to_string());
+                            parts.push(gp.clone());
+                        }
+                        if let Some(ref gf) = step.gate_feedback {
+                            parts.push(String::new());
+                            parts.push("── Gate Feedback ──".to_string());
+                            parts.push(gf.clone());
+                        }
+                        if let Some(ref rt) = step.result_text {
+                            parts.push(String::new());
+                            parts.push("── Result ──".to_string());
+                            parts.push(rt.clone());
+                        }
+                        if let Some(ref ctx) = step.context_out {
+                            parts.push(String::new());
+                            parts.push("── Context Out ──".to_string());
+                            parts.push(ctx.clone());
+                        }
+                        if let Some(ref mk) = step.markers_out {
+                            parts.push(String::new());
+                            parts.push("── Markers Out ──".to_string());
+                            parts.push(mk.clone());
+                        }
+                        let body = parts.join("\n");
+                        let line_count = body.lines().count();
+                        self.state.modal = Modal::EventDetail {
+                            title,
+                            body,
+                            line_count,
+                            scroll_offset: 0,
+                            horizontal_offset: 0,
+                        };
                     }
-                    if let Some(ref ended) = step.ended_at {
-                        parts.push(format!("Ended:     {ended}"));
-                    }
-                    if let Some(ref child_id) = step.child_run_id {
-                        parts.push(format!("Agent run: {child_id}"));
-                    }
-                    if let Some(ref gt) = step.gate_type {
-                        parts.push(format!("Gate type: {gt}"));
-                    }
-                    if let Some(ref gp) = step.gate_prompt {
-                        parts.push(String::new());
-                        parts.push("── Gate Prompt ──".to_string());
-                        parts.push(gp.clone());
-                    }
-                    if let Some(ref gf) = step.gate_feedback {
-                        parts.push(String::new());
-                        parts.push("── Gate Feedback ──".to_string());
-                        parts.push(gf.clone());
-                    }
-                    if let Some(ref rt) = step.result_text {
-                        parts.push(String::new());
-                        parts.push("── Result ──".to_string());
-                        parts.push(rt.clone());
-                    }
-                    if let Some(ref ctx) = step.context_out {
-                        parts.push(String::new());
-                        parts.push("── Context Out ──".to_string());
-                        parts.push(ctx.clone());
-                    }
-                    if let Some(ref mk) = step.markers_out {
-                        parts.push(String::new());
-                        parts.push("── Markers Out ──".to_string());
-                        parts.push(mk.clone());
-                    }
-                    let body = parts.join("\n");
-                    let line_count = body.lines().count();
-                    self.state.modal = Modal::EventDetail {
-                        title,
-                        body,
-                        line_count,
-                        scroll_offset: 0,
-                        horizontal_offset: 0,
-                    };
                 }
             }
             View::WorktreeDetail => {}
@@ -3842,6 +3912,12 @@ impl App {
             .map(|r| r.local_path.clone())
             .unwrap_or_default();
         let selected_run_id = self.state.selected_workflow_run_id.clone();
+        let selected_step_child_run_id = self
+            .state
+            .data
+            .workflow_steps
+            .get(self.state.workflow_step_index)
+            .and_then(|s| s.child_run_id.clone());
 
         let in_flight = Arc::clone(&self.workflow_poll_in_flight);
         crate::background::spawn_workflow_poll_once_guarded(
@@ -3850,6 +3926,7 @@ impl App {
             worktree_path,
             repo_path,
             selected_run_id,
+            selected_step_child_run_id,
             in_flight,
         );
     }
@@ -3894,6 +3971,26 @@ impl App {
             self.state.data.workflow_steps = wf_mgr.get_workflow_steps(run_id).unwrap_or_default();
         } else {
             self.state.data.workflow_steps.clear();
+        }
+        self.reload_step_agent_events();
+    }
+
+    /// Load agent events for the currently selected workflow step's child_run_id.
+    fn reload_step_agent_events(&mut self) {
+        let child_run_id = self
+            .state
+            .data
+            .workflow_steps
+            .get(self.state.workflow_step_index)
+            .and_then(|s| s.child_run_id.clone());
+
+        if let Some(ref run_id) = child_run_id {
+            let mgr = conductor_core::agent::AgentManager::new(&self.conn);
+            self.state.data.step_agent_events = mgr.list_events_for_run(run_id).unwrap_or_default();
+            self.state.data.step_agent_run = mgr.get_run(run_id).ok().flatten();
+        } else {
+            self.state.data.step_agent_events.clear();
+            self.state.data.step_agent_run = None;
         }
     }
 

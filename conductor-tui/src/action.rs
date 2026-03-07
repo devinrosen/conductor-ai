@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use conductor_core::agent::{AgentRun, TicketAgentTotals};
+use conductor_core::agent::{AgentRun, AgentRunEvent, TicketAgentTotals};
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::Ticket;
@@ -24,6 +24,10 @@ pub struct WorkflowDataPayload {
     pub workflow_defs: Vec<WorkflowDef>,
     pub workflow_runs: Vec<WorkflowRun>,
     pub workflow_steps: Vec<WorkflowRunStep>,
+    /// Agent events for the selected step's child_run_id (live activity)
+    pub step_agent_events: Vec<AgentRunEvent>,
+    /// Agent run metadata for the selected step's child_run_id
+    pub step_agent_run: Option<AgentRun>,
 }
 
 /// Payload for the DataRefreshed action (boxed to keep Action enum small).

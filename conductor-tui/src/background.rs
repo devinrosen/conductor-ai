@@ -213,6 +213,7 @@ pub fn spawn_workflow_poller(
     worktree_path: String,
     repo_path: String,
     selected_run_id: Option<String>,
+    selected_step_child_run_id: Option<String>,
 ) {
     thread::spawn(move || loop {
         thread::sleep(interval);
@@ -221,6 +222,7 @@ pub fn spawn_workflow_poller(
             &worktree_path,
             &repo_path,
             selected_run_id.as_deref(),
+            selected_step_child_run_id.as_deref(),
         ) {
             if !tx.send(action) {
                 break;
@@ -234,6 +236,7 @@ fn poll_workflow_data(
     worktree_path: &str,
     repo_path: &str,
     selected_run_id: Option<&str>,
+    selected_step_child_run_id: Option<&str>,
 ) -> Option<Action> {
     use conductor_core::workflow::WorkflowManager;
 
@@ -249,11 +252,26 @@ fn poll_workflow_data(
         Vec::new()
     };
 
+    // Load agent events for the selected step's child run
+    let agent_mgr = AgentManager::new(&conn);
+    let (step_agent_events, step_agent_run) = if let Some(child_run_id) = selected_step_child_run_id
+    {
+        let events = agent_mgr
+            .list_events_for_run(child_run_id)
+            .unwrap_or_default();
+        let run = agent_mgr.get_run(child_run_id).ok().flatten();
+        (events, run)
+    } else {
+        (Vec::new(), None)
+    };
+
     Some(Action::WorkflowDataRefreshed(Box::new(
         WorkflowDataPayload {
             workflow_defs: defs,
             workflow_runs: runs,
             workflow_steps: steps,
+            step_agent_events,
+            step_agent_run,
         },
     )))
 }
@@ -267,6 +285,7 @@ pub fn spawn_workflow_poll_once(
     worktree_path: String,
     repo_path: String,
     selected_run_id: Option<String>,
+    selected_step_child_run_id: Option<String>,
 ) {
     thread::spawn(move || {
         if let Some(action) = poll_workflow_data(
@@ -274,6 +293,7 @@ pub fn spawn_workflow_poll_once(
             &worktree_path,
             &repo_path,
             selected_run_id.as_deref(),
+            selected_step_child_run_id.as_deref(),
         ) {
             let _ = tx.send(action);
         }
@@ -288,6 +308,7 @@ pub fn spawn_workflow_poll_once_guarded(
     worktree_path: String,
     repo_path: String,
     selected_run_id: Option<String>,
+    selected_step_child_run_id: Option<String>,
     in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     thread::spawn(move || {
@@ -296,6 +317,7 @@ pub fn spawn_workflow_poll_once_guarded(
             &worktree_path,
             &repo_path,
             selected_run_id.as_deref(),
+            selected_step_child_run_id.as_deref(),
         );
         // Clear the guard before sending so the next tick can enqueue a new poll.
         in_flight.store(false, std::sync::atomic::Ordering::SeqCst);
