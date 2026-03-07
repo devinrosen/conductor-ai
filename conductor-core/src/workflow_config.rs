@@ -210,25 +210,31 @@ fn parse_sections(body: &str) -> HashMap<String, String> {
     sections
 }
 
+/// Resolve the `.conductor/workflows/` directory, preferring worktree over repo.
+fn resolve_workflows_dir(worktree_path: &str, repo_path: &str) -> Option<PathBuf> {
+    let worktree_dir = PathBuf::from(worktree_path)
+        .join(".conductor")
+        .join("workflows");
+    if worktree_dir.is_dir() {
+        return Some(worktree_dir);
+    }
+    let repo_dir = PathBuf::from(repo_path)
+        .join(".conductor")
+        .join("workflows");
+    if repo_dir.is_dir() {
+        return Some(repo_dir);
+    }
+    None
+}
+
 /// Load all workflow definitions from `.conductor/workflows/*.md`.
 ///
 /// Checks `worktree_path` first, then falls back to `repo_path`,
 /// consistent with `load_reviewer_roles`.
 pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<WorkflowDef>> {
-    let worktree_dir = PathBuf::from(worktree_path)
-        .join(".conductor")
-        .join("workflows");
-    let workflows_dir = if worktree_dir.is_dir() {
-        worktree_dir
-    } else {
-        let repo_dir = PathBuf::from(repo_path)
-            .join(".conductor")
-            .join("workflows");
-        if !repo_dir.is_dir() {
-            // No workflows directory — return empty list (not an error, unlike reviewers).
-            return Ok(Vec::new());
-        }
-        repo_dir
+    let Some(workflows_dir) = resolve_workflows_dir(worktree_path, repo_path) else {
+        // No workflows directory — return empty list (not an error, unlike reviewers).
+        return Ok(Vec::new());
     };
 
     let mut entries: Vec<_> = fs::read_dir(&workflows_dir)
@@ -247,6 +253,33 @@ pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<Wo
     }
 
     Ok(defs)
+}
+
+/// Load a single workflow definition by name, targeting the file directly.
+///
+/// Looks for `<name>.md` in `.conductor/workflows/`, checking `worktree_path`
+/// first then falling back to `repo_path`. Avoids parsing all workflow files.
+pub fn load_workflow_by_name(
+    worktree_path: &str,
+    repo_path: &str,
+    name: &str,
+) -> Result<WorkflowDef> {
+    crate::workflow_dsl::validate_workflow_name(name)?;
+
+    let workflows_dir = resolve_workflows_dir(worktree_path, repo_path).ok_or_else(|| {
+        ConductorError::Workflow(format!(
+            "Workflow '{name}' not found in .conductor/workflows/"
+        ))
+    })?;
+
+    let path = workflows_dir.join(format!("{name}.md"));
+    if !path.is_file() {
+        return Err(ConductorError::Workflow(format!(
+            "Workflow '{name}' not found in .conductor/workflows/"
+        )));
+    }
+
+    parse_workflow_file(&path)
 }
 
 #[cfg(test)]
@@ -413,6 +446,75 @@ and commit them to the branch.
         )
         .unwrap();
         assert_eq!(defs.len(), 1);
+    }
+
+    #[test]
+    fn test_load_workflow_by_name() {
+        let tmp = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_workflow_file(tmp.path(), "test-coverage.md", TEST_WORKFLOW);
+
+        let def = load_workflow_by_name(
+            tmp.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "test-coverage",
+        )
+        .unwrap();
+        assert_eq!(def.name, "test-coverage");
+        assert_eq!(def.steps.len(), 2);
+    }
+
+    #[test]
+    fn test_load_workflow_by_name_not_found() {
+        let tmp = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_workflow_file(tmp.path(), "test-coverage.md", TEST_WORKFLOW);
+
+        let result = load_workflow_by_name(
+            tmp.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "nonexistent",
+        );
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("nonexistent"));
+    }
+
+    #[test]
+    fn test_load_workflow_by_name_rejects_invalid() {
+        let result = load_workflow_by_name("/any", "/any", "../etc/passwd");
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("Invalid workflow name"));
+    }
+
+    #[test]
+    fn test_load_workflow_by_name_falls_back_to_repo() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        write_workflow_file(repo.path(), "test-coverage.md", TEST_WORKFLOW);
+
+        let def = load_workflow_by_name(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "test-coverage",
+        )
+        .unwrap();
+        assert_eq!(def.name, "test-coverage");
+    }
+
+    #[test]
+    fn test_load_workflow_by_name_no_workflows_dir() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        let result = load_workflow_by_name(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "test-coverage",
+        );
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("not found"));
     }
 
     #[test]
