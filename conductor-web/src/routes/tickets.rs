@@ -70,7 +70,7 @@ pub async fn sync_tickets(
             total_closed += syncer
                 .close_missing_tickets(&repo.id, "github", &synced_ids)
                 .unwrap_or(0);
-            let _ = syncer.mark_worktrees_for_closed_tickets(&repo.id);
+            let _ = syncer.mark_worktrees_for_closed_tickets(&repo.id, &config);
         }
     } else {
         for source in sources {
@@ -84,7 +84,7 @@ pub async fn sync_tickets(
                             total_closed += syncer
                                 .close_missing_tickets(&repo.id, "github", &synced_ids)
                                 .unwrap_or(0);
-                            let _ = syncer.mark_worktrees_for_closed_tickets(&repo.id);
+                            let _ = syncer.mark_worktrees_for_closed_tickets(&repo.id, &config);
                         }
                     }
                 }
@@ -97,7 +97,7 @@ pub async fn sync_tickets(
                             total_closed += syncer
                                 .close_missing_tickets(&repo.id, "jira", &synced_ids)
                                 .unwrap_or(0);
-                            let _ = syncer.mark_worktrees_for_closed_tickets(&repo.id);
+                            let _ = syncer.mark_worktrees_for_closed_tickets(&repo.id, &config);
                         }
                     }
                 }

@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 use conductor_core::agent::{
     build_startup_context, parse_events_from_line, AgentManager, PlanStep,
 };
-use conductor_core::config::{ensure_dirs, load_config};
+use conductor_core::config::{ensure_dirs, load_config, Config};
 use conductor_core::db::open_database;
 use conductor_core::github;
 use conductor_core::github_app;
@@ -885,7 +885,7 @@ fn main() -> Result<()> {
                     if sources.is_empty() {
                         // Backward compat: auto-detect GitHub from remote_url
                         if let Some((owner, name)) = github::parse_github_remote(&r.remote_url) {
-                            sync_github(&syncer, &r.id, &r.slug, &owner, &name);
+                            sync_github(&syncer, &config, &r.id, &r.slug, &owner, &name);
                         }
                     } else {
                         for source in sources {
@@ -895,7 +895,8 @@ fn main() -> Result<()> {
                                     {
                                         Ok(cfg) => {
                                             sync_github(
-                                                &syncer, &r.id, &r.slug, &cfg.owner, &cfg.repo,
+                                                &syncer, &config, &r.id, &r.slug, &cfg.owner,
+                                                &cfg.repo,
                                             );
                                         }
                                         Err(e) => {
@@ -906,7 +907,10 @@ fn main() -> Result<()> {
                                 "jira" => {
                                     match serde_json::from_str::<JiraConfig>(&source.config_json) {
                                         Ok(cfg) => {
-                                            sync_jira(&syncer, &r.id, &r.slug, &cfg.jql, &cfg.url);
+                                            sync_jira(
+                                                &syncer, &config, &r.id, &r.slug, &cfg.jql,
+                                                &cfg.url,
+                                            );
                                         }
                                         Err(e) => {
                                             eprintln!("  {} — invalid jira config: {e}", r.slug);
@@ -1717,7 +1721,14 @@ fn print_event_summary(event: &serde_json::Value) {
 }
 
 /// Sync Jira issues for a single repo, printing results.
-fn sync_jira(syncer: &TicketSyncer, repo_id: &str, repo_slug: &str, jql: &str, base_url: &str) {
+fn sync_jira(
+    syncer: &TicketSyncer,
+    config: &Config,
+    repo_id: &str,
+    repo_slug: &str,
+    jql: &str,
+    base_url: &str,
+) {
     match jira_acli::sync_jira_issues_acli(jql, base_url) {
         Ok(tickets) => {
             let synced_ids: Vec<&str> = tickets.iter().map(|t| t.source_id.as_str()).collect();
@@ -1727,7 +1738,7 @@ fn sync_jira(syncer: &TicketSyncer, repo_id: &str, repo_slug: &str, jql: &str, b
                         .close_missing_tickets(repo_id, "jira", &synced_ids)
                         .unwrap_or(0);
                     let merged = syncer
-                        .mark_worktrees_for_closed_tickets(repo_id)
+                        .mark_worktrees_for_closed_tickets(repo_id, config)
                         .unwrap_or(0);
                     print!("  {} — synced {count} Jira issues", repo_slug);
                     if closed > 0 {
@@ -1750,7 +1761,14 @@ fn sync_jira(syncer: &TicketSyncer, repo_id: &str, repo_slug: &str, jql: &str, b
 }
 
 /// Sync GitHub issues for a single repo, printing results.
-fn sync_github(syncer: &TicketSyncer, repo_id: &str, repo_slug: &str, owner: &str, name: &str) {
+fn sync_github(
+    syncer: &TicketSyncer,
+    config: &Config,
+    repo_id: &str,
+    repo_slug: &str,
+    owner: &str,
+    name: &str,
+) {
     match github::sync_github_issues(owner, name) {
         Ok(tickets) => {
             let synced_ids: Vec<&str> = tickets.iter().map(|t| t.source_id.as_str()).collect();
@@ -1760,7 +1778,7 @@ fn sync_github(syncer: &TicketSyncer, repo_id: &str, repo_slug: &str, owner: &st
                         .close_missing_tickets(repo_id, "github", &synced_ids)
                         .unwrap_or(0);
                     let merged = syncer
-                        .mark_worktrees_for_closed_tickets(repo_id)
+                        .mark_worktrees_for_closed_tickets(repo_id, config)
                         .unwrap_or(0);
                     print!("  {} — synced {count} GitHub issues", repo_slug);
                     if closed > 0 {

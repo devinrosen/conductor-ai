@@ -2,7 +2,7 @@ use std::thread;
 use std::time::Duration;
 
 use conductor_core::agent::AgentManager;
-use conductor_core::config::{db_path, load_config};
+use conductor_core::config::{db_path, load_config, Config};
 use conductor_core::db::open_database;
 use conductor_core::github;
 use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
@@ -77,7 +77,8 @@ fn sync_all_tickets(tx: &BackgroundSender) {
         if sources.is_empty() {
             // Backward compat: auto-detect GitHub from remote_url
             if let Some((owner, name)) = github::parse_github_remote(&repo.remote_url) {
-                let action = sync_github_repo(&syncer, &repo.id, &repo.slug, &owner, &name);
+                let action =
+                    sync_github_repo(&syncer, &config, &repo.id, &repo.slug, &owner, &name);
                 if !tx.send(action) {
                     return;
                 }
@@ -89,7 +90,7 @@ fn sync_all_tickets(tx: &BackgroundSender) {
                         let action = match serde_json::from_str::<GitHubConfig>(&source.config_json)
                         {
                             Ok(cfg) => sync_github_repo(
-                                &syncer, &repo.id, &repo.slug, &cfg.owner, &cfg.repo,
+                                &syncer, &config, &repo.id, &repo.slug, &cfg.owner, &cfg.repo,
                             ),
                             Err(e) => Action::TicketSyncFailed {
                                 repo_slug: repo.slug.clone(),
@@ -102,9 +103,9 @@ fn sync_all_tickets(tx: &BackgroundSender) {
                     }
                     "jira" => {
                         let action = match serde_json::from_str::<JiraConfig>(&source.config_json) {
-                            Ok(cfg) => {
-                                sync_jira_repo(&syncer, &repo.id, &repo.slug, &cfg.jql, &cfg.url)
-                            }
+                            Ok(cfg) => sync_jira_repo(
+                                &syncer, &config, &repo.id, &repo.slug, &cfg.jql, &cfg.url,
+                            ),
                             Err(e) => Action::TicketSyncFailed {
                                 repo_slug: repo.slug.clone(),
                                 error: format!("invalid jira config: {e}"),
@@ -124,6 +125,7 @@ fn sync_all_tickets(tx: &BackgroundSender) {
 /// Sync Jira issues for a single repo, returning the appropriate Action.
 fn sync_jira_repo(
     syncer: &TicketSyncer,
+    config: &Config,
     repo_id: &str,
     repo_slug: &str,
     jql: &str,
@@ -135,7 +137,7 @@ fn sync_jira_repo(
             match syncer.upsert_tickets(repo_id, &tickets) {
                 Ok(count) => {
                     let _ = syncer.close_missing_tickets(repo_id, "jira", &synced_ids);
-                    let _ = syncer.mark_worktrees_for_closed_tickets(repo_id);
+                    let _ = syncer.mark_worktrees_for_closed_tickets(repo_id, config);
                     Action::TicketSyncComplete {
                         repo_slug: repo_slug.to_string(),
                         count,
@@ -157,6 +159,7 @@ fn sync_jira_repo(
 /// Sync GitHub issues for a single repo, returning the appropriate Action.
 fn sync_github_repo(
     syncer: &TicketSyncer,
+    config: &Config,
     repo_id: &str,
     repo_slug: &str,
     owner: &str,
@@ -168,7 +171,7 @@ fn sync_github_repo(
             match syncer.upsert_tickets(repo_id, &tickets) {
                 Ok(count) => {
                     let _ = syncer.close_missing_tickets(repo_id, "github", &synced_ids);
-                    let _ = syncer.mark_worktrees_for_closed_tickets(repo_id);
+                    let _ = syncer.mark_worktrees_for_closed_tickets(repo_id, config);
                     Action::TicketSyncComplete {
                         repo_slug: repo_slug.to_string(),
                         count,
