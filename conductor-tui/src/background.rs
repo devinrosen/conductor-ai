@@ -9,7 +9,7 @@ use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig}
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::TicketSyncer;
-use conductor_core::worktree::WorktreeManager;
+use conductor_core::worktree::{self, WorktreeManager};
 
 use crate::action::{Action, DataRefreshedPayload};
 use crate::event::BackgroundSender;
@@ -34,7 +34,7 @@ pub fn poll_data() -> Option<Action> {
 
     let repo_mgr = RepoManager::new(&conn, &config);
     let wt_mgr = WorktreeManager::new(&conn, &config);
-    let ticket_syncer = TicketSyncer::new(&conn, &config);
+    let ticket_syncer = TicketSyncer::new(&conn);
     let agent_mgr = AgentManager::new(&conn);
 
     let repos = repo_mgr.list().ok()?;
@@ -68,7 +68,7 @@ fn sync_all_tickets(tx: &BackgroundSender) {
     let repo_mgr = RepoManager::new(&conn, &config);
     let Ok(repos) = repo_mgr.list() else { return };
 
-    let syncer = TicketSyncer::new(&conn, &config);
+    let syncer = TicketSyncer::new(&conn);
     let source_mgr = IssueSourceManager::new(&conn);
 
     for repo in repos {
@@ -135,7 +135,16 @@ fn sync_jira_repo(
             match syncer.upsert_tickets(repo_id, &tickets) {
                 Ok(count) => {
                     let _ = syncer.close_missing_tickets(repo_id, "jira", &synced_ids);
-                    let _ = syncer.mark_worktrees_for_closed_tickets(repo_id);
+                    for info in syncer
+                        .mark_worktrees_for_closed_tickets(repo_id)
+                        .unwrap_or_default()
+                    {
+                        worktree::remove_git_artifacts(
+                            &info.repo_path,
+                            &info.worktree_path,
+                            &info.branch,
+                        );
+                    }
                     Action::TicketSyncComplete {
                         repo_slug: repo_slug.to_string(),
                         count,
@@ -168,7 +177,16 @@ fn sync_github_repo(
             match syncer.upsert_tickets(repo_id, &tickets) {
                 Ok(count) => {
                     let _ = syncer.close_missing_tickets(repo_id, "github", &synced_ids);
-                    let _ = syncer.mark_worktrees_for_closed_tickets(repo_id);
+                    for info in syncer
+                        .mark_worktrees_for_closed_tickets(repo_id)
+                        .unwrap_or_default()
+                    {
+                        worktree::remove_git_artifacts(
+                            &info.repo_path,
+                            &info.worktree_path,
+                            &info.branch,
+                        );
+                    }
                     Action::TicketSyncComplete {
                         repo_slug: repo_slug.to_string(),
                         count,

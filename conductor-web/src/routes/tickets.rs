@@ -8,7 +8,7 @@ use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig}
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{Ticket, TicketSyncer};
-use conductor_core::worktree::Worktree;
+use conductor_core::worktree::{self, Worktree};
 
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
@@ -30,8 +30,7 @@ pub async fn list_all_tickets(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Ticket>>, ApiError> {
     let db = state.db.lock().await;
-    let config = state.config.read().await;
-    let syncer = TicketSyncer::new(&db, &config);
+    let syncer = TicketSyncer::new(&db);
     let tickets = syncer.list(None)?;
     Ok(Json(tickets))
 }
@@ -43,7 +42,7 @@ pub async fn list_tickets(
     let db = state.db.lock().await;
     let config = state.config.read().await;
     RepoManager::new(&db, &config).get_by_id(&repo_id)?;
-    let syncer = TicketSyncer::new(&db, &config);
+    let syncer = TicketSyncer::new(&db);
     let tickets = syncer.list(Some(&repo_id))?;
     Ok(Json(tickets))
 }
@@ -56,7 +55,7 @@ pub async fn sync_tickets(
     let config = state.config.read().await;
     let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
     let source_mgr = IssueSourceManager::new(&db);
-    let syncer = TicketSyncer::new(&db, &config);
+    let syncer = TicketSyncer::new(&db);
 
     let sources = source_mgr.list(&repo.id)?;
     let mut total_synced = 0usize;
@@ -71,7 +70,12 @@ pub async fn sync_tickets(
             total_closed += syncer
                 .close_missing_tickets(&repo.id, "github", &synced_ids)
                 .unwrap_or(0);
-            let _ = syncer.mark_worktrees_for_closed_tickets(&repo.id);
+            for info in syncer
+                .mark_worktrees_for_closed_tickets(&repo.id)
+                .unwrap_or_default()
+            {
+                worktree::remove_git_artifacts(&info.repo_path, &info.worktree_path, &info.branch);
+            }
         }
     } else {
         for source in sources {
@@ -85,7 +89,16 @@ pub async fn sync_tickets(
                             total_closed += syncer
                                 .close_missing_tickets(&repo.id, "github", &synced_ids)
                                 .unwrap_or(0);
-                            let _ = syncer.mark_worktrees_for_closed_tickets(&repo.id);
+                            for info in syncer
+                                .mark_worktrees_for_closed_tickets(&repo.id)
+                                .unwrap_or_default()
+                            {
+                                worktree::remove_git_artifacts(
+                                    &info.repo_path,
+                                    &info.worktree_path,
+                                    &info.branch,
+                                );
+                            }
                         }
                     }
                 }
@@ -98,7 +111,16 @@ pub async fn sync_tickets(
                             total_closed += syncer
                                 .close_missing_tickets(&repo.id, "jira", &synced_ids)
                                 .unwrap_or(0);
-                            let _ = syncer.mark_worktrees_for_closed_tickets(&repo.id);
+                            for info in syncer
+                                .mark_worktrees_for_closed_tickets(&repo.id)
+                                .unwrap_or_default()
+                            {
+                                worktree::remove_git_artifacts(
+                                    &info.repo_path,
+                                    &info.worktree_path,
+                                    &info.branch,
+                                );
+                            }
                         }
                     }
                 }

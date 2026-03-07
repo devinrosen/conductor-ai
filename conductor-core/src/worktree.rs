@@ -598,7 +598,7 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
 
 /// Remove the git worktree directory and delete the branch.
 /// Best-effort: failures are silently ignored (the worktree/branch may already be gone).
-fn remove_git_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
+pub fn remove_git_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
     let _ = Command::new("git")
         .args(["worktree", "remove", worktree_path, "--force"])
         .current_dir(repo_path)
