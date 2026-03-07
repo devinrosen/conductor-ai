@@ -28,6 +28,18 @@ use crate::worktree::WorktreeManager;
 // Constants
 // ---------------------------------------------------------------------------
 
+/// Column list for `workflow_run_steps` SELECT queries (used by `row_to_workflow_step`).
+const STEP_COLUMNS: &str =
+    "id, workflow_run_id, step_name, role, can_commit, condition_expr, status, \
+     child_run_id, position, started_at, ended_at, result_text, condition_met, \
+     iteration, parallel_group_id, context_out, markers_out, retry_count, \
+     gate_type, gate_prompt, gate_timeout, gate_approved_by, gate_approved_at, gate_feedback";
+
+/// Column list for `workflow_runs` SELECT queries (used by `row_to_workflow_run`).
+const RUN_COLUMNS: &str =
+    "id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+     started_at, ended_at, result_summary, definition_snapshot";
+
 /// Instruction appended to every agent prompt for structured output.
 pub const CONDUCTOR_OUTPUT_INSTRUCTION: &str = r#"
 When you have finished your work, output the following block exactly as the
@@ -517,9 +529,7 @@ impl<'a> WorkflowManager<'a> {
 
     pub fn get_workflow_run(&self, id: &str) -> Result<Option<WorkflowRun>> {
         let result = self.conn.query_row(
-            "SELECT id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
-             started_at, ended_at, result_summary, definition_snapshot \
-             FROM workflow_runs WHERE id = ?1",
+            &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE id = ?1"),
             params![id],
             row_to_workflow_run,
         );
@@ -532,11 +542,7 @@ impl<'a> WorkflowManager<'a> {
 
     pub fn get_workflow_steps(&self, workflow_run_id: &str) -> Result<Vec<WorkflowRunStep>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, workflow_run_id, step_name, role, can_commit, condition_expr, status, \
-             child_run_id, position, started_at, ended_at, result_text, condition_met, \
-             iteration, parallel_group_id, context_out, markers_out, retry_count, \
-             gate_type, gate_prompt, gate_timeout, gate_approved_by, gate_approved_at, gate_feedback \
-             FROM workflow_run_steps WHERE workflow_run_id = ?1 ORDER BY position",
+            &format!("SELECT {STEP_COLUMNS} FROM workflow_run_steps WHERE workflow_run_id = ?1 ORDER BY position"),
         )?;
         let rows = stmt.query_map(params![workflow_run_id], row_to_workflow_step)?;
         let mut steps = Vec::new();
@@ -547,13 +553,9 @@ impl<'a> WorkflowManager<'a> {
     }
 
     pub fn get_step_by_id(&self, step_id: &str) -> Result<Option<WorkflowRunStep>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, workflow_run_id, step_name, role, can_commit, condition_expr, status, \
-             child_run_id, position, started_at, ended_at, result_text, condition_met, \
-             iteration, parallel_group_id, context_out, markers_out, retry_count, \
-             gate_type, gate_prompt, gate_timeout, gate_approved_by, gate_approved_at, gate_feedback \
-             FROM workflow_run_steps WHERE id = ?1",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {STEP_COLUMNS} FROM workflow_run_steps WHERE id = ?1"
+        ))?;
         let mut rows = stmt.query_map(params![step_id], row_to_workflow_step)?;
         match rows.next() {
             Some(row) => Ok(Some(row?)),
@@ -563,9 +565,7 @@ impl<'a> WorkflowManager<'a> {
 
     pub fn list_workflow_runs(&self, worktree_id: &str) -> Result<Vec<WorkflowRun>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
-             started_at, ended_at, result_summary, definition_snapshot \
-             FROM workflow_runs WHERE worktree_id = ?1 ORDER BY started_at DESC",
+            &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE worktree_id = ?1 ORDER BY started_at DESC"),
         )?;
         let rows = stmt.query_map(params![worktree_id], row_to_workflow_run)?;
         let mut runs = Vec::new();
@@ -578,14 +578,12 @@ impl<'a> WorkflowManager<'a> {
     /// Find the waiting gate step for a workflow run.
     pub fn find_waiting_gate(&self, workflow_run_id: &str) -> Result<Option<WorkflowRunStep>> {
         let result = self.conn.query_row(
-            "SELECT id, workflow_run_id, step_name, role, can_commit, condition_expr, status, \
-             child_run_id, position, started_at, ended_at, result_text, condition_met, \
-             iteration, parallel_group_id, context_out, markers_out, retry_count, \
-             gate_type, gate_prompt, gate_timeout, gate_approved_by, gate_approved_at, gate_feedback \
-             FROM workflow_run_steps \
-             WHERE workflow_run_id = ?1 AND gate_type IS NOT NULL AND gate_approved_at IS NULL \
-               AND status IN ('running', 'waiting') \
-             ORDER BY position DESC LIMIT 1",
+            &format!(
+                "SELECT {STEP_COLUMNS} FROM workflow_run_steps \
+                 WHERE workflow_run_id = ?1 AND gate_type IS NOT NULL AND gate_approved_at IS NULL \
+                   AND status IN ('running', 'waiting') \
+                 ORDER BY position DESC LIMIT 1"
+            ),
             params![workflow_run_id],
             row_to_workflow_step,
         );
