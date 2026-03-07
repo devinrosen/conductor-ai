@@ -9,6 +9,7 @@ use conductor_core::agent::{
 };
 use conductor_core::config::{ensure_dirs, load_config};
 use conductor_core::db::open_database;
+use conductor_core::error::ConductorError;
 use conductor_core::github;
 use conductor_core::github_app;
 use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
@@ -18,7 +19,7 @@ use conductor_core::orchestrator::{self, OrchestratorConfig};
 use conductor_core::post_run::{self, PostRunInput};
 use conductor_core::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
-use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
+use conductor_core::tickets::{build_agent_prompt, TicketInput, TicketSyncer};
 use conductor_core::workflow::{collect_agent_names, WorkflowExecConfig, WorkflowManager};
 use conductor_core::workflow_config;
 use conductor_core::worktree::WorktreeManager;
@@ -964,7 +965,9 @@ fn main() -> Result<()> {
                     if sources.is_empty() {
                         // Backward compat: auto-detect GitHub from remote_url
                         if let Some((owner, name)) = github::parse_github_remote(&r.remote_url) {
-                            sync_github(&syncer, &r.id, &r.slug, &owner, &name);
+                            sync_repo(&syncer, &r.id, &r.slug, "github", "GitHub issues", || {
+                                github::sync_github_issues(&owner, &name)
+                            });
                         }
                     } else {
                         for source in sources {
@@ -973,8 +976,17 @@ fn main() -> Result<()> {
                                     match serde_json::from_str::<GitHubConfig>(&source.config_json)
                                     {
                                         Ok(cfg) => {
-                                            sync_github(
-                                                &syncer, &r.id, &r.slug, &cfg.owner, &cfg.repo,
+                                            sync_repo(
+                                                &syncer,
+                                                &r.id,
+                                                &r.slug,
+                                                "github",
+                                                "GitHub issues",
+                                                || {
+                                                    github::sync_github_issues(
+                                                        &cfg.owner, &cfg.repo,
+                                                    )
+                                                },
                                             );
                                         }
                                         Err(e) => {
@@ -985,7 +997,18 @@ fn main() -> Result<()> {
                                 "jira" => {
                                     match serde_json::from_str::<JiraConfig>(&source.config_json) {
                                         Ok(cfg) => {
-                                            sync_jira(&syncer, &r.id, &r.slug, &cfg.jql, &cfg.url);
+                                            sync_repo(
+                                                &syncer,
+                                                &r.id,
+                                                &r.slug,
+                                                "jira",
+                                                "Jira issues",
+                                                || {
+                                                    jira_acli::sync_jira_issues_acli(
+                                                        &cfg.jql, &cfg.url,
+                                                    )
+                                                },
+                                            );
                                         }
                                         Err(e) => {
                                             eprintln!("  {} — invalid jira config: {e}", r.slug);
@@ -2133,53 +2156,27 @@ fn print_event_summary(event: &serde_json::Value) {
     }
 }
 
-/// Sync Jira issues for a single repo, printing results.
-fn sync_jira(syncer: &TicketSyncer, repo_id: &str, repo_slug: &str, jql: &str, base_url: &str) {
-    match jira_acli::sync_jira_issues_acli(jql, base_url) {
+/// Sync issues for a single repo using the given fetch closure, printing results.
+fn sync_repo(
+    syncer: &TicketSyncer,
+    repo_id: &str,
+    repo_slug: &str,
+    source_type: &str,
+    label: &str,
+    fetch: impl FnOnce() -> Result<Vec<TicketInput>, ConductorError>,
+) {
+    match fetch() {
         Ok(tickets) => {
             let synced_ids: Vec<&str> = tickets.iter().map(|t| t.source_id.as_str()).collect();
             match syncer.upsert_tickets(repo_id, &tickets) {
                 Ok(count) => {
                     let closed = syncer
-                        .close_missing_tickets(repo_id, "jira", &synced_ids)
+                        .close_missing_tickets(repo_id, source_type, &synced_ids)
                         .unwrap_or(0);
                     let merged = syncer
                         .mark_worktrees_for_closed_tickets(repo_id)
                         .unwrap_or(0);
-                    print!("  {} — synced {count} Jira issues", repo_slug);
-                    if closed > 0 {
-                        print!(", {closed} marked closed");
-                    }
-                    if merged > 0 {
-                        print!(", {merged} worktrees merged");
-                    }
-                    println!();
-                }
-                Err(e) => {
-                    eprintln!("  {} — sync failed: {e}", repo_slug);
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("  {} — sync failed: {e}", repo_slug);
-        }
-    }
-}
-
-/// Sync GitHub issues for a single repo, printing results.
-fn sync_github(syncer: &TicketSyncer, repo_id: &str, repo_slug: &str, owner: &str, name: &str) {
-    match github::sync_github_issues(owner, name) {
-        Ok(tickets) => {
-            let synced_ids: Vec<&str> = tickets.iter().map(|t| t.source_id.as_str()).collect();
-            match syncer.upsert_tickets(repo_id, &tickets) {
-                Ok(count) => {
-                    let closed = syncer
-                        .close_missing_tickets(repo_id, "github", &synced_ids)
-                        .unwrap_or(0);
-                    let merged = syncer
-                        .mark_worktrees_for_closed_tickets(repo_id)
-                        .unwrap_or(0);
-                    print!("  {} — synced {count} GitHub issues", repo_slug);
+                    print!("  {} — synced {count} {label}", repo_slug);
                     if closed > 0 {
                         print!(", {closed} marked closed");
                     }
