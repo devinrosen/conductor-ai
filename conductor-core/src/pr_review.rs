@@ -794,12 +794,28 @@ fn build_aggregated_comment(
         comment.push_str(" — **blocking issues found**\n\n");
     }
 
-    for result in results {
-        let status = if result.approved {
-            "approved"
-        } else {
-            "changes requested"
-        };
+    // Separate approved vs blocking reviewers
+    let approved: Vec<_> = results.iter().filter(|r| r.approved).collect();
+    let blocking: Vec<_> = results.iter().filter(|r| !r.approved).collect();
+
+    // Compact summary for approved reviewers
+    if !approved.is_empty() {
+        for r in &approved {
+            let required_badge = if r.required {
+                " *(required)*"
+            } else {
+                " *(advisory)*"
+            };
+            comment.push_str(&format!(
+                "- :white_check_mark: **{}** — approved{}\n",
+                r.role_name, required_badge
+            ));
+        }
+        comment.push('\n');
+    }
+
+    // Full findings for blocking reviewers, wrapped in <details>
+    for result in &blocking {
         let required_badge = if result.required {
             " *(required)*"
         } else {
@@ -807,13 +823,12 @@ fn build_aggregated_comment(
         };
 
         comment.push_str(&format!(
-            "## {} — {}{}\n",
-            result.role_name, status, required_badge
+            "<details open>\n<summary><strong>{}</strong> — changes requested{}</summary>\n\n",
+            result.role_name, required_badge
         ));
         comment.push_str(&format!("*Focus: {}*\n\n", result.focus));
 
         if let Some(ref findings) = result.findings {
-            // Take first ~2000 bytes of findings to keep comment reasonable
             if findings.len() > 2000 {
                 let safe = truncate_str(findings, 2000);
                 comment.push_str(safe);
@@ -824,7 +839,7 @@ fn build_aggregated_comment(
         } else {
             comment.push_str("*(no findings reported)*");
         }
-        comment.push_str("\n\n---\n\n");
+        comment.push_str("\n\n</details>\n\n---\n\n");
     }
 
     // Include off-diff issues section if any were filed
@@ -1444,8 +1459,11 @@ mod tests {
         let comment = build_aggregated_comment(&results, true, &[]);
         assert!(comment.contains("2/2"));
         assert!(comment.contains("all required checks passed"));
-        assert!(comment.contains("architecture"));
-        assert!(comment.contains("security"));
+        // Approved reviewers render as compact one-liners, not full ## sections
+        assert!(comment.contains(":white_check_mark: **architecture** — approved"));
+        assert!(comment.contains(":white_check_mark: **security** — approved"));
+        assert!(!comment.contains("## architecture"));
+        assert!(!comment.contains("<details"));
         assert!(comment.contains("$0.0900"));
     }
 
@@ -1483,7 +1501,13 @@ mod tests {
         let comment = build_aggregated_comment(&results, false, &[]);
         assert!(comment.contains("1/2"));
         assert!(comment.contains("blocking issues found"));
+        // Blocking reviewer wrapped in <details open>
+        assert!(comment.contains("<details open>"));
+        assert!(comment.contains("<summary><strong>architecture</strong> — changes requested"));
         assert!(comment.contains("*(required)*"));
+        assert!(comment.contains("Found coupling issues."));
+        // Approved reviewer shown as compact line
+        assert!(comment.contains(":white_check_mark: **performance** — approved"));
         assert!(comment.contains("*(advisory)*"));
     }
 
