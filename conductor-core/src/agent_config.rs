@@ -26,7 +26,7 @@ struct AgentFrontmatter {
     model: Option<String>,
 }
 
-fn default_role() -> String {
+pub fn default_role() -> String {
     "reviewer".to_string()
 }
 

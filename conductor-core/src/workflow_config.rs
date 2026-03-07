@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::agent_config::AgentRole;
+use crate::agent_config::{default_role, AgentRole};
 use crate::error::{ConductorError, Result};
 use crate::text_util::parse_frontmatter;
 use crate::workflow_dsl::WorkflowTrigger;
@@ -50,10 +50,6 @@ struct StepFrontmatter {
     /// Model override for this step.
     #[serde(default)]
     model: Option<String>,
-}
-
-fn default_role() -> String {
-    "reviewer".to_string()
 }
 
 /// Re-export `AgentRole` as `WorkflowRole` for backward compatibility.
