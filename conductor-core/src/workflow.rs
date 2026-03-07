@@ -546,6 +546,21 @@ impl<'a> WorkflowManager<'a> {
         Ok(steps)
     }
 
+    pub fn get_step_by_id(&self, step_id: &str) -> Result<Option<WorkflowRunStep>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workflow_run_id, step_name, role, can_commit, condition_expr, status, \
+             child_run_id, position, started_at, ended_at, result_text, condition_met, \
+             iteration, parallel_group_id, context_out, markers_out, retry_count, \
+             gate_type, gate_prompt, gate_timeout, gate_approved_by, gate_approved_at, gate_feedback \
+             FROM workflow_run_steps WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query_map(params![step_id], row_to_workflow_step)?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn list_workflow_runs(&self, worktree_id: &str) -> Result<Vec<WorkflowRun>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
@@ -1669,13 +1684,11 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                             Some(step)
                         } else {
                             // Another gate is now waiting — ours must have been resolved
-                            let steps = state.wf_mgr.get_workflow_steps(&state.workflow_run_id)?;
-                            steps.into_iter().find(|s| s.id == step_id)
+                            state.wf_mgr.get_step_by_id(&step_id)?
                         }
                     } else {
                         // No waiting gate — ours must have been resolved
-                        let steps = state.wf_mgr.get_workflow_steps(&state.workflow_run_id)?;
-                        steps.into_iter().find(|s| s.id == step_id)
+                        state.wf_mgr.get_step_by_id(&step_id)?
                     };
 
                 if let Some(ref step) = resolved_step {
@@ -2271,5 +2284,31 @@ And here is my actual output:
         let mgr = WorkflowManager::new(&conn);
         let result = mgr.get_workflow_run("nonexistent").unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_step_by_id() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("test", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+
+        let step_id = mgr
+            .insert_step(&run.id, "build", "actor", false, 0, 0)
+            .unwrap();
+
+        let step = mgr.get_step_by_id(&step_id).unwrap();
+        assert!(step.is_some());
+        let step = step.unwrap();
+        assert_eq!(step.id, step_id);
+        assert_eq!(step.step_name, "build");
+        assert_eq!(step.role, "actor");
+
+        let missing = mgr.get_step_by_id("nonexistent").unwrap();
+        assert!(missing.is_none());
     }
 }
