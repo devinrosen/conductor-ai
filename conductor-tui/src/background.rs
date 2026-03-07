@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -36,6 +37,21 @@ pub fn poll_data() -> Option<Action> {
     let wt_mgr = WorktreeManager::new(&conn, &config);
     let ticket_syncer = TicketSyncer::new(&conn);
     let agent_mgr = AgentManager::new(&conn);
+
+    // Reap orphaned runs whose tmux windows have disappeared.
+    // Throttle to at most once every 30 seconds to avoid spawning tmux
+    // subprocesses on every poll tick.
+    {
+        static LAST_REAP: AtomicI64 = AtomicI64::new(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        if now - LAST_REAP.load(Ordering::Relaxed) >= 30 {
+            LAST_REAP.store(now, Ordering::Relaxed);
+            let _ = agent_mgr.reap_orphaned_runs();
+        }
+    }
 
     let repos = repo_mgr.list().ok()?;
     let worktrees = wt_mgr.list(None, true).ok()?;
