@@ -1533,10 +1533,15 @@ impl<'a> AgentManager<'a> {
             row_to_agent_run,
         )?;
 
+        // Fetch all live tmux window names once (avoids N+1 subprocess spawns).
+        let live_windows = list_live_tmux_windows();
+
         let mut reaped = 0;
         for run in &active_runs {
-            if tmux_window_exists(run.tmux_window.as_deref()) {
-                continue;
+            if let Some(ref name) = run.tmux_window {
+                if live_windows.contains(name.as_str()) {
+                    continue;
+                }
             }
             // Window is gone — try to recover result from log file
             if try_recover_from_log(self, &run.id).is_some() {
@@ -1554,29 +1559,22 @@ impl<'a> AgentManager<'a> {
     }
 }
 
-/// Check whether a tmux window still exists.
+/// Fetch all live tmux window names across all sessions.
 ///
-/// Returns `true` if the window name is `Some` and `tmux list-windows` shows it
-/// in any session. Returns `false` if the window is `None` (no tmux window was
-/// recorded) or if the tmux command fails/shows no match.
-fn tmux_window_exists(window: Option<&str>) -> bool {
-    let Some(name) = window else {
-        return false;
-    };
-    // Use `tmux list-windows -a -F '#{window_name}'` to list all window names
-    // across all sessions and check if our window is present.
+/// Calls `tmux list-windows -a` once and returns the set of window names.
+/// Returns an empty set if tmux is not running or the command fails.
+fn list_live_tmux_windows() -> std::collections::HashSet<String> {
     let Ok(output) = Command::new("tmux")
         .args(["list-windows", "-a", "-F", "#{window_name}"])
         .output()
     else {
-        // tmux not running or not installed — window definitely doesn't exist
-        return false;
+        return std::collections::HashSet::new();
     };
     if !output.status.success() {
-        return false;
+        return std::collections::HashSet::new();
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.lines().any(|line| line.trim() == name)
+    stdout.lines().map(|line| line.trim().to_owned()).collect()
 }
 
 /// Build a startup context block to prepend to the agent prompt.
