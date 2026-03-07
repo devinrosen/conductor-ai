@@ -32,6 +32,32 @@ fn max_scroll(line_count: usize) -> u16 {
     line_count.saturating_sub(1) as u16
 }
 
+/// Increment `index` by one, clamping to `len - 1` (no-op when `len` is zero).
+fn clamp_increment(index: &mut usize, len: usize) {
+    let max = len.saturating_sub(1);
+    if *index < max {
+        *index += 1;
+    }
+}
+
+/// Increment `index` by one, wrapping back to 0 when reaching `len`.
+fn wrap_increment(index: &mut usize, len: usize) {
+    if *index + 1 < len {
+        *index += 1;
+    } else {
+        *index = 0;
+    }
+}
+
+/// Decrement `index` by one, wrapping to `len - 1` when at 0.
+fn wrap_decrement(index: &mut usize, len: usize) {
+    if *index > 0 {
+        *index -= 1;
+    } else {
+        *index = len.saturating_sub(1);
+    }
+}
+
 /// Format structured [`MetadataEntry`] values into a fixed-width text block
 /// suitable for the TUI modal.
 fn format_metadata_entries(entries: &[MetadataEntry]) -> String {
@@ -808,33 +834,21 @@ impl App {
             } => {
                 *custom_active = false;
                 let total = conductor_core::models::KNOWN_MODELS.len() + 1; // +1 for custom
-                if *selected > 0 {
-                    *selected -= 1;
-                } else {
-                    *selected = total - 1;
-                }
+                wrap_decrement(selected, total);
                 return;
             }
             Modal::WorkTargetPicker {
                 ref targets,
                 ref mut selected,
             } => {
-                if *selected > 0 {
-                    *selected -= 1;
-                } else {
-                    *selected = targets.len().saturating_sub(1);
-                }
+                wrap_decrement(selected, targets.len());
                 return;
             }
             Modal::WorkTargetManager {
                 ref targets,
                 ref mut selected,
             } => {
-                if *selected > 0 {
-                    *selected -= 1;
-                } else {
-                    *selected = targets.len().saturating_sub(1);
-                }
+                wrap_decrement(selected, targets.len());
                 return;
             }
             Modal::IssueSourceManager {
@@ -842,11 +856,7 @@ impl App {
                 ref mut selected,
                 ..
             } => {
-                if *selected > 0 {
-                    *selected -= 1;
-                } else {
-                    *selected = sources.len().saturating_sub(1);
-                }
+                wrap_decrement(selected, sources.len());
                 return;
             }
             Modal::GithubDiscoverOrgs {
@@ -854,11 +864,7 @@ impl App {
                 ref mut cursor,
                 ..
             } => {
-                if *cursor > 0 {
-                    *cursor -= 1;
-                } else {
-                    *cursor = orgs.len().saturating_sub(1);
-                }
+                wrap_decrement(cursor, orgs.len());
                 return;
             }
             Modal::GithubDiscover {
@@ -866,11 +872,7 @@ impl App {
                 ref mut cursor,
                 ..
             } => {
-                if *cursor > 0 {
-                    *cursor -= 1;
-                } else {
-                    *cursor = repos.len().saturating_sub(1);
-                }
+                wrap_decrement(cursor, repos.len());
                 return;
             }
             _ => {}
@@ -935,33 +937,21 @@ impl App {
             } => {
                 *custom_active = false;
                 let total = conductor_core::models::KNOWN_MODELS.len() + 1; // +1 for custom
-                if *selected + 1 < total {
-                    *selected += 1;
-                } else {
-                    *selected = 0;
-                }
+                wrap_increment(selected, total);
                 return;
             }
             Modal::WorkTargetPicker {
                 ref targets,
                 ref mut selected,
             } => {
-                if *selected + 1 < targets.len() {
-                    *selected += 1;
-                } else {
-                    *selected = 0;
-                }
+                wrap_increment(selected, targets.len());
                 return;
             }
             Modal::WorkTargetManager {
                 ref targets,
                 ref mut selected,
             } => {
-                if *selected + 1 < targets.len() {
-                    *selected += 1;
-                } else {
-                    *selected = 0;
-                }
+                wrap_increment(selected, targets.len());
                 return;
             }
             Modal::IssueSourceManager {
@@ -969,11 +959,7 @@ impl App {
                 ref mut selected,
                 ..
             } => {
-                if *selected + 1 < sources.len() {
-                    *selected += 1;
-                } else {
-                    *selected = 0;
-                }
+                wrap_increment(selected, sources.len());
                 return;
             }
             Modal::GithubDiscoverOrgs {
@@ -981,11 +967,7 @@ impl App {
                 ref mut cursor,
                 ..
             } => {
-                if *cursor + 1 < orgs.len() {
-                    *cursor += 1;
-                } else {
-                    *cursor = 0;
-                }
+                wrap_increment(cursor, orgs.len());
                 return;
             }
             Modal::GithubDiscover {
@@ -993,11 +975,7 @@ impl App {
                 ref mut cursor,
                 ..
             } => {
-                if *cursor + 1 < repos.len() {
-                    *cursor += 1;
-                } else {
-                    *cursor = 0;
-                }
+                wrap_increment(cursor, repos.len());
                 return;
             }
             _ => {}
@@ -1005,63 +983,56 @@ impl App {
         match self.state.view {
             View::Dashboard => match self.state.dashboard_focus {
                 DashboardFocus::Repos => {
-                    let max = self.state.data.repos.len().saturating_sub(1);
-                    if self.state.repo_index < max {
-                        self.state.repo_index += 1;
-                    }
+                    clamp_increment(&mut self.state.repo_index, self.state.data.repos.len());
                 }
                 DashboardFocus::Worktrees => {
-                    let max = self.state.data.worktrees.len().saturating_sub(1);
-                    if self.state.worktree_index < max {
-                        self.state.worktree_index += 1;
-                    }
+                    clamp_increment(
+                        &mut self.state.worktree_index,
+                        self.state.data.worktrees.len(),
+                    );
                 }
                 DashboardFocus::Tickets => {
-                    let max = self.state.data.tickets.len().saturating_sub(1);
-                    if self.state.ticket_index < max {
-                        self.state.ticket_index += 1;
-                    }
+                    clamp_increment(&mut self.state.ticket_index, self.state.data.tickets.len());
                 }
             },
             View::RepoDetail => match self.state.repo_detail_focus {
                 RepoDetailFocus::Worktrees => {
-                    let max = self.state.detail_worktrees.len().saturating_sub(1);
-                    if self.state.detail_wt_index < max {
-                        self.state.detail_wt_index += 1;
-                    }
+                    clamp_increment(
+                        &mut self.state.detail_wt_index,
+                        self.state.detail_worktrees.len(),
+                    );
                 }
                 RepoDetailFocus::Tickets => {
-                    let max = self.state.detail_tickets.len().saturating_sub(1);
-                    if self.state.detail_ticket_index < max {
-                        self.state.detail_ticket_index += 1;
-                    }
+                    clamp_increment(
+                        &mut self.state.detail_ticket_index,
+                        self.state.detail_tickets.len(),
+                    );
                 }
             },
             View::Tickets => {
-                let max = self.state.data.tickets.len().saturating_sub(1);
-                if self.state.ticket_index < max {
-                    self.state.ticket_index += 1;
-                }
+                clamp_increment(&mut self.state.ticket_index, self.state.data.tickets.len());
             }
             View::Workflows => match self.state.workflows_focus {
                 WorkflowsFocus::Defs => {
-                    let max = self.state.data.workflow_defs.len().saturating_sub(1);
-                    if self.state.workflow_def_index < max {
-                        self.state.workflow_def_index += 1;
-                    }
+                    clamp_increment(
+                        &mut self.state.workflow_def_index,
+                        self.state.data.workflow_defs.len(),
+                    );
                 }
                 WorkflowsFocus::Runs => {
-                    let max = self.state.data.workflow_runs.len().saturating_sub(1);
-                    if self.state.workflow_run_index < max {
-                        self.state.workflow_run_index += 1;
-                    }
+                    clamp_increment(
+                        &mut self.state.workflow_run_index,
+                        self.state.data.workflow_runs.len(),
+                    );
                 }
             },
             View::WorkflowRunDetail => {
-                let max = self.state.data.workflow_steps.len().saturating_sub(1);
                 let old = self.state.workflow_step_index;
-                if old < max {
-                    self.state.workflow_step_index = old + 1;
+                clamp_increment(
+                    &mut self.state.workflow_step_index,
+                    self.state.data.workflow_steps.len(),
+                );
+                if self.state.workflow_step_index != old {
                     self.poll_workflow_data_async();
                 }
             }
@@ -4197,5 +4168,61 @@ mod tests {
             extract_last_code_block(Cursor::new(content)),
             Some("closed".to_string())
         );
+    }
+
+    #[test]
+    fn test_clamp_increment_advances() {
+        let mut idx = 0;
+        clamp_increment(&mut idx, 3);
+        assert_eq!(idx, 1);
+    }
+
+    #[test]
+    fn test_clamp_increment_stops_at_max() {
+        let mut idx = 2;
+        clamp_increment(&mut idx, 3);
+        assert_eq!(idx, 2);
+    }
+
+    #[test]
+    fn test_clamp_increment_empty_list() {
+        let mut idx = 0;
+        clamp_increment(&mut idx, 0);
+        assert_eq!(idx, 0);
+    }
+
+    #[test]
+    fn test_wrap_increment_advances() {
+        let mut idx = 0;
+        wrap_increment(&mut idx, 3);
+        assert_eq!(idx, 1);
+    }
+
+    #[test]
+    fn test_wrap_increment_wraps_to_zero() {
+        let mut idx = 2;
+        wrap_increment(&mut idx, 3);
+        assert_eq!(idx, 0);
+    }
+
+    #[test]
+    fn test_wrap_decrement_decreases() {
+        let mut idx = 2;
+        wrap_decrement(&mut idx, 3);
+        assert_eq!(idx, 1);
+    }
+
+    #[test]
+    fn test_wrap_decrement_wraps_to_end() {
+        let mut idx = 0;
+        wrap_decrement(&mut idx, 3);
+        assert_eq!(idx, 2);
+    }
+
+    #[test]
+    fn test_wrap_decrement_empty_list() {
+        let mut idx = 0;
+        wrap_decrement(&mut idx, 0);
+        assert_eq!(idx, 0);
     }
 }
