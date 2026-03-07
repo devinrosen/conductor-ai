@@ -1249,26 +1249,9 @@ fn poll_reviewer_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
-    use chrono::Utc;
-    use tempfile::NamedTempFile;
 
     fn setup_db() -> Connection {
-        let tmp = NamedTempFile::new().unwrap();
-        let conn = db::open_database(tmp.path()).unwrap();
-        let now = Utc::now().to_rfc3339();
-        conn.execute(
-            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
-             VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', 'main', '/tmp/ws', ?1)",
-            rusqlite::params![now],
-        ).unwrap();
-        conn.execute(
-            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
-             VALUES ('w1', 'r1', 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', ?1)",
-            rusqlite::params![now],
-        )
-        .unwrap();
-        conn
+        crate::test_helpers::setup_db()
     }
 
     fn make_run(status: AgentRunStatus, result_text: Option<&str>) -> AgentRun {

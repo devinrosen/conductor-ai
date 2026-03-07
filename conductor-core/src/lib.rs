@@ -21,3 +21,6 @@ pub mod workflow;
 pub mod workflow_config;
 pub mod workflow_dsl;
 pub mod worktree;
+
+#[cfg(test)]
+pub mod test_helpers;

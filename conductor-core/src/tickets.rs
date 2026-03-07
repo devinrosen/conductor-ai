@@ -255,50 +255,7 @@ mod tests {
     use rusqlite::Connection;
 
     fn setup_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE repos (
-                id TEXT PRIMARY KEY,
-                slug TEXT NOT NULL UNIQUE,
-                local_path TEXT NOT NULL,
-                remote_url TEXT NOT NULL,
-                default_branch TEXT NOT NULL DEFAULT 'main',
-                workspace_dir TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE tickets (
-                id TEXT PRIMARY KEY,
-                repo_id TEXT NOT NULL REFERENCES repos(id),
-                source_type TEXT NOT NULL,
-                source_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                body TEXT NOT NULL DEFAULT '',
-                state TEXT NOT NULL DEFAULT 'open',
-                labels TEXT NOT NULL DEFAULT '[]',
-                assignee TEXT,
-                priority TEXT,
-                url TEXT NOT NULL DEFAULT '',
-                synced_at TEXT NOT NULL,
-                raw_json TEXT NOT NULL DEFAULT '{}',
-                UNIQUE(repo_id, source_type, source_id)
-            );
-            CREATE TABLE worktrees (
-                id TEXT PRIMARY KEY,
-                repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-                slug TEXT NOT NULL,
-                branch TEXT NOT NULL,
-                path TEXT NOT NULL,
-                ticket_id TEXT REFERENCES tickets(id) ON DELETE SET NULL,
-                status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'merged', 'abandoned')),
-                created_at TEXT NOT NULL,
-                completed_at TEXT,
-                UNIQUE(repo_id, slug)
-            );
-            INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
-            VALUES ('repo1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo', '/tmp/ws', '2024-01-01T00:00:00Z');",
-        )
-        .unwrap();
-        conn
+        crate::test_helpers::setup_db()
     }
 
     fn make_ticket(source_id: &str, title: &str) -> TicketInput {
@@ -336,14 +293,14 @@ mod tests {
             make_ticket("2", "Issue 2"),
             make_ticket("3", "Issue 3"),
         ];
-        syncer.upsert_tickets("repo1", &tickets).unwrap();
+        syncer.upsert_tickets("r1", &tickets).unwrap();
 
         // Sync #2: only issues 1, 3 are open (issue 2 was closed on GitHub)
         let tickets2 = vec![make_ticket("1", "Issue 1"), make_ticket("3", "Issue 3")];
         let synced_ids: Vec<&str> = tickets2.iter().map(|t| t.source_id.as_str()).collect();
-        syncer.upsert_tickets("repo1", &tickets2).unwrap();
+        syncer.upsert_tickets("r1", &tickets2).unwrap();
         let closed = syncer
-            .close_missing_tickets("repo1", "github", &synced_ids)
+            .close_missing_tickets("r1", "github", &synced_ids)
             .unwrap();
 
         assert_eq!(closed, 1);
@@ -359,18 +316,18 @@ mod tests {
 
         // Sync #1: issues 1, 2 are open
         let tickets = vec![make_ticket("1", "Issue 1"), make_ticket("2", "Issue 2")];
-        syncer.upsert_tickets("repo1", &tickets).unwrap();
+        syncer.upsert_tickets("r1", &tickets).unwrap();
 
         // Sync #2: only issue 1 open → issue 2 closed
         let synced_ids = vec!["1"];
         syncer
-            .close_missing_tickets("repo1", "github", &synced_ids)
+            .close_missing_tickets("r1", "github", &synced_ids)
             .unwrap();
         assert_eq!(get_ticket_state(&conn, "2"), "closed");
 
         // Sync #3: still only issue 1 open → issue 2 already closed, count should be 0
         let closed = syncer
-            .close_missing_tickets("repo1", "github", &synced_ids)
+            .close_missing_tickets("r1", "github", &synced_ids)
             .unwrap();
         assert_eq!(closed, 0);
     }
@@ -382,12 +339,10 @@ mod tests {
 
         // Sync existing tickets
         let tickets = vec![make_ticket("1", "Issue 1")];
-        syncer.upsert_tickets("repo1", &tickets).unwrap();
+        syncer.upsert_tickets("r1", &tickets).unwrap();
 
         // Empty sync should not close anything (protects against API failures)
-        let closed = syncer
-            .close_missing_tickets("repo1", "github", &[])
-            .unwrap();
+        let closed = syncer.close_missing_tickets("r1", "github", &[]).unwrap();
         assert_eq!(closed, 0);
         assert_eq!(get_ticket_state(&conn, "1"), "open");
     }
@@ -408,19 +363,19 @@ mod tests {
         // Both repos have issue #1
         let tickets1 = vec![make_ticket("1", "Repo1 Issue")];
         let tickets2 = vec![make_ticket("1", "Repo2 Issue")];
-        syncer.upsert_tickets("repo1", &tickets1).unwrap();
+        syncer.upsert_tickets("r1", &tickets1).unwrap();
         syncer.upsert_tickets("repo2", &tickets2).unwrap();
 
         // Sync repo1 with no open issues → only repo1's ticket should close
         let closed = syncer
-            .close_missing_tickets("repo1", "github", &["999"])
+            .close_missing_tickets("r1", "github", &["999"])
             .unwrap();
         assert_eq!(closed, 1);
 
         // repo1's ticket should be closed
         let repo1_state: String = conn
             .query_row(
-                "SELECT state FROM tickets WHERE repo_id = 'repo1' AND source_id = '1'",
+                "SELECT state FROM tickets WHERE repo_id = 'r1' AND source_id = '1'",
                 [],
                 |row| row.get(0),
             )
@@ -477,19 +432,19 @@ mod tests {
         let syncer = TicketSyncer::new(&conn);
 
         let tickets = vec![make_ticket("1", "Issue 1")];
-        syncer.upsert_tickets("repo1", &tickets).unwrap();
+        syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        insert_worktree(&conn, "wt1", "repo1", Some(&ticket_id), "active");
+        insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
 
         syncer
-            .close_missing_tickets("repo1", "github", &["999"])
+            .close_missing_tickets("r1", "github", &["999"])
             .unwrap();
 
-        let count = syncer.mark_worktrees_for_closed_tickets("repo1").unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
     }
@@ -500,18 +455,18 @@ mod tests {
         let syncer = TicketSyncer::new(&conn);
 
         let tickets = vec![make_ticket("1", "Issue 1")];
-        syncer.upsert_tickets("repo1", &tickets).unwrap();
+        syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        insert_worktree(&conn, "wt1", "repo1", Some(&ticket_id), "abandoned");
+        insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "abandoned");
         syncer
-            .close_missing_tickets("repo1", "github", &["999"])
+            .close_missing_tickets("r1", "github", &["999"])
             .unwrap();
 
-        let count = syncer.mark_worktrees_for_closed_tickets("repo1").unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
     }
@@ -521,9 +476,9 @@ mod tests {
         let conn = setup_db();
         let syncer = TicketSyncer::new(&conn);
 
-        insert_worktree(&conn, "wt1", "repo1", None, "active");
+        insert_worktree(&conn, "wt1", "r1", None, "active");
 
-        let count = syncer.mark_worktrees_for_closed_tickets("repo1").unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
         assert_eq!(count, 0);
         assert_eq!(get_worktree_status(&conn, "wt1"), "active");
     }
@@ -534,18 +489,18 @@ mod tests {
         let syncer = TicketSyncer::new(&conn);
 
         let tickets = vec![make_ticket("1", "Issue 1")];
-        syncer.upsert_tickets("repo1", &tickets).unwrap();
+        syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        insert_worktree(&conn, "wt1", "repo1", Some(&ticket_id), "merged");
+        insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "merged");
         syncer
-            .close_missing_tickets("repo1", "github", &["999"])
+            .close_missing_tickets("r1", "github", &["999"])
             .unwrap();
 
-        let count = syncer.mark_worktrees_for_closed_tickets("repo1").unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
         assert_eq!(count, 0);
     }
 
@@ -563,15 +518,13 @@ mod tests {
 
         let t1 = vec![make_ticket("1", "Repo1 Issue")];
         let t2 = vec![make_ticket("1", "Repo2 Issue")];
-        syncer.upsert_tickets("repo1", &t1).unwrap();
+        syncer.upsert_tickets("r1", &t1).unwrap();
         syncer.upsert_tickets("repo2", &t2).unwrap();
 
         let tid1: String = conn
-            .query_row(
-                "SELECT id FROM tickets WHERE repo_id = 'repo1'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT id FROM tickets WHERE repo_id = 'r1'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         let tid2: String = conn
             .query_row(
@@ -580,17 +533,17 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        insert_worktree(&conn, "wt1", "repo1", Some(&tid1), "active");
+        insert_worktree(&conn, "wt1", "r1", Some(&tid1), "active");
         insert_worktree(&conn, "wt2", "repo2", Some(&tid2), "active");
 
         syncer
-            .close_missing_tickets("repo1", "github", &["999"])
+            .close_missing_tickets("r1", "github", &["999"])
             .unwrap();
         syncer
             .close_missing_tickets("repo2", "github", &["999"])
             .unwrap();
 
-        let count = syncer.mark_worktrees_for_closed_tickets("repo1").unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
         assert_eq!(get_worktree_status(&conn, "wt2"), "active");
@@ -601,13 +554,13 @@ mod tests {
         let conn = setup_db();
         let syncer = TicketSyncer::new(&conn);
         let tickets = vec![make_ticket("1", "Issue 1")];
-        syncer.upsert_tickets("repo1", &tickets).unwrap();
+        syncer.upsert_tickets("r1", &tickets).unwrap();
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        insert_worktree(&conn, "wt1", "repo1", None, "active");
+        insert_worktree(&conn, "wt1", "r1", None, "active");
 
         syncer.link_to_worktree(&ticket_id, "wt1").unwrap();
 
@@ -626,7 +579,7 @@ mod tests {
         let conn = setup_db();
         let syncer = TicketSyncer::new(&conn);
         let tickets = vec![make_ticket("1", "Issue 1"), make_ticket("2", "Issue 2")];
-        syncer.upsert_tickets("repo1", &tickets).unwrap();
+        syncer.upsert_tickets("r1", &tickets).unwrap();
         let tid1: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
                 row.get(0)
@@ -637,7 +590,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        insert_worktree(&conn, "wt1", "repo1", Some(&tid1), "active");
+        insert_worktree(&conn, "wt1", "r1", Some(&tid1), "active");
 
         let result = syncer.link_to_worktree(&tid2, "wt1");
         assert!(result.is_err());
@@ -652,7 +605,7 @@ mod tests {
         let conn = setup_db();
         let syncer = TicketSyncer::new(&conn);
         let tickets = vec![make_ticket("1", "Issue 1")];
-        syncer.upsert_tickets("repo1", &tickets).unwrap();
+        syncer.upsert_tickets("r1", &tickets).unwrap();
 
         let ticket_id: String = conn
             .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
@@ -677,7 +630,7 @@ mod tests {
     fn test_build_agent_prompt_full_ticket() {
         let ticket = Ticket {
             id: "01ABCDEF".to_string(),
-            repo_id: "repo1".to_string(),
+            repo_id: "r1".to_string(),
             source_type: "github".to_string(),
             source_id: "42".to_string(),
             title: "Add dark mode support".to_string(),
@@ -703,7 +656,7 @@ mod tests {
     fn test_build_agent_prompt_empty_body_and_labels() {
         let ticket = Ticket {
             id: "01ABCDEF".to_string(),
-            repo_id: "repo1".to_string(),
+            repo_id: "r1".to_string(),
             source_type: "github".to_string(),
             source_id: "7".to_string(),
             title: "Fix typo".to_string(),

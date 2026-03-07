@@ -112,28 +112,7 @@ mod tests {
     use rusqlite::Connection;
 
     fn setup_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE repos (
-                id TEXT PRIMARY KEY,
-                slug TEXT NOT NULL UNIQUE,
-                local_path TEXT NOT NULL,
-                remote_url TEXT NOT NULL,
-                default_branch TEXT NOT NULL DEFAULT 'main',
-                workspace_dir TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE repo_issue_sources (
-                id TEXT PRIMARY KEY,
-                repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-                source_type TEXT NOT NULL CHECK (source_type IN ('github', 'jira')),
-                config_json TEXT NOT NULL
-            );
-            INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
-            VALUES ('repo1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo', '/tmp/ws', '2024-01-01T00:00:00Z');",
-        )
-        .unwrap();
-        conn
+        crate::test_helpers::setup_db()
     }
 
     #[test]
@@ -143,17 +122,17 @@ mod tests {
 
         let source = mgr
             .add(
-                "repo1",
+                "r1",
                 "github",
                 r#"{"owner":"test","repo":"repo"}"#,
                 "test-repo",
             )
             .unwrap();
 
-        assert_eq!(source.repo_id, "repo1");
+        assert_eq!(source.repo_id, "r1");
         assert_eq!(source.source_type, "github");
 
-        let sources = mgr.list("repo1").unwrap();
+        let sources = mgr.list("r1").unwrap();
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].source_type, "github");
     }
@@ -164,7 +143,7 @@ mod tests {
         let mgr = IssueSourceManager::new(&conn);
 
         mgr.add(
-            "repo1",
+            "r1",
             "github",
             r#"{"owner":"test","repo":"repo"}"#,
             "test-repo",
@@ -172,7 +151,7 @@ mod tests {
         .unwrap();
 
         let result = mgr.add(
-            "repo1",
+            "r1",
             "github",
             r#"{"owner":"other","repo":"other"}"#,
             "test-repo",
@@ -187,7 +166,7 @@ mod tests {
 
         let source = mgr
             .add(
-                "repo1",
+                "r1",
                 "github",
                 r#"{"owner":"test","repo":"repo"}"#,
                 "test-repo",
@@ -196,7 +175,7 @@ mod tests {
 
         mgr.remove(&source.id).unwrap();
 
-        let sources = mgr.list("repo1").unwrap();
+        let sources = mgr.list("r1").unwrap();
         assert!(sources.is_empty());
     }
 
@@ -206,21 +185,21 @@ mod tests {
         let mgr = IssueSourceManager::new(&conn);
 
         mgr.add(
-            "repo1",
+            "r1",
             "github",
             r#"{"owner":"test","repo":"repo"}"#,
             "test-repo",
         )
         .unwrap();
 
-        let removed = mgr.remove_by_type("repo1", "github").unwrap();
+        let removed = mgr.remove_by_type("r1", "github").unwrap();
         assert!(removed);
 
-        let sources = mgr.list("repo1").unwrap();
+        let sources = mgr.list("r1").unwrap();
         assert!(sources.is_empty());
 
         // Removing again returns false
-        let removed = mgr.remove_by_type("repo1", "github").unwrap();
+        let removed = mgr.remove_by_type("r1", "github").unwrap();
         assert!(!removed);
     }
 
@@ -229,7 +208,7 @@ mod tests {
         let conn = setup_db();
         let mgr = IssueSourceManager::new(&conn);
 
-        let sources = mgr.list("repo1").unwrap();
+        let sources = mgr.list("r1").unwrap();
         assert!(sources.is_empty());
     }
 
@@ -239,7 +218,7 @@ mod tests {
         let mgr = IssueSourceManager::new(&conn);
 
         mgr.add(
-            "repo1",
+            "r1",
             "github",
             r#"{"owner":"test","repo":"repo"}"#,
             "test-repo",
@@ -247,14 +226,14 @@ mod tests {
         .unwrap();
 
         mgr.add(
-            "repo1",
+            "r1",
             "jira",
             r#"{"jql":"project = TEST","url":"https://jira.example.com"}"#,
             "test-repo",
         )
         .unwrap();
 
-        let sources = mgr.list("repo1").unwrap();
+        let sources = mgr.list("r1").unwrap();
         assert_eq!(sources.len(), 2);
     }
 }
