@@ -3912,12 +3912,7 @@ impl App {
             .map(|r| r.local_path.clone())
             .unwrap_or_default();
         let selected_run_id = self.state.selected_workflow_run_id.clone();
-        let selected_step_child_run_id = self
-            .state
-            .data
-            .workflow_steps
-            .get(self.state.workflow_step_index)
-            .and_then(|s| s.child_run_id.clone());
+        let selected_step_child_run_id = self.selected_step_child_run_id();
 
         let in_flight = Arc::clone(&self.workflow_poll_in_flight);
         crate::background::spawn_workflow_poll_once_guarded(
@@ -3972,26 +3967,18 @@ impl App {
         } else {
             self.state.data.workflow_steps.clear();
         }
-        self.reload_step_agent_events();
+        // Clear stale agent event cache; the background poller will refresh it.
+        self.state.data.step_agent_events.clear();
+        self.state.data.step_agent_run = None;
     }
 
-    /// Load agent events for the currently selected workflow step's child_run_id.
-    fn reload_step_agent_events(&mut self) {
-        let child_run_id = self
-            .state
+    /// Get the child_run_id of the currently selected workflow step.
+    fn selected_step_child_run_id(&self) -> Option<String> {
+        self.state
             .data
             .workflow_steps
             .get(self.state.workflow_step_index)
-            .and_then(|s| s.child_run_id.clone());
-
-        if let Some(ref run_id) = child_run_id {
-            let mgr = conductor_core::agent::AgentManager::new(&self.conn);
-            self.state.data.step_agent_events = mgr.list_events_for_run(run_id).unwrap_or_default();
-            self.state.data.step_agent_run = mgr.get_run(run_id).ok().flatten();
-        } else {
-            self.state.data.step_agent_events.clear();
-            self.state.data.step_agent_run = None;
-        }
+            .and_then(|s| s.child_run_id.clone())
     }
 
     fn clamp_workflow_indices(&mut self) {
