@@ -766,14 +766,14 @@ fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {
 
 /// Best-effort capture of tmux scrollback to `~/.conductor/agent-logs/<run_id>.log`.
 fn capture_agent_log(mgr: &AgentManager, run_id: &str, tmux_window: &str) {
-    let log_dir = conductor_core::config::conductor_dir().join("agent-logs");
+    let log_dir = conductor_core::config::agent_log_dir();
 
     if let Err(e) = std::fs::create_dir_all(&log_dir) {
         tracing::warn!("could not create agent-logs dir: {e}");
         return;
     }
 
-    let log_path = log_dir.join(format!("{run_id}.log"));
+    let log_path = conductor_core::config::agent_log_path(run_id);
 
     let output = Command::new("tmux")
         .args([

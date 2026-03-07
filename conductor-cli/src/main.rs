@@ -1321,9 +1321,9 @@ fn run_agent(
     };
 
     // Set up log file to capture stream-json events as they arrive.
-    let log_dir = conductor_core::config::conductor_dir().join("agent-logs");
+    let log_dir = conductor_core::config::agent_log_dir();
     let _ = std::fs::create_dir_all(&log_dir);
-    let log_path = log_dir.join(format!("{run_id}.log"));
+    let log_path = conductor_core::config::agent_log_path(run_id);
     let mut log_file = std::fs::File::create(&log_path).ok();
 
     // Store log file path in DB immediately so the TUI can read streaming events.
@@ -1341,6 +1341,7 @@ fn run_agent(
     let mut num_turns: Option<i64> = None;
     let mut duration_ms: Option<i64> = None;
     let mut is_error = false;
+    let mut db_updated_eagerly = false;
 
     // Track the last persisted event span so we can fill its ended_at
     let mut last_event_id: Option<String> = None;
@@ -1370,19 +1371,40 @@ fn run_agent(
                 }
             }
 
-            // Capture result from final message
+            // Capture result from final message and eagerly update DB to
+            // narrow the race window if the process is killed before child.wait().
             if event.get("result").is_some() {
-                result_text = event
-                    .get("result")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                cost_usd = event.get("total_cost_usd").and_then(|v| v.as_f64());
-                num_turns = event.get("num_turns").and_then(|v| v.as_i64());
-                duration_ms = event.get("duration_ms").and_then(|v| v.as_i64());
-                is_error = event
-                    .get("is_error")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                let parsed = conductor_core::agent::parse_result_event(&event);
+                result_text = parsed.result_text;
+                cost_usd = parsed.cost_usd;
+                num_turns = parsed.num_turns;
+                duration_ms = parsed.duration_ms;
+                is_error = parsed.is_error;
+
+                // Eagerly persist completion/failure so the consumer sees it
+                // even if this process is killed before child.wait() returns.
+                if is_error {
+                    let error_msg = result_text
+                        .as_deref()
+                        .unwrap_or(conductor_core::agent::DEFAULT_AGENT_ERROR_MSG);
+                    if let Err(e) = mgr.update_run_failed_with_session(
+                        run_id,
+                        error_msg,
+                        session_id_parsed.as_deref(),
+                    ) {
+                        eprintln!("[conductor] Warning: eager DB update failed: {e}");
+                    }
+                } else if let Err(e) = mgr.update_run_completed(
+                    run_id,
+                    session_id_parsed.as_deref(),
+                    result_text.as_deref(),
+                    cost_usd,
+                    num_turns,
+                    duration_ms,
+                ) {
+                    eprintln!("[conductor] Warning: eager DB update failed: {e}");
+                }
+                db_updated_eagerly = true;
             }
 
             // Persist parsed events to DB as spans
@@ -1453,14 +1475,16 @@ fn run_agent(
 
     match status {
         Ok(s) if s.success() && !is_error => {
-            mgr.update_run_completed(
-                run_id,
-                session_id_parsed.as_deref(),
-                result_text.as_deref(),
-                cost_usd,
-                num_turns,
-                duration_ms,
-            )?;
+            if !db_updated_eagerly {
+                mgr.update_run_completed(
+                    run_id,
+                    session_id_parsed.as_deref(),
+                    result_text.as_deref(),
+                    cost_usd,
+                    num_turns,
+                    duration_ms,
+                )?;
+            }
             // Mark all plan steps done now that the run succeeded
             if let Err(e) = mgr.mark_plan_done(run_id) {
                 eprintln!("[conductor] Warning: could not mark plan done: {e}");
@@ -1476,11 +1500,20 @@ fn run_agent(
             }
         }
         Ok(_) if is_error => {
-            let error_msg = result_text.as_deref().unwrap_or("Claude reported an error");
-            mgr.update_run_failed_with_session(run_id, error_msg, session_id_parsed.as_deref())?;
+            let error_msg = result_text
+                .as_deref()
+                .unwrap_or(conductor_core::agent::DEFAULT_AGENT_ERROR_MSG);
+            if !db_updated_eagerly {
+                mgr.update_run_failed_with_session(
+                    run_id,
+                    error_msg,
+                    session_id_parsed.as_deref(),
+                )?;
+            }
             eprintln!("[conductor] Agent failed: {}", error_msg);
         }
         Ok(s) => {
+            // Non-zero exit without is_error — override any eager update
             let error_msg = format!("Claude exited with status: {}", s);
             mgr.update_run_failed_with_session(run_id, &error_msg, session_id_parsed.as_deref())?;
             eprintln!("[conductor] Agent failed: {}", error_msg);

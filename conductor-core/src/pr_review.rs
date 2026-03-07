@@ -5,18 +5,22 @@
 //! review and optionally posts to the GitHub PR.
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::process::Command;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use notify::{Event as NotifyEvent, RecursiveMode, Watcher};
 use rusqlite::Connection;
 
 use crate::agent::{
-    AgentManager, AgentRun, AgentRunStatus, PlanStep, StepStatus, PR_REVIEW_SWARM_PROMPT_PREFIX,
+    try_recover_from_log, AgentManager, AgentRun, AgentRunStatus, PlanStep, StepStatus,
+    PR_REVIEW_SWARM_PROMPT_PREFIX,
 };
-use crate::config::Config;
+use crate::config::{self, Config};
 use crate::error::{ConductorError, Result};
 use crate::github;
 use crate::merge_queue::MergeQueueManager;
@@ -967,7 +971,10 @@ fn spawn_reviewer_tmux(
 }
 
 /// Poll all reviewer runs in a single shared loop, collecting results as each completes.
-/// This avoids sequential O(N × timeout) worst-case wait.
+///
+/// Uses an OS-level file watcher (`notify` crate) on the agent-logs directory to detect
+/// result events written to log files. Falls back to periodic DB polling so that
+/// spawn failures (no log file) and already-completed runs are still handled.
 fn poll_all_reviewers(
     mgr: &AgentManager<'_>,
     child_runs: &[(usize, AgentRun, ReviewerRole)],
@@ -978,6 +985,83 @@ fn poll_all_reviewers(
     let start = std::time::Instant::now();
     let mut results: Vec<Option<ReviewerResult>> = vec![None; child_runs.len()];
     let mut pending_count = child_runs.len();
+    let watched_ids: HashSet<String> = child_runs.iter().map(|(_, r, _)| r.id.clone()).collect();
+
+    // Set up file watcher on the agent-logs directory.
+    // Notifications send the specific run ID that changed so we only scan that file.
+    let (notify_tx, notify_rx) = mpsc::channel::<String>();
+    // Must stay alive: dropping stops the watcher.
+    let _watcher_guard = {
+        let log_dir = config::agent_log_dir();
+        let _ = std::fs::create_dir_all(&log_dir);
+        let mut watcher =
+            notify::recommended_watcher(move |res: std::result::Result<NotifyEvent, _>| {
+                if let Ok(event) = res {
+                    for p in &event.paths {
+                        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                            if watched_ids.contains(stem) {
+                                let _ = notify_tx.send(stem.to_owned());
+                            }
+                        }
+                    }
+                }
+            });
+        match watcher {
+            Ok(ref mut w) => {
+                if let Err(e) = w.watch(&log_dir, RecursiveMode::NonRecursive) {
+                    eprintln!("[review-swarm] Warning: could not watch log dir: {e}");
+                }
+            }
+            Err(ref e) => {
+                eprintln!("[review-swarm] Warning: could not create file watcher: {e}");
+            }
+        }
+        watcher.ok()
+    };
+
+    // Run IDs notified by the file watcher since last poll cycle.
+    // When empty (timeout or first iteration), all pending runs are scanned as a fallback.
+    let mut notified_ids: HashSet<String> = HashSet::new();
+    let mut watcher_triggered = false;
+
+    // Helper closure to resolve a completed/failed/cancelled run into a ReviewerResult.
+    let resolve_run = |run: &AgentRun, step_idx: usize, role: &ReviewerRole| -> ReviewerResult {
+        let findings = run.result_text.clone();
+        let parsed = findings
+            .as_deref()
+            .map(|text| parse_reviewer_output(text, &role.name))
+            .unwrap_or_default();
+        let approved = is_review_approved(run, &parsed);
+        let off_diff = parsed.off_diff_findings;
+        if let Some(ref step_id) = steps[step_idx].id {
+            let step_status = if run.status == AgentRunStatus::Completed {
+                StepStatus::Completed
+            } else {
+                StepStatus::Failed
+            };
+            let _ = mgr.update_step_status(step_id, step_status);
+        }
+        eprintln!(
+            "[review-swarm] {} reviewer: {} (approved={}, off_diff={})",
+            role.name,
+            run.status,
+            approved,
+            off_diff.len()
+        );
+        ReviewerResult {
+            role_name: role.name.clone(),
+            focus: role.focus.clone(),
+            required: role.required,
+            run_id: run.id.clone(),
+            status: run.status.clone(),
+            findings,
+            approved,
+            cost_usd: run.cost_usd,
+            num_turns: run.num_turns,
+            duration_ms: run.duration_ms,
+            off_diff_findings: off_diff,
+        }
+    };
 
     loop {
         if pending_count == 0 {
@@ -1019,49 +1103,38 @@ fn poll_all_reviewers(
                 continue;
             }
 
+            // First check the DB (handles eager updates and spawn failures).
             match mgr.get_run(&child_run.id) {
                 Ok(Some(run)) => match run.status {
                     AgentRunStatus::Completed
                     | AgentRunStatus::Failed
                     | AgentRunStatus::Cancelled => {
-                        let findings = run.result_text.clone();
-                        let parsed = findings
-                            .as_deref()
-                            .map(|text| parse_reviewer_output(text, &role.name))
-                            .unwrap_or_default();
-                        let approved = is_review_approved(&run, &parsed);
-                        let off_diff = parsed.off_diff_findings;
-                        if let Some(ref step_id) = steps[*step_idx].id {
-                            let step_status = if run.status == AgentRunStatus::Completed {
-                                StepStatus::Completed
-                            } else {
-                                StepStatus::Failed
-                            };
-                            let _ = mgr.update_step_status(step_id, step_status);
-                        }
-                        eprintln!(
-                            "[review-swarm] {} reviewer: {} (approved={}, off_diff={})",
-                            role.name,
-                            run.status,
-                            approved,
-                            off_diff.len()
-                        );
-                        results[idx] = Some(ReviewerResult {
-                            role_name: role.name.clone(),
-                            focus: role.focus.clone(),
-                            required: role.required,
-                            run_id: run.id.clone(),
-                            status: run.status.clone(),
-                            findings,
-                            approved,
-                            cost_usd: run.cost_usd,
-                            num_turns: run.num_turns,
-                            duration_ms: run.duration_ms,
-                            off_diff_findings: off_diff,
-                        });
+                        results[idx] = Some(resolve_run(&run, *step_idx, role));
                         pending_count -= 1;
+                        continue;
                     }
-                    _ => {}
+                    _ => {
+                        // DB says still running — only scan the log file if the
+                        // watcher reported a change for this specific run (or if
+                        // we woke from a timeout, in which case scan all as fallback).
+                        let should_scan =
+                            !watcher_triggered || notified_ids.contains(&child_run.id);
+                        if should_scan {
+                            if let Some(recovered) = try_recover_from_log(mgr, &child_run.id) {
+                                match recovered.status {
+                                    AgentRunStatus::Completed
+                                    | AgentRunStatus::Failed
+                                    | AgentRunStatus::Cancelled => {
+                                        results[idx] =
+                                            Some(resolve_run(&recovered, *step_idx, role));
+                                        pending_count -= 1;
+                                        continue;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
                 },
                 Ok(None) => {
                     eprintln!(
@@ -1104,7 +1177,18 @@ fn poll_all_reviewers(
         }
 
         if pending_count > 0 {
-            thread::sleep(poll_interval);
+            // Wait for either a file notification or the poll interval, whichever comes first.
+            // Collect notified run IDs so only those are log-scanned on the next iteration.
+            notified_ids.clear();
+            watcher_triggered = false;
+            if let Ok(id) = notify_rx.recv_timeout(poll_interval) {
+                notified_ids.insert(id);
+                watcher_triggered = true;
+            }
+            // Drain any extra queued notifications before re-checking.
+            while let Ok(id) = notify_rx.try_recv() {
+                notified_ids.insert(id);
+            }
         }
     }
 
@@ -1598,7 +1682,7 @@ mod tests {
             &child_runs,
             &steps,
             Duration::from_millis(10),
-            Duration::from_millis(50),
+            Duration::from_secs(2),
         );
 
         assert_eq!(results.len(), 2);
@@ -2210,5 +2294,59 @@ mod tests {
     fn test_find_existing_issue_empty_list() {
         let issues: Vec<github::IssueRef> = Vec::new();
         assert_eq!(find_existing_issue(&issues, "anything"), None);
+    }
+
+    #[test]
+    fn test_poll_all_reviewers_recovers_from_log() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let (r1, r2, child_runs) = setup_two_child_runs(&mgr);
+
+        // r1: completed via DB (normal path)
+        mgr.update_run_completed(
+            &r1.id,
+            None,
+            Some("VERDICT: APPROVE"),
+            Some(0.05),
+            Some(3),
+            Some(5000),
+        )
+        .unwrap();
+
+        // r2: stays "running" in DB, but write a result to its log file
+        // to simulate the producer being killed after log write but before DB update.
+        let log_dir = config::agent_log_dir();
+        let _ = std::fs::create_dir_all(&log_dir);
+        let log_path = config::agent_log_path(&r2.id);
+        std::fs::write(
+            &log_path,
+            format!(
+                r#"{{"result":"VERDICT: APPROVE","total_cost_usd":0.08,"num_turns":4,"duration_ms":6000}}{}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+
+        let steps = make_plan_steps(2);
+
+        let results = poll_all_reviewers(
+            &mgr,
+            &child_runs,
+            &steps,
+            Duration::from_millis(10),
+            Duration::from_secs(2),
+        );
+
+        // Clean up log file
+        let _ = std::fs::remove_file(&log_path);
+
+        assert_eq!(results.len(), 2);
+        // Both should be resolved
+        assert!(results[0].approved);
+        assert_eq!(results[0].status, AgentRunStatus::Completed);
+        // r2 should have been recovered from the log file
+        assert!(results[1].approved);
+        assert_eq!(results[1].status, AgentRunStatus::Completed);
+        assert_eq!(results[1].cost_usd, Some(0.08));
     }
 }

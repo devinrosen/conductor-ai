@@ -14,6 +14,9 @@ use crate::error::Result;
 /// import it upward, keeping the dependency flow unidirectional.
 pub const PR_REVIEW_SWARM_PROMPT_PREFIX: &str = "PR review swarm";
 
+/// Default error message used when the agent reports an error without a message.
+pub const DEFAULT_AGENT_ERROR_MSG: &str = "Claude reported an error";
+
 /// Protocol marker that agents emit to request human feedback.
 pub const FEEDBACK_MARKER: &str = "[NEEDS_FEEDBACK] ";
 
@@ -41,6 +44,89 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
 /// Shared SELECT column list for the `feedback_requests` table.
 const FEEDBACK_SELECT: &str =
     "SELECT id, run_id, prompt, response, status, created_at, responded_at FROM feedback_requests";
+
+/// Parsed result event from an agent log file or streaming JSON.
+pub struct LogResult {
+    pub result_text: Option<String>,
+    pub cost_usd: Option<f64>,
+    pub num_turns: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub is_error: bool,
+}
+
+/// Extract the five protocol fields from a `result` JSON event.
+pub fn parse_result_event(event: &serde_json::Value) -> LogResult {
+    LogResult {
+        result_text: event
+            .get("result")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        cost_usd: event.get("total_cost_usd").and_then(|v| v.as_f64()),
+        num_turns: event.get("num_turns").and_then(|v| v.as_i64()),
+        duration_ms: event.get("duration_ms").and_then(|v| v.as_i64()),
+        is_error: event
+            .get("is_error")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    }
+}
+
+/// Scan an agent log file at the given path for the `result` event.
+///
+/// Reads the last 4 KB of the file (the result event is always the final line),
+/// keeping the scan O(1) regardless of log size.
+pub(crate) fn scan_log_for_result_at(path: &std::path::Path) -> Option<LogResult> {
+    use std::io::{Read as _, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+
+    // Read at most the last 4 KB — generous for a single JSON line.
+    const TAIL_BYTES: u64 = 4096;
+    let start = len.saturating_sub(TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf).ok()?;
+
+    // Walk lines in reverse so we find the result event quickly.
+    for line in buf.lines().rev() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if event.get("result").is_some() {
+            return Some(parse_result_event(&event));
+        }
+    }
+    None
+}
+
+/// Scan the canonical log file for a given run ID.
+pub(crate) fn scan_log_for_result(run_id: &str) -> Option<LogResult> {
+    scan_log_for_result_at(&crate::config::agent_log_path(run_id))
+}
+
+/// Try to recover a stuck run by scanning its log file for a result event.
+/// If found, updates the DB and returns the refreshed run. Otherwise returns `None`.
+pub(crate) fn try_recover_from_log(mgr: &AgentManager<'_>, run_id: &str) -> Option<AgentRun> {
+    let log_result = scan_log_for_result(run_id)?;
+    if log_result.is_error {
+        let error_msg = log_result
+            .result_text
+            .as_deref()
+            .unwrap_or(DEFAULT_AGENT_ERROR_MSG);
+        let _ = mgr.update_run_failed(run_id, error_msg);
+    } else {
+        let _ = mgr.update_run_completed(
+            run_id,
+            None,
+            log_result.result_text.as_deref(),
+            log_result.cost_usd,
+            log_result.num_turns,
+            log_result.duration_ms,
+        );
+    }
+    mgr.get_run(run_id).ok().flatten()
+}
 
 /// Status of an agent run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3118,5 +3204,57 @@ mod tests {
 
         // Feedback should be cascade-deleted
         assert!(mgr.get_feedback(&fb.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_scan_log_for_result_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("test-scan-success.log");
+        std::fs::write(
+            &log_path,
+            r#"{"type":"init","session_id":"s1"}
+{"type":"text","text":"working..."}
+{"result":"All done","total_cost_usd":0.05,"num_turns":3,"duration_ms":5000}
+"#,
+        )
+        .unwrap();
+
+        let result = super::scan_log_for_result_at(&log_path).unwrap();
+        assert_eq!(result.result_text.as_deref(), Some("All done"));
+        assert_eq!(result.cost_usd, Some(0.05));
+        assert_eq!(result.num_turns, Some(3));
+        assert_eq!(result.duration_ms, Some(5000));
+        assert!(!result.is_error);
+    }
+
+    #[test]
+    fn test_scan_log_for_result_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("test-scan-error.log");
+        std::fs::write(
+            &log_path,
+            r#"{"result":"Something went wrong","is_error":true,"total_cost_usd":0.01,"num_turns":1,"duration_ms":1000}
+"#,
+        )
+        .unwrap();
+
+        let result = super::scan_log_for_result_at(&log_path).unwrap();
+        assert!(result.is_error);
+        assert_eq!(result.result_text.as_deref(), Some("Something went wrong"));
+    }
+
+    #[test]
+    fn test_scan_log_no_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("test-no-result.log");
+        std::fs::write(
+            &log_path,
+            r#"{"type":"init","session_id":"s1"}
+{"type":"text","text":"still working..."}
+"#,
+        )
+        .unwrap();
+
+        assert!(super::scan_log_for_result_at(&log_path).is_none());
     }
 }
