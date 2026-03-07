@@ -19,9 +19,7 @@ use conductor_core::post_run::{self, PostRunInput};
 use conductor_core::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
-use conductor_core::workflow::{
-    collect_agent_names, count_nodes, WorkflowExecConfig, WorkflowManager,
-};
+use conductor_core::workflow::{collect_agent_names, WorkflowExecConfig, WorkflowManager};
 use conductor_core::workflow_config;
 use conductor_core::worktree::WorktreeManager;
 
@@ -1245,7 +1243,7 @@ fn main() -> Result<()> {
                 let wf_defs = WorkflowManager::list_defs(&wt.path, &r.local_path)?;
                 if !wf_defs.is_empty() {
                     for def in &wf_defs {
-                        let node_count = count_nodes(&def.body) + count_nodes(&def.always);
+                        let node_count = def.total_nodes();
                         println!(
                             "  {:<20} {:<40} [{}, {} nodes]",
                             def.name, def.description, def.trigger, node_count
@@ -1327,7 +1325,7 @@ fn main() -> Result<()> {
                     ..Default::default()
                 };
 
-                let node_count = count_nodes(&workflow.body) + count_nodes(&workflow.always);
+                let node_count = workflow.total_nodes();
                 println!(
                     "Running workflow '{}' ({} nodes) on {}/{}...",
                     workflow.name, node_count, repo, worktree
@@ -1471,7 +1469,7 @@ fn main() -> Result<()> {
                 println!("Workflow: {}", workflow.name);
                 println!("  Description: {}", workflow.description);
                 println!("  Trigger: {}", workflow.trigger);
-                let node_count = count_nodes(&workflow.body) + count_nodes(&workflow.always);
+                let node_count = workflow.total_nodes();
                 println!("  Nodes: {node_count}");
                 println!("  Agents referenced: {}", all_names.len());
 
