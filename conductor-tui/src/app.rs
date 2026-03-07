@@ -14,6 +14,7 @@ use conductor_core::github;
 use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
+use conductor_core::workflow::MetadataEntry;
 use conductor_core::worktree::WorktreeManager;
 
 use crate::action::{Action, GithubDiscoverPayload};
@@ -29,6 +30,39 @@ use crate::ui;
 /// Maximum scroll offset for a text body (total lines minus one visible line).
 fn max_scroll(line_count: usize) -> u16 {
     line_count.saturating_sub(1) as u16
+}
+
+/// Format structured [`MetadataEntry`] values into a fixed-width text block
+/// suitable for the TUI modal.
+fn format_metadata_entries(entries: &[MetadataEntry]) -> String {
+    let pad = entries
+        .iter()
+        .filter_map(|e| match e {
+            MetadataEntry::Field { label, .. } => Some(label.len()),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+
+    let mut parts: Vec<String> = Vec::new();
+    for entry in entries {
+        match entry {
+            MetadataEntry::Field { label, value } => {
+                parts.push(format!(
+                    "{:<pad$}  {}",
+                    format!("{label}:"),
+                    value,
+                    pad = pad + 1
+                ));
+            }
+            MetadataEntry::Section { heading, body } => {
+                parts.push(String::new());
+                parts.push(format!("── {heading} ──"));
+                parts.push(body.clone());
+            }
+        }
+    }
+    parts.join("\n")
 }
 
 /// Derive a worktree slug from a ticket's source_id and title.
@@ -1201,7 +1235,7 @@ impl App {
                     } else {
                         // No agent run — show step metadata modal
                         let title = format!("Step: {} ({})", step.step_name, step.status);
-                        let body = step.format_metadata();
+                        let body = format_metadata_entries(&step.metadata_fields());
                         let line_count = body.lines().count();
                         Some(Modal::EventDetail {
                             title,
