@@ -14,3 +14,14 @@ pub fn open_database(path: &Path) -> Result<Connection> {
     migrations::run(&conn)?;
     Ok(conn)
 }
+
+/// Prepare a query, map each row, and collect results into a `Vec`.
+pub fn query_collect<T, P, F>(conn: &Connection, sql: &str, params: P, f: F) -> Result<Vec<T>>
+where
+    P: rusqlite::Params,
+    F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+{
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(params, f)?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}

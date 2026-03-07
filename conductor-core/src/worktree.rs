@@ -5,6 +5,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::config::Config;
+use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::repo::RepoManager;
 
@@ -195,10 +196,7 @@ impl<'a> WorktreeManager<'a> {
              ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at",
             status_filter
         );
-        let mut stmt = self.conn.prepare(&query)?;
-        let rows = stmt.query_map(params![repo_id], map_worktree_row)?;
-        let worktrees = rows.collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(worktrees)
+        query_collect(self.conn, &query, params![repo_id], map_worktree_row)
     }
 
     pub fn list(&self, repo_slug: Option<&str>, active_only: bool) -> Result<Vec<Worktree>> {

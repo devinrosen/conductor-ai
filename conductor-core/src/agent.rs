@@ -7,6 +7,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
+use crate::db::query_collect;
 use crate::error::Result;
 
 /// Prefix used for the parent run prompt when launching a PR review swarm.
@@ -915,13 +916,13 @@ impl<'a> AgentManager<'a> {
 
     /// Get all plan steps for a run, ordered by position.
     pub fn get_run_steps(&self, run_id: &str) -> Result<Vec<PlanStep>> {
-        let mut stmt = self.conn.prepare(
+        query_collect(
+            self.conn,
             "SELECT id, run_id, position, description, status, started_at, completed_at \
              FROM agent_run_steps WHERE run_id = ?1 ORDER BY position ASC",
-        )?;
-        let rows = stmt.query_map(params![run_id], row_to_plan_step)?;
-        let steps = rows.collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(steps)
+            params![run_id],
+            row_to_plan_step,
+        )
     }
 
     /// Populate the `plan` field on a slice of runs from the steps table.
@@ -959,21 +960,23 @@ impl<'a> AgentManager<'a> {
     }
 
     pub fn list_for_worktree(&self, worktree_id: &str) -> Result<Vec<AgentRun>> {
-        let mut stmt = self.conn.prepare(
+        let mut runs = query_collect(
+            self.conn,
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
              model, plan, parent_run_id \
              FROM agent_runs WHERE worktree_id = ?1 ORDER BY started_at DESC",
+            params![worktree_id],
+            row_to_agent_run,
         )?;
-        let rows = stmt.query_map(params![worktree_id], row_to_agent_run)?;
-        let mut runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         self.populate_plans(&mut runs)?;
         Ok(runs)
     }
 
     /// List all agent runs for a repo (across all its worktrees), newest first.
     pub fn list_for_repo(&self, repo_id: &str) -> Result<Vec<AgentRun>> {
-        let mut stmt = self.conn.prepare(
+        let mut runs = query_collect(
+            self.conn,
             "SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, a.result_text, \
              a.cost_usd, a.num_turns, a.duration_ms, a.started_at, a.ended_at, a.tmux_window, \
              a.log_file, a.model, NULL, a.parent_run_id \
@@ -981,9 +984,9 @@ impl<'a> AgentManager<'a> {
              JOIN worktrees w ON a.worktree_id = w.id \
              WHERE w.repo_id = ?1 \
              ORDER BY a.started_at DESC",
+            params![repo_id],
+            row_to_agent_run,
         )?;
-        let rows = stmt.query_map(params![repo_id], row_to_agent_run)?;
-        let mut runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         self.populate_plans(&mut runs)?;
         Ok(runs)
     }
@@ -1097,27 +1100,27 @@ impl<'a> AgentManager<'a> {
 
     /// List all events for a run in chronological order.
     pub fn list_events_for_run(&self, run_id: &str) -> Result<Vec<AgentRunEvent>> {
-        let mut stmt = self.conn.prepare(
+        query_collect(
+            self.conn,
             "SELECT id, run_id, kind, summary, started_at, ended_at, metadata \
              FROM agent_run_events WHERE run_id = ?1 ORDER BY started_at ASC",
-        )?;
-        let rows = stmt.query_map(params![run_id], row_to_agent_run_event)?;
-        let events = rows.collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(events)
+            params![run_id],
+            row_to_agent_run_event,
+        )
     }
 
     /// List all events across all runs for a worktree, in chronological order.
     pub fn list_events_for_worktree(&self, worktree_id: &str) -> Result<Vec<AgentRunEvent>> {
-        let mut stmt = self.conn.prepare(
+        query_collect(
+            self.conn,
             "SELECT e.id, e.run_id, e.kind, e.summary, e.started_at, e.ended_at, e.metadata \
              FROM agent_run_events e \
              JOIN agent_runs r ON e.run_id = r.id \
              WHERE r.worktree_id = ?1 \
              ORDER BY e.started_at ASC",
-        )?;
-        let rows = stmt.query_map(params![worktree_id], row_to_agent_run_event)?;
-        let events = rows.collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(events)
+            params![worktree_id],
+            row_to_agent_run_event,
+        )
     }
 
     /// Record a GitHub issue created by an agent run.
@@ -1168,13 +1171,13 @@ impl<'a> AgentManager<'a> {
         &self,
         agent_run_id: &str,
     ) -> Result<Vec<AgentCreatedIssue>> {
-        let mut stmt = self.conn.prepare(
+        query_collect(
+            self.conn,
             "SELECT id, agent_run_id, repo_id, source_type, source_id, title, url, created_at \
              FROM agent_created_issues WHERE agent_run_id = ?1 ORDER BY created_at ASC",
-        )?;
-        let rows = stmt.query_map(params![agent_run_id], row_to_agent_created_issue)?;
-        let issues = rows.collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(issues)
+            params![agent_run_id],
+            row_to_agent_created_issue,
+        )
     }
 
     /// List all issues created by all runs for a worktree.
@@ -1182,22 +1185,23 @@ impl<'a> AgentManager<'a> {
         &self,
         worktree_id: &str,
     ) -> Result<Vec<AgentCreatedIssue>> {
-        let mut stmt = self.conn.prepare(
+        query_collect(
+            self.conn,
             "SELECT aci.id, aci.agent_run_id, aci.repo_id, aci.source_type, \
              aci.source_id, aci.title, aci.url, aci.created_at \
              FROM agent_created_issues aci \
              JOIN agent_runs ar ON aci.agent_run_id = ar.id \
              WHERE ar.worktree_id = ?1 \
              ORDER BY aci.created_at ASC",
-        )?;
-        let rows = stmt.query_map(params![worktree_id], row_to_agent_created_issue)?;
-        let issues = rows.collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(issues)
+            params![worktree_id],
+            row_to_agent_created_issue,
+        )
     }
 
     /// Returns the latest agent run for each worktree, keyed by worktree_id.
     pub fn latest_runs_by_worktree(&self) -> Result<HashMap<String, AgentRun>> {
-        let mut stmt = self.conn.prepare(
+        let mut runs = query_collect(
+            self.conn,
             "SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, \
              a.result_text, a.cost_usd, a.num_turns, a.duration_ms, a.started_at, \
              a.ended_at, a.tmux_window, a.log_file, a.model, a.plan, a.parent_run_id \
@@ -1206,10 +1210,9 @@ impl<'a> AgentManager<'a> {
                  SELECT worktree_id, MAX(started_at) AS max_started \
                  FROM agent_runs GROUP BY worktree_id \
              ) latest ON a.worktree_id = latest.worktree_id AND a.started_at = latest.max_started",
+            [],
+            row_to_agent_run,
         )?;
-
-        let rows = stmt.query_map([], row_to_agent_run)?;
-        let mut runs: Vec<AgentRun> = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         self.populate_plans(&mut runs)?;
         let mut map = HashMap::new();
         for run in runs {
@@ -1222,14 +1225,15 @@ impl<'a> AgentManager<'a> {
 
     /// List direct child runs of a parent run (newest first).
     pub fn list_child_runs(&self, parent_run_id: &str) -> Result<Vec<AgentRun>> {
-        let mut stmt = self.conn.prepare(
+        let mut runs = query_collect(
+            self.conn,
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
              model, plan, parent_run_id \
              FROM agent_runs WHERE parent_run_id = ?1 ORDER BY started_at DESC",
+            params![parent_run_id],
+            row_to_agent_run,
         )?;
-        let rows = stmt.query_map(params![parent_run_id], row_to_agent_run)?;
-        let mut runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         self.populate_plans(&mut runs)?;
         Ok(runs)
     }
@@ -1239,7 +1243,8 @@ impl<'a> AgentManager<'a> {
     /// the tree using `parent_run_id` references.
     pub fn get_run_tree(&self, root_run_id: &str) -> Result<Vec<AgentRun>> {
         // SQLite supports recursive CTEs, which are perfect for tree traversal.
-        let mut stmt = self.conn.prepare(
+        let mut runs = query_collect(
+            self.conn,
             "WITH RECURSIVE tree(id) AS ( \
                  SELECT id FROM agent_runs WHERE id = ?1 \
                  UNION ALL \
@@ -1251,24 +1256,25 @@ impl<'a> AgentManager<'a> {
              FROM agent_runs a \
              JOIN tree t ON a.id = t.id \
              ORDER BY a.started_at ASC",
+            params![root_run_id],
+            row_to_agent_run,
         )?;
-        let rows = stmt.query_map(params![root_run_id], row_to_agent_run)?;
-        let mut runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         self.populate_plans(&mut runs)?;
         Ok(runs)
     }
 
     /// List only top-level (root) runs for a worktree — runs with no parent.
     pub fn list_root_runs_for_worktree(&self, worktree_id: &str) -> Result<Vec<AgentRun>> {
-        let mut stmt = self.conn.prepare(
+        let mut runs = query_collect(
+            self.conn,
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
              model, plan, parent_run_id \
              FROM agent_runs WHERE worktree_id = ?1 AND parent_run_id IS NULL \
              ORDER BY started_at DESC",
+            params![worktree_id],
+            row_to_agent_run,
         )?;
-        let rows = stmt.query_map(params![worktree_id], row_to_agent_run)?;
-        let mut runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         self.populate_plans(&mut runs)?;
         Ok(runs)
     }
@@ -1481,12 +1487,12 @@ impl<'a> AgentManager<'a> {
 
     /// List all feedback requests for a run, newest first.
     pub fn list_feedback_for_run(&self, run_id: &str) -> Result<Vec<FeedbackRequest>> {
-        let mut stmt = self.conn.prepare(&format!(
-            "{FEEDBACK_SELECT} WHERE run_id = ?1 ORDER BY created_at DESC"
-        ))?;
-        let rows = stmt.query_map(params![run_id], row_to_feedback_request)?;
-        let reqs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(reqs)
+        query_collect(
+            self.conn,
+            &format!("{FEEDBACK_SELECT} WHERE run_id = ?1 ORDER BY created_at DESC"),
+            params![run_id],
+            row_to_feedback_request,
+        )
     }
 
     /// Get the pending feedback request for a worktree's latest running agent.

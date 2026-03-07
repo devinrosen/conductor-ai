@@ -2,6 +2,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
+use crate::db::query_collect;
 use crate::error::Result;
 
 /// A single entry in the merge queue — represents a worktree whose changes
@@ -73,15 +74,15 @@ impl<'a> MergeQueueManager<'a> {
 
     /// List all merge queue entries for a repo, ordered by position.
     pub fn list_for_repo(&self, repo_id: &str) -> Result<Vec<MergeQueueEntry>> {
-        let mut stmt = self.conn.prepare(
+        query_collect(
+            self.conn,
             "SELECT id, repo_id, worktree_id, run_id, target_branch, position, status,
                     queued_at, started_at, completed_at
              FROM merge_queue
              WHERE repo_id = ?1
              ORDER BY position ASC",
-        )?;
-        let entries = stmt
-            .query_map(params![repo_id], |row| {
+            params![repo_id],
+            |row| {
                 Ok(MergeQueueEntry {
                     id: row.get(0)?,
                     repo_id: row.get(1)?,
@@ -94,22 +95,21 @@ impl<'a> MergeQueueManager<'a> {
                     started_at: row.get(8)?,
                     completed_at: row.get(9)?,
                 })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(entries)
+            },
+        )
     }
 
     /// List only pending (queued/processing) entries for a repo, ordered by position.
     pub fn list_pending(&self, repo_id: &str) -> Result<Vec<MergeQueueEntry>> {
-        let mut stmt = self.conn.prepare(
+        query_collect(
+            self.conn,
             "SELECT id, repo_id, worktree_id, run_id, target_branch, position, status,
                     queued_at, started_at, completed_at
              FROM merge_queue
              WHERE repo_id = ?1 AND status IN ('queued', 'processing')
              ORDER BY position ASC",
-        )?;
-        let entries = stmt
-            .query_map(params![repo_id], |row| {
+            params![repo_id],
+            |row| {
                 Ok(MergeQueueEntry {
                     id: row.get(0)?,
                     repo_id: row.get(1)?,
@@ -122,9 +122,8 @@ impl<'a> MergeQueueManager<'a> {
                     started_at: row.get(8)?,
                     completed_at: row.get(9)?,
                 })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(entries)
+            },
+        )
     }
 
     /// Get a single entry by ID.

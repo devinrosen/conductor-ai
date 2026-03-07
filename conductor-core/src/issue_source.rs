@@ -1,6 +1,7 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
+use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,21 +73,19 @@ impl<'a> IssueSourceManager<'a> {
 
     /// List all issue sources for a repo.
     pub fn list(&self, repo_id: &str) -> Result<Vec<IssueSource>> {
-        let mut stmt = self.conn.prepare(
+        query_collect(
+            self.conn,
             "SELECT id, repo_id, source_type, config_json FROM repo_issue_sources WHERE repo_id = ?1",
-        )?;
-
-        let rows = stmt.query_map(params![repo_id], |row| {
-            Ok(IssueSource {
-                id: row.get(0)?,
-                repo_id: row.get(1)?,
-                source_type: row.get(2)?,
-                config_json: row.get(3)?,
-            })
-        })?;
-
-        let sources = rows.collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(sources)
+            params![repo_id],
+            |row| {
+                Ok(IssueSource {
+                    id: row.get(0)?,
+                    repo_id: row.get(1)?,
+                    source_type: row.get(2)?,
+                    config_json: row.get(3)?,
+                })
+            },
+        )
     }
 
     /// Remove an issue source by ID.

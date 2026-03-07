@@ -3,6 +3,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
+use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,14 +92,14 @@ impl<'a> RepoManager<'a> {
     }
 
     pub fn list(&self) -> Result<Vec<Repo>> {
-        let mut stmt = self.conn.prepare(
+        query_collect(
+            self.conn,
             "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, created_at, \
              COALESCE(model, NULL) as model, \
              COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation \
              FROM repos ORDER BY slug",
-        )?;
-        let repos = stmt
-            .query_map([], |row| {
+            [],
+            |row| {
                 Ok(Repo {
                     id: row.get(0)?,
                     slug: row.get(1)?,
@@ -110,9 +111,8 @@ impl<'a> RepoManager<'a> {
                     model: row.get(7)?,
                     allow_agent_issue_creation: row.get::<_, i64>(8).map(|v| v != 0)?,
                 })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(repos)
+            },
+        )
     }
 
     pub fn get_by_id(&self, id: &str) -> Result<Repo> {

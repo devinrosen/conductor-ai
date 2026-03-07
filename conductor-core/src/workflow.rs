@@ -17,6 +17,7 @@ use crate::agent::{AgentManager, AgentRunStatus};
 use crate::agent_config;
 use crate::agent_runtime;
 use crate::config::Config;
+use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::{
     self, CallNode, GateNode, GateType, IfNode, OnMaxIter, OnTimeout, ParallelNode, WhileNode,
@@ -541,15 +542,12 @@ impl<'a> WorkflowManager<'a> {
     }
 
     pub fn get_workflow_steps(&self, workflow_run_id: &str) -> Result<Vec<WorkflowRunStep>> {
-        let mut stmt = self.conn.prepare(
+        query_collect(
+            self.conn,
             &format!("SELECT {STEP_COLUMNS} FROM workflow_run_steps WHERE workflow_run_id = ?1 ORDER BY position"),
-        )?;
-        let rows = stmt.query_map(params![workflow_run_id], row_to_workflow_step)?;
-        let mut steps = Vec::new();
-        for row in rows {
-            steps.push(row?);
-        }
-        Ok(steps)
+            params![workflow_run_id],
+            row_to_workflow_step,
+        )
     }
 
     pub fn get_step_by_id(&self, step_id: &str) -> Result<Option<WorkflowRunStep>> {
@@ -564,15 +562,12 @@ impl<'a> WorkflowManager<'a> {
     }
 
     pub fn list_workflow_runs(&self, worktree_id: &str) -> Result<Vec<WorkflowRun>> {
-        let mut stmt = self.conn.prepare(
+        query_collect(
+            self.conn,
             &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE worktree_id = ?1 ORDER BY started_at DESC"),
-        )?;
-        let rows = stmt.query_map(params![worktree_id], row_to_workflow_run)?;
-        let mut runs = Vec::new();
-        for row in rows {
-            runs.push(row?);
-        }
-        Ok(runs)
+            params![worktree_id],
+            row_to_workflow_run,
+        )
     }
 
     /// Find the waiting gate step for a workflow run.
