@@ -429,6 +429,20 @@ impl<'a> WorktreeManager<'a> {
 
         Ok(count)
     }
+
+    /// Mark worktrees for closed tickets and remove their git artifacts.
+    /// Returns the number of worktrees cleaned up.
+    /// Errors from the DB query or git cleanup are silently ignored.
+    pub fn cleanup_merged_worktrees(&self, repo_id: &str) -> usize {
+        let infos = crate::tickets::TicketSyncer::new(self.conn)
+            .mark_worktrees_for_closed_tickets(repo_id)
+            .unwrap_or_default();
+        let count = infos.len();
+        for info in infos {
+            remove_git_artifacts(&info.repo_path, &info.worktree_path, &info.branch);
+        }
+        count
+    }
 }
 
 fn map_worktree_row(row: &rusqlite::Row) -> rusqlite::Result<Worktree> {

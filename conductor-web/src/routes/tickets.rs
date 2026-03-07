@@ -8,7 +8,7 @@ use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig}
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{Ticket, TicketSyncer};
-use conductor_core::worktree::Worktree;
+use conductor_core::worktree::{Worktree, WorktreeManager};
 
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
@@ -56,6 +56,7 @@ pub async fn sync_tickets(
     let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
     let source_mgr = IssueSourceManager::new(&db);
     let syncer = TicketSyncer::new(&db);
+    let wt_mgr = WorktreeManager::new(&db, &config);
 
     let sources = source_mgr.list(&repo.id)?;
     let mut total_synced = 0usize;
@@ -70,7 +71,7 @@ pub async fn sync_tickets(
             total_closed += syncer
                 .close_missing_tickets(&repo.id, "github", &synced_ids)
                 .unwrap_or(0);
-            syncer.mark_and_remove_merged_worktrees(&repo.id);
+            wt_mgr.cleanup_merged_worktrees(&repo.id);
         }
     } else {
         for source in sources {
@@ -84,7 +85,7 @@ pub async fn sync_tickets(
                             total_closed += syncer
                                 .close_missing_tickets(&repo.id, "github", &synced_ids)
                                 .unwrap_or(0);
-                            syncer.mark_and_remove_merged_worktrees(&repo.id);
+                            wt_mgr.cleanup_merged_worktrees(&repo.id);
                         }
                     }
                 }
@@ -97,7 +98,7 @@ pub async fn sync_tickets(
                             total_closed += syncer
                                 .close_missing_tickets(&repo.id, "jira", &synced_ids)
                                 .unwrap_or(0);
-                            syncer.mark_and_remove_merged_worktrees(&repo.id);
+                            wt_mgr.cleanup_merged_worktrees(&repo.id);
                         }
                     }
                 }

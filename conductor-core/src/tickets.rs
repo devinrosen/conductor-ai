@@ -35,8 +35,8 @@ pub struct TicketInput {
     pub raw_json: String,
 }
 
-/// Info returned by `mark_worktrees_for_closed_tickets` so callers can
-/// perform git cleanup (worktree removal + branch deletion) outside `TicketSyncer`.
+/// Info returned by `mark_worktrees_for_closed_tickets` so the worktree domain
+/// can perform git cleanup (worktree removal + branch deletion).
 pub struct MergedWorktreeInfo {
     pub repo_path: String,
     pub worktree_path: String,
@@ -200,7 +200,7 @@ impl<'a> TicketSyncer<'a> {
         &self,
         repo_id: &str,
     ) -> Result<Vec<MergedWorktreeInfo>> {
-        // Fetch worktree + repo info in a single JOIN query.
+        // Fetch worktree IDs + git-cleanup info in a single JOIN query.
         let mut stmt = self.conn.prepare(
             "SELECT w.id, r.local_path, w.path, w.branch
              FROM worktrees w
@@ -210,7 +210,7 @@ impl<'a> TicketSyncer<'a> {
              AND w.ticket_id IS NOT NULL
              AND w.ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')",
         )?;
-        let infos: Vec<MergedWorktreeInfo> = stmt
+        let rows: Vec<(String, String, String, String)> = stmt
             .query_map(params![repo_id], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -220,45 +220,39 @@ impl<'a> TicketSyncer<'a> {
                 ))
             })?
             .filter_map(|r| r.ok())
-            .map(
-                |(_id, repo_path, worktree_path, branch)| MergedWorktreeInfo {
-                    repo_path,
-                    worktree_path,
-                    branch,
-                },
-            )
             .collect();
 
-        // Bulk-update status in a single statement.
+        if rows.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Bulk-update by ID — avoids repeating the filter predicate in the UPDATE.
         let now = Utc::now().to_rfc3339();
-        self.conn.execute(
-            "UPDATE worktrees SET status = 'merged', completed_at = ?1
-             WHERE repo_id = ?2
-             AND status != 'merged'
-             AND ticket_id IS NOT NULL
-             AND ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')",
-            params![now, repo_id],
-        )?;
+        let placeholders: Vec<String> = (0..rows.len()).map(|i| format!("?{}", i + 2)).collect();
+        let sql = format!(
+            "UPDATE worktrees SET status = 'merged', completed_at = ?1 WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        param_values.push(Box::new(now));
+        for (id, _, _, _) in &rows {
+            param_values.push(Box::new(id.clone()));
+        }
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut update_stmt = self.conn.prepare(&sql)?;
+        update_stmt.execute(params.as_slice())?;
+
+        let infos = rows
+            .into_iter()
+            .map(|(_, repo_path, worktree_path, branch)| MergedWorktreeInfo {
+                repo_path,
+                worktree_path,
+                branch,
+            })
+            .collect();
 
         Ok(infos)
-    }
-
-    /// Convenience wrapper: marks worktrees for closed tickets, removes their
-    /// git artifacts, and returns the number of worktrees cleaned up.
-    /// Errors from the DB query or git cleanup are silently ignored.
-    pub fn mark_and_remove_merged_worktrees(&self, repo_id: &str) -> usize {
-        let infos = self
-            .mark_worktrees_for_closed_tickets(repo_id)
-            .unwrap_or_default();
-        let count = infos.len();
-        for info in infos {
-            crate::worktree::remove_git_artifacts(
-                &info.repo_path,
-                &info.worktree_path,
-                &info.branch,
-            );
-        }
-        count
     }
 }
 
