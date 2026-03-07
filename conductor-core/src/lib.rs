@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod agent_config;
+pub mod agent_runtime;
 pub mod config;
 pub mod db;
 pub mod error;

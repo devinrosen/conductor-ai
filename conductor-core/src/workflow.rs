@@ -13,8 +13,9 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
-use crate::agent::{AgentManager, AgentRun, AgentRunStatus};
+use crate::agent::{AgentManager, AgentRunStatus};
 use crate::agent_config;
+use crate::agent_runtime;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::{
@@ -643,6 +644,40 @@ fn substitute_variables(prompt: &str, vars: &HashMap<&str, String>) -> String {
     result
 }
 
+/// Build a fully-substituted agent prompt from the execution state and agent definition.
+///
+/// Handles: input variables, prior_context, prior_contexts, gate_feedback,
+/// dry-run prefix for committing agents, and CONDUCTOR_OUTPUT instruction.
+fn build_agent_prompt(state: &ExecutionState<'_>, agent_def: &agent_config::AgentDef) -> String {
+    let mut vars: HashMap<&str, String> = HashMap::new();
+    for (k, v) in &state.inputs {
+        vars.insert(k.as_str(), v.clone());
+    }
+
+    let prior_context = state
+        .contexts
+        .last()
+        .map(|c| c.context.clone())
+        .unwrap_or_default();
+    vars.insert("prior_context", prior_context);
+
+    let prior_contexts_json = serde_json::to_string(&state.contexts).unwrap_or_default();
+    vars.insert("prior_contexts", prior_contexts_json);
+
+    if let Some(ref feedback) = state.last_gate_feedback {
+        vars.insert("gate_feedback", feedback.clone());
+    }
+
+    let mut prompt = substitute_variables(&agent_def.prompt, &vars);
+
+    if agent_def.can_commit && state.exec_config.dry_run {
+        prompt = format!("DO NOT commit or push any changes. This is a dry run.\n\n{prompt}");
+    }
+
+    prompt.push_str(CONDUCTOR_OUTPUT_INSTRUCTION);
+    prompt
+}
+
 // ---------------------------------------------------------------------------
 // Execution state
 // ---------------------------------------------------------------------------
@@ -882,40 +917,7 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
         Some(&state.workflow_name),
     )?;
 
-    // Build variable map
-    let mut vars: HashMap<&str, String> = HashMap::new();
-    for (k, v) in &state.inputs {
-        vars.insert(k.as_str(), v.clone());
-    }
-
-    // Prior context
-    let prior_context = state
-        .contexts
-        .last()
-        .map(|c| c.context.clone())
-        .unwrap_or_default();
-    vars.insert("prior_context", prior_context);
-
-    // Prior contexts as JSON array
-    let prior_contexts_json = serde_json::to_string(&state.contexts).unwrap_or_default();
-    vars.insert("prior_contexts", prior_contexts_json);
-
-    // Gate feedback if available
-    if let Some(ref feedback) = state.last_gate_feedback {
-        vars.insert("gate_feedback", feedback.clone());
-    }
-
-    // Build prompt
-    let mut prompt = substitute_variables(&agent_def.prompt, &vars);
-
-    // Dry-run override for committing agents
-    if agent_def.can_commit && state.exec_config.dry_run {
-        prompt = format!("DO NOT commit or push any changes. This is a dry run.\n\n{prompt}");
-    }
-
-    // Append CONDUCTOR_OUTPUT instruction
-    prompt.push_str(CONDUCTOR_OUTPUT_INSTRUCTION);
-
+    let prompt = build_agent_prompt(state, &agent_def);
     let step_model = agent_def.model.as_deref().or(state.model.as_deref());
 
     // Retry loop
@@ -961,7 +963,7 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
         );
 
         // Spawn in tmux
-        if let Err(e) = spawn_child_tmux(
+        if let Err(e) = agent_runtime::spawn_child_tmux(
             &state.conductor_bin,
             &child_run.id,
             &state.worktree_path,
@@ -987,7 +989,7 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
         }
 
         // Poll for completion
-        match poll_child_completion(
+        match agent_runtime::poll_child_completion(
             state.conn,
             &child_run.id,
             state.exec_config.poll_interval,
@@ -1312,26 +1314,7 @@ fn execute_parallel(
             Some(&state.workflow_name),
         )?;
 
-        // Build prompt with variables
-        let mut vars: HashMap<&str, String> = HashMap::new();
-        for (k, v) in &state.inputs {
-            vars.insert(k.as_str(), v.clone());
-        }
-        let prior_context = state
-            .contexts
-            .last()
-            .map(|c| c.context.clone())
-            .unwrap_or_default();
-        vars.insert("prior_context", prior_context);
-        let prior_contexts_json = serde_json::to_string(&state.contexts).unwrap_or_default();
-        vars.insert("prior_contexts", prior_contexts_json);
-
-        let mut prompt = substitute_variables(&agent_def.prompt, &vars);
-        if agent_def.can_commit && state.exec_config.dry_run {
-            prompt = format!("DO NOT commit or push any changes. This is a dry run.\n\n{prompt}");
-        }
-        prompt.push_str(CONDUCTOR_OUTPUT_INSTRUCTION);
-
+        let prompt = build_agent_prompt(state, &agent_def);
         let step_model = agent_def.model.as_deref().or(state.model.as_deref());
         let step_id = state.wf_mgr.insert_step(
             &state.workflow_run_id,
@@ -1363,7 +1346,7 @@ fn execute_parallel(
             None,
         )?;
 
-        if let Err(e) = spawn_child_tmux(
+        if let Err(e) = agent_runtime::spawn_child_tmux(
             &state.conductor_bin,
             &child_run.id,
             &state.worktree_path,
@@ -1939,44 +1922,6 @@ fn build_workflow_summary(state: &ExecutionState<'_>) -> String {
     lines.join("\n")
 }
 
-/// Poll the database for a child run to reach a terminal status.
-fn poll_child_completion(
-    conn: &Connection,
-    child_run_id: &str,
-    poll_interval: Duration,
-    timeout: Duration,
-) -> std::result::Result<AgentRun, String> {
-    let start = std::time::Instant::now();
-
-    loop {
-        if start.elapsed() > timeout {
-            return Err(format!(
-                "Child run {} timed out after {:.0}s",
-                child_run_id,
-                timeout.as_secs_f64()
-            ));
-        }
-
-        let mgr = AgentManager::new(conn);
-        match mgr.get_run(child_run_id) {
-            Ok(Some(run)) => match run.status {
-                AgentRunStatus::Completed | AgentRunStatus::Failed | AgentRunStatus::Cancelled => {
-                    return Ok(run)
-                }
-                AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback => {}
-            },
-            Ok(None) => {
-                return Err(format!("Child run {child_run_id} not found in database"));
-            }
-            Err(e) => {
-                return Err(format!("Database error polling child run: {e}"));
-            }
-        }
-
-        thread::sleep(poll_interval);
-    }
-}
-
 /// Sanitize a string for use as a tmux window name.
 /// Removes characters that tmux treats specially (`.`, `:`, `\`).
 fn sanitize_tmux_name(name: &str) -> String {
@@ -1987,54 +1932,6 @@ fn sanitize_tmux_name(name: &str) -> String {
             _ => c,
         })
         .collect()
-}
-
-/// Spawn a child agent in a new tmux window.
-fn spawn_child_tmux(
-    conductor_bin: &str,
-    run_id: &str,
-    worktree_path: &str,
-    prompt: &str,
-    model: Option<&str>,
-    window_name: &str,
-) -> std::result::Result<(), String> {
-    let mut args = vec![
-        "agent".to_string(),
-        "run".to_string(),
-        "--run-id".to_string(),
-        run_id.to_string(),
-        "--worktree-path".to_string(),
-        worktree_path.to_string(),
-        "--prompt".to_string(),
-        prompt.to_string(),
-    ];
-
-    if let Some(m) = model {
-        args.push("--model".to_string());
-        args.push(m.to_string());
-    }
-
-    let mut tmux_args = vec![
-        "new-window".to_string(),
-        "-d".to_string(),
-        "-n".to_string(),
-        window_name.to_string(),
-        "--".to_string(),
-        conductor_bin.to_string(),
-    ];
-    tmux_args.extend(args);
-
-    let result = Command::new("tmux")
-        .args(&tmux_args)
-        .output()
-        .map_err(|e| format!("Failed to spawn tmux: {e}"))?;
-
-    if result.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        Err(format!("tmux failed: {stderr}"))
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2338,7 +2235,7 @@ And here is my actual output:
         mgr.update_run_completed(&run.id, None, Some("done"), Some(0.05), Some(3), Some(5000))
             .unwrap();
 
-        let result = poll_child_completion(
+        let result = agent_runtime::poll_child_completion(
             &conn,
             &run.id,
             Duration::from_millis(10),
@@ -2355,7 +2252,7 @@ And here is my actual output:
 
         let run = mgr.create_run("w1", "test", None, None).unwrap();
 
-        let result = poll_child_completion(
+        let result = agent_runtime::poll_child_completion(
             &conn,
             &run.id,
             Duration::from_millis(10),
