@@ -952,7 +952,7 @@ fn post_pr_comment(
 /// The prompt is written to a temp file to avoid exceeding tmux/OS command length
 /// limits (large PR diffs can easily blow past the ~200KB arg limit).
 fn spawn_reviewer_tmux(
-    conductor_bin: &str,
+    _conductor_bin: &str,
     run_id: &str,
     worktree_path: &str,
     prompt: &str,
@@ -972,35 +972,22 @@ fn spawn_reviewer_tmux(
     f.write_all(prompt.as_bytes())
         .map_err(|e| format!("Failed to write prompt file: {e}"))?;
 
-    // Pass args directly to tmux without sh -c to avoid shell injection
-    let mut cmd = Command::new("tmux");
-    cmd.args(["new-window", "-d", "-n", window_name, "--"]);
-    cmd.arg(conductor_bin);
-    cmd.args([
-        "agent",
-        "run",
-        "--run-id",
-        run_id,
-        "--worktree-path",
-        worktree_path,
-        "--prompt-file",
-        &prompt_file.to_string_lossy(),
-    ]);
+    let mut args = vec![
+        "agent".to_string(),
+        "run".to_string(),
+        "--run-id".to_string(),
+        run_id.to_string(),
+        "--worktree-path".to_string(),
+        worktree_path.to_string(),
+        "--prompt-file".to_string(),
+        prompt_file.to_string_lossy().into_owned(),
+    ];
     if let Some(m) = model {
-        cmd.args(["--model", m]);
+        args.push("--model".to_string());
+        args.push(m.to_string());
     }
 
-    let result = cmd
-        .output()
-        .map_err(|e| format!("Failed to spawn tmux: {e}"))?;
-
-    if result.status.success() {
-        // Verify the window actually exists after spawn.
-        crate::agent_runtime::verify_tmux_window(window_name)
-    } else {
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        Err(format!("tmux failed: {stderr}"))
-    }
+    crate::agent_runtime::spawn_tmux_window(&args, window_name)
 }
 
 /// Poll all reviewer runs in a single shared loop, collecting results as each completes.

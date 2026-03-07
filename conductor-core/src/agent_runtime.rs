@@ -11,10 +11,57 @@ use rusqlite::Connection;
 
 use crate::agent::{AgentManager, AgentRun, AgentRunStatus};
 
+/// Resolve the path to the `conductor` binary.
+///
+/// Looks for a sibling `conductor` next to the current executable first,
+/// then falls back to the bare name (relying on `$PATH`).
+pub fn resolve_conductor_bin() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| {
+            let sibling = p.parent()?.join("conductor");
+            sibling
+                .exists()
+                .then(|| sibling.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "conductor".to_string())
+}
+
+/// Spawn a new tmux window running `conductor <args>`, then verify it is alive.
+///
+/// `args` are the arguments passed to the `conductor` binary (e.g.
+/// `["agent", "run", "--run-id", …]`).  `window_name` is used as the tmux
+/// window name (`-n`) and for post-spawn verification.
+pub fn spawn_tmux_window(args: &[String], window_name: &str) -> std::result::Result<(), String> {
+    let conductor_bin = resolve_conductor_bin();
+
+    let mut tmux_args = vec![
+        "new-window".to_string(),
+        "-d".to_string(),
+        "-n".to_string(),
+        window_name.to_string(),
+        "--".to_string(),
+        conductor_bin,
+    ];
+    tmux_args.extend_from_slice(args);
+
+    let result = Command::new("tmux")
+        .args(&tmux_args)
+        .output()
+        .map_err(|e| format!("Failed to spawn tmux: {e}"))?;
+
+    if result.status.success() {
+        verify_tmux_window(window_name)
+    } else {
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        Err(format!("tmux failed: {stderr}"))
+    }
+}
+
 /// After a successful `tmux new-window`, wait briefly and verify the window
 /// actually exists. Returns `Ok(())` if the window is alive, or an `Err`
 /// describing the failure.
-pub fn verify_tmux_window(window_name: &str) -> std::result::Result<(), String> {
+fn verify_tmux_window(window_name: &str) -> std::result::Result<(), String> {
     // Give tmux a moment to register the window.
     thread::sleep(Duration::from_millis(100));
 
@@ -77,7 +124,7 @@ pub fn poll_child_completion(
 
 /// Spawn a child agent in a new tmux window.
 pub fn spawn_child_tmux(
-    conductor_bin: &str,
+    _conductor_bin: &str,
     run_id: &str,
     worktree_path: &str,
     prompt: &str,
@@ -100,38 +147,15 @@ pub fn spawn_child_tmux(
         args.push(m.to_string());
     }
 
-    let mut tmux_args = vec![
-        "new-window".to_string(),
-        "-d".to_string(),
-        "-n".to_string(),
-        window_name.to_string(),
-        "--".to_string(),
-        conductor_bin.to_string(),
-    ];
-    tmux_args.extend(args);
-
-    let result = Command::new("tmux")
-        .args(&tmux_args)
-        .output()
-        .map_err(|e| format!("Failed to spawn tmux: {e}"))?;
-
-    if result.status.success() {
-        // Verify the window actually exists after spawn.
-        verify_tmux_window(window_name)
-    } else {
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        Err(format!("tmux failed: {stderr}"))
-    }
+    spawn_tmux_window(&args, window_name)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn verify_tmux_window_rejects_nonexistent_window() {
         // Whether or not tmux is running, a bogus window name should fail.
-        let result = verify_tmux_window("conductor-test-nonexistent-xyz-99999");
+        let result = super::verify_tmux_window("conductor-test-nonexistent-xyz-99999");
         assert!(result.is_err());
     }
 }

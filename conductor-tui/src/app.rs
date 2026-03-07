@@ -3278,55 +3278,16 @@ impl App {
             args.push(m.clone());
         }
 
-        // Resolve the conductor binary path
-        let conductor_bin = std::env::current_exe()
-            .ok()
-            .and_then(|p| {
-                let sibling = p.parent()?.join("conductor");
-                sibling
-                    .exists()
-                    .then(|| sibling.to_string_lossy().into_owned())
-            })
-            .unwrap_or_else(|| "conductor".to_string());
-
-        // Spawn tmux window
-        let mut tmux_args = vec![
-            "new-window".to_string(),
-            "-d".to_string(),
-            "-n".to_string(),
-            worktree_slug.clone(),
-            "--".to_string(),
-            conductor_bin,
-        ];
-        tmux_args.extend(args);
-
-        let result = Command::new("tmux").args(&tmux_args).output();
-
-        match result {
-            Ok(o) if o.status.success() => {
-                // Verify the window actually exists after spawn.
-                if let Err(e) = conductor_core::agent_runtime::verify_tmux_window(&worktree_slug) {
-                    let _ = mgr.update_run_failed(&run.id, &e);
-                    self.state.modal = Modal::Error { message: e };
-                } else {
-                    self.state.status_message = Some(format!(
-                        "Orchestrator launched in tmux window: {worktree_slug}"
-                    ));
-                    self.refresh_data();
-                }
-            }
-            Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                let _ = mgr.update_run_failed(&run.id, &format!("tmux failed: {stderr}"));
-                self.state.modal = Modal::Error {
-                    message: format!("Failed to spawn tmux window: {stderr}"),
-                };
+        match conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug) {
+            Ok(()) => {
+                self.state.status_message = Some(format!(
+                    "Orchestrator launched in tmux window: {worktree_slug}"
+                ));
+                self.refresh_data();
             }
             Err(e) => {
-                let _ = mgr.update_run_failed(&run.id, &format!("tmux error: {e}"));
-                self.state.modal = Modal::Error {
-                    message: format!("Failed to spawn tmux: {e}"),
-                };
+                let _ = mgr.update_run_failed(&run.id, &e);
+                self.state.modal = Modal::Error { message: e };
             }
         }
     }
@@ -3475,56 +3436,15 @@ impl App {
             args.push(m.clone());
         }
 
-        // Resolve the conductor binary path — look next to the current executable first,
-        // then fall back to bare "conductor" on PATH.
-        let conductor_bin = std::env::current_exe()
-            .ok()
-            .and_then(|p| {
-                let sibling = p.parent()?.join("conductor");
-                sibling
-                    .exists()
-                    .then(|| sibling.to_string_lossy().into_owned())
-            })
-            .unwrap_or_else(|| "conductor".to_string());
-
-        // Spawn tmux window in background: tmux new-window -d -n <slug> -- conductor agent run ...
-        let mut tmux_args = vec![
-            "new-window".to_string(),
-            "-d".to_string(),
-            "-n".to_string(),
-            worktree_slug.clone(),
-            "--".to_string(),
-            conductor_bin,
-        ];
-        tmux_args.extend(args);
-
-        let result = Command::new("tmux").args(&tmux_args).output();
-
-        match result {
-            Ok(o) if o.status.success() => {
-                // Verify the window actually exists after spawn.
-                if let Err(e) = conductor_core::agent_runtime::verify_tmux_window(&worktree_slug) {
-                    let _ = mgr.update_run_failed(&run.id, &e);
-                    self.state.modal = Modal::Error { message: e };
-                } else {
-                    self.state.status_message =
-                        Some(format!("Agent launched in tmux window: {worktree_slug}"));
-                    self.refresh_data();
-                }
-            }
-            Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                // Clean up the DB record since tmux failed
-                let _ = mgr.update_run_failed(&run.id, &format!("tmux failed: {stderr}"));
-                self.state.modal = Modal::Error {
-                    message: format!("Failed to spawn tmux window: {stderr}"),
-                };
+        match conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug) {
+            Ok(()) => {
+                self.state.status_message =
+                    Some(format!("Agent launched in tmux window: {worktree_slug}"));
+                self.refresh_data();
             }
             Err(e) => {
-                let _ = mgr.update_run_failed(&run.id, &format!("tmux error: {e}"));
-                self.state.modal = Modal::Error {
-                    message: format!("Failed to spawn tmux: {e}"),
-                };
+                let _ = mgr.update_run_failed(&run.id, &e);
+                self.state.modal = Modal::Error { message: e };
             }
         }
     }

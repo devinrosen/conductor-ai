@@ -148,58 +148,17 @@ pub async fn start_agent(
         args.push(m.clone());
     }
 
-    // Resolve conductor binary
-    let conductor_bin = std::env::current_exe()
-        .ok()
-        .and_then(|p| {
-            let sibling = p.parent()?.join("conductor");
-            sibling
-                .exists()
-                .then(|| sibling.to_string_lossy().into_owned())
-        })
-        .unwrap_or_else(|| "conductor".to_string());
-
-    // Spawn tmux window
-    let mut tmux_args = vec![
-        "new-window".to_string(),
-        "-d".to_string(),
-        "-n".to_string(),
-        wt.slug.clone(),
-        "--".to_string(),
-        conductor_bin,
-    ];
-    tmux_args.extend(args);
-
-    let result = Command::new("tmux").args(&tmux_args).output();
-
-    match result {
-        Ok(o) if o.status.success() => {
-            // Verify the window actually exists after spawn.
-            if let Err(e) = conductor_core::agent_runtime::verify_tmux_window(&wt.slug) {
-                let _ = agent_mgr.update_run_failed(&run.id, &e);
-                Err(conductor_core::error::ConductorError::Agent(e).into())
-            } else {
-                state.events.emit(ConductorEvent::AgentStarted {
-                    run_id: run.id.clone(),
-                    worktree_id: wt.id.clone(),
-                });
-                Ok((StatusCode::CREATED, Json(run)))
-            }
-        }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            let _ = agent_mgr.update_run_failed(&run.id, &format!("tmux failed: {stderr}"));
-            Err(conductor_core::error::ConductorError::Agent(format!(
-                "Failed to spawn tmux window: {stderr}"
-            ))
-            .into())
+    match conductor_core::agent_runtime::spawn_tmux_window(&args, &wt.slug) {
+        Ok(()) => {
+            state.events.emit(ConductorEvent::AgentStarted {
+                run_id: run.id.clone(),
+                worktree_id: wt.id.clone(),
+            });
+            Ok((StatusCode::CREATED, Json(run)))
         }
         Err(e) => {
-            let _ = agent_mgr.update_run_failed(&run.id, &format!("tmux error: {e}"));
-            Err(
-                conductor_core::error::ConductorError::Agent(format!("Failed to spawn tmux: {e}"))
-                    .into(),
-            )
+            let _ = agent_mgr.update_run_failed(&run.id, &e);
+            Err(conductor_core::error::ConductorError::Agent(e).into())
         }
     }
 }
@@ -573,58 +532,17 @@ pub async fn orchestrate_agent(
     args.push("--child-timeout-secs".to_string());
     args.push(body.child_timeout_secs.to_string());
 
-    // Resolve conductor binary
-    let conductor_bin = std::env::current_exe()
-        .ok()
-        .and_then(|p| {
-            let sibling = p.parent()?.join("conductor");
-            sibling
-                .exists()
-                .then(|| sibling.to_string_lossy().into_owned())
-        })
-        .unwrap_or_else(|| "conductor".to_string());
-
-    // Spawn tmux window for the orchestrator
-    let mut tmux_args = vec![
-        "new-window".to_string(),
-        "-d".to_string(),
-        "-n".to_string(),
-        wt.slug.clone(),
-        "--".to_string(),
-        conductor_bin,
-    ];
-    tmux_args.extend(args);
-
-    let result = Command::new("tmux").args(&tmux_args).output();
-
-    match result {
-        Ok(o) if o.status.success() => {
-            // Verify the window actually exists after spawn.
-            if let Err(e) = conductor_core::agent_runtime::verify_tmux_window(&wt.slug) {
-                let _ = agent_mgr.update_run_failed(&run.id, &e);
-                Err(conductor_core::error::ConductorError::Agent(e).into())
-            } else {
-                state.events.emit(ConductorEvent::AgentStarted {
-                    run_id: run.id.clone(),
-                    worktree_id: wt.id.clone(),
-                });
-                Ok((StatusCode::CREATED, Json(run)))
-            }
-        }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            let _ = agent_mgr.update_run_failed(&run.id, &format!("tmux failed: {stderr}"));
-            Err(conductor_core::error::ConductorError::Agent(format!(
-                "Failed to spawn tmux window: {stderr}"
-            ))
-            .into())
+    match conductor_core::agent_runtime::spawn_tmux_window(&args, &wt.slug) {
+        Ok(()) => {
+            state.events.emit(ConductorEvent::AgentStarted {
+                run_id: run.id.clone(),
+                worktree_id: wt.id.clone(),
+            });
+            Ok((StatusCode::CREATED, Json(run)))
         }
         Err(e) => {
-            let _ = agent_mgr.update_run_failed(&run.id, &format!("tmux error: {e}"));
-            Err(
-                conductor_core::error::ConductorError::Agent(format!("Failed to spawn tmux: {e}"))
-                    .into(),
-            )
+            let _ = agent_mgr.update_run_failed(&run.id, &e);
+            Err(conductor_core::error::ConductorError::Agent(e).into())
         }
     }
 }
