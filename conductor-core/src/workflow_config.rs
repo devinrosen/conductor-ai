@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::agent_config::AgentRole;
 use crate::error::{ConductorError, Result};
+use crate::text_util::parse_frontmatter;
+use crate::workflow_dsl::WorkflowTrigger;
 
 /// YAML frontmatter for a workflow `.md` file.
 #[derive(Debug, Clone, Deserialize)]
@@ -53,71 +56,8 @@ fn default_role() -> String {
     "reviewer".to_string()
 }
 
-/// Role type for a workflow step.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkflowRole {
-    /// Read-only: analyzes code, reports findings. No side effects.
-    Reviewer,
-    /// Can write code, run commands, and commit to a branch.
-    Actor,
-}
-
-impl std::fmt::Display for WorkflowRole {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Reviewer => write!(f, "reviewer"),
-            Self::Actor => write!(f, "actor"),
-        }
-    }
-}
-
-impl std::str::FromStr for WorkflowRole {
-    type Err = String;
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "reviewer" => Ok(Self::Reviewer),
-            "actor" => Ok(Self::Actor),
-            _ => Err(format!(
-                "unknown WorkflowRole: {s}. Expected 'reviewer' or 'actor'."
-            )),
-        }
-    }
-}
-
-/// Trigger type for when a workflow should run.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkflowTrigger {
-    /// Only run when explicitly invoked.
-    Manual,
-    /// Run automatically on PR events.
-    Pr,
-    /// Run on a schedule.
-    Scheduled,
-}
-
-impl std::fmt::Display for WorkflowTrigger {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Manual => write!(f, "manual"),
-            Self::Pr => write!(f, "pr"),
-            Self::Scheduled => write!(f, "scheduled"),
-        }
-    }
-}
-
-impl std::str::FromStr for WorkflowTrigger {
-    type Err = String;
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "manual" => Ok(Self::Manual),
-            "pr" => Ok(Self::Pr),
-            "scheduled" => Ok(Self::Scheduled),
-            _ => Err(format!("unknown WorkflowTrigger: {s}")),
-        }
-    }
-}
+/// Re-export `AgentRole` as `WorkflowRole` for backward compatibility.
+pub type WorkflowRole = AgentRole;
 
 /// A parsed step within a workflow definition.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -245,21 +185,6 @@ fn parse_workflow_file(path: &Path) -> Result<WorkflowDef> {
         steps,
         source_path: path.to_string_lossy().to_string(),
     })
-}
-
-/// Split a file's content into (frontmatter_yaml, body).
-fn parse_frontmatter(content: &str) -> Option<(&str, &str)> {
-    let trimmed = content.trim_start();
-    if !trimmed.starts_with("---") {
-        return None;
-    }
-    let after_open = &trimmed[3..];
-    let after_open = after_open.strip_prefix('\n').unwrap_or(after_open);
-    let close_pos = after_open.find("\n---")?;
-    let yaml = &after_open[..close_pos];
-    let rest = &after_open[close_pos + 4..];
-    let body = rest.strip_prefix('\n').unwrap_or(rest);
-    Some((yaml, body))
 }
 
 /// Parse markdown body into named sections keyed by `## heading`.

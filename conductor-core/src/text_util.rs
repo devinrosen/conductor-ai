@@ -24,6 +24,23 @@ pub fn cap_with_suffix(s: &str, max: usize, suffix: &str) -> String {
     }
 }
 
+/// Split a file's content into (frontmatter_yaml, body).
+///
+/// Returns `None` if the content doesn't start with `---` or has no closing `---`.
+pub fn parse_frontmatter(content: &str) -> Option<(&str, &str)> {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") {
+        return None;
+    }
+    let after_open = &trimmed[3..];
+    let after_open = after_open.strip_prefix('\n').unwrap_or(after_open);
+    let close_pos = after_open.find("\n---")?;
+    let yaml = &after_open[..close_pos];
+    let rest = &after_open[close_pos + 4..]; // skip "\n---"
+    let body = rest.strip_prefix('\n').unwrap_or(rest);
+    Some((yaml, body))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -39,5 +56,23 @@ mod tests {
 
         assert_eq!(truncate_str("hello", 10), "hello");
         assert_eq!(truncate_str("hello", 3), "hel");
+    }
+
+    #[test]
+    fn test_parse_frontmatter_basic() {
+        let content = "---\nname: test\n---\nbody text";
+        let (yaml, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(yaml, "name: test");
+        assert_eq!(body, "body text");
+    }
+
+    #[test]
+    fn test_parse_frontmatter_no_opening() {
+        assert!(parse_frontmatter("no frontmatter here").is_none());
+    }
+
+    #[test]
+    fn test_parse_frontmatter_no_closing() {
+        assert!(parse_frontmatter("---\nyaml without closing").is_none());
     }
 }

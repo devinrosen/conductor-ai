@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::{ConductorError, Result};
+use crate::text_util::parse_frontmatter;
 
 /// YAML frontmatter for an agent `.md` file.
 #[derive(Debug, Clone, Deserialize)]
@@ -72,21 +73,6 @@ pub struct AgentDef {
     pub model: Option<String>,
     /// The prompt template (full markdown body after frontmatter).
     pub prompt: String,
-}
-
-/// Split a file's content into (frontmatter_yaml, body).
-fn parse_frontmatter(content: &str) -> Option<(&str, &str)> {
-    let trimmed = content.trim_start();
-    if !trimmed.starts_with("---") {
-        return None;
-    }
-    let after_open = &trimmed[3..];
-    let after_open = after_open.strip_prefix('\n').unwrap_or(after_open);
-    let close_pos = after_open.find("\n---")?;
-    let yaml = &after_open[..close_pos];
-    let rest = &after_open[close_pos + 4..];
-    let body = rest.strip_prefix('\n').unwrap_or(rest);
-    Some((yaml, body))
 }
 
 /// Parse an agent `.md` file into an `AgentDef`.
