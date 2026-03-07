@@ -14,3 +14,4 @@ CREATE TABLE IF NOT EXISTS feedback_requests (
     responded_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_requests_run_id ON feedback_requests(run_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_requests_status_run_id ON feedback_requests(status, run_id);
