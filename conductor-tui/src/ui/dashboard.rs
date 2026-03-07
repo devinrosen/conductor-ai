@@ -140,15 +140,9 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
         .data
         .tickets
         .iter()
-        .filter(|t| {
-            if state.filter_active && !state.filter_text.is_empty() {
-                let lower = state.filter_text.to_lowercase();
-                t.title.to_lowercase().contains(&lower)
-                    || t.source_id.contains(&lower)
-                    || t.labels.to_lowercase().contains(&lower)
-            } else {
-                true
-            }
+        .filter(|t| match state.filter.as_query().as_deref() {
+            Some(f) if !f.is_empty() => t.matches_filter(f),
+            _ => true,
         })
         .map(|t| {
             let repo_slug = state

@@ -8,27 +8,15 @@ use super::common::truncate;
 use crate::state::AppState;
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
-    let filter = if state.filter_active || !state.filter_text.is_empty() {
-        Some(state.filter_text.to_lowercase())
-    } else {
-        None
-    };
+    let filter = state.filter.as_query();
 
     let items: Vec<ListItem> = state
         .data
         .tickets
         .iter()
-        .filter(|t| {
-            if let Some(ref f) = filter {
-                if f.is_empty() {
-                    return true;
-                }
-                t.title.to_lowercase().contains(f)
-                    || t.source_id.contains(f.as_str())
-                    || t.labels.to_lowercase().contains(f)
-            } else {
-                true
-            }
+        .filter(|t| match filter.as_deref() {
+            Some(f) if !f.is_empty() => t.matches_filter(f),
+            _ => true,
         })
         .map(|t| {
             let repo_slug = state

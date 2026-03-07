@@ -115,9 +115,14 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
+    let detail_filter = state.detail_ticket_filter.as_query();
     let ticket_items: Vec<ListItem> = state
         .detail_tickets
         .iter()
+        .filter(|t| match detail_filter.as_deref() {
+            Some(f) if !f.is_empty() => t.matches_filter(f),
+            _ => true,
+        })
         .map(|t| {
             let state_color = match t.state.as_str() {
                 "open" => Color::Green,
@@ -142,12 +147,17 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         })
         .collect();
 
+    let ticket_title = match detail_filter.as_deref() {
+        Some(f) if !f.is_empty() => format!(" Tickets (filter: {f}) "),
+        _ => " Tickets ".to_string(),
+    };
+
     let ticket_list = List::new(ticket_items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(ticket_border)
-                .title(" Tickets "),
+                .title(ticket_title),
         )
         .highlight_style(
             Style::default()

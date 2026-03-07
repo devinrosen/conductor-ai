@@ -279,19 +279,10 @@ impl App {
             }
 
             // Filter
-            Action::EnterFilter => {
-                self.state.filter_active = true;
-                self.state.filter_text.clear();
-            }
-            Action::FilterChar(c) => {
-                self.state.filter_text.push(c);
-            }
-            Action::FilterBackspace => {
-                self.state.filter_text.pop();
-            }
-            Action::ExitFilter => {
-                self.state.filter_active = false;
-            }
+            Action::EnterFilter => self.state.active_filter_mut().enter(),
+            Action::FilterChar(c) => self.state.active_filter_mut().push(c),
+            Action::FilterBackspace => self.state.active_filter_mut().backspace(),
+            Action::ExitFilter => self.state.active_filter_mut().exit(),
 
             // Modal
             Action::ShowHelp => {
