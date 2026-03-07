@@ -44,6 +44,13 @@ pub struct WorkflowDef {
     pub source_path: String,
 }
 
+impl WorkflowDef {
+    /// Total number of nodes across body and always blocks.
+    pub fn total_nodes(&self) -> usize {
+        count_nodes(&self.body) + count_nodes(&self.always)
+    }
+}
+
 /// Trigger type for when a workflow should run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -881,8 +888,8 @@ pub fn load_workflow_by_name(
     })
 }
 
-/// Count the total number of nodes in a workflow (for display).
-pub fn count_nodes(nodes: &[WorkflowNode]) -> usize {
+/// Count the total number of nodes in a node list (for display).
+fn count_nodes(nodes: &[WorkflowNode]) -> usize {
     let mut count = 0;
     for node in nodes {
         count += 1;
@@ -1187,6 +1194,8 @@ workflow ticket-to-pr {
         let body_count = count_nodes(&def.body);
         // 9 top-level + 3 in while + 3 in parallel + 1 in if = 16
         assert_eq!(body_count, 16);
+        // total_nodes covers body + always
+        assert_eq!(def.total_nodes(), body_count + count_nodes(&def.always));
     }
 
     #[test]
