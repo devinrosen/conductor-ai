@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
+use super::common::truncate;
 use crate::state::AppState;
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -103,13 +104,4 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 
     frame.render_stateful_widget(list, area, &mut list_state);
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max.saturating_sub(3)).collect();
-        format!("{truncated}...")
-    }
 }

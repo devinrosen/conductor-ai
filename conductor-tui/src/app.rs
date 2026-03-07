@@ -150,10 +150,10 @@ impl App {
         match action {
             Action::None => return false,
             Action::Tick => {
-                // On workflow views, poll workflow data on each tick
+                // On workflow views, poll workflow data asynchronously
+                // to avoid blocking the main loop with FS + DB I/O.
                 if matches!(self.state.view, View::Workflows | View::WorkflowRunDetail) {
-                    self.reload_workflow_data();
-                    return true;
+                    self.poll_workflow_data_async();
                 }
                 return false;
             }
@@ -3712,16 +3712,47 @@ impl App {
 
     // ── Workflow handlers ──────────────────────────────────────────────
 
+    /// Dispatch workflow data loading to a background thread. The result
+    /// arrives as a `WorkflowDataRefreshed` action, avoiding synchronous
+    /// FS + DB I/O on the main loop tick.
+    fn poll_workflow_data_async(&self) {
+        let Some(ref tx) = self.bg_tx else { return };
+        let wt_id = match self.state.selected_worktree_id {
+            Some(ref id) => id.clone(),
+            None => return,
+        };
+
+        let wt = self.state.data.worktrees.iter().find(|w| w.id == wt_id);
+        let Some(wt) = wt else { return };
+        let worktree_path = wt.path.clone();
+        let repo_path = self
+            .state
+            .data
+            .repos
+            .iter()
+            .find(|r| r.id == wt.repo_id)
+            .map(|r| r.local_path.clone())
+            .unwrap_or_default();
+        let selected_run_id = self.state.selected_workflow_run_id.clone();
+
+        crate::background::spawn_workflow_poll_once(
+            tx.clone(),
+            wt_id,
+            worktree_path,
+            repo_path,
+            selected_run_id,
+        );
+    }
+
     fn reload_workflow_data(&mut self) {
         use conductor_core::workflow::WorkflowManager;
-        use conductor_core::workflow_dsl;
 
         let wt_id = match self.state.selected_worktree_id {
             Some(ref id) => id.clone(),
             None => return,
         };
 
-        // Load defs from filesystem
+        // Load defs from filesystem via manager
         let wt = self.state.data.worktrees.iter().find(|w| w.id == wt_id);
         if let Some(wt) = wt {
             let repo_path = self
@@ -3733,7 +3764,7 @@ impl App {
                 .map(|r| r.local_path.as_str())
                 .unwrap_or("");
             self.state.data.workflow_defs =
-                workflow_dsl::load_workflow_defs(&wt.path, repo_path).unwrap_or_default();
+                WorkflowManager::list_defs(&wt.path, repo_path).unwrap_or_default();
         }
 
         // Load runs from DB
@@ -3813,34 +3844,22 @@ impl App {
 
         // Spawn workflow execution in a background thread
         std::thread::spawn(move || {
-            use conductor_core::config::db_path;
-            use conductor_core::db::open_database;
             use conductor_core::workflow::{
-                execute_workflow, WorkflowExecConfig, WorkflowExecInput,
+                execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
             };
 
-            let db = db_path();
-            let Ok(conn) = open_database(&db) else { return };
-
-            let conductor_bin = std::env::current_exe()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
-
-            let exec_config = WorkflowExecConfig::default();
-            let input = WorkflowExecInput {
-                conn: &conn,
-                config: &config,
-                workflow: &def,
-                worktree_id: &wt.id,
-                worktree_path: &wt.path,
-                repo_path: &repo_path,
+            let params = WorkflowExecStandalone {
+                config,
+                workflow: def.clone(),
+                worktree_id: wt.id.clone(),
+                worktree_path: wt.path.clone(),
+                repo_path,
                 model: None,
-                conductor_bin: &conductor_bin,
-                exec_config: &exec_config,
+                exec_config: WorkflowExecConfig::default(),
                 inputs: std::collections::HashMap::new(),
             };
 
-            let result = execute_workflow(&input);
+            let result = execute_workflow_standalone(&params);
 
             if let Some(ref tx) = bg_tx {
                 let msg = match result {

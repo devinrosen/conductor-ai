@@ -588,6 +588,23 @@ impl<'a> WorkflowManager<'a> {
             Err(e) => Err(e.into()),
         }
     }
+
+    /// Load workflow definitions from the filesystem for a worktree.
+    ///
+    /// Wraps `workflow_dsl::load_workflow_defs` so consumers don't need to
+    /// reach into the low-level DSL module directly.
+    pub fn list_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<WorkflowDef>> {
+        workflow_dsl::load_workflow_defs(worktree_path, repo_path)
+    }
+
+    /// Load a single workflow definition by name.
+    pub fn load_def_by_name(
+        worktree_path: &str,
+        repo_path: &str,
+        name: &str,
+    ) -> Result<WorkflowDef> {
+        workflow_dsl::load_workflow_by_name(worktree_path, repo_path, name)
+    }
 }
 
 fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
@@ -886,6 +903,46 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         total_turns: state.total_turns,
         total_duration_ms: state.total_duration_ms,
     })
+}
+
+/// Owned inputs for [`execute_workflow_standalone`], avoiding lifetime issues
+/// when spawning background threads.
+pub struct WorkflowExecStandalone {
+    pub config: Config,
+    pub workflow: WorkflowDef,
+    pub worktree_id: String,
+    pub worktree_path: String,
+    pub repo_path: String,
+    pub model: Option<String>,
+    pub exec_config: WorkflowExecConfig,
+    pub inputs: HashMap<String, String>,
+}
+
+/// Execute a workflow in a self-contained manner: opens its own database
+/// connection and resolves the conductor binary path. Designed for use in
+/// background threads where the caller cannot share a `&Connection`.
+pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<WorkflowResult> {
+    let db = crate::config::db_path();
+    let conn = crate::db::open_database(&db)?;
+
+    let conductor_bin = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+
+    let input = WorkflowExecInput {
+        conn: &conn,
+        config: &params.config,
+        workflow: &params.workflow,
+        worktree_id: &params.worktree_id,
+        worktree_path: &params.worktree_path,
+        repo_path: &params.repo_path,
+        model: params.model.as_deref(),
+        conductor_bin: &conductor_bin,
+        exec_config: &params.exec_config,
+        inputs: params.inputs.clone(),
+    };
+
+    execute_workflow(&input)
 }
 
 /// Walk a list of workflow nodes, dispatching to the appropriate handler.

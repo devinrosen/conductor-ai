@@ -11,7 +11,7 @@ use conductor_core::workflow::{
     execute_workflow, WorkflowExecConfig, WorkflowExecInput, WorkflowManager, WorkflowRun,
     WorkflowRunStatus, WorkflowRunStep,
 };
-use conductor_core::workflow_dsl::{self, InputDecl, WorkflowDef};
+use conductor_core::workflow_dsl::{InputDecl, WorkflowDef};
 use conductor_core::worktree::WorktreeManager;
 
 use crate::error::ApiError;
@@ -84,7 +84,7 @@ pub async fn list_workflow_defs(
     let wt = wt_mgr.get_by_id(&worktree_id)?;
     let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
 
-    let defs = workflow_dsl::load_workflow_defs(&wt.path, &repo.local_path).unwrap_or_default();
+    let defs = WorkflowManager::list_defs(&wt.path, &repo.local_path).unwrap_or_default();
     let summaries: Vec<WorkflowDefSummary> = defs.iter().map(WorkflowDefSummary::from).collect();
     Ok(Json(summaries))
 }
@@ -106,7 +106,7 @@ pub async fn run_workflow(
         let repo = repo_mgr.get_by_id(&wt.repo_id)?;
 
         // Validate workflow exists
-        let _def = workflow_dsl::load_workflow_by_name(&wt.path, &repo.local_path, &req.name)?;
+        let _def = WorkflowManager::load_def_by_name(&wt.path, &repo.local_path, &req.name)?;
 
         // Resolve model: request → per-worktree → per-repo → global config
         let model = req
@@ -131,14 +131,14 @@ pub async fn run_workflow(
             let db = state_clone.db.lock().await;
             let config = state_clone.config.read().await;
 
-            let def =
-                match workflow_dsl::load_workflow_by_name(&wt_path, &repo_path, &workflow_name) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        tracing::error!("Failed to load workflow def: {e}");
-                        return;
-                    }
-                };
+            let def = match WorkflowManager::load_def_by_name(&wt_path, &repo_path, &workflow_name)
+            {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::error!("Failed to load workflow def: {e}");
+                    return;
+                }
+            };
 
             let conductor_bin = std::env::current_exe()
                 .ok()

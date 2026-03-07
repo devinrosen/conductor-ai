@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
+use super::common::truncate;
 use crate::state::{AppState, WorkflowsFocus};
 
 /// Render the Workflows split-pane view: defs (left) + runs (right).
@@ -277,15 +278,6 @@ fn status_display(status: &str) -> (String, Color) {
         "waiting" => ("⏸ waiting".to_string(), Color::Magenta),
         "skipped" => ("⊘ skipped".to_string(), Color::DarkGray),
         _ => (format!("? {status}"), Color::White),
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max.saturating_sub(3)).collect();
-        format!("{truncated}...")
     }
 }
 

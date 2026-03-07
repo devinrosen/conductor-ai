@@ -239,3 +239,13 @@ pub fn ticket_agent_total_spans(
     };
     vec![Span::styled(text, Style::default().fg(Color::Magenta))]
 }
+
+/// Truncate a string to at most `max` characters, appending "…" if truncated.
+pub fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max.saturating_sub(3)).collect();
+        format!("{truncated}...")
+    }
+}

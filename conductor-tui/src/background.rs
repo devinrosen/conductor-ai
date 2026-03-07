@@ -220,12 +220,11 @@ fn poll_workflow_data(
     selected_run_id: Option<&str>,
 ) -> Option<Action> {
     use conductor_core::workflow::WorkflowManager;
-    use conductor_core::workflow_dsl;
 
     let db = db_path();
     let conn = open_database(&db).ok()?;
 
-    let defs = workflow_dsl::load_workflow_defs(worktree_path, repo_path).unwrap_or_default();
+    let defs = WorkflowManager::list_defs(worktree_path, repo_path).unwrap_or_default();
     let wf_mgr = WorkflowManager::new(&conn);
     let runs = wf_mgr.list_workflow_runs(worktree_id).unwrap_or_default();
     let steps = if let Some(run_id) = selected_run_id {
@@ -241,6 +240,27 @@ fn poll_workflow_data(
             workflow_steps: steps,
         },
     )))
+}
+
+/// One-shot async workflow data poll. Spawns a thread that loads defs, runs,
+/// and steps and sends a `WorkflowDataRefreshed` action back.
+pub fn spawn_workflow_poll_once(
+    tx: BackgroundSender,
+    worktree_id: String,
+    worktree_path: String,
+    repo_path: String,
+    selected_run_id: Option<String>,
+) {
+    thread::spawn(move || {
+        if let Some(action) = poll_workflow_data(
+            &worktree_id,
+            &worktree_path,
+            &repo_path,
+            selected_run_id.as_deref(),
+        ) {
+            let _ = tx.send(action);
+        }
+    });
 }
 
 /// Spawn a one-shot background operation for blocking tasks.
