@@ -88,11 +88,6 @@ enum Commands {
         /// Worktree slug
         worktree: String,
     },
-    /// View workflow run history
-    Workflow {
-        #[command(subcommand)]
-        command: WorkflowCommands,
-    },
 }
 
 #[derive(Subcommand)]
@@ -227,6 +222,13 @@ enum AgentCommands {
 
 #[derive(Subcommand)]
 enum WorkflowCommands {
+    /// List workflow run history for a repository
+    Runs {
+        /// Repository slug
+        repo: String,
+        /// Filter by worktree slug
+        worktree: Option<String>,
+    },
     /// List available workflow definitions for a repo/worktree
     List {
         /// Repo slug
@@ -468,17 +470,6 @@ enum TicketCommands {
     Stats {
         /// Filter by repo slug
         repo: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
-enum WorkflowCommands {
-    /// List workflow run history for a repository
-    Runs {
-        /// Repository slug
-        repo: String,
-        /// Filter by worktree slug
-        worktree: Option<String>,
     },
 }
 
@@ -1201,6 +1192,37 @@ fn main() -> Result<()> {
             }
         }
         Commands::Workflow { command } => match command {
+            WorkflowCommands::Runs { repo, worktree } => {
+                let repo_mgr = RepoManager::new(&conn, &config);
+                let r = repo_mgr.get_by_slug(&repo)?;
+
+                let agent_mgr = AgentManager::new(&conn);
+                let runs = if let Some(wt_slug) = worktree {
+                    let wt_mgr = WorktreeManager::new(&conn, &config);
+                    let wt = wt_mgr.get_by_slug(&r.id, &wt_slug)?;
+                    agent_mgr.list_for_worktree(&wt.id)?
+                } else {
+                    agent_mgr.list_for_repo(&r.id)?
+                };
+
+                if runs.is_empty() {
+                    println!("No workflow runs found.");
+                } else {
+                    println!(
+                        "  {:<10}  {:<40}  {:<20}  STARTED AT",
+                        "RUN ID", "WORKFLOW", "STATUS"
+                    );
+                    for run in &runs {
+                        println!(
+                            "  {:<10}  {:<40}  {:<20}  {}",
+                            &run.id[..8.min(run.id.len())],
+                            truncate_str(&run.prompt, 40),
+                            run.status,
+                            &run.started_at[..16.min(run.started_at.len())],
+                        );
+                    }
+                }
+            }
             WorkflowCommands::List { repo, worktree } => {
                 let repo_mgr = RepoManager::new(&conn, &config);
                 let r = repo_mgr.get_by_slug(&repo)?;
@@ -1553,39 +1575,6 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Workflow { command } => match command {
-            WorkflowCommands::Runs { repo, worktree } => {
-                let repo_mgr = RepoManager::new(&conn, &config);
-                let r = repo_mgr.get_by_slug(&repo)?;
-
-                let agent_mgr = AgentManager::new(&conn);
-                let runs = if let Some(wt_slug) = worktree {
-                    let wt_mgr = WorktreeManager::new(&conn, &config);
-                    let wt = wt_mgr.get_by_slug(&r.id, &wt_slug)?;
-                    agent_mgr.list_for_worktree(&wt.id)?
-                } else {
-                    agent_mgr.list_for_repo(&r.id)?
-                };
-
-                if runs.is_empty() {
-                    println!("No workflow runs found.");
-                } else {
-                    println!(
-                        "  {:<10}  {:<40}  {:<20}  STARTED AT",
-                        "RUN ID", "WORKFLOW", "STATUS"
-                    );
-                    for run in &runs {
-                        println!(
-                            "  {:<10}  {:<40}  {:<20}  {}",
-                            &run.id[..8.min(run.id.len())],
-                            truncate_str(&run.prompt, 40),
-                            run.status,
-                            &run.started_at[..16.min(run.started_at.len())],
-                        );
-                    }
-                }
-            }
-        },
     }
 
     Ok(())
