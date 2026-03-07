@@ -101,7 +101,7 @@ impl<'a> WorktreeManager<'a> {
 
         // Create git branch
         let output = Command::new("git")
-            .args(["branch", &branch, &base])
+            .args(["branch", "--", &branch, &base])
             .current_dir(&repo.local_path)
             .output()?;
         if !output.status.success() {
@@ -302,7 +302,7 @@ impl<'a> WorktreeManager<'a> {
 
         // Delete git branch
         let _ = Command::new("git")
-            .args(["branch", "-D", &worktree.branch])
+            .args(["branch", "-D", "--", &worktree.branch])
             .current_dir(&repo.local_path)
             .output();
 
