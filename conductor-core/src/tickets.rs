@@ -205,7 +205,7 @@ impl<'a> TicketSyncer<'a> {
 
         let wt_mgr = WorktreeManager::new(self.conn, self.config);
         for id in &ids {
-            let _ = wt_mgr.update_status(id, "merged");
+            let _ = wt_mgr.delete_by_id(id);
         }
 
         Ok(ids.len())
@@ -278,7 +278,9 @@ mod tests {
                 remote_url TEXT NOT NULL,
                 default_branch TEXT NOT NULL DEFAULT 'main',
                 workspace_dir TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                model TEXT,
+                allow_agent_issue_creation INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE tickets (
                 id TEXT PRIMARY KEY,
@@ -306,6 +308,7 @@ mod tests {
                 status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'merged', 'abandoned')),
                 created_at TEXT NOT NULL,
                 completed_at TEXT,
+                model TEXT,
                 UNIQUE(repo_id, slug)
             );
             INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)

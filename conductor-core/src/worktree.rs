@@ -289,17 +289,7 @@ impl<'a> WorktreeManager<'a> {
         let new_status = if is_merged { "merged" } else { "abandoned" };
         let now = Utc::now().to_rfc3339();
 
-        // Remove git worktree
-        let _ = Command::new("git")
-            .args(["worktree", "remove", &worktree.path, "--force"])
-            .current_dir(&repo.local_path)
-            .output();
-
-        // Delete git branch
-        let _ = Command::new("git")
-            .args(["branch", "-D", &worktree.branch])
-            .current_dir(&repo.local_path)
-            .output();
+        remove_git_artifacts(&repo.local_path, &worktree.path, &worktree.branch);
 
         // Soft-delete: update status + completed_at instead of deleting the row
         self.conn.execute(
@@ -315,23 +305,6 @@ impl<'a> WorktreeManager<'a> {
     }
 
     pub fn update_status(&self, worktree_id: &str, status: &str) -> Result<()> {
-        // When marking as merged or abandoned, remove the git worktree and branch
-        if status == "merged" || status == "abandoned" {
-            if let Ok(worktree) = self.get_by_id(worktree_id) {
-                let repo_mgr = RepoManager::new(self.conn, self.config);
-                if let Ok(repo) = repo_mgr.get_by_id(&worktree.repo_id) {
-                    let _ = Command::new("git")
-                        .args(["worktree", "remove", &worktree.path, "--force"])
-                        .current_dir(&repo.local_path)
-                        .output();
-                    let _ = Command::new("git")
-                        .args(["branch", "-D", &worktree.branch])
-                        .current_dir(&repo.local_path)
-                        .output();
-                }
-            }
-        }
-
         let completed_at = if status != "active" {
             Some(Utc::now().to_rfc3339())
         } else {
@@ -621,6 +594,19 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
     }
 
     Ok(warnings)
+}
+
+/// Remove the git worktree directory and delete the branch.
+/// Best-effort: failures are silently ignored (the worktree/branch may already be gone).
+fn remove_git_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
+    let _ = Command::new("git")
+        .args(["worktree", "remove", worktree_path, "--force"])
+        .current_dir(repo_path)
+        .output();
+    let _ = Command::new("git")
+        .args(["branch", "-D", branch])
+        .current_dir(repo_path)
+        .output();
 }
 
 /// Check if a branch has been merged into the default branch.
