@@ -287,8 +287,7 @@ pub fn run(conn: &Connection) -> Result<()> {
     }
 
     // Migration 021: workflow redesign — add structured output, iteration,
-    // parallel, retry, gate, and snapshot columns. Also recreate tables to
-    // update CHECK constraints for 'waiting' status.
+    // parallel, retry, gate, and snapshot columns.
     let has_definition_snapshot: bool = conn
         .prepare("SELECT definition_snapshot FROM workflow_runs LIMIT 0")
         .is_ok();
@@ -328,7 +327,7 @@ pub fn run(conn: &Connection) -> Result<()> {
                 id                TEXT PRIMARY KEY,
                 workflow_run_id   TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
                 step_name         TEXT NOT NULL,
-                role              TEXT NOT NULL CHECK (role IN ('reviewer','actor')),
+                role              TEXT NOT NULL CHECK (role IN ('actor','reviewer','gate')),
                 can_commit        INTEGER NOT NULL DEFAULT 0,
                 condition_expr    TEXT,
                 status            TEXT NOT NULL DEFAULT 'pending'

@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     worktree_id     TEXT NOT NULL REFERENCES worktrees(id) ON DELETE CASCADE,
     parent_run_id   TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
     status          TEXT NOT NULL DEFAULT 'pending'
-                    CHECK (status IN ('pending','running','completed','failed','cancelled')),
+                    CHECK (status IN ('pending','running','waiting','completed','failed','cancelled')),
     dry_run         INTEGER NOT NULL DEFAULT 0,
     trigger         TEXT NOT NULL DEFAULT 'manual',
     started_at      TEXT NOT NULL,
@@ -22,11 +22,11 @@ CREATE TABLE IF NOT EXISTS workflow_run_steps (
     id              TEXT PRIMARY KEY,
     workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
     step_name       TEXT NOT NULL,
-    role            TEXT NOT NULL CHECK (role IN ('reviewer','actor')),
+    role            TEXT NOT NULL CHECK (role IN ('actor','reviewer','gate')),
     can_commit      INTEGER NOT NULL DEFAULT 0,
     condition_expr  TEXT,
     status          TEXT NOT NULL DEFAULT 'pending'
-                    CHECK (status IN ('pending','running','completed','failed','skipped')),
+                    CHECK (status IN ('pending','running','waiting','completed','failed','skipped')),
     child_run_id    TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
     position        INTEGER NOT NULL,
     started_at      TEXT,

@@ -1,6 +1,5 @@
 -- Workflow redesign: add new columns for structured output, iterations,
 -- parallel groups, retries, gates, and workflow snapshots.
--- Also updates CHECK constraints to include 'waiting' status.
 
 -- Store serialized WorkflowDef JSON so in-flight runs are not affected by
 -- edits to the .wf source file.

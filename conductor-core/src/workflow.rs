@@ -648,10 +648,8 @@ fn substitute_variables(prompt: &str, vars: &HashMap<&str, String>) -> String {
 // ---------------------------------------------------------------------------
 
 /// Mutable runtime state for a workflow execution.
-#[allow(dead_code)]
 struct ExecutionState<'a> {
     conn: &'a Connection,
-    config: &'a Config,
     workflow_run_id: String,
     workflow_name: String,
     worktree_id: String,
@@ -729,7 +727,6 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
 
     let mut state = ExecutionState {
         conn,
-        config,
         workflow_run_id: wf_run.id.clone(),
         workflow_name: workflow.name.clone(),
         worktree_id: input.worktree_id.to_string(),
