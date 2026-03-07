@@ -279,38 +279,10 @@ impl App {
             }
 
             // Filter
-            Action::EnterFilter => {
-                if self.state.view == View::RepoDetail
-                    && self.state.repo_detail_focus == RepoDetailFocus::Tickets
-                {
-                    self.state.detail_ticket_filter_active = true;
-                    self.state.detail_ticket_filter_text.clear();
-                } else {
-                    self.state.filter_active = true;
-                    self.state.filter_text.clear();
-                }
-            }
-            Action::FilterChar(c) => {
-                if self.state.detail_ticket_filter_active {
-                    self.state.detail_ticket_filter_text.push(c);
-                } else {
-                    self.state.filter_text.push(c);
-                }
-            }
-            Action::FilterBackspace => {
-                if self.state.detail_ticket_filter_active {
-                    self.state.detail_ticket_filter_text.pop();
-                } else {
-                    self.state.filter_text.pop();
-                }
-            }
-            Action::ExitFilter => {
-                if self.state.detail_ticket_filter_active {
-                    self.state.detail_ticket_filter_active = false;
-                } else {
-                    self.state.filter_active = false;
-                }
-            }
+            Action::EnterFilter => self.state.active_filter_mut().enter(),
+            Action::FilterChar(c) => self.state.active_filter_mut().push(c),
+            Action::FilterBackspace => self.state.active_filter_mut().backspace(),
+            Action::ExitFilter => self.state.active_filter_mut().exit(),
 
             // Modal
             Action::ShowHelp => {

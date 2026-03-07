@@ -116,8 +116,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         Style::default().fg(Color::DarkGray)
     };
     let detail_filter =
-        if state.detail_ticket_filter_active || !state.detail_ticket_filter_text.is_empty() {
-            Some(state.detail_ticket_filter_text.to_lowercase())
+        if state.detail_ticket_filter.active || !state.detail_ticket_filter.text.is_empty() {
+            Some(state.detail_ticket_filter.text.to_lowercase())
         } else {
             None
         };
@@ -160,14 +160,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         })
         .collect();
 
-    let ticket_title = if let Some(ref f) = detail_filter {
-        if f.is_empty() {
-            " Tickets ".to_string()
-        } else {
-            format!(" Tickets (filter: {f}) ")
-        }
-    } else {
-        " Tickets ".to_string()
+    let ticket_title = match detail_filter.as_deref() {
+        Some(f) if !f.is_empty() => format!(" Tickets (filter: {f}) "),
+        _ => " Tickets ".to_string(),
     };
 
     let ticket_list = List::new(ticket_items)

@@ -37,10 +37,10 @@ pub fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
-    let msg = if state.filter_active {
-        format!("/{} ", state.filter_text)
-    } else if state.detail_ticket_filter_active {
-        format!("/{} ", state.detail_ticket_filter_text)
+    let msg = if state.filter.active {
+        format!("/{} ", state.filter.text)
+    } else if state.detail_ticket_filter.active {
+        format!("/{} ", state.detail_ticket_filter.text)
     } else if let Some(ref msg) = state.status_message {
         msg.clone()
     } else {

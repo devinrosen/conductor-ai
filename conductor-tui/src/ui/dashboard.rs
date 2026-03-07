@@ -141,8 +141,8 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
         .tickets
         .iter()
         .filter(|t| {
-            if state.filter_active && !state.filter_text.is_empty() {
-                let lower = state.filter_text.to_lowercase();
+            if state.filter.active && !state.filter.text.is_empty() {
+                let lower = state.filter.text.to_lowercase();
                 t.title.to_lowercase().contains(&lower)
                     || t.source_id.contains(&lower)
                     || t.labels.to_lowercase().contains(&lower)

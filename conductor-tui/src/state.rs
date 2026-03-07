@@ -2,6 +2,28 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 
+#[derive(Debug, Default, Clone)]
+pub struct FilterState {
+    pub active: bool,
+    pub text: String,
+}
+
+impl FilterState {
+    pub fn enter(&mut self) {
+        self.active = true;
+        self.text.clear();
+    }
+    pub fn exit(&mut self) {
+        self.active = false;
+    }
+    pub fn push(&mut self, c: char) {
+        self.text.push(c);
+    }
+    pub fn backspace(&mut self) {
+        self.text.pop();
+    }
+}
+
 use conductor_core::agent::{
     AgentCreatedIssue, AgentRun, AgentRunEvent, FeedbackRequest, TicketAgentTotals,
 };
@@ -498,13 +520,9 @@ pub struct AppState {
     /// Tracks pending `g` keypress for `gg` chord (go to top)
     pub pending_g: bool,
 
-    // Filter
-    pub filter_active: bool,
-    pub filter_text: String,
-
-    // Repo-detail ticket filter (separate from global filter)
-    pub detail_ticket_filter_active: bool,
-    pub detail_ticket_filter_text: String,
+    // Filters
+    pub filter: FilterState,
+    pub detail_ticket_filter: FilterState,
 
     // Status bar message
     pub status_message: Option<String>,
@@ -542,10 +560,8 @@ impl AppState {
             detail_ticket_index: 0,
             agent_list_state: RefCell::new(ListState::default()),
             pending_g: false,
-            filter_active: false,
-            filter_text: String::new(),
-            detail_ticket_filter_active: false,
-            detail_ticket_filter_text: String::new(),
+            filter: FilterState::default(),
+            detail_ticket_filter: FilterState::default(),
             status_message: None,
             github_orgs_cache: Vec::new(),
             workflows_focus: WorkflowsFocus::Defs,
@@ -555,6 +571,20 @@ impl AppState {
             selected_workflow_run_id: None,
             should_quit: false,
         }
+    }
+
+    /// Returns the filter that should receive input based on current view/focus.
+    pub fn active_filter_mut(&mut self) -> &mut FilterState {
+        if self.view == View::RepoDetail && self.repo_detail_focus == RepoDetailFocus::Tickets {
+            &mut self.detail_ticket_filter
+        } else {
+            &mut self.filter
+        }
+    }
+
+    /// Returns whether any filter is currently active.
+    pub fn any_filter_active(&self) -> bool {
+        self.filter.active || self.detail_ticket_filter.active
     }
 
     /// Returns (current_index, list_length) for the currently focused pane.

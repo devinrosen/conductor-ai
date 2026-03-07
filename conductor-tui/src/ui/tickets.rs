@@ -8,8 +8,8 @@ use super::common::truncate;
 use crate::state::AppState;
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
-    let filter = if state.filter_active || !state.filter_text.is_empty() {
-        Some(state.filter_text.to_lowercase())
+    let filter = if state.filter.active || !state.filter.text.is_empty() {
+        Some(state.filter.text.to_lowercase())
     } else {
         None
     };
