@@ -13,7 +13,7 @@ use serde::Deserialize;
 use crate::agent_config::{default_role, AgentRole};
 use crate::error::{ConductorError, Result};
 use crate::text_util::parse_frontmatter;
-use crate::workflow_dsl::{validate_workflow_name, WorkflowTrigger};
+use crate::workflow_dsl::WorkflowTrigger;
 
 /// YAML frontmatter for a workflow `.md` file.
 #[derive(Debug, Clone, Deserialize)]
@@ -249,21 +249,6 @@ pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<Wo
     Ok(defs)
 }
 
-/// Load a single workflow definition by name.
-pub fn load_workflow_by_name(
-    worktree_path: &str,
-    repo_path: &str,
-    name: &str,
-) -> Result<WorkflowDef> {
-    validate_workflow_name(name)?;
-    let defs = load_workflow_defs(worktree_path, repo_path)?;
-    defs.into_iter().find(|d| d.name == name).ok_or_else(|| {
-        ConductorError::Workflow(format!(
-            "Workflow '{name}' not found in .conductor/workflows/"
-        ))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,51 +438,6 @@ and commit them to the branch.
         )
         .unwrap();
         assert!(defs.is_empty());
-    }
-
-    #[test]
-    fn test_load_workflow_by_name() {
-        let tmp = TempDir::new().unwrap();
-        let repo = TempDir::new().unwrap();
-        write_workflow_file(tmp.path(), "test-coverage.md", TEST_WORKFLOW);
-
-        let def = load_workflow_by_name(
-            tmp.path().to_str().unwrap(),
-            repo.path().to_str().unwrap(),
-            "test-coverage",
-        )
-        .unwrap();
-        assert_eq!(def.name, "test-coverage");
-    }
-
-    #[test]
-    fn test_load_workflow_by_name_not_found() {
-        let tmp = TempDir::new().unwrap();
-        let repo = TempDir::new().unwrap();
-
-        let result = load_workflow_by_name(
-            tmp.path().to_str().unwrap(),
-            repo.path().to_str().unwrap(),
-            "nonexistent",
-        );
-        assert!(result.is_err());
-        let err = format!("{}", result.unwrap_err());
-        assert!(err.contains("not found"));
-    }
-
-    #[test]
-    fn test_load_workflow_by_name_rejects_path_traversal() {
-        let tmp = TempDir::new().unwrap();
-        let repo = TempDir::new().unwrap();
-
-        let result = load_workflow_by_name(
-            tmp.path().to_str().unwrap(),
-            repo.path().to_str().unwrap(),
-            "../etc/passwd",
-        );
-        assert!(result.is_err());
-        let err = format!("{}", result.unwrap_err());
-        assert!(err.contains("Invalid workflow name"));
     }
 
     #[test]

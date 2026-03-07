@@ -1383,6 +1383,32 @@ workflow lint-fix {
     }
 
     #[test]
+    fn test_load_workflow_by_name() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let wf_dir = tmp.path().join(".conductor").join("workflows");
+        fs::create_dir_all(&wf_dir).unwrap();
+        fs::write(wf_dir.join("deploy.wf"), "workflow deploy { call build }").unwrap();
+
+        let def =
+            load_workflow_by_name(tmp.path().to_str().unwrap(), "/nonexistent", "deploy").unwrap();
+        assert_eq!(def.name, "deploy");
+    }
+
+    #[test]
+    fn test_load_workflow_by_name_not_found() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let wf_dir = tmp.path().join(".conductor").join("workflows");
+        fs::create_dir_all(&wf_dir).unwrap();
+        fs::write(wf_dir.join("deploy.wf"), "workflow deploy { call build }").unwrap();
+
+        let result =
+            load_workflow_by_name(tmp.path().to_str().unwrap(), "/nonexistent", "nonexistent");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("not found"));
+    }
+
+    #[test]
     fn test_load_workflow_by_name_rejects_invalid() {
         let tmp = tempfile::TempDir::new().unwrap();
         let result = load_workflow_by_name(
