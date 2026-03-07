@@ -13,6 +13,8 @@ pub fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
         View::RepoDetail => "Repo Detail",
         View::WorktreeDetail => "Worktree Detail",
         View::Tickets => "Tickets",
+        View::Workflows => "Workflows",
+        View::WorkflowRunDetail => "Workflow Run",
     };
 
     let header = Line::from(vec![
@@ -62,6 +64,21 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
                 }
             }
             View::Tickets => "j/k:nav  /:filter  Esc:back  ?:help".to_string(),
+            View::Workflows => {
+                "Tab:panel  j/k:nav  Enter:select  r:run  Esc:back  ?:help".to_string()
+            }
+            View::WorkflowRunDetail => {
+                let has_gate = state
+                    .data
+                    .workflow_steps
+                    .iter()
+                    .any(|s| s.status.to_string() == "waiting" && s.gate_type.is_some());
+                if has_gate {
+                    "j/k:nav  g:gate  x:cancel  Esc:back  ?:help".to_string()
+                } else {
+                    "j/k:nav  x:cancel  Esc:back  ?:help".to_string()
+                }
+            }
         }
     };
 

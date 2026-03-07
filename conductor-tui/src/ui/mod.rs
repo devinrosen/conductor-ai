@@ -4,6 +4,7 @@ mod help;
 mod modal;
 mod repo_detail;
 mod tickets;
+mod workflows;
 mod worktree_detail;
 
 use ratatui::Frame;
@@ -35,6 +36,8 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         View::RepoDetail => repo_detail::render(frame, body_area, state),
         View::WorktreeDetail => worktree_detail::render(frame, body_area, state),
         View::Tickets => tickets::render(frame, body_area, state),
+        View::Workflows => workflows::render(frame, body_area, state),
+        View::WorkflowRunDetail => workflows::render_run_detail(frame, body_area, state),
     }
 
     common::render_status_bar(frame, status_area, state);
@@ -100,6 +103,11 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             *custom_active,
             suggested.as_deref(),
         ),
+        Modal::GateAction {
+            gate_prompt,
+            feedback,
+            ..
+        } => modal::render_gate_action(frame, area, gate_prompt, feedback),
         Modal::EventDetail {
             title,
             body,

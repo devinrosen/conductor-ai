@@ -202,6 +202,16 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::GateAction { .. } => {
+            return match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Action::ApproveGate,
+                KeyCode::Char('n') | KeyCode::Char('N') => Action::RejectGate,
+                KeyCode::Esc => Action::DismissModal,
+                KeyCode::Backspace => Action::GateInputBackspace,
+                KeyCode::Char(c) => Action::GateInputChar(c),
+                _ => Action::None,
+            };
+        }
         Modal::None => {}
     }
 
@@ -263,6 +273,32 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         }
     }
 
+    // View-specific keybindings (Workflows)
+    if state.view == View::Workflows {
+        if let KeyCode::Char('r') = key.code {
+            return Action::RunWorkflow;
+        }
+    }
+
+    // View-specific keybindings (WorkflowRunDetail)
+    if state.view == View::WorkflowRunDetail {
+        match key.code {
+            KeyCode::Char('x') => return Action::CancelWorkflow,
+            KeyCode::Char('g') if !state.pending_g => {
+                // Check for waiting gate
+                let has_gate = state
+                    .data
+                    .workflow_steps
+                    .iter()
+                    .any(|s| s.status.to_string() == "waiting" && s.gate_type.is_some());
+                if has_gate {
+                    return Action::ApproveGate;
+                }
+            }
+            _ => {}
+        }
+    }
+
     // View-specific keybindings (RepoDetail)
     if state.view == View::RepoDetail {
         match key.code {
@@ -320,6 +356,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('t') => Action::GoToTickets,
         KeyCode::Char('1') => Action::GoToDashboard,
         KeyCode::Char('2') => Action::GoToTickets,
+        KeyCode::Char('3') => Action::GoToWorkflows,
 
         _ => Action::None,
     }

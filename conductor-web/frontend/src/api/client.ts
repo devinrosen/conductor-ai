@@ -21,6 +21,10 @@ import type {
   DiscoverableRepo,
   GlobalConfig,
   KnownModel,
+  WorkflowDefSummary,
+  WorkflowRun,
+  WorkflowRunStep,
+  RunWorkflowRequest,
 } from "./types";
 
 const BASE = "/api";
@@ -203,4 +207,28 @@ export const api = {
     request<DiscoverableRepo[]>(
       owner ? `/github/repos?owner=${encodeURIComponent(owner)}` : "/github/repos",
     ),
+
+  // Workflows
+  listWorkflowDefs: (worktreeId: string) =>
+    request<WorkflowDefSummary[]>(`/worktrees/${worktreeId}/workflows/defs`),
+  runWorkflow: (worktreeId: string, data: RunWorkflowRequest) =>
+    request<{ status: string; worktree_id: string }>(`/worktrees/${worktreeId}/workflows/run`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  listWorkflowRuns: (worktreeId: string) =>
+    request<WorkflowRun[]>(`/worktrees/${worktreeId}/workflows/runs`),
+  getWorkflowRun: (runId: string) =>
+    request<WorkflowRun | null>(`/workflows/runs/${runId}`),
+  getWorkflowSteps: (runId: string) =>
+    request<WorkflowRunStep[]>(`/workflows/runs/${runId}/steps`),
+  cancelWorkflow: (runId: string) =>
+    request<void>(`/workflows/runs/${runId}/cancel`, { method: "POST" }),
+  approveGate: (runId: string, feedback?: string) =>
+    request<void>(`/workflows/runs/${runId}/gate/approve`, {
+      method: "POST",
+      body: JSON.stringify({ feedback: feedback ?? null }),
+    }),
+  rejectGate: (runId: string) =>
+    request<void>(`/workflows/runs/${runId}/gate/reject`, { method: "POST" }),
 };

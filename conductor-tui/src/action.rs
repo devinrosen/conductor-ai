@@ -4,6 +4,8 @@ use conductor_core::agent::{AgentRun, TicketAgentTotals};
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::Ticket;
+use conductor_core::workflow::{WorkflowRun, WorkflowRunStep};
+use conductor_core::workflow_dsl::WorkflowDef;
 use conductor_core::worktree::Worktree;
 use crossterm::event::KeyEvent;
 
@@ -15,6 +17,14 @@ pub struct GithubDiscoverPayload {
     pub repos: Vec<DiscoveredRepo>,
     /// HTTPS/SSH URLs of repos already registered in Conductor
     pub registered_urls: Vec<String>,
+}
+
+/// Payload for workflow data refresh (workflow runs + steps for current context).
+#[derive(Debug)]
+pub struct WorkflowDataPayload {
+    pub workflow_defs: Vec<WorkflowDef>,
+    pub workflow_runs: Vec<WorkflowRun>,
+    pub workflow_steps: Vec<WorkflowRunStep>,
 }
 
 /// Payload for the DataRefreshed action (boxed to keep Action enum small).
@@ -42,6 +52,7 @@ pub enum Action {
     // Views
     GoToDashboard,
     GoToTickets,
+    GoToWorkflows,
     // CRUD triggers
     AddRepo,
     Create,
@@ -154,7 +165,16 @@ pub enum Action {
         message: String,
     },
 
-    // Timer tick (no-op, just wakes the main loop)
+    // Workflow actions
+    RunWorkflow,
+    CancelWorkflow,
+    ApproveGate,
+    RejectGate,
+    GateInputChar(char),
+    GateInputBackspace,
+    WorkflowDataRefreshed(Box<WorkflowDataPayload>),
+
+    // Timer tick — also triggers workflow data refresh on workflow views
     Tick,
 
     // No-op (unhandled key)

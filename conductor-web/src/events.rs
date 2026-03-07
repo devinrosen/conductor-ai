@@ -37,6 +37,20 @@ pub enum ConductorEvent {
     WorkTargetsChanged,
     #[serde(rename = "issue_sources_changed")]
     IssueSourcesChanged { repo_id: String },
+    #[serde(rename = "workflow_run_status_changed")]
+    WorkflowRunStatusChanged {
+        run_id: String,
+        worktree_id: String,
+        status: String,
+    },
+    #[serde(rename = "workflow_step_status_changed")]
+    WorkflowStepStatusChanged {
+        run_id: String,
+        step_id: String,
+        status: String,
+    },
+    #[serde(rename = "workflow_gate_waiting")]
+    WorkflowGateWaiting { run_id: String, step_id: String },
 }
 
 impl ConductorEvent {
@@ -55,6 +69,9 @@ impl ConductorEvent {
             Self::FeedbackSubmitted { .. } => "feedback_submitted",
             Self::WorkTargetsChanged => "work_targets_changed",
             Self::IssueSourcesChanged { .. } => "issue_sources_changed",
+            Self::WorkflowRunStatusChanged { .. } => "workflow_run_status_changed",
+            Self::WorkflowStepStatusChanged { .. } => "workflow_step_status_changed",
+            Self::WorkflowGateWaiting { .. } => "workflow_gate_waiting",
         }
     }
 }
@@ -185,6 +202,29 @@ mod tests {
             (
                 ConductorEvent::IssueSourcesChanged { repo_id: "".into() },
                 "issue_sources_changed",
+            ),
+            (
+                ConductorEvent::WorkflowRunStatusChanged {
+                    run_id: "".into(),
+                    worktree_id: "".into(),
+                    status: "".into(),
+                },
+                "workflow_run_status_changed",
+            ),
+            (
+                ConductorEvent::WorkflowStepStatusChanged {
+                    run_id: "".into(),
+                    step_id: "".into(),
+                    status: "".into(),
+                },
+                "workflow_step_status_changed",
+            ),
+            (
+                ConductorEvent::WorkflowGateWaiting {
+                    run_id: "".into(),
+                    step_id: "".into(),
+                },
+                "workflow_gate_waiting",
             ),
         ];
         for (event, expected) in cases {

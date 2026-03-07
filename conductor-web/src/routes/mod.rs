@@ -5,6 +5,7 @@ pub mod merge_queue;
 pub mod repos;
 pub mod tickets;
 pub mod work_targets;
+pub mod workflows;
 pub mod worktrees;
 
 use axum::routing::{delete, get, patch, post};
@@ -114,6 +115,36 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/worktrees/{id}/agent/runs/{run_id}/feedback",
             get(agents::list_run_feedback),
+        )
+        // Workflows
+        .route(
+            "/api/worktrees/{id}/workflows/defs",
+            get(workflows::list_workflow_defs),
+        )
+        .route(
+            "/api/worktrees/{id}/workflows/run",
+            post(workflows::run_workflow),
+        )
+        .route(
+            "/api/worktrees/{id}/workflows/runs",
+            get(workflows::list_workflow_runs),
+        )
+        .route("/api/workflows/runs/{id}", get(workflows::get_workflow_run))
+        .route(
+            "/api/workflows/runs/{id}/steps",
+            get(workflows::get_workflow_steps),
+        )
+        .route(
+            "/api/workflows/runs/{id}/cancel",
+            post(workflows::cancel_workflow),
+        )
+        .route(
+            "/api/workflows/runs/{id}/gate/approve",
+            post(workflows::approve_gate),
+        )
+        .route(
+            "/api/workflows/runs/{id}/gate/reject",
+            post(workflows::reject_gate),
         )
         // Issue Sources
         .route(

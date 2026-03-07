@@ -1144,6 +1144,60 @@ fn format_source_config_lines(source: &IssueSource) -> Vec<String> {
     }
 }
 
+pub fn render_gate_action(frame: &mut Frame, area: Rect, gate_prompt: &str, feedback: &str) {
+    let popup = centered_rect(60, 40, area);
+    frame.render_widget(Clear, popup);
+
+    let content = Paragraph::new(vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "Gate Prompt:",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::raw(gate_prompt)),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Feedback (optional):",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                feedback,
+                Style::default().add_modifier(Modifier::UNDERLINED),
+            ),
+            Span::styled("_", Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "  y",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" = approve    "),
+            Span::styled(
+                "n",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" = reject    "),
+            Span::styled("Esc", Style::default().fg(Color::DarkGray)),
+            Span::raw(" = cancel"),
+        ]),
+    ])
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .title(" Gate Action "),
+    );
+
+    frame.render_widget(content, popup);
+}
+
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let vertical = Layout::vertical([Constraint::Percentage(percent_y)])
         .flex(Flex::Center)

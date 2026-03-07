@@ -19,6 +19,7 @@ import {
   type ConductorEventData,
 } from "../hooks/useConductorEvents";
 import { useHotkeys } from "../hooks/useHotkeys";
+import { WorkflowPanel } from "../components/workflows/WorkflowPanel";
 
 export function WorktreeDetailPage() {
   const { repoId, worktreeId } = useParams<{
@@ -47,6 +48,7 @@ export function WorktreeDetailPage() {
   const [linkingTicket, setLinkingTicket] = useState(false);
   const [selectedTicketId, setSelectedTicketId] = useState("");
   const [editingModel, setEditingModel] = useState(false);
+  const [activeTab, setActiveTab] = useState<"agent" | "workflows">("agent");
 
   // Agent state
   const [latestRun, setLatestRun] = useState<AgentRun | null>(null);
@@ -516,94 +518,126 @@ export function WorktreeDetailPage() {
         </section>
       )}
 
-      {/* Agent Section */}
-      <section>
-        <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+      {/* Tab Bar */}
+      <div className="flex gap-4 border-b border-gray-200">
+        <button
+          onClick={() => setActiveTab("agent")}
+          className={`pb-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === "agent"
+              ? "border-indigo-600 text-indigo-600"
+              : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
           Agent
-        </h3>
+        </button>
+        <button
+          onClick={() => setActiveTab("workflows")}
+          className={`pb-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === "workflows"
+              ? "border-indigo-600 text-indigo-600"
+              : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          Workflows
+        </button>
+      </div>
 
-        {agentLoading && (
-          <div className="flex items-center gap-2 text-sm text-gray-500 mb-3">
-            <LoadingSpinner />
-            <span>Processing...</span>
-          </div>
-        )}
-
-        {latestRun ? (
-          <AgentStatusDisplay
-            run={latestRun}
-            runs={agentRuns}
-            childRuns={childRuns}
-            onLaunch={handleLaunchClick}
-            onOrchestrate={handleOrchestrateClick}
-            onStop={() => setStopConfirm(true)}
-          />
-        ) : (
-          <div className="rounded-lg border border-gray-200 bg-white p-4 flex items-center justify-between">
-            <p className="text-sm text-gray-500">No agent runs yet</p>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleLaunchClick}
-                disabled={agentLoading}
-                className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
-              >
-                Launch Agent
-              </button>
-              <button
-                onClick={handleOrchestrateClick}
-                disabled={agentLoading}
-                className="px-3 py-1.5 text-sm rounded-md border border-indigo-300 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
-              >
-                Orchestrate
-              </button>
-            </div>
-          </div>
-        )}
-      </section>
-
-      {/* Agent Plan Checklist */}
-      {latestRun?.plan && latestRun.plan.length > 0 && (
-        <section>
-          <AgentPlanChecklist steps={latestRun.plan} />
-        </section>
+      {activeTab === "workflows" && worktreeId && (
+        <WorkflowPanel worktreeId={worktreeId} />
       )}
 
-      {/* Agent Activity Log */}
-      {(agentEvents.length > 0 || isRunning) && (
-        <section>
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
-            Activity Log
-          </h3>
-          <AgentActivityLog events={agentEvents} runs={agentRuns} isRunning={isRunning} />
-        </section>
-      )}
+      {/* Agent Section */}
+      {activeTab === "agent" && (
+        <>
+          <section>
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+              Agent
+            </h3>
 
-      {/* Issues Created by Agent */}
-      {createdIssues.length > 0 && (
-        <section>
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
-            Issues Created by Agent
-          </h3>
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <ul className="divide-y divide-gray-100">
-              {createdIssues.map((issue) => (
-                <li key={issue.id} className="px-4 py-3 flex items-center gap-3">
-                  <span className="text-xs font-mono text-gray-400">
-                    #{issue.source_id}
-                  </span>
-                  <a
-                    href={issue.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-sm text-indigo-600 hover:underline flex-1"
+            {agentLoading && (
+              <div className="flex items-center gap-2 text-sm text-gray-500 mb-3">
+                <LoadingSpinner />
+                <span>Processing...</span>
+              </div>
+            )}
+
+            {latestRun ? (
+              <AgentStatusDisplay
+                run={latestRun}
+                runs={agentRuns}
+                childRuns={childRuns}
+                onLaunch={handleLaunchClick}
+                onOrchestrate={handleOrchestrateClick}
+                onStop={() => setStopConfirm(true)}
+              />
+            ) : (
+              <div className="rounded-lg border border-gray-200 bg-white p-4 flex items-center justify-between">
+                <p className="text-sm text-gray-500">No agent runs yet</p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleLaunchClick}
+                    disabled={agentLoading}
+                    className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
                   >
-                    {issue.title}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </section>
+                    Launch Agent
+                  </button>
+                  <button
+                    onClick={handleOrchestrateClick}
+                    disabled={agentLoading}
+                    className="px-3 py-1.5 text-sm rounded-md border border-indigo-300 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                  >
+                    Orchestrate
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* Agent Plan Checklist */}
+          {latestRun?.plan && latestRun.plan.length > 0 && (
+            <section>
+              <AgentPlanChecklist steps={latestRun.plan} />
+            </section>
+          )}
+
+          {/* Agent Activity Log */}
+          {(agentEvents.length > 0 || isRunning) && (
+            <section>
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+                Activity Log
+              </h3>
+              <AgentActivityLog events={agentEvents} runs={agentRuns} isRunning={isRunning} />
+            </section>
+          )}
+
+          {/* Issues Created by Agent */}
+          {createdIssues.length > 0 && (
+            <section>
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+                Issues Created by Agent
+              </h3>
+              <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                <ul className="divide-y divide-gray-100">
+                  {createdIssues.map((issue) => (
+                    <li key={issue.id} className="px-4 py-3 flex items-center gap-3">
+                      <span className="text-xs font-mono text-gray-400">
+                        #{issue.source_id}
+                      </span>
+                      <a
+                        href={issue.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-indigo-600 hover:underline flex-1"
+                      >
+                        {issue.title}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </section>
+          )}
+        </>
       )}
 
       <AgentPromptModal

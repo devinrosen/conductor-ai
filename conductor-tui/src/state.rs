@@ -10,6 +10,8 @@ use conductor_core::github::DiscoveredRepo;
 use conductor_core::issue_source::IssueSource;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::Ticket;
+use conductor_core::workflow::{WorkflowRun, WorkflowRunStep};
+use conductor_core::workflow_dsl::WorkflowDef;
 use conductor_core::worktree::Worktree;
 use ratatui::widgets::ListState;
 use tui_textarea::TextArea;
@@ -20,6 +22,8 @@ pub enum View {
     RepoDetail,
     WorktreeDetail,
     Tickets,
+    Workflows,
+    WorkflowRunDetail,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +62,21 @@ impl RepoDetailFocus {
         match self {
             Self::Worktrees => Self::Tickets,
             Self::Tickets => Self::Worktrees,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowsFocus {
+    Defs,
+    Runs,
+}
+
+impl WorkflowsFocus {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Defs => Self::Runs,
+            Self::Runs => Self::Defs,
         }
     }
 }
@@ -145,6 +164,14 @@ pub enum Modal {
         /// What to do when a model is selected
         on_submit: InputAction,
     },
+    /// Gate action modal for approving/rejecting a workflow gate step.
+    GateAction {
+        #[allow(dead_code)]
+        run_id: String,
+        step_id: String,
+        gate_prompt: String,
+        feedback: String,
+    },
     /// Second level: browse and import repos for a specific owner.
     GithubDiscover {
         /// Owner whose repos are shown ("" = personal account).
@@ -183,6 +210,7 @@ impl fmt::Debug for Modal {
             } => {
                 write!(f, "Modal::ModelPicker(ctx={context_label:?})")
             }
+            Modal::GateAction { .. } => write!(f, "Modal::GateAction"),
             Modal::EventDetail { .. } => write!(f, "Modal::EventDetail"),
             Modal::GithubDiscoverOrgs { loading, .. } => {
                 write!(f, "Modal::GithubDiscoverOrgs(loading={loading})")
@@ -220,6 +248,9 @@ pub enum ConfirmAction {
         repo_id: String,
         repo_slug: String,
         remote_url: String,
+    },
+    CancelWorkflow {
+        workflow_run_id: String,
     },
 }
 
@@ -320,6 +351,12 @@ pub struct DataCache {
     pub agent_created_issues: Vec<AgentCreatedIssue>,
     /// Pending feedback request for the currently viewed worktree (if any)
     pub pending_feedback: Option<FeedbackRequest>,
+    /// Workflow definitions for the currently viewed worktree
+    pub workflow_defs: Vec<WorkflowDef>,
+    /// Workflow runs for the currently viewed worktree
+    pub workflow_runs: Vec<WorkflowRun>,
+    /// Steps for the currently viewed workflow run
+    pub workflow_steps: Vec<WorkflowRunStep>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.
@@ -468,6 +505,14 @@ pub struct AppState {
     /// Cached org list so navigating back from repo modal doesn't re-fetch.
     pub github_orgs_cache: Vec<String>,
 
+    // Workflow state
+    pub workflows_focus: WorkflowsFocus,
+    pub workflow_def_index: usize,
+    pub workflow_run_index: usize,
+    pub workflow_step_index: usize,
+    /// Currently selected workflow run ID (for detail view)
+    pub selected_workflow_run_id: Option<String>,
+
     pub should_quit: bool,
 }
 
@@ -494,6 +539,11 @@ impl AppState {
             filter_text: String::new(),
             status_message: None,
             github_orgs_cache: Vec::new(),
+            workflows_focus: WorkflowsFocus::Defs,
+            workflow_def_index: 0,
+            workflow_run_index: 0,
+            workflow_step_index: 0,
+            selected_workflow_run_id: None,
             should_quit: false,
         }
     }
@@ -515,6 +565,11 @@ impl AppState {
                 (idx, self.data.agent_activity_len())
             }
             View::Tickets => (self.ticket_index, self.data.tickets.len()),
+            View::Workflows => match self.workflows_focus {
+                WorkflowsFocus::Defs => (self.workflow_def_index, self.data.workflow_defs.len()),
+                WorkflowsFocus::Runs => (self.workflow_run_index, self.data.workflow_runs.len()),
+            },
+            View::WorkflowRunDetail => (self.workflow_step_index, self.data.workflow_steps.len()),
         }
     }
 
@@ -534,6 +589,11 @@ impl AppState {
                 self.agent_list_state.borrow_mut().select(Some(index));
             }
             View::Tickets => self.ticket_index = index,
+            View::Workflows => match self.workflows_focus {
+                WorkflowsFocus::Defs => self.workflow_def_index = index,
+                WorkflowsFocus::Runs => self.workflow_run_index = index,
+            },
+            View::WorkflowRunDetail => self.workflow_step_index = index,
         }
     }
 

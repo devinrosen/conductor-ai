@@ -189,3 +189,51 @@ export interface DiscoverableRepo {
   already_registered: boolean;
   registered_id: string | null;
 }
+
+export interface WorkflowDefSummary {
+  name: string;
+  description: string;
+  trigger: string;
+  inputs: { name: string; required: boolean }[];
+  node_count: number;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflow_name: string;
+  worktree_id: string;
+  parent_run_id: string;
+  status: "pending" | "running" | "completed" | "failed" | "cancelled" | "waiting";
+  dry_run: boolean;
+  trigger: string;
+  started_at: string;
+  ended_at: string | null;
+  result_summary: string | null;
+}
+
+export interface WorkflowRunStep {
+  id: string;
+  workflow_run_id: string;
+  step_name: string;
+  role: string;
+  can_commit: boolean;
+  status: "pending" | "running" | "completed" | "failed" | "skipped" | "waiting";
+  position: number;
+  iteration: number;
+  started_at: string | null;
+  ended_at: string | null;
+  result_text: string | null;
+  markers_out: string | null;
+  retry_count: number;
+  gate_type: string | null;
+  gate_prompt: string | null;
+  gate_approved_by: string | null;
+  gate_feedback: string | null;
+}
+
+export interface RunWorkflowRequest {
+  name: string;
+  model?: string;
+  dry_run?: boolean;
+  inputs?: Record<string, string>;
+}
