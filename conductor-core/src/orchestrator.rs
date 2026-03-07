@@ -69,15 +69,12 @@ pub struct OrchestrationResult {
 /// 4. Updates the plan step status based on the child's result
 /// 5. Aggregates all results and updates the parent run
 ///
-/// The `conductor_bin` parameter should be the path to the `conductor` binary
-/// (used to spawn child `conductor agent run` processes).
 pub fn orchestrate_run(
     conn: &Connection,
     config: &Config,
     parent_run_id: &str,
     worktree_path: &str,
     model: Option<&str>,
-    conductor_bin: &str,
     orch_config: &OrchestratorConfig,
 ) -> Result<OrchestrationResult> {
     let mgr = AgentManager::new(conn);
@@ -145,7 +142,6 @@ pub fn orchestrate_run(
 
         // Spawn the child agent in a tmux window
         let spawn_result = agent_runtime::spawn_child_tmux(
-            conductor_bin,
             &child_run.id,
             worktree_path,
             &child_prompt,
@@ -653,7 +649,6 @@ mod tests {
             &run.id,
             "/tmp/ws/feat-test",
             None,
-            "conductor",
             &OrchestratorConfig::default(),
         );
         assert!(result.is_err());
@@ -672,7 +667,6 @@ mod tests {
             "nonexistent-run",
             "/tmp/ws/feat-test",
             None,
-            "conductor",
             &OrchestratorConfig::default(),
         );
         assert!(result.is_err());

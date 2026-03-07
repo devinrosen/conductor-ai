@@ -106,7 +106,6 @@ pub struct ReviewSwarmInput<'a> {
     pub pr_branch: &'a str,
     pub pr_number: Option<i64>,
     pub model: Option<&'a str>,
-    pub conductor_bin: &'a str,
     pub swarm_config: &'a ReviewSwarmConfig,
     pub app_token: Option<&'a str>,
 }
@@ -129,7 +128,6 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
     let pr_branch = input.pr_branch;
     let pr_number = input.pr_number;
     let model = input.model;
-    let conductor_bin = input.conductor_bin;
     let swarm_config = input.swarm_config;
 
     let mgr = AgentManager::new(conn);
@@ -203,7 +201,6 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
         );
 
         let spawn_result = spawn_reviewer_tmux(
-            conductor_bin,
             &child_run.id,
             &worktree.path,
             &child_prompt,
@@ -952,7 +949,6 @@ fn post_pr_comment(
 /// The prompt is written to a temp file to avoid exceeding tmux/OS command length
 /// limits (large PR diffs can easily blow past the ~200KB arg limit).
 fn spawn_reviewer_tmux(
-    _conductor_bin: &str,
     run_id: &str,
     worktree_path: &str,
     prompt: &str,
@@ -1663,7 +1659,6 @@ mod tests {
             pr_branch: "feat/test",
             pr_number: None,
             model: None,
-            conductor_bin: "conductor",
             swarm_config: &swarm_config,
             app_token: None,
         });

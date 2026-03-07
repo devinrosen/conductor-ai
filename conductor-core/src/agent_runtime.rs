@@ -15,7 +15,7 @@ use crate::agent::{AgentManager, AgentRun, AgentRunStatus};
 ///
 /// Looks for a sibling `conductor` next to the current executable first,
 /// then falls back to the bare name (relying on `$PATH`).
-pub fn resolve_conductor_bin() -> String {
+fn resolve_conductor_bin() -> String {
     std::env::current_exe()
         .ok()
         .and_then(|p| {
@@ -124,7 +124,6 @@ pub fn poll_child_completion(
 
 /// Spawn a child agent in a new tmux window.
 pub fn spawn_child_tmux(
-    _conductor_bin: &str,
     run_id: &str,
     worktree_path: &str,
     prompt: &str,

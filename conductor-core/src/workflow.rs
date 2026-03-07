@@ -805,7 +805,6 @@ struct ExecutionState<'a> {
     worktree_path: String,
     worktree_slug: String,
     repo_path: String,
-    conductor_bin: String,
     model: Option<String>,
     exec_config: WorkflowExecConfig,
     inputs: HashMap<String, String>,
@@ -836,7 +835,6 @@ pub struct WorkflowExecInput<'a> {
     pub worktree_path: &'a str,
     pub repo_path: &'a str,
     pub model: Option<&'a str>,
-    pub conductor_bin: &'a str,
     pub exec_config: &'a WorkflowExecConfig,
     pub inputs: HashMap<String, String>,
 }
@@ -908,7 +906,6 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         worktree_path: input.worktree_path.to_string(),
         worktree_slug: worktree.slug.clone(),
         repo_path: input.repo_path.to_string(),
-        conductor_bin: input.conductor_bin.to_string(),
         model: input.model.map(String::from),
         exec_config: input.exec_config.clone(),
         inputs: input.inputs.clone(),
@@ -1014,10 +1011,6 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     let db = crate::config::db_path();
     let conn = crate::db::open_database(&db)?;
 
-    let conductor_bin = std::env::current_exe()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
-
     let input = WorkflowExecInput {
         conn: &conn,
         config: &params.config,
@@ -1026,7 +1019,6 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         worktree_path: &params.worktree_path,
         repo_path: &params.repo_path,
         model: params.model.as_deref(),
-        conductor_bin: &conductor_bin,
         exec_config: &params.exec_config,
         inputs: params.inputs.clone(),
     };
@@ -1118,7 +1110,6 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
 
         // Spawn in tmux
         if let Err(e) = agent_runtime::spawn_child_tmux(
-            &state.conductor_bin,
             &child_run.id,
             &state.worktree_path,
             &prompt,
@@ -1501,7 +1492,6 @@ fn execute_parallel(
         )?;
 
         if let Err(e) = agent_runtime::spawn_child_tmux(
-            &state.conductor_bin,
             &child_run.id,
             &state.worktree_path,
             &prompt,

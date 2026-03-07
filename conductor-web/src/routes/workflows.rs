@@ -139,16 +139,6 @@ pub async fn run_workflow(
                 }
             };
 
-            let conductor_bin = std::env::current_exe()
-                .ok()
-                .and_then(|p| {
-                    let sibling = p.parent()?.join("conductor");
-                    sibling
-                        .exists()
-                        .then(|| sibling.to_string_lossy().into_owned())
-                })
-                .unwrap_or_else(|| "conductor".to_string());
-
             let exec_config = WorkflowExecConfig {
                 dry_run,
                 ..Default::default()
@@ -162,7 +152,6 @@ pub async fn run_workflow(
                 worktree_path: &wt_path,
                 repo_path: &repo_path,
                 model: model.as_deref(),
-                conductor_bin: &conductor_bin,
                 exec_config: &exec_config,
                 inputs: inputs.clone(),
             };

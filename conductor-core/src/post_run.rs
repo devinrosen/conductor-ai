@@ -59,7 +59,6 @@ pub struct PostRunInput<'a> {
     pub config: &'a Config,
     pub repo_slug: &'a str,
     pub worktree_slug: &'a str,
-    pub conductor_bin: &'a str,
 }
 
 /// Run the full post-agent lifecycle.
@@ -185,7 +184,6 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
             pr_branch: &wt.branch,
             pr_number: Some(pr_number),
             model: None,
-            conductor_bin: input.conductor_bin,
             swarm_config: &swarm_config,
             app_token: token_resolution.token(),
         })?;
