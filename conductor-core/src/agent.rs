@@ -971,6 +971,23 @@ impl<'a> AgentManager<'a> {
         Ok(runs)
     }
 
+    /// List all agent runs for a repo (across all its worktrees), newest first.
+    pub fn list_for_repo(&self, repo_id: &str) -> Result<Vec<AgentRun>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, a.result_text, \
+             a.cost_usd, a.num_turns, a.duration_ms, a.started_at, a.ended_at, a.tmux_window, \
+             a.log_file, a.model, NULL, a.parent_run_id \
+             FROM agent_runs a \
+             JOIN worktrees w ON a.worktree_id = w.id \
+             WHERE w.repo_id = ?1 \
+             ORDER BY a.started_at DESC",
+        )?;
+        let rows = stmt.query_map(params![repo_id], row_to_agent_run)?;
+        let mut runs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        self.populate_plans(&mut runs)?;
+        Ok(runs)
+    }
+
     /// Returns true if the worktree has any prior agent runs.
     pub fn has_runs_for_worktree(&self, worktree_id: &str) -> Result<bool> {
         let count: i64 = self.conn.query_row(
