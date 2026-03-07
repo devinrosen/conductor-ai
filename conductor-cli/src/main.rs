@@ -753,210 +753,221 @@ fn main() -> Result<()> {
                 }
             }
         },
-        Commands::Agent { command } => match command {
-            AgentCommands::Run {
-                run_id,
-                worktree_path,
-                prompt,
-                prompt_file,
-                resume,
-                model,
-            } => {
-                let resolved_prompt = match (prompt, prompt_file) {
-                    (Some(p), _) => p,
-                    (None, Some(path)) => std::fs::read_to_string(&path)
-                        .with_context(|| format!("Failed to read prompt file: {path}"))?,
-                    (None, None) => anyhow::bail!("Either --prompt or --prompt-file is required"),
-                };
-                run_agent(
-                    &conn,
-                    &run_id,
-                    &worktree_path,
-                    &resolved_prompt,
-                    resume.as_deref(),
-                    model.as_deref(),
-                )?;
+        Commands::Agent { command } => {
+            // Reap orphaned runs before handling any agent command.
+            {
+                let agent_mgr = AgentManager::new(&conn);
+                let _ = agent_mgr.reap_orphaned_runs();
             }
-            AgentCommands::Orchestrate {
-                run_id,
-                worktree_path,
-                model,
-                fail_fast,
-                child_timeout_secs,
-            } => {
-                run_orchestrate(
-                    &conn,
-                    &config,
-                    &run_id,
-                    &worktree_path,
-                    model.as_deref(),
+
+            match command {
+                AgentCommands::Run {
+                    run_id,
+                    worktree_path,
+                    prompt,
+                    prompt_file,
+                    resume,
+                    model,
+                } => {
+                    let resolved_prompt = match (prompt, prompt_file) {
+                        (Some(p), _) => p,
+                        (None, Some(path)) => std::fs::read_to_string(&path)
+                            .with_context(|| format!("Failed to read prompt file: {path}"))?,
+                        (None, None) => {
+                            anyhow::bail!("Either --prompt or --prompt-file is required")
+                        }
+                    };
+                    run_agent(
+                        &conn,
+                        &run_id,
+                        &worktree_path,
+                        &resolved_prompt,
+                        resume.as_deref(),
+                        model.as_deref(),
+                    )?;
+                }
+                AgentCommands::Orchestrate {
+                    run_id,
+                    worktree_path,
+                    model,
                     fail_fast,
                     child_timeout_secs,
-                )?;
-            }
-            AgentCommands::CreateIssue {
-                title,
-                body,
-                run_id,
-            } => {
-                let run_id = run_id
-                    .or_else(|| std::env::var(CONDUCTOR_RUN_ID_ENV).ok())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "No run ID provided. Use --run-id or set ${CONDUCTOR_RUN_ID_ENV}."
-                        )
-                    })?;
+                } => {
+                    run_orchestrate(
+                        &conn,
+                        &config,
+                        &run_id,
+                        &worktree_path,
+                        model.as_deref(),
+                        fail_fast,
+                        child_timeout_secs,
+                    )?;
+                }
+                AgentCommands::CreateIssue {
+                    title,
+                    body,
+                    run_id,
+                } => {
+                    let run_id = run_id
+                        .or_else(|| std::env::var(CONDUCTOR_RUN_ID_ENV).ok())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "No run ID provided. Use --run-id or set ${CONDUCTOR_RUN_ID_ENV}."
+                            )
+                        })?;
 
-                let agent_mgr = AgentManager::new(&conn);
+                    let agent_mgr = AgentManager::new(&conn);
 
-                // Look up run → worktree → repo
-                let run = agent_mgr
-                    .get_run(&run_id)?
-                    .ok_or_else(|| anyhow::anyhow!("Agent run not found: {run_id}"))?;
+                    // Look up run → worktree → repo
+                    let run = agent_mgr
+                        .get_run(&run_id)?
+                        .ok_or_else(|| anyhow::anyhow!("Agent run not found: {run_id}"))?;
 
-                let (repo_id, remote_url): (String, String) = conn
-                    .query_row(
-                        "SELECT r.id, r.remote_url \
+                    let (repo_id, remote_url): (String, String) = conn
+                        .query_row(
+                            "SELECT r.id, r.remote_url \
                          FROM worktrees w \
                          JOIN repos r ON w.repo_id = r.id \
                          WHERE w.id = ?1",
-                        rusqlite::params![run.worktree_id],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    )
-                    .map_err(|_| {
-                        anyhow::anyhow!("Could not find repo for worktree {}", run.worktree_id)
-                    })?;
-
-                // Check per-repo opt-in
-                let allow: bool = conn
-                    .query_row(
-                        "SELECT allow_agent_issue_creation FROM repos WHERE id = ?1",
-                        rusqlite::params![repo_id],
-                        |row| row.get::<_, i64>(0).map(|v| v != 0),
-                    )
-                    .unwrap_or(false);
-
-                if !allow {
-                    anyhow::bail!(
-                        "Agent issue creation is disabled for this repo. \
-                         Enable it via `conductor repo allow-agent-issues <repo-slug>`."
-                    );
-                }
-
-                // Determine GitHub owner/repo from remote URL
-                let (owner, repo_name) =
-                    github::parse_github_remote(&remote_url).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Cannot determine GitHub repo from remote URL: {remote_url}"
+                            rusqlite::params![run.worktree_id],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
                         )
-                    })?;
+                        .map_err(|_| {
+                            anyhow::anyhow!("Could not find repo for worktree {}", run.worktree_id)
+                        })?;
 
-                // Create the GitHub issue
-                let (source_id, url) =
-                    github::create_github_issue(&owner, &repo_name, &title, &body, &[])?;
+                    // Check per-repo opt-in
+                    let allow: bool = conn
+                        .query_row(
+                            "SELECT allow_agent_issue_creation FROM repos WHERE id = ?1",
+                            rusqlite::params![repo_id],
+                            |row| row.get::<_, i64>(0).map(|v| v != 0),
+                        )
+                        .unwrap_or(false);
 
-                // Record in DB
-                agent_mgr
-                    .record_created_issue(&run_id, &repo_id, "github", &source_id, &title, &url)?;
-
-                println!("Created issue #{source_id}: {url}");
-            }
-            AgentCommands::PostRun { repo, worktree } => {
-                let conductor_bin = resolve_conductor_bin();
-
-                match post_run::run_post_lifecycle(&PostRunInput {
-                    conn: &conn,
-                    config: &config,
-                    repo_slug: &repo,
-                    worktree_slug: &worktree,
-                    conductor_bin: &conductor_bin,
-                }) {
-                    Ok(result) => {
-                        println!("{}", result.summary);
-                        if let Some(ref url) = result.pr_url {
-                            println!("PR: {url}");
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Post-run lifecycle failed: {e}");
-                        std::process::exit(1);
-                    }
-                }
-            }
-            AgentCommands::Review {
-                repo,
-                worktree,
-                pr_number,
-                model,
-                reviewer_timeout_secs,
-            } => {
-                let repo_mgr = RepoManager::new(&conn, &config);
-                let r = repo_mgr.get_by_slug(&repo)?;
-                let wt_mgr = WorktreeManager::new(&conn, &config);
-                let wt = wt_mgr.get_by_slug(&r.id, &worktree)?;
-
-                // Auto-detect PR number from branch if not provided
-                let pr_num = match pr_number {
-                    Some(n) => Some(n),
-                    None => github::detect_pr_number(&r.remote_url, &wt.branch),
-                };
-
-                let conductor_bin = resolve_conductor_bin();
-
-                let swarm_config = ReviewSwarmConfig {
-                    reviewer_timeout: std::time::Duration::from_secs(reviewer_timeout_secs),
-                    ..Default::default()
-                };
-
-                println!(
-                    "Starting PR review swarm for {}/{} (branch: {})...",
-                    repo, worktree, wt.branch
-                );
-                if let Some(n) = pr_num {
-                    println!("PR #{n}");
-                }
-
-                let token_resolution = github_app::resolve_app_token(&config, "review");
-
-                match pr_review::run_review_swarm(&ReviewSwarmInput {
-                    conn: &conn,
-                    config: &config,
-                    repo_id: &r.id,
-                    worktree_id: &wt.id,
-                    pr_branch: &wt.branch,
-                    pr_number: pr_num,
-                    model: model.as_deref(),
-                    conductor_bin: &conductor_bin,
-                    swarm_config: &swarm_config,
-                    app_token: token_resolution.token(),
-                }) {
-                    Ok(result) => {
-                        println!("\n{}", result.aggregated_comment);
-                        if result.all_required_approved {
-                            println!("All required reviewers approved — added to merge queue.");
-                        } else {
-                            let blocking: Vec<_> = result
-                                .reviewer_results
-                                .iter()
-                                .filter(|r| r.required && !r.approved)
-                                .map(|r| r.role_name.as_str())
-                                .collect();
-                            println!("Blocking reviewers: {}", blocking.join(", "));
-                        }
-                        println!(
-                            "Total: ${:.4}, {} turns, {:.1}s",
-                            result.total_cost,
-                            result.total_turns,
-                            result.total_duration_ms as f64 / 1000.0
+                    if !allow {
+                        anyhow::bail!(
+                            "Agent issue creation is disabled for this repo. \
+                         Enable it via `conductor repo allow-agent-issues <repo-slug>`."
                         );
                     }
-                    Err(e) => {
-                        eprintln!("Review swarm failed: {e}");
-                        std::process::exit(1);
+
+                    // Determine GitHub owner/repo from remote URL
+                    let (owner, repo_name) =
+                        github::parse_github_remote(&remote_url).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Cannot determine GitHub repo from remote URL: {remote_url}"
+                            )
+                        })?;
+
+                    // Create the GitHub issue
+                    let (source_id, url) =
+                        github::create_github_issue(&owner, &repo_name, &title, &body, &[])?;
+
+                    // Record in DB
+                    agent_mgr.record_created_issue(
+                        &run_id, &repo_id, "github", &source_id, &title, &url,
+                    )?;
+
+                    println!("Created issue #{source_id}: {url}");
+                }
+                AgentCommands::PostRun { repo, worktree } => {
+                    let conductor_bin = resolve_conductor_bin();
+
+                    match post_run::run_post_lifecycle(&PostRunInput {
+                        conn: &conn,
+                        config: &config,
+                        repo_slug: &repo,
+                        worktree_slug: &worktree,
+                        conductor_bin: &conductor_bin,
+                    }) {
+                        Ok(result) => {
+                            println!("{}", result.summary);
+                            if let Some(ref url) = result.pr_url {
+                                println!("PR: {url}");
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Post-run lifecycle failed: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                AgentCommands::Review {
+                    repo,
+                    worktree,
+                    pr_number,
+                    model,
+                    reviewer_timeout_secs,
+                } => {
+                    let repo_mgr = RepoManager::new(&conn, &config);
+                    let r = repo_mgr.get_by_slug(&repo)?;
+                    let wt_mgr = WorktreeManager::new(&conn, &config);
+                    let wt = wt_mgr.get_by_slug(&r.id, &worktree)?;
+
+                    // Auto-detect PR number from branch if not provided
+                    let pr_num = match pr_number {
+                        Some(n) => Some(n),
+                        None => github::detect_pr_number(&r.remote_url, &wt.branch),
+                    };
+
+                    let conductor_bin = resolve_conductor_bin();
+
+                    let swarm_config = ReviewSwarmConfig {
+                        reviewer_timeout: std::time::Duration::from_secs(reviewer_timeout_secs),
+                        ..Default::default()
+                    };
+
+                    println!(
+                        "Starting PR review swarm for {}/{} (branch: {})...",
+                        repo, worktree, wt.branch
+                    );
+                    if let Some(n) = pr_num {
+                        println!("PR #{n}");
+                    }
+
+                    let token_resolution = github_app::resolve_app_token(&config, "review");
+
+                    match pr_review::run_review_swarm(&ReviewSwarmInput {
+                        conn: &conn,
+                        config: &config,
+                        repo_id: &r.id,
+                        worktree_id: &wt.id,
+                        pr_branch: &wt.branch,
+                        pr_number: pr_num,
+                        model: model.as_deref(),
+                        conductor_bin: &conductor_bin,
+                        swarm_config: &swarm_config,
+                        app_token: token_resolution.token(),
+                    }) {
+                        Ok(result) => {
+                            println!("\n{}", result.aggregated_comment);
+                            if result.all_required_approved {
+                                println!("All required reviewers approved — added to merge queue.");
+                            } else {
+                                let blocking: Vec<_> = result
+                                    .reviewer_results
+                                    .iter()
+                                    .filter(|r| r.required && !r.approved)
+                                    .map(|r| r.role_name.as_str())
+                                    .collect();
+                                println!("Blocking reviewers: {}", blocking.join(", "));
+                            }
+                            println!(
+                                "Total: ${:.4}, {} turns, {:.1}s",
+                                result.total_cost,
+                                result.total_turns,
+                                result.total_duration_ms as f64 / 1000.0
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!("Review swarm failed: {e}");
+                            std::process::exit(1);
+                        }
                     }
                 }
             }
-        },
+        }
         Commands::Tickets { command } => match command {
             TicketCommands::Sync { repo } => {
                 let repo_mgr = RepoManager::new(&conn, &config);

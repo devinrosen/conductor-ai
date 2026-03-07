@@ -37,6 +37,9 @@ pub fn poll_data() -> Option<Action> {
     let ticket_syncer = TicketSyncer::new(&conn);
     let agent_mgr = AgentManager::new(&conn);
 
+    // Reap orphaned runs whose tmux windows have disappeared.
+    let _ = agent_mgr.reap_orphaned_runs();
+
     let repos = repo_mgr.list().ok()?;
     let worktrees = wt_mgr.list(None, true).ok()?;
     let tickets = ticket_syncer.list(None).ok()?;
