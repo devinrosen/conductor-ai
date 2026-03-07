@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_config;
 pub mod config;
 pub mod db;
 pub mod error;
@@ -15,4 +16,7 @@ pub mod repo;
 pub mod review_config;
 pub mod text_util;
 pub mod tickets;
+pub mod workflow;
+pub mod workflow_config;
+pub mod workflow_dsl;
 pub mod worktree;

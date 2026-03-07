@@ -1,0 +1,29 @@
+workflow ticket-to-pr {
+  meta {
+    description = "Full development cycle — plan from ticket, implement, push PR, then review and iterate until clean"
+    trigger     = "manual"
+  }
+
+  inputs {
+    ticket_id required
+  }
+
+  call plan
+
+  call implement {
+    retries = 2
+  }
+
+  call push-and-pr
+
+  call review
+
+  while review.has_review_issues {
+    max_iterations = 5
+    stuck_after    = 3
+    on_max_iter    = fail
+
+    call address-reviews
+    call review
+  }
+}

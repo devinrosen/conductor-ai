@@ -1,0 +1,12 @@
+workflow test-coverage {
+  meta {
+    description = "Validate PR has sufficient tests; write and commit missing ones"
+    trigger     = "manual"
+  }
+
+  call analyze-coverage
+
+  if analyze-coverage.has_missing_tests {
+    call write-tests
+  }
+}
