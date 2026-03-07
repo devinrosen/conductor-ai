@@ -18,7 +18,7 @@ use crate::agent_config;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::{
-    CallNode, GateNode, GateType, IfNode, OnMaxIter, OnTimeout, ParallelNode, WhileNode,
+    self, CallNode, GateNode, GateType, IfNode, OnMaxIter, OnTimeout, ParallelNode, WhileNode,
     WorkflowDef, WorkflowNode,
 };
 use crate::worktree::WorktreeManager;
@@ -703,6 +703,32 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     let wt_mgr = WorktreeManager::new(conn, config);
     let worktree = wt_mgr.get_by_id(input.worktree_id)?;
 
+    // Validate all referenced agents exist before starting
+    let mut all_agents = workflow_dsl::collect_agent_names(&workflow.body);
+    all_agents.extend(workflow_dsl::collect_agent_names(&workflow.always));
+    all_agents.sort();
+    all_agents.dedup();
+
+    let mut missing_agents = Vec::new();
+    for agent_name in &all_agents {
+        if agent_config::load_agent(
+            input.worktree_path,
+            input.repo_path,
+            agent_name,
+            Some(&workflow.name),
+        )
+        .is_err()
+        {
+            missing_agents.push(agent_name.as_str());
+        }
+    }
+    if !missing_agents.is_empty() {
+        return Err(ConductorError::Workflow(format!(
+            "Missing agent definitions: {}. Run 'conductor workflow validate' for details.",
+            missing_agents.join(", ")
+        )));
+    }
+
     // Snapshot the definition
     let snapshot_json = serde_json::to_string(workflow).map_err(|e| {
         ConductorError::Workflow(format!("Failed to serialize workflow definition: {e}"))
@@ -906,7 +932,8 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
             iteration as i64,
         )?;
 
-        let child_window = format!("{}-wf-{}", state.worktree_slug, node.agent);
+        let child_window =
+            sanitize_tmux_name(&format!("{}-wf-{}", state.worktree_slug, node.agent));
         let child_run = state.agent_mgr.create_child_run(
             &state.worktree_id,
             &prompt,
@@ -1096,7 +1123,12 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
             retries: 0,
             on_fail: None,
         };
-        let _ = execute_call(state, &on_fail_node, iteration);
+        if let Err(e) = execute_call(state, &on_fail_node, iteration) {
+            eprintln!(
+                "[workflow] on_fail agent '{}' also failed: {e}",
+                on_fail_agent
+            );
+        }
 
         // Clean up injected vars
         state.inputs.remove("failed_step");
@@ -1311,7 +1343,8 @@ fn execute_parallel(
         )?;
         state.wf_mgr.set_step_parallel_group(&step_id, &group_id)?;
 
-        let window_name = format!("{}-wf-{}-{}", state.worktree_slug, agent_name, i);
+        let window_name =
+            sanitize_tmux_name(&format!("{}-wf-{}-{}", state.worktree_slug, agent_name, i));
         let child_run = state.agent_mgr.create_child_run(
             &state.worktree_id,
             &prompt,
@@ -1366,7 +1399,7 @@ fn execute_parallel(
     let start = std::time::Instant::now();
     let mut completed: HashSet<usize> = HashSet::new();
     let mut successes = 0u32;
-    let mut _failures = 0u32;
+    let mut failures = 0u32;
     let mut merged_markers: Vec<String> = Vec::new();
 
     loop {
@@ -1378,11 +1411,16 @@ fn execute_parallel(
             // Cancel remaining
             for (i, child) in children.iter().enumerate() {
                 if !completed.contains(&i) {
-                    let _ = state.agent_mgr.update_run_cancelled(&child.child_run_id);
+                    if let Err(e) = state.agent_mgr.update_run_cancelled(&child.child_run_id) {
+                        eprintln!(
+                            "[workflow] parallel: failed to cancel run for '{}': {e}",
+                            child.agent_name
+                        );
+                    }
                     let _ = Command::new("tmux")
                         .args(["kill-window", "-t", &format!(":{}", child.window_name)])
                         .output();
-                    let _ = state.wf_mgr.update_step_status(
+                    if let Err(e) = state.wf_mgr.update_step_status(
                         &child.step_id,
                         WorkflowStepStatus::Failed,
                         Some(&child.child_run_id),
@@ -1390,8 +1428,13 @@ fn execute_parallel(
                         None,
                         None,
                         None,
-                    );
-                    _failures += 1;
+                    ) {
+                        eprintln!(
+                            "[workflow] parallel: failed to update timed-out step for '{}': {e}",
+                            child.agent_name
+                        );
+                    }
+                    failures += 1;
                     completed.insert(i);
                 }
             }
@@ -1423,11 +1466,11 @@ fn execute_parallel(
                             merged_markers.extend(output.markers.iter().cloned());
                             WorkflowStepStatus::Completed
                         } else {
-                            _failures += 1;
+                            failures += 1;
                             WorkflowStepStatus::Failed
                         };
 
-                        let _ = state.wf_mgr.update_step_status(
+                        if let Err(e) = state.wf_mgr.update_step_status(
                             &child.step_id,
                             step_status,
                             Some(&child.child_run_id),
@@ -1435,7 +1478,12 @@ fn execute_parallel(
                             Some(&output.context),
                             Some(&markers_json),
                             None,
-                        );
+                        ) {
+                            eprintln!(
+                                "[workflow] parallel: failed to update step status for '{}': {e}",
+                                child.agent_name
+                            );
+                        }
 
                         if let Some(cost) = run.cost_usd {
                             state.total_cost += cost;
@@ -1459,8 +1507,14 @@ fn execute_parallel(
                             eprintln!("[workflow] parallel: fail_fast — cancelling remaining");
                             for (j, other) in children.iter().enumerate() {
                                 if !completed.contains(&j) {
-                                    let _ =
-                                        state.agent_mgr.update_run_cancelled(&other.child_run_id);
+                                    if let Err(e) =
+                                        state.agent_mgr.update_run_cancelled(&other.child_run_id)
+                                    {
+                                        eprintln!(
+                                            "[workflow] parallel: failed to cancel run for '{}': {e}",
+                                            other.agent_name
+                                        );
+                                    }
                                     let _ = Command::new("tmux")
                                         .args([
                                             "kill-window",
@@ -1468,7 +1522,7 @@ fn execute_parallel(
                                             &format!(":{}", other.window_name),
                                         ])
                                         .output();
-                                    let _ = state.wf_mgr.update_step_status(
+                                    if let Err(e) = state.wf_mgr.update_step_status(
                                         &other.step_id,
                                         WorkflowStepStatus::Failed,
                                         Some(&other.child_run_id),
@@ -1476,9 +1530,14 @@ fn execute_parallel(
                                         None,
                                         None,
                                         None,
-                                    );
+                                    ) {
+                                        eprintln!(
+                                            "[workflow] parallel: failed to update step for '{}': {e}",
+                                            other.agent_name
+                                        );
+                                    }
                                     completed.insert(j);
-                                    _failures += 1;
+                                    failures += 1;
                                 }
                             }
                         }
@@ -1493,6 +1552,10 @@ fn execute_parallel(
 
     // Apply min_success policy
     let min_required = node.min_success.unwrap_or(children.len() as u32);
+    eprintln!(
+        "[workflow] parallel: {successes} succeeded, {failures} failed out of {} agents",
+        children.len()
+    );
     if successes < min_required {
         eprintln!(
             "[workflow] parallel: only {}/{} succeeded (min_success={})",
@@ -1611,134 +1674,54 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
             let start = std::time::Instant::now();
             loop {
                 if start.elapsed() > Duration::from_secs(node.timeout_secs) {
-                    eprintln!("[workflow] Gate '{}' timed out", node.name);
-                    match node.on_timeout {
-                        OnTimeout::Fail => {
-                            state.wf_mgr.update_step_status(
-                                &step_id,
-                                WorkflowStepStatus::Failed,
-                                None,
-                                Some("gate timed out"),
-                                None,
-                                None,
-                                None,
-                            )?;
-                            state.all_succeeded = false;
-                            state.wf_mgr.update_workflow_status(
-                                &state.workflow_run_id,
-                                WorkflowRunStatus::Running,
-                                None,
-                            )?;
-                            return Err(ConductorError::Workflow(format!(
-                                "Gate '{}' timed out",
-                                node.name
-                            )));
-                        }
-                        OnTimeout::Continue => {
-                            state.wf_mgr.update_step_status(
-                                &step_id,
-                                WorkflowStepStatus::Completed,
-                                None,
-                                Some("gate timed out (continuing)"),
-                                None,
-                                None,
-                                None,
-                            )?;
-                            state.wf_mgr.update_workflow_status(
-                                &state.workflow_run_id,
-                                WorkflowRunStatus::Running,
-                                None,
-                            )?;
-                            return Ok(());
-                        }
-                    }
+                    return handle_gate_timeout(state, &step_id, node);
                 }
 
-                // Check if gate has been approved/rejected
-                if let Some(step) = state.wf_mgr.find_waiting_gate(&state.workflow_run_id)? {
-                    if step.id == step_id {
-                        if step.gate_approved_at.is_some() {
-                            eprintln!("[workflow] Gate '{}' approved", node.name);
-                            if let Some(ref feedback) = step.gate_feedback {
-                                state.last_gate_feedback = Some(feedback.clone());
-                            }
-                            state.wf_mgr.update_workflow_status(
-                                &state.workflow_run_id,
-                                WorkflowRunStatus::Running,
-                                None,
-                            )?;
-                            return Ok(());
-                        }
-                        if step.status == WorkflowStepStatus::Failed {
-                            eprintln!("[workflow] Gate '{}' rejected", node.name);
-                            state.all_succeeded = false;
-                            state.wf_mgr.update_workflow_status(
-                                &state.workflow_run_id,
-                                WorkflowRunStatus::Running,
-                                None,
-                            )?;
-                            return Err(ConductorError::Workflow(format!(
-                                "Gate '{}' rejected",
-                                node.name
-                            )));
+                // Check if gate has been approved/rejected.
+                // Use find_waiting_gate as a fast path, fall back to reading the
+                // step directly when our gate is no longer the active waiting gate.
+                let resolved_step =
+                    if let Some(step) = state.wf_mgr.find_waiting_gate(&state.workflow_run_id)? {
+                        if step.id == step_id {
+                            Some(step)
+                        } else {
+                            // Another gate is now waiting — ours must have been resolved
+                            let steps = state.wf_mgr.get_workflow_steps(&state.workflow_run_id)?;
+                            steps.into_iter().find(|s| s.id == step_id)
                         }
                     } else {
-                        // Our gate is no longer waiting — it must have been approved/rejected
-                        // Re-read our step directly
+                        // No waiting gate — ours must have been resolved
                         let steps = state.wf_mgr.get_workflow_steps(&state.workflow_run_id)?;
-                        if let Some(our_step) = steps.iter().find(|s| s.id == step_id) {
-                            if our_step.status == WorkflowStepStatus::Completed {
-                                if let Some(ref feedback) = our_step.gate_feedback {
-                                    state.last_gate_feedback = Some(feedback.clone());
-                                }
-                                state.wf_mgr.update_workflow_status(
-                                    &state.workflow_run_id,
-                                    WorkflowRunStatus::Running,
-                                    None,
-                                )?;
-                                return Ok(());
-                            }
-                            if our_step.status == WorkflowStepStatus::Failed {
-                                state.all_succeeded = false;
-                                state.wf_mgr.update_workflow_status(
-                                    &state.workflow_run_id,
-                                    WorkflowRunStatus::Running,
-                                    None,
-                                )?;
-                                return Err(ConductorError::Workflow(format!(
-                                    "Gate '{}' rejected",
-                                    node.name
-                                )));
-                            }
+                        steps.into_iter().find(|s| s.id == step_id)
+                    };
+
+                if let Some(ref step) = resolved_step {
+                    if step.gate_approved_at.is_some()
+                        || step.status == WorkflowStepStatus::Completed
+                    {
+                        eprintln!("[workflow] Gate '{}' approved", node.name);
+                        if let Some(ref feedback) = step.gate_feedback {
+                            state.last_gate_feedback = Some(feedback.clone());
                         }
+                        state.wf_mgr.update_workflow_status(
+                            &state.workflow_run_id,
+                            WorkflowRunStatus::Running,
+                            None,
+                        )?;
+                        return Ok(());
                     }
-                } else {
-                    // No waiting gate found — our gate must have been resolved
-                    let steps = state.wf_mgr.get_workflow_steps(&state.workflow_run_id)?;
-                    if let Some(our_step) = steps.iter().find(|s| s.id == step_id) {
-                        if our_step.status == WorkflowStepStatus::Completed {
-                            if let Some(ref feedback) = our_step.gate_feedback {
-                                state.last_gate_feedback = Some(feedback.clone());
-                            }
-                            state.wf_mgr.update_workflow_status(
-                                &state.workflow_run_id,
-                                WorkflowRunStatus::Running,
-                                None,
-                            )?;
-                            return Ok(());
-                        }
-                        if our_step.status == WorkflowStepStatus::Failed {
-                            state.all_succeeded = false;
-                            state.wf_mgr.update_workflow_status(
-                                &state.workflow_run_id,
-                                WorkflowRunStatus::Running,
-                                None,
-                            )?;
-                            return Err(ConductorError::Workflow(format!(
-                                "Gate '{}' rejected",
-                                node.name
-                            )));
-                        }
+                    if step.status == WorkflowStepStatus::Failed {
+                        eprintln!("[workflow] Gate '{}' rejected", node.name);
+                        state.all_succeeded = false;
+                        state.wf_mgr.update_workflow_status(
+                            &state.workflow_run_id,
+                            WorkflowRunStatus::Running,
+                            None,
+                        )?;
+                        return Err(ConductorError::Workflow(format!(
+                            "Gate '{}' rejected",
+                            node.name
+                        )));
                     }
                 }
 
@@ -1992,6 +1975,18 @@ fn poll_child_completion(
 
         thread::sleep(poll_interval);
     }
+}
+
+/// Sanitize a string for use as a tmux window name.
+/// Removes characters that tmux treats specially (`.`, `:`, `\`).
+fn sanitize_tmux_name(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '.' | ':' | '\\' | '\'' | '"' => '-',
+            c if c.is_ascii_control() => '-',
+            _ => c,
+        })
+        .collect()
 }
 
 /// Spawn a child agent in a new tmux window.

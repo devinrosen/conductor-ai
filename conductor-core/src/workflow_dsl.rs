@@ -768,12 +768,14 @@ fn parse_duration_str(s: &str) -> std::result::Result<u64, String> {
         let n: u64 = hours
             .parse()
             .map_err(|e| format!("Invalid duration '{s}': {e}"))?;
-        Ok(n * 3600)
+        n.checked_mul(3600)
+            .ok_or_else(|| format!("Duration overflow: '{s}' exceeds u64 range"))
     } else if let Some(mins) = s.strip_suffix('m') {
         let n: u64 = mins
             .parse()
             .map_err(|e| format!("Invalid duration '{s}': {e}"))?;
-        Ok(n * 60)
+        n.checked_mul(60)
+            .ok_or_else(|| format!("Duration overflow: '{s}' exceeds u64 range"))
     } else if let Some(secs) = s.strip_suffix('s') {
         secs.parse()
             .map_err(|e| format!("Invalid duration '{s}': {e}"))

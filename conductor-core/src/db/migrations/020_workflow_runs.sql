@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     status          TEXT NOT NULL DEFAULT 'pending'
                     CHECK (status IN ('pending','running','waiting','completed','failed','cancelled')),
     dry_run         INTEGER NOT NULL DEFAULT 0,
-    trigger         TEXT NOT NULL DEFAULT 'manual',
+    trigger         TEXT NOT NULL DEFAULT 'manual'
+                    CHECK (trigger IN ('manual','pr','scheduled')),
     started_at      TEXT NOT NULL,
     ended_at        TEXT,
     result_summary  TEXT
