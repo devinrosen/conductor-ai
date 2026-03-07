@@ -126,16 +126,52 @@ pub fn get_app_token(app_config: &GitHubAppConfig) -> Result<String> {
     exchange_installation_token(app_config, &jwt)
 }
 
+/// Result of attempting to resolve a GitHub App installation token.
+///
+/// Makes the authentication identity explicit so callers can distinguish
+/// between a real App token and a fallback to the `gh` CLI user identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TokenResolution {
+    /// Successfully obtained a GitHub App installation token.
+    AppToken(String),
+    /// No GitHub App is configured; falling back to `gh` CLI user identity.
+    NotConfigured,
+    /// GitHub App is configured but token acquisition failed; falling back
+    /// to `gh` CLI user identity.
+    Fallback { reason: String },
+}
+
+impl TokenResolution {
+    /// Returns the token string if an App token was obtained, `None` otherwise.
+    pub fn token(&self) -> Option<&str> {
+        match self {
+            TokenResolution::AppToken(t) => Some(t),
+            TokenResolution::NotConfigured | TokenResolution::Fallback { .. } => None,
+        }
+    }
+
+    /// Returns `true` when using the `gh` CLI identity due to a token failure.
+    pub fn is_fallback(&self) -> bool {
+        matches!(self, TokenResolution::Fallback { .. })
+    }
+}
+
 /// Attempt to obtain a GitHub App installation token from the config.
-/// Returns `None` (graceful fallback) if the app is not configured or
-/// token generation fails.
-pub fn resolve_app_token(config: &Config, context: &str) -> Option<String> {
-    let app_config = config.github.app.as_ref()?;
+///
+/// Returns a [`TokenResolution`] that tells callers exactly which identity
+/// is being used and why, instead of silently falling back to `None`.
+pub fn resolve_app_token(config: &Config, context: &str) -> TokenResolution {
+    let app_config = match config.github.app.as_ref() {
+        Some(c) => c,
+        None => return TokenResolution::NotConfigured,
+    };
     match get_app_token(app_config) {
-        Ok(token) => Some(token),
+        Ok(token) => TokenResolution::AppToken(token),
         Err(e) => {
             eprintln!("[{context}] GitHub App token failed, falling back to gh user: {e}");
-            None
+            TokenResolution::Fallback {
+                reason: e.to_string(),
+            }
         }
     }
 }
@@ -179,5 +215,54 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("failed to read"));
+    }
+
+    #[test]
+    fn test_token_resolution_token_returns_value_for_app_token() {
+        let res = TokenResolution::AppToken("ghp_abc123".to_string());
+        assert_eq!(res.token(), Some("ghp_abc123"));
+        assert!(!res.is_fallback());
+    }
+
+    #[test]
+    fn test_token_resolution_token_returns_none_for_not_configured() {
+        let res = TokenResolution::NotConfigured;
+        assert_eq!(res.token(), None);
+        assert!(!res.is_fallback());
+    }
+
+    #[test]
+    fn test_token_resolution_token_returns_none_for_fallback() {
+        let res = TokenResolution::Fallback {
+            reason: "API unreachable".to_string(),
+        };
+        assert_eq!(res.token(), None);
+        assert!(res.is_fallback());
+    }
+
+    #[test]
+    fn test_resolve_app_token_not_configured() {
+        let config = Config::default();
+        let res = resolve_app_token(&config, "test");
+        assert_eq!(res, TokenResolution::NotConfigured);
+    }
+
+    #[test]
+    fn test_resolve_app_token_bad_key_returns_fallback() {
+        let mut config = Config::default();
+        config.github.app = Some(GitHubAppConfig {
+            app_id: 12345,
+            client_id: None,
+            private_key_path: "/nonexistent/key.pem".to_string(),
+            installation_id: 67890,
+        });
+        let res = resolve_app_token(&config, "test");
+        assert!(res.is_fallback());
+        assert_eq!(res.token(), None);
+        if let TokenResolution::Fallback { reason } = &res {
+            assert!(reason.contains("failed to read"));
+        } else {
+            panic!("expected Fallback variant");
+        }
     }
 }

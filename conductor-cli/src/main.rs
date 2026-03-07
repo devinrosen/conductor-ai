@@ -826,7 +826,7 @@ fn main() -> Result<()> {
                     println!("PR #{n}");
                 }
 
-                let app_token = github_app::resolve_app_token(&config, "review");
+                let token_resolution = github_app::resolve_app_token(&config, "review");
 
                 match pr_review::run_review_swarm(&ReviewSwarmInput {
                     conn: &conn,
@@ -838,7 +838,7 @@ fn main() -> Result<()> {
                     model: model.as_deref(),
                     conductor_bin: &conductor_bin,
                     swarm_config: &swarm_config,
-                    app_token: app_token.as_deref(),
+                    app_token: token_resolution.token(),
                 }) {
                     Ok(result) => {
                         println!("\n{}", result.aggregated_comment);
