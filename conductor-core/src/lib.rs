@@ -19,7 +19,7 @@ pub mod text_util;
 pub mod tickets;
 pub mod workflow;
 pub mod workflow_config;
-pub mod workflow_dsl;
+pub(crate) mod workflow_dsl;
 pub mod worktree;
 
 #[cfg(test)]
