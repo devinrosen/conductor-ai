@@ -46,6 +46,12 @@ pub enum ConductorError {
 
     #[error("merge queue entry not found: {id}")]
     MergeQueueEntryNotFound { id: String },
+
+    #[error("workflow error: {0}")]
+    Workflow(String),
+
+    #[error("agent config error: {0}")]
+    AgentConfig(String),
 }
 
 pub type Result<T> = std::result::Result<T, ConductorError>;

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::{ConductorError, Result};
+use crate::text_util::parse_frontmatter;
 
 const REVIEWER_HINT: &str = "See .conductor/reviewers/ in conductor-ai for reference roles.";
 
@@ -101,27 +102,6 @@ fn parse_reviewer_file(path: &Path) -> Result<ReviewerRole> {
         system_prompt: body.trim().to_string(),
         required: fm.required,
     })
-}
-
-/// Split a file's content into (frontmatter_yaml, body).
-///
-/// Returns `None` if the content doesn't start with `---` or has no closing `---`.
-fn parse_frontmatter(content: &str) -> Option<(&str, &str)> {
-    let trimmed = content.trim_start();
-    if !trimmed.starts_with("---") {
-        return None;
-    }
-    // Skip the opening `---` line
-    let after_open = &trimmed[3..];
-    let after_open = after_open.strip_prefix('\n').unwrap_or(after_open);
-
-    // Find the closing `---`
-    let close_pos = after_open.find("\n---")?;
-    let yaml = &after_open[..close_pos];
-    let rest = &after_open[close_pos + 4..]; // skip "\n---"
-                                             // Skip the newline after closing ---
-    let body = rest.strip_prefix('\n').unwrap_or(rest);
-    Some((yaml, body))
 }
 
 /// Load review settings from `.conductor/review.toml` in the given repo path.

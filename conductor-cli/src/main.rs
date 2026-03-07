@@ -19,6 +19,9 @@ use conductor_core::post_run::{self, PostRunInput};
 use conductor_core::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
+use conductor_core::workflow::{WorkflowExecConfig, WorkflowManager};
+use conductor_core::workflow_config;
+use conductor_core::workflow_dsl;
 use conductor_core::worktree::WorktreeManager;
 
 /// Environment variable name used to pass the current agent run ID to subprocesses.
@@ -72,6 +75,11 @@ enum Commands {
     MergeQueue {
         #[command(subcommand)]
         command: MergeQueueCommands,
+    },
+    /// Multi-step workflow engine
+    Workflow {
+        #[command(subcommand)]
+        command: WorkflowCommands,
     },
     /// Approve and merge a PR that is awaiting manual approval
     Approve {
@@ -209,6 +217,80 @@ enum AgentCommands {
         /// Reviewer timeout in seconds (default: 900 = 15 min)
         #[arg(long, default_value = "900")]
         reviewer_timeout_secs: u64,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkflowCommands {
+    /// List available workflow definitions for a repo/worktree
+    List {
+        /// Repo slug
+        repo: String,
+        /// Worktree slug
+        worktree: String,
+    },
+    /// Run a workflow
+    Run {
+        /// Repo slug
+        repo: String,
+        /// Worktree slug
+        worktree: String,
+        /// Workflow name (must match a .conductor/workflows/<name>.wf file)
+        name: String,
+        /// Model to use for agent steps
+        #[arg(long)]
+        model: Option<String>,
+        /// Dry-run mode: show what would be committed without doing it
+        #[arg(long)]
+        dry_run: bool,
+        /// Continue past step failures
+        #[arg(long)]
+        no_fail_fast: bool,
+        /// Step timeout in seconds (default: 1800 = 30 min)
+        #[arg(long, default_value = "1800")]
+        step_timeout_secs: u64,
+        /// Input variables (key=value pairs)
+        #[arg(long = "input", value_name = "KEY=VALUE")]
+        inputs: Vec<String>,
+    },
+    /// Show details of a workflow run
+    Show {
+        /// Workflow run ID
+        id: String,
+    },
+    /// Validate a workflow definition (check all agents exist)
+    Validate {
+        /// Repo slug
+        repo: String,
+        /// Worktree slug
+        worktree: String,
+        /// Workflow name
+        name: String,
+    },
+    /// Cancel a running or waiting workflow
+    Cancel {
+        /// Workflow run ID
+        id: String,
+    },
+    /// Approve a pending human gate
+    GateApprove {
+        /// Workflow run ID
+        #[arg(value_name = "RUN_ID")]
+        run_id: String,
+    },
+    /// Reject a pending human gate (fails the workflow)
+    GateReject {
+        /// Workflow run ID
+        #[arg(value_name = "RUN_ID")]
+        run_id: String,
+    },
+    /// Provide feedback and approve a pending human gate
+    GateFeedback {
+        /// Workflow run ID
+        #[arg(value_name = "RUN_ID")]
+        run_id: String,
+        /// Feedback text
+        feedback: String,
     },
 }
 
@@ -1102,6 +1184,340 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Commands::Workflow { command } => match command {
+            WorkflowCommands::List { repo, worktree } => {
+                let repo_mgr = RepoManager::new(&conn, &config);
+                let r = repo_mgr.get_by_slug(&repo)?;
+                let wt_mgr = WorktreeManager::new(&conn, &config);
+                let wt = wt_mgr.get_by_slug(&r.id, &worktree)?;
+
+                // Try new .wf files first, fall back to legacy .md
+                let wf_defs = workflow_dsl::load_workflow_defs(&wt.path, &r.local_path)?;
+                if !wf_defs.is_empty() {
+                    for def in &wf_defs {
+                        let node_count = workflow_dsl::count_nodes(&def.body)
+                            + workflow_dsl::count_nodes(&def.always);
+                        println!(
+                            "  {:<20} {:<40} [{}, {} nodes]",
+                            def.name, def.description, def.trigger, node_count
+                        );
+                    }
+                } else {
+                    let defs = workflow_config::load_workflow_defs(&wt.path, &r.local_path)?;
+                    if defs.is_empty() {
+                        println!(
+                            "No workflows found. Create .conductor/workflows/<name>.wf in your repo."
+                        );
+                    } else {
+                        for def in &defs {
+                            println!(
+                                "  {:<20} {:<40} [{}, {} steps]",
+                                def.name,
+                                def.description,
+                                def.trigger,
+                                def.steps.len()
+                            );
+                        }
+                    }
+                }
+            }
+            WorkflowCommands::Run {
+                repo,
+                worktree,
+                name,
+                model,
+                dry_run,
+                no_fail_fast,
+                step_timeout_secs,
+                inputs,
+            } => {
+                let repo_mgr = RepoManager::new(&conn, &config);
+                let r = repo_mgr.get_by_slug(&repo)?;
+                let wt_mgr = WorktreeManager::new(&conn, &config);
+                let wt = wt_mgr.get_by_slug(&r.id, &worktree)?;
+
+                let workflow = workflow_dsl::load_workflow_by_name(&wt.path, &r.local_path, &name)?;
+
+                // Parse input key=value pairs
+                let mut input_map = std::collections::HashMap::new();
+                for input in &inputs {
+                    if let Some((key, value)) = input.split_once('=') {
+                        input_map.insert(key.to_string(), value.to_string());
+                    } else {
+                        anyhow::bail!("Invalid input format: '{}'. Use key=value.", input);
+                    }
+                }
+
+                // Validate required inputs
+                for input_decl in &workflow.inputs {
+                    if input_decl.required && !input_map.contains_key(&input_decl.name) {
+                        anyhow::bail!(
+                            "Missing required input: '{}'. Use --input {}=<value>.",
+                            input_decl.name,
+                            input_decl.name
+                        );
+                    }
+                    // Set defaults for missing optional inputs
+                    if let Some(ref default) = input_decl.default {
+                        input_map
+                            .entry(input_decl.name.clone())
+                            .or_insert_with(|| default.clone());
+                    }
+                }
+
+                if dry_run {
+                    println!("DRY RUN: Actor steps will show intended changes without committing.");
+                }
+
+                let conductor_bin = resolve_conductor_bin();
+
+                let exec_config = WorkflowExecConfig {
+                    step_timeout: std::time::Duration::from_secs(step_timeout_secs),
+                    fail_fast: !no_fail_fast,
+                    dry_run,
+                    ..Default::default()
+                };
+
+                let node_count = workflow_dsl::count_nodes(&workflow.body)
+                    + workflow_dsl::count_nodes(&workflow.always);
+                println!(
+                    "Running workflow '{}' ({} nodes) on {}/{}...",
+                    workflow.name, node_count, repo, worktree
+                );
+
+                match conductor_core::workflow::execute_workflow(
+                    &conductor_core::workflow::WorkflowExecInput {
+                        conn: &conn,
+                        config: &config,
+                        workflow: &workflow,
+                        worktree_id: &wt.id,
+                        worktree_path: &wt.path,
+                        repo_path: &r.local_path,
+                        model: model.as_deref(),
+                        conductor_bin: &conductor_bin,
+                        exec_config: &exec_config,
+                        inputs: input_map,
+                    },
+                ) {
+                    Ok(result) => {
+                        println!(
+                            "\nTotal: ${:.4}, {} turns, {:.1}s",
+                            result.total_cost,
+                            result.total_turns,
+                            result.total_duration_ms as f64 / 1000.0
+                        );
+                        if result.all_succeeded {
+                            println!("Workflow completed successfully.");
+                        } else {
+                            eprintln!("Workflow finished with failures.");
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Workflow execution failed: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            WorkflowCommands::Show { id } => {
+                let wf_mgr = WorkflowManager::new(&conn);
+                match wf_mgr.get_workflow_run(&id)? {
+                    Some(run) => {
+                        println!("Workflow Run: {}", run.id);
+                        println!("  Name:    {}", run.workflow_name);
+                        println!("  Status:  {}", run.status);
+                        println!("  Trigger: {}", run.trigger);
+                        println!("  Dry run: {}", run.dry_run);
+                        println!("  Started: {}", run.started_at);
+                        if let Some(ref ended) = run.ended_at {
+                            println!("  Ended:   {ended}");
+                        }
+                        if let Some(ref summary) = run.result_summary {
+                            println!("\n{summary}");
+                        }
+
+                        let steps = wf_mgr.get_workflow_steps(&run.id)?;
+                        if !steps.is_empty() {
+                            println!("\nSteps:");
+                            for step in &steps {
+                                let marker = match step.status {
+                                    conductor_core::workflow::WorkflowStepStatus::Completed => "ok",
+                                    conductor_core::workflow::WorkflowStepStatus::Failed => "FAIL",
+                                    conductor_core::workflow::WorkflowStepStatus::Skipped => "skip",
+                                    conductor_core::workflow::WorkflowStepStatus::Running => "...",
+                                    conductor_core::workflow::WorkflowStepStatus::Pending => "-",
+                                    conductor_core::workflow::WorkflowStepStatus::Waiting => "wait",
+                                };
+                                let commit_flag = if step.can_commit { " [commit]" } else { "" };
+                                let iter_label = if step.iteration > 0 {
+                                    format!(" iter={}", step.iteration)
+                                } else {
+                                    String::new()
+                                };
+                                println!(
+                                    "  [{marker}] {} ({}{}){iter_label}",
+                                    step.step_name, step.role, commit_flag
+                                );
+                                if let Some(ref gate_type) = step.gate_type {
+                                    print!("        gate: {gate_type}");
+                                    if let Some(ref approved_at) = step.gate_approved_at {
+                                        print!(" (approved {approved_at})");
+                                    }
+                                    println!();
+                                }
+                                if step.retry_count > 0 {
+                                    println!("        retries: {}", step.retry_count);
+                                }
+                                if let Some(ref markers) = step.markers_out {
+                                    println!("        markers: {markers}");
+                                }
+                                if let Some(ref ctx) = step.context_out {
+                                    if !ctx.is_empty() {
+                                        println!("        context: {ctx}");
+                                    }
+                                }
+                                if let Some(ref child) = step.child_run_id {
+                                    println!("        child run: {child}");
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        println!("Workflow run not found: {id}");
+                    }
+                }
+            }
+            WorkflowCommands::Validate {
+                repo,
+                worktree,
+                name,
+            } => {
+                let repo_mgr = RepoManager::new(&conn, &config);
+                let r = repo_mgr.get_by_slug(&repo)?;
+                let wt_mgr = WorktreeManager::new(&conn, &config);
+                let wt = wt_mgr.get_by_slug(&r.id, &worktree)?;
+
+                let workflow = workflow_dsl::load_workflow_by_name(&wt.path, &r.local_path, &name)?;
+
+                let mut all_names = workflow_dsl::collect_agent_names(&workflow.body);
+                all_names.extend(workflow_dsl::collect_agent_names(&workflow.always));
+
+                // Deduplicate
+                all_names.sort();
+                all_names.dedup();
+
+                let mut missing = Vec::new();
+                for agent_name in &all_names {
+                    if conductor_core::agent_config::load_agent(
+                        &wt.path,
+                        &r.local_path,
+                        agent_name,
+                        Some(&name),
+                    )
+                    .is_err()
+                    {
+                        missing.push(agent_name.as_str());
+                    }
+                }
+
+                println!("Workflow: {}", workflow.name);
+                println!("  Description: {}", workflow.description);
+                println!("  Trigger: {}", workflow.trigger);
+                let node_count = workflow_dsl::count_nodes(&workflow.body)
+                    + workflow_dsl::count_nodes(&workflow.always);
+                println!("  Nodes: {node_count}");
+                println!("  Agents referenced: {}", all_names.len());
+
+                if missing.is_empty() {
+                    println!("  All agents found.");
+                } else {
+                    println!(
+                        "\n  MISSING agents ({}/{}):",
+                        missing.len(),
+                        all_names.len()
+                    );
+                    for name in &missing {
+                        println!("    - {name}");
+                    }
+                    std::process::exit(1);
+                }
+            }
+            WorkflowCommands::Cancel { id } => {
+                let wf_mgr = WorkflowManager::new(&conn);
+                match wf_mgr.get_workflow_run(&id)? {
+                    Some(run) => {
+                        if matches!(
+                            run.status,
+                            conductor_core::workflow::WorkflowRunStatus::Completed
+                                | conductor_core::workflow::WorkflowRunStatus::Failed
+                                | conductor_core::workflow::WorkflowRunStatus::Cancelled
+                        ) {
+                            println!(
+                                "Workflow run {} is already in terminal state: {}",
+                                id, run.status
+                            );
+                        } else {
+                            wf_mgr.update_workflow_status(
+                                &id,
+                                conductor_core::workflow::WorkflowRunStatus::Cancelled,
+                                Some("Cancelled by user"),
+                            )?;
+                            println!("Workflow run {} cancelled.", id);
+                        }
+                    }
+                    None => {
+                        println!("Workflow run not found: {id}");
+                    }
+                }
+            }
+            WorkflowCommands::GateApprove { run_id } => {
+                let wf_mgr = WorkflowManager::new(&conn);
+                match wf_mgr.find_waiting_gate(&run_id)? {
+                    Some(step) => {
+                        let user = std::env::var("USER").unwrap_or_else(|_| "cli".to_string());
+                        wf_mgr.approve_gate(&step.id, &user, None)?;
+                        println!("Gate '{}' approved by {user}.", step.step_name);
+                    }
+                    None => {
+                        println!("No waiting gate found for workflow run: {run_id}");
+                    }
+                }
+            }
+            WorkflowCommands::GateReject { run_id } => {
+                let wf_mgr = WorkflowManager::new(&conn);
+                match wf_mgr.find_waiting_gate(&run_id)? {
+                    Some(step) => {
+                        let user = std::env::var("USER").unwrap_or_else(|_| "cli".to_string());
+                        wf_mgr.reject_gate(&step.id, &user)?;
+                        wf_mgr.update_workflow_status(
+                            &run_id,
+                            conductor_core::workflow::WorkflowRunStatus::Failed,
+                            Some(&format!("Gate '{}' rejected by {user}", step.step_name)),
+                        )?;
+                        println!("Gate '{}' rejected by {user}.", step.step_name);
+                    }
+                    None => {
+                        println!("No waiting gate found for workflow run: {run_id}");
+                    }
+                }
+            }
+            WorkflowCommands::GateFeedback { run_id, feedback } => {
+                let wf_mgr = WorkflowManager::new(&conn);
+                match wf_mgr.find_waiting_gate(&run_id)? {
+                    Some(step) => {
+                        let user = std::env::var("USER").unwrap_or_else(|_| "cli".to_string());
+                        wf_mgr.approve_gate(&step.id, &user, Some(&feedback))?;
+                        println!(
+                            "Gate '{}' approved with feedback by {user}.",
+                            step.step_name
+                        );
+                    }
+                    None => {
+                        println!("No waiting gate found for workflow run: {run_id}");
+                    }
+                }
+            }
+        },
         Commands::Approve { repo, worktree } => {
             let conductor_bin = resolve_conductor_bin();
 

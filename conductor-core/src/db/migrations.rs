@@ -277,5 +277,93 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 19)?;
     }
 
+    // Migration 020: workflow_runs and workflow_run_steps tables.
+    let has_workflow_runs: bool = conn.prepare("SELECT id FROM workflow_runs LIMIT 0").is_ok();
+    if !has_workflow_runs {
+        conn.execute_batch(include_str!("migrations/020_workflow_runs.sql"))?;
+    }
+    if version < 20 {
+        bump_version(conn, 20)?;
+    }
+
+    // Migration 021: workflow redesign — add structured output, iteration,
+    // parallel, retry, gate, and snapshot columns.
+    let has_definition_snapshot: bool = conn
+        .prepare("SELECT definition_snapshot FROM workflow_runs LIMIT 0")
+        .is_ok();
+    if !has_definition_snapshot {
+        conn.execute_batch(include_str!("migrations/021_workflow_redesign.sql"))?;
+    }
+    if version < 21 {
+        // Recreate tables to update CHECK constraints (add 'waiting' status).
+        conn.pragma_update(None, "foreign_keys", "off")?;
+
+        conn.execute_batch(
+            "CREATE TABLE workflow_runs_new (
+                id                  TEXT PRIMARY KEY,
+                workflow_name       TEXT NOT NULL,
+                worktree_id         TEXT NOT NULL REFERENCES worktrees(id) ON DELETE CASCADE,
+                parent_run_id       TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+                status              TEXT NOT NULL DEFAULT 'pending'
+                                    CHECK (status IN ('pending','running','completed','failed','cancelled','waiting')),
+                dry_run             INTEGER NOT NULL DEFAULT 0,
+                trigger             TEXT NOT NULL DEFAULT 'manual',
+                started_at          TEXT NOT NULL,
+                ended_at            TEXT,
+                result_summary      TEXT,
+                definition_snapshot TEXT
+            );
+            INSERT INTO workflow_runs_new SELECT id, workflow_name, worktree_id, parent_run_id,
+                status, dry_run, trigger, started_at, ended_at, result_summary, definition_snapshot
+                FROM workflow_runs;
+            DROP TABLE workflow_runs;
+            ALTER TABLE workflow_runs_new RENAME TO workflow_runs;
+            CREATE INDEX IF NOT EXISTS idx_workflow_runs_worktree ON workflow_runs(worktree_id);
+            CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent ON workflow_runs(parent_run_id);",
+        )?;
+
+        conn.execute_batch(
+            "CREATE TABLE workflow_run_steps_new (
+                id                TEXT PRIMARY KEY,
+                workflow_run_id   TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+                step_name         TEXT NOT NULL,
+                role              TEXT NOT NULL CHECK (role IN ('actor','reviewer','gate')),
+                can_commit        INTEGER NOT NULL DEFAULT 0,
+                condition_expr    TEXT,
+                status            TEXT NOT NULL DEFAULT 'pending'
+                                  CHECK (status IN ('pending','running','completed','failed','skipped','waiting')),
+                child_run_id      TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+                position          INTEGER NOT NULL,
+                started_at        TEXT,
+                ended_at          TEXT,
+                result_text       TEXT,
+                condition_met     INTEGER,
+                iteration         INTEGER NOT NULL DEFAULT 0,
+                parallel_group_id TEXT,
+                context_out       TEXT,
+                markers_out       TEXT,
+                retry_count       INTEGER NOT NULL DEFAULT 0,
+                gate_type         TEXT,
+                gate_prompt       TEXT,
+                gate_timeout      TEXT,
+                gate_approved_by  TEXT,
+                gate_approved_at  TEXT,
+                gate_feedback     TEXT
+            );
+            INSERT INTO workflow_run_steps_new SELECT id, workflow_run_id, step_name, role,
+                can_commit, condition_expr, status, child_run_id, position, started_at, ended_at,
+                result_text, condition_met, iteration, parallel_group_id, context_out, markers_out,
+                retry_count, gate_type, gate_prompt, gate_timeout, gate_approved_by,
+                gate_approved_at, gate_feedback
+                FROM workflow_run_steps;
+            DROP TABLE workflow_run_steps;
+            ALTER TABLE workflow_run_steps_new RENAME TO workflow_run_steps;
+            CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run ON workflow_run_steps(workflow_run_id);",
+        )?;
+
+        conn.pragma_update(None, "foreign_keys", "on")?;
+        bump_version(conn, 21)?;
+    }
+
     Ok(())
 }

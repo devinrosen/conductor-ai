@@ -5,12 +5,12 @@
 //! updates plan step status, and aggregates results back to the parent.
 
 use std::process::Command;
-use std::thread;
 use std::time::Duration;
 
 use rusqlite::Connection;
 
 use crate::agent::{AgentManager, AgentRun, AgentRunStatus, StepStatus};
+use crate::agent_runtime;
 use crate::config::Config;
 use crate::error::Result;
 use crate::worktree::WorktreeManager;
@@ -144,7 +144,7 @@ pub fn orchestrate_run(
         );
 
         // Spawn the child agent in a tmux window
-        let spawn_result = spawn_child_tmux(
+        let spawn_result = agent_runtime::spawn_child_tmux(
             conductor_bin,
             &child_run.id,
             worktree_path,
@@ -180,7 +180,7 @@ pub fn orchestrate_run(
         }
 
         // Poll for child completion
-        let result = poll_child_completion(
+        let result = agent_runtime::poll_child_completion(
             conn,
             &child_run.id,
             orch_config.poll_interval,
@@ -327,96 +327,6 @@ fn build_child_prompt(
         step_num = step_index + 1,
         parent_prompt = parent_run.prompt,
     )
-}
-
-/// Poll the database for a child run to reach a terminal status.
-fn poll_child_completion(
-    conn: &Connection,
-    child_run_id: &str,
-    poll_interval: Duration,
-    timeout: Duration,
-) -> std::result::Result<AgentRun, String> {
-    let start = std::time::Instant::now();
-
-    loop {
-        if start.elapsed() > timeout {
-            return Err(format!(
-                "Child run {} timed out after {:.0}s",
-                child_run_id,
-                timeout.as_secs_f64()
-            ));
-        }
-
-        let mgr = AgentManager::new(conn);
-        match mgr.get_run(child_run_id) {
-            Ok(Some(run)) => {
-                match run.status {
-                    AgentRunStatus::Completed
-                    | AgentRunStatus::Failed
-                    | AgentRunStatus::Cancelled => return Ok(run),
-                    AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback => {
-                        // Still running — wait and poll again
-                    }
-                }
-            }
-            Ok(None) => {
-                return Err(format!("Child run {child_run_id} not found in database"));
-            }
-            Err(e) => {
-                return Err(format!("Database error polling child run: {e}"));
-            }
-        }
-
-        thread::sleep(poll_interval);
-    }
-}
-
-/// Spawn a child agent in a new tmux window.
-fn spawn_child_tmux(
-    conductor_bin: &str,
-    run_id: &str,
-    worktree_path: &str,
-    prompt: &str,
-    model: Option<&str>,
-    window_name: &str,
-) -> std::result::Result<(), String> {
-    let mut args = vec![
-        "agent".to_string(),
-        "run".to_string(),
-        "--run-id".to_string(),
-        run_id.to_string(),
-        "--worktree-path".to_string(),
-        worktree_path.to_string(),
-        "--prompt".to_string(),
-        prompt.to_string(),
-    ];
-
-    if let Some(m) = model {
-        args.push("--model".to_string());
-        args.push(m.to_string());
-    }
-
-    let mut tmux_args = vec![
-        "new-window".to_string(),
-        "-d".to_string(),
-        "-n".to_string(),
-        window_name.to_string(),
-        "--".to_string(),
-        conductor_bin.to_string(),
-    ];
-    tmux_args.extend(args);
-
-    let result = Command::new("tmux")
-        .args(&tmux_args)
-        .output()
-        .map_err(|e| format!("Failed to spawn tmux: {e}"))?;
-
-    if result.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        Err(format!("tmux failed: {stderr}"))
-    }
 }
 
 /// Build a human-readable summary of the orchestration result.
@@ -660,7 +570,7 @@ mod tests {
         mgr.update_run_completed(&run.id, None, Some("done"), Some(0.05), Some(3), Some(5000))
             .unwrap();
 
-        let result = poll_child_completion(
+        let result = agent_runtime::poll_child_completion(
             &conn,
             &run.id,
             Duration::from_millis(10),
@@ -680,7 +590,7 @@ mod tests {
         let run = mgr.create_run("w1", "test", None, None).unwrap();
         mgr.update_run_failed(&run.id, "something broke").unwrap();
 
-        let result = poll_child_completion(
+        let result = agent_runtime::poll_child_completion(
             &conn,
             &run.id,
             Duration::from_millis(10),
@@ -699,7 +609,7 @@ mod tests {
         let run = mgr.create_run("w1", "test", None, None).unwrap();
         mgr.update_run_cancelled(&run.id).unwrap();
 
-        let result = poll_child_completion(
+        let result = agent_runtime::poll_child_completion(
             &conn,
             &run.id,
             Duration::from_millis(10),
@@ -714,7 +624,7 @@ mod tests {
     fn test_poll_child_completion_not_found() {
         let conn = setup_db();
 
-        let result = poll_child_completion(
+        let result = agent_runtime::poll_child_completion(
             &conn,
             "nonexistent-id",
             Duration::from_millis(10),
@@ -733,7 +643,7 @@ mod tests {
         let run = mgr.create_run("w1", "test", None, None).unwrap();
         assert_eq!(run.status, AgentRunStatus::Running);
 
-        let result = poll_child_completion(
+        let result = agent_runtime::poll_child_completion(
             &conn,
             &run.id,
             Duration::from_millis(10),

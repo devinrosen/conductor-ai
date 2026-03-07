@@ -1,0 +1,12 @@
+workflow lint-fix {
+  meta {
+    description = "Analyze lint errors and apply fixes"
+    trigger     = "manual"
+  }
+
+  call analyze-lint
+
+  if analyze-lint.has_lint_errors {
+    call lint-fix-impl
+  }
+}
