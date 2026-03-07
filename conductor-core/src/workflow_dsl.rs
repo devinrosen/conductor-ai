@@ -835,19 +835,9 @@ pub fn parse_workflow_str(input: &str, source_path: &str) -> Result<WorkflowDef>
 
 /// Load all workflow definitions from `.conductor/workflows/*.wf`.
 pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<WorkflowDef>> {
-    let worktree_dir = PathBuf::from(worktree_path)
-        .join(".conductor")
-        .join("workflows");
-    let workflows_dir = if worktree_dir.is_dir() {
-        worktree_dir
-    } else {
-        let repo_dir = PathBuf::from(repo_path)
-            .join(".conductor")
-            .join("workflows");
-        if !repo_dir.is_dir() {
-            return Ok(Vec::new());
-        }
-        repo_dir
+    let workflows_dir = match resolve_workflows_dir(worktree_path, repo_path) {
+        Some(dir) => dir,
+        None => return Ok(Vec::new()),
     };
 
     let mut entries: Vec<_> = fs::read_dir(&workflows_dir)
@@ -889,6 +879,23 @@ pub fn validate_workflow_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Resolve the `.conductor/workflows/` directory, preferring worktree over repo.
+fn resolve_workflows_dir(worktree_path: &str, repo_path: &str) -> Option<PathBuf> {
+    let worktree_dir = PathBuf::from(worktree_path)
+        .join(".conductor")
+        .join("workflows");
+    if worktree_dir.is_dir() {
+        return Some(worktree_dir);
+    }
+    let repo_dir = PathBuf::from(repo_path)
+        .join(".conductor")
+        .join("workflows");
+    if repo_dir.is_dir() {
+        return Some(repo_dir);
+    }
+    None
+}
+
 /// Load a single workflow definition by name.
 pub fn load_workflow_by_name(
     worktree_path: &str,
@@ -897,12 +904,20 @@ pub fn load_workflow_by_name(
 ) -> Result<WorkflowDef> {
     validate_workflow_name(name)?;
 
-    let defs = load_workflow_defs(worktree_path, repo_path)?;
-    defs.into_iter().find(|d| d.name == name).ok_or_else(|| {
+    let workflows_dir = resolve_workflows_dir(worktree_path, repo_path).ok_or_else(|| {
         ConductorError::Workflow(format!(
             "Workflow '{name}' not found in .conductor/workflows/"
         ))
-    })
+    })?;
+
+    let path = workflows_dir.join(format!("{name}.wf"));
+    if !path.is_file() {
+        return Err(ConductorError::Workflow(format!(
+            "Workflow '{name}' not found in .conductor/workflows/"
+        )));
+    }
+
+    parse_workflow_file(&path)
 }
 
 /// Count the total number of nodes in a node list (for display).
@@ -1419,5 +1434,36 @@ workflow lint-fix {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("Invalid workflow name"));
+    }
+
+    #[test]
+    fn test_load_workflow_by_name_falls_back_to_repo_path() {
+        let repo = tempfile::TempDir::new().unwrap();
+        let wf_dir = repo.path().join(".conductor").join("workflows");
+        fs::create_dir_all(&wf_dir).unwrap();
+        fs::write(wf_dir.join("deploy.wf"), "workflow deploy { call build }").unwrap();
+
+        // worktree has no .conductor/workflows/, should fall back to repo_path
+        let worktree = tempfile::TempDir::new().unwrap();
+        let def = load_workflow_by_name(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "deploy",
+        )
+        .unwrap();
+        assert_eq!(def.name, "deploy");
+    }
+
+    #[test]
+    fn test_load_workflow_by_name_no_workflows_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let result = load_workflow_by_name(
+            tmp.path().to_str().unwrap(),
+            tmp.path().to_str().unwrap(),
+            "deploy",
+        );
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("not found"));
     }
 }
