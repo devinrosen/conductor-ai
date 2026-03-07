@@ -271,49 +271,89 @@ pub struct WorkflowRunStep {
     pub gate_feedback: Option<String>,
 }
 
+/// A single entry in a step's metadata, either a key-value field or a
+/// multi-line section with a heading and body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MetadataEntry {
+    /// Short key-value pair (e.g. "Status" → "completed").
+    Field { label: &'static str, value: String },
+    /// Longer block with a heading and free-form body text.
+    Section { heading: &'static str, body: String },
+}
+
 impl WorkflowRunStep {
-    /// Format step metadata fields as a multi-line string for display.
-    pub fn format_metadata(&self) -> String {
-        let mut parts: Vec<String> = Vec::new();
-        parts.push(format!("Status:    {}", self.status));
-        parts.push(format!("Role:      {}", self.role));
-        parts.push(format!("Can commit: {}", self.can_commit));
-        parts.push(format!("Iteration: {}", self.iteration));
+    /// Return structured metadata entries for this step.
+    ///
+    /// Consumers are responsible for choosing how to render the entries (e.g.
+    /// fixed-width columns for a TUI, HTML table for a web UI, etc.).
+    pub fn metadata_fields(&self) -> Vec<MetadataEntry> {
+        let mut entries = vec![
+            MetadataEntry::Field {
+                label: "Status",
+                value: self.status.to_string(),
+            },
+            MetadataEntry::Field {
+                label: "Role",
+                value: self.role.clone(),
+            },
+            MetadataEntry::Field {
+                label: "Can commit",
+                value: self.can_commit.to_string(),
+            },
+            MetadataEntry::Field {
+                label: "Iteration",
+                value: self.iteration.to_string(),
+            },
+        ];
         if let Some(ref started) = self.started_at {
-            parts.push(format!("Started:   {started}"));
+            entries.push(MetadataEntry::Field {
+                label: "Started",
+                value: started.clone(),
+            });
         }
         if let Some(ref ended) = self.ended_at {
-            parts.push(format!("Ended:     {ended}"));
+            entries.push(MetadataEntry::Field {
+                label: "Ended",
+                value: ended.clone(),
+            });
         }
         if let Some(ref gt) = self.gate_type {
-            parts.push(format!("Gate type: {gt}"));
+            entries.push(MetadataEntry::Field {
+                label: "Gate type",
+                value: gt.clone(),
+            });
         }
         if let Some(ref gp) = self.gate_prompt {
-            parts.push(String::new());
-            parts.push("── Gate Prompt ──".to_string());
-            parts.push(gp.clone());
+            entries.push(MetadataEntry::Section {
+                heading: "Gate Prompt",
+                body: gp.clone(),
+            });
         }
         if let Some(ref gf) = self.gate_feedback {
-            parts.push(String::new());
-            parts.push("── Gate Feedback ──".to_string());
-            parts.push(gf.clone());
+            entries.push(MetadataEntry::Section {
+                heading: "Gate Feedback",
+                body: gf.clone(),
+            });
         }
         if let Some(ref rt) = self.result_text {
-            parts.push(String::new());
-            parts.push("── Result ──".to_string());
-            parts.push(rt.clone());
+            entries.push(MetadataEntry::Section {
+                heading: "Result",
+                body: rt.clone(),
+            });
         }
         if let Some(ref ctx) = self.context_out {
-            parts.push(String::new());
-            parts.push("── Context Out ──".to_string());
-            parts.push(ctx.clone());
+            entries.push(MetadataEntry::Section {
+                heading: "Context Out",
+                body: ctx.clone(),
+            });
         }
         if let Some(ref mk) = self.markers_out {
-            parts.push(String::new());
-            parts.push("── Markers Out ──".to_string());
-            parts.push(mk.clone());
+            entries.push(MetadataEntry::Section {
+                heading: "Markers Out",
+                body: mk.clone(),
+            });
         }
-        parts.join("\n")
+        entries
     }
 }
 
@@ -2412,7 +2452,7 @@ And here is my actual output:
     }
 
     #[test]
-    fn test_format_metadata_basic_fields() {
+    fn test_metadata_fields_basic() {
         let step = WorkflowRunStep {
             id: "s1".into(),
             workflow_run_id: "r1".into(),
@@ -2439,19 +2479,58 @@ And here is my actual output:
             gate_approved_at: None,
             gate_feedback: None,
         };
-        let meta = step.format_metadata();
-        assert!(meta.contains("Status:    completed"));
-        assert!(meta.contains("Role:      reviewer"));
-        assert!(meta.contains("Can commit: false"));
-        assert!(meta.contains("Iteration: 1"));
-        assert!(meta.contains("Started:   2025-01-01T00:00:00Z"));
-        assert!(meta.contains("Ended:     2025-01-01T00:01:00Z"));
-        assert!(!meta.contains("Gate"));
-        assert!(!meta.contains("Result"));
+        let entries = step.metadata_fields();
+        assert_eq!(entries.len(), 6); // 4 always-present + Started + Ended
+        assert_eq!(
+            entries[0],
+            MetadataEntry::Field {
+                label: "Status",
+                value: "completed".into()
+            }
+        );
+        assert_eq!(
+            entries[1],
+            MetadataEntry::Field {
+                label: "Role",
+                value: "reviewer".into()
+            }
+        );
+        assert_eq!(
+            entries[2],
+            MetadataEntry::Field {
+                label: "Can commit",
+                value: "false".into()
+            }
+        );
+        assert_eq!(
+            entries[3],
+            MetadataEntry::Field {
+                label: "Iteration",
+                value: "1".into()
+            }
+        );
+        assert_eq!(
+            entries[4],
+            MetadataEntry::Field {
+                label: "Started",
+                value: "2025-01-01T00:00:00Z".into()
+            }
+        );
+        assert_eq!(
+            entries[5],
+            MetadataEntry::Field {
+                label: "Ended",
+                value: "2025-01-01T00:01:00Z".into()
+            }
+        );
+        // No gate or section entries
+        assert!(!entries
+            .iter()
+            .any(|e| matches!(e, MetadataEntry::Section { .. })));
     }
 
     #[test]
-    fn test_format_metadata_optional_sections() {
+    fn test_metadata_fields_optional_sections() {
         let step = WorkflowRunStep {
             id: "s2".into(),
             workflow_run_id: "r1".into(),
@@ -2478,17 +2557,30 @@ And here is my actual output:
             gate_approved_at: None,
             gate_feedback: Some("Looks good".into()),
         };
-        let meta = step.format_metadata();
-        assert!(meta.contains("Gate type: approval"));
-        assert!(meta.contains("── Gate Prompt ──"));
-        assert!(meta.contains("Please approve"));
-        assert!(meta.contains("── Gate Feedback ──"));
-        assert!(meta.contains("Looks good"));
-        assert!(meta.contains("── Result ──"));
-        assert!(meta.contains("All good"));
-        assert!(meta.contains("── Context Out ──"));
-        assert!(meta.contains("ctx data"));
-        assert!(meta.contains("── Markers Out ──"));
-        assert!(meta.contains("marker1"));
+        let entries = step.metadata_fields();
+        assert!(entries.contains(&MetadataEntry::Field {
+            label: "Gate type",
+            value: "approval".into()
+        }));
+        assert!(entries.contains(&MetadataEntry::Section {
+            heading: "Gate Prompt",
+            body: "Please approve".into()
+        }));
+        assert!(entries.contains(&MetadataEntry::Section {
+            heading: "Gate Feedback",
+            body: "Looks good".into()
+        }));
+        assert!(entries.contains(&MetadataEntry::Section {
+            heading: "Result",
+            body: "All good".into()
+        }));
+        assert!(entries.contains(&MetadataEntry::Section {
+            heading: "Context Out",
+            body: "ctx data".into()
+        }));
+        assert!(entries.contains(&MetadataEntry::Section {
+            heading: "Markers Out",
+            body: "marker1".into()
+        }));
     }
 }
