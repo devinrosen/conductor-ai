@@ -45,6 +45,85 @@ pub fn render_confirm(frame: &mut Frame, area: Rect, title: &str, message: &str)
     frame.render_widget(content, popup);
 }
 
+pub fn render_confirm_by_name(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    message: &str,
+    expected: &str,
+    value: &str,
+) {
+    let popup = centered_rect(55, 40, area);
+    frame.render_widget(Clear, popup);
+
+    let matches = value == expected;
+    let border_color = if matches { Color::Green } else { Color::Red };
+    let input_style = if matches {
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::UNDERLINED)
+    } else {
+        Style::default()
+            .fg(Color::Red)
+            .add_modifier(Modifier::UNDERLINED)
+    };
+
+    let content = Paragraph::new(vec![
+        Line::from(""),
+        Line::from(Span::styled(message, Style::default().fg(Color::Yellow))),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  Type "),
+            Span::styled(
+                expected,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" to confirm:"),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled(value, input_style),
+            Span::styled("_", Style::default().fg(Color::Cyan)),
+        ]),
+        Line::from(""),
+        Line::from(if matches {
+            vec![
+                Span::styled(
+                    "  Enter",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" = confirm    "),
+                Span::styled(
+                    "Esc",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" = cancel"),
+            ]
+        } else {
+            vec![Span::styled(
+                "  Esc to cancel",
+                Style::default().fg(Color::DarkGray),
+            )]
+        }),
+    ])
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color))
+            .title(format!(" {title} ")),
+    )
+    .wrap(Wrap { trim: false });
+
+    frame.render_widget(content, popup);
+}
+
 pub fn render_input(frame: &mut Frame, area: Rect, title: &str, prompt: &str, value: &str) {
     let popup = centered_rect(50, 30, area);
     frame.render_widget(Clear, popup);

@@ -47,6 +47,13 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         Modal::None => {}
         Modal::Help => help::render(frame, area),
         Modal::Confirm { title, message, .. } => modal::render_confirm(frame, area, title, message),
+        Modal::ConfirmByName {
+            title,
+            message,
+            expected,
+            value,
+            ..
+        } => modal::render_confirm_by_name(frame, area, title, message, expected, value),
         Modal::Input {
             title,
             prompt,

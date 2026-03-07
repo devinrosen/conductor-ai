@@ -306,7 +306,7 @@ impl App {
                 self.state.modal = Modal::None;
             }
             Action::InputChar(c) => match self.state.modal {
-                Modal::Input { ref mut value, .. } => {
+                Modal::Input { ref mut value, .. } | Modal::ConfirmByName { ref mut value, .. } => {
                     value.push(c);
                 }
                 Modal::ModelPicker {
@@ -319,7 +319,7 @@ impl App {
                 _ => {}
             },
             Action::InputBackspace => match self.state.modal {
-                Modal::Input { ref mut value, .. } => {
+                Modal::Input { ref mut value, .. } | Modal::ConfirmByName { ref mut value, .. } => {
                     value.pop();
                 }
                 Modal::ModelPicker {
@@ -1273,119 +1273,123 @@ impl App {
     fn handle_confirm_yes(&mut self) {
         let modal = std::mem::replace(&mut self.state.modal, Modal::None);
         if let Modal::Confirm { on_confirm, .. } = modal {
-            match on_confirm {
-                ConfirmAction::DeleteWorktree { repo_slug, wt_slug } => {
-                    let wt_mgr = WorktreeManager::new(&self.conn, &self.config);
-                    match wt_mgr.delete(&repo_slug, &wt_slug) {
-                        Ok(wt) => {
-                            self.state.status_message =
-                                Some(format!("Worktree {} marked as {}", wt_slug, wt.status));
-                            self.state.view = View::Dashboard;
-                            self.state.selected_worktree_id = None;
-                            self.refresh_data();
-                        }
-                        Err(e) => {
-                            self.state.modal = Modal::Error {
-                                message: format!("Delete failed: {e}"),
-                            };
-                        }
+            self.execute_confirm_action(on_confirm);
+        }
+    }
+
+    fn execute_confirm_action(&mut self, on_confirm: ConfirmAction) {
+        match on_confirm {
+            ConfirmAction::DeleteWorktree { repo_slug, wt_slug } => {
+                let wt_mgr = WorktreeManager::new(&self.conn, &self.config);
+                match wt_mgr.delete(&repo_slug, &wt_slug) {
+                    Ok(wt) => {
+                        self.state.status_message =
+                            Some(format!("Worktree {} marked as {}", wt_slug, wt.status));
+                        self.state.view = View::Dashboard;
+                        self.state.selected_worktree_id = None;
+                        self.refresh_data();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Delete failed: {e}"),
+                        };
                     }
                 }
-                ConfirmAction::RemoveRepo { repo_slug } => {
-                    let mgr = RepoManager::new(&self.conn, &self.config);
-                    match mgr.remove(&repo_slug) {
-                        Ok(()) => {
-                            self.state.status_message = Some(format!("Removed repo: {repo_slug}"));
-                            self.state.view = View::Dashboard;
-                            self.state.selected_repo_id = None;
-                            self.refresh_data();
-                        }
-                        Err(e) => {
-                            self.state.modal = Modal::Error {
-                                message: format!("Remove failed: {e}"),
-                            };
-                        }
+            }
+            ConfirmAction::RemoveRepo { repo_slug } => {
+                let mgr = RepoManager::new(&self.conn, &self.config);
+                match mgr.remove(&repo_slug) {
+                    Ok(()) => {
+                        self.state.status_message = Some(format!("Removed repo: {repo_slug}"));
+                        self.state.view = View::Dashboard;
+                        self.state.selected_repo_id = None;
+                        self.refresh_data();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Remove failed: {e}"),
+                        };
                     }
                 }
-                ConfirmAction::StartAgentForWorktree {
+            }
+            ConfirmAction::StartAgentForWorktree {
+                worktree_id,
+                worktree_path,
+                worktree_slug,
+                ticket_id,
+            } => {
+                self.show_agent_prompt_for_ticket(
                     worktree_id,
                     worktree_path,
                     worktree_slug,
                     ticket_id,
-                } => {
-                    self.show_agent_prompt_for_ticket(
-                        worktree_id,
-                        worktree_path,
-                        worktree_slug,
-                        ticket_id,
-                    );
-                }
-                ConfirmAction::DeleteWorkTarget { index } => {
-                    if index < self.config.general.work_targets.len() {
-                        let removed = self.config.general.work_targets.remove(index);
-                        match save_config(&self.config) {
-                            Ok(()) => {
-                                let new_selected = index
-                                    .min(self.config.general.work_targets.len().saturating_sub(1));
-                                self.state.modal = Modal::WorkTargetManager {
-                                    targets: self.config.general.work_targets.clone(),
-                                    selected: new_selected,
-                                };
-                                self.state.status_message =
-                                    Some(format!("Deleted work target: {}", removed.name));
-                            }
-                            Err(e) => {
-                                self.state.modal = Modal::Error {
-                                    message: format!("Failed to save config: {e}"),
-                                };
-                            }
-                        }
-                    }
-                }
-                ConfirmAction::CancelWorkflow { workflow_run_id } => {
-                    use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
-                    let wf_mgr = WorkflowManager::new(&self.conn);
-                    match wf_mgr.update_workflow_status(
-                        &workflow_run_id,
-                        WorkflowRunStatus::Cancelled,
-                        Some("Cancelled by user"),
-                    ) {
+                );
+            }
+            ConfirmAction::DeleteWorkTarget { index } => {
+                if index < self.config.general.work_targets.len() {
+                    let removed = self.config.general.work_targets.remove(index);
+                    match save_config(&self.config) {
                         Ok(()) => {
-                            self.state.status_message = Some("Workflow run cancelled".to_string());
-                            self.reload_workflow_data();
-                        }
-                        Err(e) => {
-                            self.state.modal = Modal::Error {
-                                message: format!("Cancel failed: {e}"),
-                            };
-                        }
-                    }
-                }
-                ConfirmAction::DeleteIssueSource {
-                    source_id,
-                    repo_id,
-                    repo_slug,
-                    remote_url,
-                } => {
-                    let mgr = IssueSourceManager::new(&self.conn);
-                    match mgr.remove(&source_id) {
-                        Ok(()) => {
-                            let sources = mgr.list(&repo_id).unwrap_or_default();
-                            self.state.modal = Modal::IssueSourceManager {
-                                repo_id,
-                                repo_slug: repo_slug.clone(),
-                                remote_url,
-                                sources,
-                                selected: 0,
+                            let new_selected =
+                                index.min(self.config.general.work_targets.len().saturating_sub(1));
+                            self.state.modal = Modal::WorkTargetManager {
+                                targets: self.config.general.work_targets.clone(),
+                                selected: new_selected,
                             };
                             self.state.status_message =
-                                Some(format!("Removed issue source from {repo_slug}"));
+                                Some(format!("Deleted work target: {}", removed.name));
                         }
                         Err(e) => {
                             self.state.modal = Modal::Error {
-                                message: format!("Failed to remove source: {e}"),
+                                message: format!("Failed to save config: {e}"),
                             };
                         }
+                    }
+                }
+            }
+            ConfirmAction::CancelWorkflow { workflow_run_id } => {
+                use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
+                let wf_mgr = WorkflowManager::new(&self.conn);
+                match wf_mgr.update_workflow_status(
+                    &workflow_run_id,
+                    WorkflowRunStatus::Cancelled,
+                    Some("Cancelled by user"),
+                ) {
+                    Ok(()) => {
+                        self.state.status_message = Some("Workflow run cancelled".to_string());
+                        self.reload_workflow_data();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Cancel failed: {e}"),
+                        };
+                    }
+                }
+            }
+            ConfirmAction::DeleteIssueSource {
+                source_id,
+                repo_id,
+                repo_slug,
+                remote_url,
+            } => {
+                let mgr = IssueSourceManager::new(&self.conn);
+                match mgr.remove(&source_id) {
+                    Ok(()) => {
+                        let sources = mgr.list(&repo_id).unwrap_or_default();
+                        self.state.modal = Modal::IssueSourceManager {
+                            repo_id,
+                            repo_slug: repo_slug.clone(),
+                            remote_url,
+                            sources,
+                            selected: 0,
+                        };
+                        self.state.status_message =
+                            Some(format!("Removed issue source from {repo_slug}"));
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Failed to remove source: {e}"),
+                        };
                     }
                 }
             }
@@ -1393,6 +1397,24 @@ impl App {
     }
 
     fn handle_input_submit(&mut self) {
+        // ConfirmByName: only proceed if typed value matches expected slug
+        if let Modal::ConfirmByName {
+            ref expected,
+            ref value,
+            ..
+        } = self.state.modal
+        {
+            if value != expected {
+                return; // ignore Enter when text doesn't match
+            }
+            // Value matches — take the modal and execute
+            let modal = std::mem::replace(&mut self.state.modal, Modal::None);
+            if let Modal::ConfirmByName { on_confirm, .. } = modal {
+                self.execute_confirm_action(on_confirm);
+            }
+            return;
+        }
+
         let modal = std::mem::replace(&mut self.state.modal, Modal::None);
 
         // Extract (value, on_submit) from Input, AgentPrompt, or ModelPicker modals
@@ -2364,17 +2386,55 @@ impl App {
                             .get(&wt.repo_id)
                             .cloned()
                             .unwrap_or_else(|| "?".to_string());
-                        self.state.modal = Modal::Confirm {
-                            title: "Delete Worktree".to_string(),
-                            message: format!(
-                                "Delete worktree {}/{}? This removes the git worktree and branch.",
-                                repo_slug, wt.slug
-                            ),
-                            on_confirm: ConfirmAction::DeleteWorktree {
-                                repo_slug,
-                                wt_slug: wt.slug.clone(),
-                            },
+
+                        let on_confirm = ConfirmAction::DeleteWorktree {
+                            repo_slug: repo_slug.clone(),
+                            wt_slug: wt.slug.clone(),
                         };
+
+                        // Check if work is completed (issue closed + PR merged)
+                        let issue_closed = wt
+                            .ticket_id
+                            .as_ref()
+                            .and_then(|tid| self.state.data.ticket_map.get(tid))
+                            .is_some_and(|t| t.state == "closed");
+
+                        let repo = self.state.data.repos.iter().find(|r| r.id == wt.repo_id);
+                        let pr_merged = repo.is_some_and(|r| {
+                            conductor_core::github::has_merged_pr(&r.remote_url, &wt.branch)
+                        });
+
+                        if issue_closed && pr_merged {
+                            // Work is done — simple confirm
+                            self.state.modal = Modal::Confirm {
+                                title: "Delete Worktree".to_string(),
+                                message: format!(
+                                    "Delete worktree {}/{}? Issue is closed and PR is merged.",
+                                    repo_slug, wt.slug
+                                ),
+                                on_confirm,
+                            };
+                        } else {
+                            // Work may be in progress — require typing the slug
+                            let reason = if wt.ticket_id.is_none() {
+                                "This worktree has no linked issue."
+                            } else if !issue_closed && !pr_merged {
+                                "This worktree has an open issue and unmerged code."
+                            } else if !issue_closed {
+                                "This worktree has an open issue."
+                            } else {
+                                "This worktree has unmerged code."
+                            };
+                            self.state.modal = Modal::ConfirmByName {
+                                title: "Delete Worktree".to_string(),
+                                message: format!(
+                                    "{reason} This removes the git worktree and branch.",
+                                ),
+                                expected: wt.slug.clone(),
+                                value: String::new(),
+                                on_confirm,
+                            };
+                        }
                     }
                 }
             }
@@ -2396,12 +2456,14 @@ impl App {
                         } else {
                             String::new()
                         };
-                        self.state.modal = Modal::Confirm {
+                        self.state.modal = Modal::ConfirmByName {
                             title: "Remove Repository".to_string(),
                             message: format!(
-                                "Remove repo '{}'?{} This unregisters it from Conductor.",
-                                repo.slug, warning
+                                "This will permanently delete the repo and all associated worktrees, agent runs, and tickets.{}",
+                                warning
                             ),
+                            expected: repo.slug.clone(),
+                            value: String::new(),
                             on_confirm: ConfirmAction::RemoveRepo {
                                 repo_slug: repo.slug.clone(),
                             },

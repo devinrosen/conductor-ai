@@ -28,7 +28,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
-        Modal::Input { .. } => {
+        Modal::Input { .. } | Modal::ConfirmByName { .. } => {
             return match key.code {
                 KeyCode::Enter => Action::InputSubmit,
                 KeyCode::Esc => Action::DismissModal,

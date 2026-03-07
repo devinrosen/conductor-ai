@@ -288,6 +288,24 @@ pub fn detect_pr_number(remote_url: &str, branch: &str) -> Option<i64> {
     json.first()?.get("number")?.as_i64()
 }
 
+/// Check whether a merged PR exists for a branch using `gh pr list --state merged`.
+pub fn has_merged_pr(remote_url: &str, branch: &str) -> bool {
+    let Some((owner, repo)) = parse_github_remote(remote_url) else {
+        return false;
+    };
+    let slug = repo_slug(&owner, &repo);
+    let Ok(output) = run_gh(&[
+        "pr", "list", "--repo", &slug, "--head", branch, "--state", "merged", "--json", "number",
+        "--limit", "1",
+    ]) else {
+        return false;
+    };
+    let Ok(json) = serde_json::from_slice::<Vec<serde_json::Value>>(&output.stdout) else {
+        return false;
+    };
+    !json.is_empty()
+}
+
 /// Close a GitHub issue as completed via the `gh` CLI.
 pub fn close_github_issue(owner: &str, repo: &str, issue_number: &str) -> Result<()> {
     let repo_slug = repo_slug(owner, repo);

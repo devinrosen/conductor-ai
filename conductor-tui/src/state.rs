@@ -171,6 +171,16 @@ pub enum Modal {
         gate_prompt: String,
         feedback: String,
     },
+    /// Confirm-by-name modal: user must type the expected slug to confirm.
+    ConfirmByName {
+        title: String,
+        message: String,
+        /// The slug the user must type to confirm.
+        expected: String,
+        /// Current user input.
+        value: String,
+        on_confirm: ConfirmAction,
+    },
     /// Second level: browse and import repos for a specific owner.
     GithubDiscover {
         /// Owner whose repos are shown ("" = personal account).
@@ -209,6 +219,10 @@ impl fmt::Debug for Modal {
             } => {
                 write!(f, "Modal::ModelPicker(ctx={context_label:?})")
             }
+            Modal::ConfirmByName { title, .. } => f
+                .debug_struct("ConfirmByName")
+                .field("title", title)
+                .finish(),
             Modal::GateAction { .. } => write!(f, "Modal::GateAction"),
             Modal::EventDetail { .. } => write!(f, "Modal::EventDetail"),
             Modal::GithubDiscoverOrgs { loading, .. } => {
