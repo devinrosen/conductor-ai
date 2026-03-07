@@ -39,11 +39,12 @@ pub struct TicketInput {
 
 pub struct TicketSyncer<'a> {
     conn: &'a Connection,
+    config: &'a Config,
 }
 
 impl<'a> TicketSyncer<'a> {
-    pub fn new(conn: &'a Connection) -> Self {
-        Self { conn }
+    pub fn new(conn: &'a Connection, config: &'a Config) -> Self {
+        Self { conn, config }
     }
 
     /// Upsert a batch of tickets for a repo. Returns the number of tickets upserted.
@@ -187,11 +188,7 @@ impl<'a> TicketSyncer<'a> {
     /// After syncing tickets for a repo, update any linked worktrees whose
     /// ticket is now closed: remove the git worktree/branch and set status to 'merged'.
     /// Returns the number of worktrees updated.
-    pub fn mark_worktrees_for_closed_tickets(
-        &self,
-        repo_id: &str,
-        config: &Config,
-    ) -> Result<usize> {
+    pub fn mark_worktrees_for_closed_tickets(&self, repo_id: &str) -> Result<usize> {
         // Find IDs of worktrees that need to be marked as merged.
         let mut stmt = self.conn.prepare(
             "SELECT w.id
@@ -206,7 +203,7 @@ impl<'a> TicketSyncer<'a> {
             .filter_map(|r| r.ok())
             .collect();
 
-        let wt_mgr = WorktreeManager::new(self.conn, config);
+        let wt_mgr = WorktreeManager::new(self.conn, self.config);
         for id in &ids {
             let _ = wt_mgr.update_status(id, "merged");
         }
@@ -345,7 +342,8 @@ mod tests {
     #[test]
     fn test_close_missing_tickets_marks_absent_as_closed() {
         let conn = setup_db();
-        let syncer = TicketSyncer::new(&conn);
+        let config = Config::default();
+        let syncer = TicketSyncer::new(&conn, &config);
 
         // Sync #1: issues 1, 2, 3 are open
         let tickets = vec![
@@ -372,7 +370,8 @@ mod tests {
     #[test]
     fn test_close_missing_does_not_reclose_already_closed() {
         let conn = setup_db();
-        let syncer = TicketSyncer::new(&conn);
+        let config = Config::default();
+        let syncer = TicketSyncer::new(&conn, &config);
 
         // Sync #1: issues 1, 2 are open
         let tickets = vec![make_ticket("1", "Issue 1"), make_ticket("2", "Issue 2")];
@@ -395,7 +394,8 @@ mod tests {
     #[test]
     fn test_close_missing_empty_sync_is_noop() {
         let conn = setup_db();
-        let syncer = TicketSyncer::new(&conn);
+        let config = Config::default();
+        let syncer = TicketSyncer::new(&conn, &config);
 
         // Sync existing tickets
         let tickets = vec![make_ticket("1", "Issue 1")];
@@ -420,7 +420,8 @@ mod tests {
         )
         .unwrap();
 
-        let syncer = TicketSyncer::new(&conn);
+        let config = Config::default();
+        let syncer = TicketSyncer::new(&conn, &config);
 
         // Both repos have issue #1
         let tickets1 = vec![make_ticket("1", "Repo1 Issue")];
@@ -491,7 +492,8 @@ mod tests {
     #[test]
     fn test_mark_worktrees_active_to_merged() {
         let conn = setup_db();
-        let syncer = TicketSyncer::new(&conn);
+        let config = Config::default();
+        let syncer = TicketSyncer::new(&conn, &config);
 
         let tickets = vec![make_ticket("1", "Issue 1")];
         syncer.upsert_tickets("repo1", &tickets).unwrap();
@@ -506,9 +508,7 @@ mod tests {
             .close_missing_tickets("repo1", "github", &["999"])
             .unwrap();
 
-        let count = syncer
-            .mark_worktrees_for_closed_tickets("repo1", &Config::default())
-            .unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("repo1").unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
     }
@@ -516,7 +516,8 @@ mod tests {
     #[test]
     fn test_mark_worktrees_abandoned_to_merged() {
         let conn = setup_db();
-        let syncer = TicketSyncer::new(&conn);
+        let config = Config::default();
+        let syncer = TicketSyncer::new(&conn, &config);
 
         let tickets = vec![make_ticket("1", "Issue 1")];
         syncer.upsert_tickets("repo1", &tickets).unwrap();
@@ -530,9 +531,7 @@ mod tests {
             .close_missing_tickets("repo1", "github", &["999"])
             .unwrap();
 
-        let count = syncer
-            .mark_worktrees_for_closed_tickets("repo1", &Config::default())
-            .unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("repo1").unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
     }
@@ -540,13 +539,12 @@ mod tests {
     #[test]
     fn test_mark_worktrees_skips_unlinked() {
         let conn = setup_db();
-        let syncer = TicketSyncer::new(&conn);
+        let config = Config::default();
+        let syncer = TicketSyncer::new(&conn, &config);
 
         insert_worktree(&conn, "wt1", "repo1", None, "active");
 
-        let count = syncer
-            .mark_worktrees_for_closed_tickets("repo1", &Config::default())
-            .unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("repo1").unwrap();
         assert_eq!(count, 0);
         assert_eq!(get_worktree_status(&conn, "wt1"), "active");
     }
@@ -554,7 +552,8 @@ mod tests {
     #[test]
     fn test_mark_worktrees_idempotent() {
         let conn = setup_db();
-        let syncer = TicketSyncer::new(&conn);
+        let config = Config::default();
+        let syncer = TicketSyncer::new(&conn, &config);
 
         let tickets = vec![make_ticket("1", "Issue 1")];
         syncer.upsert_tickets("repo1", &tickets).unwrap();
@@ -568,9 +567,7 @@ mod tests {
             .close_missing_tickets("repo1", "github", &["999"])
             .unwrap();
 
-        let count = syncer
-            .mark_worktrees_for_closed_tickets("repo1", &Config::default())
-            .unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("repo1").unwrap();
         assert_eq!(count, 0);
     }
 
@@ -584,7 +581,8 @@ mod tests {
         )
         .unwrap();
 
-        let syncer = TicketSyncer::new(&conn);
+        let config = Config::default();
+        let syncer = TicketSyncer::new(&conn, &config);
 
         let t1 = vec![make_ticket("1", "Repo1 Issue")];
         let t2 = vec![make_ticket("1", "Repo2 Issue")];
@@ -615,9 +613,7 @@ mod tests {
             .close_missing_tickets("repo2", "github", &["999"])
             .unwrap();
 
-        let count = syncer
-            .mark_worktrees_for_closed_tickets("repo1", &Config::default())
-            .unwrap();
+        let count = syncer.mark_worktrees_for_closed_tickets("repo1").unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
         assert_eq!(get_worktree_status(&conn, "wt2"), "active");
@@ -626,7 +622,8 @@ mod tests {
     #[test]
     fn test_link_to_worktree_success() {
         let conn = setup_db();
-        let syncer = TicketSyncer::new(&conn);
+        let config = Config::default();
+        let syncer = TicketSyncer::new(&conn, &config);
         let tickets = vec![make_ticket("1", "Issue 1")];
         syncer.upsert_tickets("repo1", &tickets).unwrap();
         let ticket_id: String = conn
@@ -651,7 +648,8 @@ mod tests {
     #[test]
     fn test_link_to_worktree_rejects_if_already_linked() {
         let conn = setup_db();
-        let syncer = TicketSyncer::new(&conn);
+        let config = Config::default();
+        let syncer = TicketSyncer::new(&conn, &config);
         let tickets = vec![make_ticket("1", "Issue 1"), make_ticket("2", "Issue 2")];
         syncer.upsert_tickets("repo1", &tickets).unwrap();
         let tid1: String = conn
@@ -677,7 +675,8 @@ mod tests {
     #[test]
     fn test_get_by_id_success() {
         let conn = setup_db();
-        let syncer = TicketSyncer::new(&conn);
+        let config = Config::default();
+        let syncer = TicketSyncer::new(&conn, &config);
         let tickets = vec![make_ticket("1", "Issue 1")];
         syncer.upsert_tickets("repo1", &tickets).unwrap();
 
@@ -695,7 +694,8 @@ mod tests {
     #[test]
     fn test_get_by_id_not_found() {
         let conn = setup_db();
-        let syncer = TicketSyncer::new(&conn);
+        let config = Config::default();
+        let syncer = TicketSyncer::new(&conn, &config);
         let result = syncer.get_by_id("nonexistent-id");
         assert!(result.is_err());
     }

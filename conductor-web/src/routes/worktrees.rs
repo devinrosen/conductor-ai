@@ -140,7 +140,7 @@ pub async fn link_ticket(
         return Err(conductor_core::error::ConductorError::TicketAlreadyLinked.into());
     }
     // Verify ticket exists
-    let syncer = TicketSyncer::new(&db);
+    let syncer = TicketSyncer::new(&db, &config);
     syncer.get_by_id(&body.ticket_id)?;
     // Link ticket to worktree
     syncer.link_to_worktree(&body.ticket_id, &id)?;

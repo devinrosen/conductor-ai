@@ -461,7 +461,7 @@ impl App {
     fn refresh_data(&mut self) {
         let repo_mgr = RepoManager::new(&self.conn, &self.config);
         let wt_mgr = WorktreeManager::new(&self.conn, &self.config);
-        let ticket_syncer = TicketSyncer::new(&self.conn);
+        let ticket_syncer = TicketSyncer::new(&self.conn, &self.config);
         let agent_mgr = AgentManager::new(&self.conn);
 
         self.state.data.repos = repo_mgr.list().unwrap_or_default();
@@ -1236,7 +1236,7 @@ impl App {
                 if value.is_empty() {
                     return;
                 }
-                let syncer = TicketSyncer::new(&self.conn);
+                let syncer = TicketSyncer::new(&self.conn, &self.config);
                 // Find ticket by source_id, scoped to the worktree's repo
                 let wt_repo_id = self
                     .state
@@ -2232,7 +2232,7 @@ impl App {
 
         let repo_mgr = RepoManager::new(&self.conn, &self.config);
         let repos = repo_mgr.list().unwrap_or_default();
-        let syncer = TicketSyncer::new(&self.conn);
+        let syncer = TicketSyncer::new(&self.conn, &self.config);
 
         let mut total = 0;
         for repo in &repos {
