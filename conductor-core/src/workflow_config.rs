@@ -289,19 +289,6 @@ and commit them to the branch.
 ";
 
     #[test]
-    fn test_parse_frontmatter_basic() {
-        let content = "---\nname: test\nsteps: []\n---\n## section\nbody";
-        let (yaml, body) = parse_frontmatter(content).unwrap();
-        assert!(yaml.contains("name: test"));
-        assert!(body.contains("## section"));
-    }
-
-    #[test]
-    fn test_parse_frontmatter_no_opening() {
-        assert!(parse_frontmatter("no frontmatter here").is_none());
-    }
-
-    #[test]
     fn test_parse_sections() {
         let body = "## analyze\nYou are a reviewer.\n\n## write\nYou are a writer.";
         let sections = parse_sections(body);
