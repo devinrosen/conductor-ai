@@ -13,7 +13,7 @@ use serde::Deserialize;
 use crate::agent_config::{default_role, AgentRole};
 use crate::error::{ConductorError, Result};
 use crate::text_util::parse_frontmatter;
-use crate::workflow_dsl::WorkflowTrigger;
+use crate::workflow_dsl::{validate_workflow_name, WorkflowTrigger};
 
 /// YAML frontmatter for a workflow `.md` file.
 #[derive(Debug, Clone, Deserialize)]
@@ -255,6 +255,7 @@ pub fn load_workflow_by_name(
     repo_path: &str,
     name: &str,
 ) -> Result<WorkflowDef> {
+    validate_workflow_name(name)?;
     let defs = load_workflow_defs(worktree_path, repo_path)?;
     defs.into_iter().find(|d| d.name == name).ok_or_else(|| {
         ConductorError::Workflow(format!(
@@ -482,6 +483,21 @@ and commit them to the branch.
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
         assert!(err.contains("not found"));
+    }
+
+    #[test]
+    fn test_load_workflow_by_name_rejects_path_traversal() {
+        let tmp = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        let result = load_workflow_by_name(
+            tmp.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "../etc/passwd",
+        );
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("Invalid workflow name"));
     }
 
     #[test]
