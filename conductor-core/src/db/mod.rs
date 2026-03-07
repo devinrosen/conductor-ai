@@ -21,7 +21,7 @@ where
     P: rusqlite::Params,
     F: FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
 {
-    let mut stmt = conn.prepare(sql)?;
+    let mut stmt = conn.prepare_cached(sql)?;
     let rows = stmt.query_map(params, f)?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }

@@ -128,7 +128,7 @@ impl<'a> MergeQueueManager<'a> {
 
     /// Get a single entry by ID.
     pub fn get(&self, entry_id: &str) -> Result<Option<MergeQueueEntry>> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT id, repo_id, worktree_id, run_id, target_branch, position, status,
                     queued_at, started_at, completed_at
              FROM merge_queue
@@ -182,7 +182,7 @@ impl<'a> MergeQueueManager<'a> {
         }
 
         // Return the entry we just updated.
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT id, repo_id, worktree_id, run_id, target_branch, position, status,
                     queued_at, started_at, completed_at
              FROM merge_queue
@@ -238,7 +238,7 @@ impl<'a> MergeQueueManager<'a> {
 
     /// Get the count of entries by status for a repo.
     pub fn queue_stats(&self, repo_id: &str) -> Result<QueueStats> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT status, COUNT(*) FROM merge_queue WHERE repo_id = ?1 GROUP BY status",
         )?;
         let mut stats = QueueStats::default();

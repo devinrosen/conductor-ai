@@ -1025,7 +1025,7 @@ impl<'a> AgentManager<'a> {
     /// Returns aggregated agent stats per ticket (across all linked worktrees).
     /// Only includes completed runs with recorded metrics.
     pub fn totals_by_ticket_all(&self) -> Result<HashMap<String, TicketAgentTotals>> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT w.ticket_id, \
                     COUNT(*) AS total_runs, \
                     COALESCE(SUM(a.cost_usd), 0.0) AS total_cost, \
@@ -1287,7 +1287,7 @@ impl<'a> AgentManager<'a> {
     pub fn worktree_cost_phases(&self, worktree_id: &str) -> Result<Vec<CostPhase>> {
         // Single recursive-CTE query: find all root runs and aggregate each
         // tree's cost/duration in one round-trip instead of 1+N queries.
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "WITH RECURSIVE tree(root_id, node_id) AS ( \
                  SELECT id, id \
                  FROM agent_runs \

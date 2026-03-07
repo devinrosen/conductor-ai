@@ -640,7 +640,7 @@ impl<'a> WorkflowManager<'a> {
     }
 
     pub fn get_step_by_id(&self, step_id: &str) -> Result<Option<WorkflowRunStep>> {
-        let mut stmt = self.conn.prepare(&format!(
+        let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT {STEP_COLUMNS} FROM workflow_run_steps WHERE id = ?1"
         ))?;
         let mut rows = stmt.query_map(params![step_id], row_to_workflow_step)?;

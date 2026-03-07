@@ -125,7 +125,7 @@ pub async fn ticket_detail(
     let all_totals = agent_mgr.totals_by_ticket_all()?;
     let agent_totals = all_totals.get(&ticket_id).cloned();
 
-    let mut stmt = db.prepare(
+    let mut stmt = db.prepare_cached(
         "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model \
          FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC",
     )?;

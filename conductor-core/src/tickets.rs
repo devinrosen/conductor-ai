@@ -139,7 +139,7 @@ impl<'a> TicketSyncer<'a> {
             }
         };
 
-        let mut stmt = self.conn.prepare(query)?;
+        let mut stmt = self.conn.prepare_cached(query)?;
         let rows = if let Some(rid) = repo_id {
             stmt.query_map(params![rid], map_ticket_row)?
         } else {
