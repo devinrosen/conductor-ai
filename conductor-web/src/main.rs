@@ -35,14 +35,20 @@ async fn main() -> Result<()> {
     };
 
     // Spawn a background task that periodically reaps orphaned runs.
+    // Uses spawn_blocking to avoid blocking the tokio runtime with
+    // synchronous DB queries and tmux subprocess calls.
     let reaper_state = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
         loop {
             interval.tick().await;
-            let conn = reaper_state.db.lock().await;
-            let mgr = AgentManager::new(&conn);
-            let _ = mgr.reap_orphaned_runs();
+            let db = reaper_state.db.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let conn = db.blocking_lock();
+                let mgr = AgentManager::new(&conn);
+                mgr.reap_orphaned_runs()
+            })
+            .await;
         }
     });
 
