@@ -271,6 +271,52 @@ pub struct WorkflowRunStep {
     pub gate_feedback: Option<String>,
 }
 
+impl WorkflowRunStep {
+    /// Format step metadata fields as a multi-line string for display.
+    pub fn format_metadata(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        parts.push(format!("Status:    {}", self.status));
+        parts.push(format!("Role:      {}", self.role));
+        parts.push(format!("Can commit: {}", self.can_commit));
+        parts.push(format!("Iteration: {}", self.iteration));
+        if let Some(ref started) = self.started_at {
+            parts.push(format!("Started:   {started}"));
+        }
+        if let Some(ref ended) = self.ended_at {
+            parts.push(format!("Ended:     {ended}"));
+        }
+        if let Some(ref gt) = self.gate_type {
+            parts.push(format!("Gate type: {gt}"));
+        }
+        if let Some(ref gp) = self.gate_prompt {
+            parts.push(String::new());
+            parts.push("── Gate Prompt ──".to_string());
+            parts.push(gp.clone());
+        }
+        if let Some(ref gf) = self.gate_feedback {
+            parts.push(String::new());
+            parts.push("── Gate Feedback ──".to_string());
+            parts.push(gf.clone());
+        }
+        if let Some(ref rt) = self.result_text {
+            parts.push(String::new());
+            parts.push("── Result ──".to_string());
+            parts.push(rt.clone());
+        }
+        if let Some(ref ctx) = self.context_out {
+            parts.push(String::new());
+            parts.push("── Context Out ──".to_string());
+            parts.push(ctx.clone());
+        }
+        if let Some(ref mk) = self.markers_out {
+            parts.push(String::new());
+            parts.push("── Markers Out ──".to_string());
+            parts.push(mk.clone());
+        }
+        parts.join("\n")
+    }
+}
+
 /// Configuration for workflow execution.
 #[derive(Debug, Clone)]
 pub struct WorkflowExecConfig {
@@ -2363,5 +2409,86 @@ And here is my actual output:
 
         let missing = mgr.get_step_by_id("nonexistent").unwrap();
         assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_format_metadata_basic_fields() {
+        let step = WorkflowRunStep {
+            id: "s1".into(),
+            workflow_run_id: "r1".into(),
+            step_name: "lint".into(),
+            role: "reviewer".into(),
+            can_commit: false,
+            condition_expr: None,
+            status: WorkflowStepStatus::Completed,
+            child_run_id: None,
+            position: 1,
+            started_at: Some("2025-01-01T00:00:00Z".into()),
+            ended_at: Some("2025-01-01T00:01:00Z".into()),
+            result_text: None,
+            condition_met: None,
+            iteration: 1,
+            parallel_group_id: None,
+            context_out: None,
+            markers_out: None,
+            retry_count: 0,
+            gate_type: None,
+            gate_prompt: None,
+            gate_timeout: None,
+            gate_approved_by: None,
+            gate_approved_at: None,
+            gate_feedback: None,
+        };
+        let meta = step.format_metadata();
+        assert!(meta.contains("Status:    completed"));
+        assert!(meta.contains("Role:      reviewer"));
+        assert!(meta.contains("Can commit: false"));
+        assert!(meta.contains("Iteration: 1"));
+        assert!(meta.contains("Started:   2025-01-01T00:00:00Z"));
+        assert!(meta.contains("Ended:     2025-01-01T00:01:00Z"));
+        assert!(!meta.contains("Gate"));
+        assert!(!meta.contains("Result"));
+    }
+
+    #[test]
+    fn test_format_metadata_optional_sections() {
+        let step = WorkflowRunStep {
+            id: "s2".into(),
+            workflow_run_id: "r1".into(),
+            step_name: "review".into(),
+            role: "reviewer".into(),
+            can_commit: false,
+            condition_expr: None,
+            status: WorkflowStepStatus::Running,
+            child_run_id: None,
+            position: 2,
+            started_at: None,
+            ended_at: None,
+            result_text: Some("All good".into()),
+            condition_met: None,
+            iteration: 0,
+            parallel_group_id: None,
+            context_out: Some("ctx data".into()),
+            markers_out: Some("marker1".into()),
+            retry_count: 0,
+            gate_type: Some("approval".into()),
+            gate_prompt: Some("Please approve".into()),
+            gate_timeout: None,
+            gate_approved_by: None,
+            gate_approved_at: None,
+            gate_feedback: Some("Looks good".into()),
+        };
+        let meta = step.format_metadata();
+        assert!(meta.contains("Gate type: approval"));
+        assert!(meta.contains("── Gate Prompt ──"));
+        assert!(meta.contains("Please approve"));
+        assert!(meta.contains("── Gate Feedback ──"));
+        assert!(meta.contains("Looks good"));
+        assert!(meta.contains("── Result ──"));
+        assert!(meta.contains("All good"));
+        assert!(meta.contains("── Context Out ──"));
+        assert!(meta.contains("ctx data"));
+        assert!(meta.contains("── Markers Out ──"));
+        assert!(meta.contains("marker1"));
     }
 }

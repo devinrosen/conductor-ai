@@ -1201,46 +1201,7 @@ impl App {
                     } else {
                         // No agent run — show step metadata modal
                         let title = format!("Step: {} ({})", step.step_name, step.status);
-                        let mut parts: Vec<String> = Vec::new();
-                        parts.push(format!("Status:    {}", step.status));
-                        parts.push(format!("Role:      {}", step.role));
-                        parts.push(format!("Can commit: {}", step.can_commit));
-                        parts.push(format!("Iteration: {}", step.iteration));
-                        if let Some(ref started) = step.started_at {
-                            parts.push(format!("Started:   {started}"));
-                        }
-                        if let Some(ref ended) = step.ended_at {
-                            parts.push(format!("Ended:     {ended}"));
-                        }
-                        if let Some(ref gt) = step.gate_type {
-                            parts.push(format!("Gate type: {gt}"));
-                        }
-                        if let Some(ref gp) = step.gate_prompt {
-                            parts.push(String::new());
-                            parts.push("── Gate Prompt ──".to_string());
-                            parts.push(gp.clone());
-                        }
-                        if let Some(ref gf) = step.gate_feedback {
-                            parts.push(String::new());
-                            parts.push("── Gate Feedback ──".to_string());
-                            parts.push(gf.clone());
-                        }
-                        if let Some(ref rt) = step.result_text {
-                            parts.push(String::new());
-                            parts.push("── Result ──".to_string());
-                            parts.push(rt.clone());
-                        }
-                        if let Some(ref ctx) = step.context_out {
-                            parts.push(String::new());
-                            parts.push("── Context Out ──".to_string());
-                            parts.push(ctx.clone());
-                        }
-                        if let Some(ref mk) = step.markers_out {
-                            parts.push(String::new());
-                            parts.push("── Markers Out ──".to_string());
-                            parts.push(mk.clone());
-                        }
-                        let body = parts.join("\n");
+                        let body = step.format_metadata();
                         let line_count = body.lines().count();
                         Some(Modal::EventDetail {
                             title,
