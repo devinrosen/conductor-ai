@@ -315,6 +315,23 @@ impl<'a> WorktreeManager<'a> {
     }
 
     pub fn update_status(&self, worktree_id: &str, status: &str) -> Result<()> {
+        // When marking as merged or abandoned, remove the git worktree and branch
+        if status == "merged" || status == "abandoned" {
+            if let Ok(worktree) = self.get_by_id(worktree_id) {
+                let repo_mgr = RepoManager::new(self.conn, self.config);
+                if let Ok(repo) = repo_mgr.get_by_id(&worktree.repo_id) {
+                    let _ = Command::new("git")
+                        .args(["worktree", "remove", &worktree.path, "--force"])
+                        .current_dir(&repo.local_path)
+                        .output();
+                    let _ = Command::new("git")
+                        .args(["branch", "-D", &worktree.branch])
+                        .current_dir(&repo.local_path)
+                        .output();
+                }
+            }
+        }
+
         let completed_at = if status != "active" {
             Some(Utc::now().to_rfc3339())
         } else {

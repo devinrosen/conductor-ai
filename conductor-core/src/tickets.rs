@@ -1,6 +1,7 @@
 use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::process::Command;
 
 use crate::error::{ConductorError, Result};
 
@@ -183,9 +184,42 @@ impl<'a> TicketSyncer<'a> {
     }
 
     /// After syncing tickets for a repo, update any linked worktrees whose
-    /// ticket is now closed: set worktree status to 'merged'.
+    /// ticket is now closed: remove the git worktree/branch and set status to 'merged'.
     /// Returns the number of worktrees updated.
     pub fn mark_worktrees_for_closed_tickets(&self, repo_id: &str) -> Result<usize> {
+        // Find worktrees that need to be marked as merged, along with repo local_path.
+        let mut stmt = self.conn.prepare(
+            "SELECT w.id, w.path, w.branch, r.local_path
+             FROM worktrees w
+             JOIN repos r ON r.id = w.repo_id
+             WHERE w.repo_id = ?1
+             AND w.status != 'merged'
+             AND w.ticket_id IS NOT NULL
+             AND w.ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')",
+        )?;
+        let rows: Vec<(String, String, String, String)> = stmt
+            .query_map(params![repo_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for (_id, wt_path, branch, repo_path) in &rows {
+            let _ = Command::new("git")
+                .args(["worktree", "remove", wt_path, "--force"])
+                .current_dir(repo_path)
+                .output();
+            let _ = Command::new("git")
+                .args(["branch", "-D", branch])
+                .current_dir(repo_path)
+                .output();
+        }
+
         let count = self.conn.execute(
             "UPDATE worktrees SET status = 'merged'
              WHERE repo_id = ?1
