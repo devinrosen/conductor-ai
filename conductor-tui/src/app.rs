@@ -22,7 +22,7 @@ use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
 use crate::state::{
     AppState, ConfirmAction, DashboardFocus, FormAction, FormField, InputAction, Modal,
-    RepoDetailFocus, View,
+    RepoDetailFocus, View, WorkflowsFocus,
 };
 use crate::ui;
 
@@ -863,6 +863,17 @@ impl App {
             View::Tickets => {
                 self.state.ticket_index = self.state.ticket_index.saturating_sub(1);
             }
+            View::Workflows => match self.state.workflows_focus {
+                WorkflowsFocus::Defs => {
+                    self.state.workflow_def_index = self.state.workflow_def_index.saturating_sub(1);
+                }
+                WorkflowsFocus::Runs => {
+                    self.state.workflow_run_index = self.state.workflow_run_index.saturating_sub(1);
+                }
+            },
+            View::WorkflowRunDetail => {
+                self.state.workflow_step_index = self.state.workflow_step_index.saturating_sub(1);
+            }
             _ => {}
         }
     }
@@ -992,6 +1003,26 @@ impl App {
                     self.state.ticket_index += 1;
                 }
             }
+            View::Workflows => match self.state.workflows_focus {
+                WorkflowsFocus::Defs => {
+                    let max = self.state.data.workflow_defs.len().saturating_sub(1);
+                    if self.state.workflow_def_index < max {
+                        self.state.workflow_def_index += 1;
+                    }
+                }
+                WorkflowsFocus::Runs => {
+                    let max = self.state.data.workflow_runs.len().saturating_sub(1);
+                    if self.state.workflow_run_index < max {
+                        self.state.workflow_run_index += 1;
+                    }
+                }
+            },
+            View::WorkflowRunDetail => {
+                let max = self.state.data.workflow_steps.len().saturating_sub(1);
+                if self.state.workflow_step_index < max {
+                    self.state.workflow_step_index += 1;
+                }
+            }
             _ => {}
         }
     }
@@ -1073,7 +1104,6 @@ impl App {
                 }
             }
             View::Workflows => {
-                use crate::state::WorkflowsFocus;
                 match self.state.workflows_focus {
                     WorkflowsFocus::Defs => {
                         // Run selected workflow definition
@@ -1096,7 +1126,68 @@ impl App {
                     }
                 }
             }
-            View::WorkflowRunDetail | View::WorktreeDetail => {}
+            View::WorkflowRunDetail => {
+                if let Some(step) = self
+                    .state
+                    .data
+                    .workflow_steps
+                    .get(self.state.workflow_step_index)
+                {
+                    let title = format!("Step: {} ({})", step.step_name, step.status);
+                    let mut parts: Vec<String> = Vec::new();
+                    parts.push(format!("Status:    {}", step.status));
+                    parts.push(format!("Role:      {}", step.role));
+                    parts.push(format!("Can commit: {}", step.can_commit));
+                    parts.push(format!("Iteration: {}", step.iteration));
+                    if let Some(ref started) = step.started_at {
+                        parts.push(format!("Started:   {started}"));
+                    }
+                    if let Some(ref ended) = step.ended_at {
+                        parts.push(format!("Ended:     {ended}"));
+                    }
+                    if let Some(ref child_id) = step.child_run_id {
+                        parts.push(format!("Agent run: {child_id}"));
+                    }
+                    if let Some(ref gt) = step.gate_type {
+                        parts.push(format!("Gate type: {gt}"));
+                    }
+                    if let Some(ref gp) = step.gate_prompt {
+                        parts.push(String::new());
+                        parts.push("── Gate Prompt ──".to_string());
+                        parts.push(gp.clone());
+                    }
+                    if let Some(ref gf) = step.gate_feedback {
+                        parts.push(String::new());
+                        parts.push("── Gate Feedback ──".to_string());
+                        parts.push(gf.clone());
+                    }
+                    if let Some(ref rt) = step.result_text {
+                        parts.push(String::new());
+                        parts.push("── Result ──".to_string());
+                        parts.push(rt.clone());
+                    }
+                    if let Some(ref ctx) = step.context_out {
+                        parts.push(String::new());
+                        parts.push("── Context Out ──".to_string());
+                        parts.push(ctx.clone());
+                    }
+                    if let Some(ref mk) = step.markers_out {
+                        parts.push(String::new());
+                        parts.push("── Markers Out ──".to_string());
+                        parts.push(mk.clone());
+                    }
+                    let body = parts.join("\n");
+                    let line_count = body.lines().count();
+                    self.state.modal = Modal::EventDetail {
+                        title,
+                        body,
+                        line_count,
+                        scroll_offset: 0,
+                        horizontal_offset: 0,
+                    };
+                }
+            }
+            View::WorktreeDetail => {}
         }
     }
 
