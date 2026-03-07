@@ -994,15 +994,13 @@ fn poll_all_reviewers(
     let _watcher_guard = {
         let log_dir = config::agent_log_dir();
         let _ = std::fs::create_dir_all(&log_dir);
-        let ids = watched_ids.clone();
-        let tx = notify_tx.clone();
         let mut watcher =
             notify::recommended_watcher(move |res: std::result::Result<NotifyEvent, _>| {
                 if let Ok(event) = res {
                     for p in &event.paths {
                         if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                            if ids.contains(stem) {
-                                let _ = tx.send(stem.to_owned());
+                            if watched_ids.contains(stem) {
+                                let _ = notify_tx.send(stem.to_owned());
                             }
                         }
                     }
