@@ -130,7 +130,7 @@ pub fn get_app_token(app_config: &GitHubAppConfig) -> Result<String> {
 ///
 /// Makes the authentication identity explicit so callers can distinguish
 /// between a real App token and a fallback to the `gh` CLI user identity.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum TokenResolution {
     /// Successfully obtained a GitHub App installation token.
     AppToken(String),
@@ -139,6 +139,18 @@ pub enum TokenResolution {
     /// GitHub App is configured but token acquisition failed; falling back
     /// to `gh` CLI user identity.
     Fallback { reason: String },
+}
+
+impl std::fmt::Debug for TokenResolution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TokenResolution::AppToken(_) => write!(f, "AppToken([REDACTED])"),
+            TokenResolution::NotConfigured => write!(f, "NotConfigured"),
+            TokenResolution::Fallback { reason } => {
+                f.debug_struct("Fallback").field("reason", reason).finish()
+            }
+        }
+    }
 }
 
 impl TokenResolution {
