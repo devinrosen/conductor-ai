@@ -184,6 +184,16 @@ impl<'a> WorktreeManager<'a> {
             })
     }
 
+    pub fn list_by_ticket(&self, ticket_id: &str) -> Result<Vec<Worktree>> {
+        query_collect(
+            self.conn,
+            "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model
+             FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC",
+            params![ticket_id],
+            map_worktree_row,
+        )
+    }
+
     pub fn list_by_repo_id(&self, repo_id: &str, active_only: bool) -> Result<Vec<Worktree>> {
         let status_filter = if active_only {
             " AND status = 'active'"
@@ -814,6 +824,58 @@ mod tests {
             "expected divergence warning, got: {:?}",
             warnings
         );
+    }
+
+    #[test]
+    fn test_list_by_ticket() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+
+        // Insert tickets referenced by worktrees
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES ('t1', 'r1', 'github', '1', 'Ticket 1', '', 'open', '[]', '', '2024-01-01T00:00:00Z', '{}')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES ('t2', 'r1', 'github', '2', 'Ticket 2', '', 'open', '[]', '', '2024-01-01T00:00:00Z', '{}')",
+            [],
+        ).unwrap();
+
+        // Insert worktrees with ticket_id
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, ticket_id, status, created_at) \
+             VALUES ('wt1', 'r1', 'feat-a', 'feat/a', '/tmp/ws/feat-a', 't1', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, ticket_id, status, created_at) \
+             VALUES ('wt2', 'r1', 'feat-b', 'feat/b', '/tmp/ws/feat-b', 't1', 'merged', '2024-01-02T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, ticket_id, status, created_at) \
+             VALUES ('wt3', 'r1', 'feat-c', 'feat/c', '/tmp/ws/feat-c', 't2', 'active', '2024-01-03T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+
+        // Should return 2 worktrees for ticket t1, ordered by created_at DESC
+        let worktrees = mgr.list_by_ticket("t1").unwrap();
+        assert_eq!(worktrees.len(), 2);
+        assert_eq!(worktrees[0].id, "wt2"); // newer first
+        assert_eq!(worktrees[1].id, "wt1");
+
+        // Should return 1 worktree for ticket t2
+        let worktrees = mgr.list_by_ticket("t2").unwrap();
+        assert_eq!(worktrees.len(), 1);
+        assert_eq!(worktrees[0].id, "wt3");
+
+        // Should return empty for unknown ticket
+        let worktrees = mgr.list_by_ticket("nonexistent").unwrap();
+        assert!(worktrees.is_empty());
     }
 
     #[test]

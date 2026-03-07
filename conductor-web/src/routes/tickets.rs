@@ -8,7 +8,7 @@ use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig}
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{Ticket, TicketSyncer};
-use conductor_core::worktree::Worktree;
+use conductor_core::worktree::{Worktree, WorktreeManager};
 
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
@@ -120,31 +120,14 @@ pub async fn ticket_detail(
     Path(ticket_id): Path<String>,
 ) -> Result<Json<TicketDetail>, ApiError> {
     let db = state.db.lock().await;
+    let config = state.config.read().await;
 
     let agent_mgr = AgentManager::new(&db);
     let all_totals = agent_mgr.totals_by_ticket_all()?;
     let agent_totals = all_totals.get(&ticket_id).cloned();
 
-    let mut stmt = db.prepare_cached(
-        "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model \
-         FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC",
-    )?;
-    let worktrees = stmt
-        .query_map([&ticket_id], |row| {
-            Ok(Worktree {
-                id: row.get(0)?,
-                repo_id: row.get(1)?,
-                slug: row.get(2)?,
-                branch: row.get(3)?,
-                path: row.get(4)?,
-                ticket_id: row.get(5)?,
-                status: row.get(6)?,
-                created_at: row.get(7)?,
-                completed_at: row.get(8)?,
-                model: row.get(9)?,
-            })
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let wt_mgr = WorktreeManager::new(&db, &config);
+    let worktrees = wt_mgr.list_by_ticket(&ticket_id)?;
 
     Ok(Json(TicketDetail {
         agent_totals,
