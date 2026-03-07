@@ -866,6 +866,13 @@ pub fn load_workflow_by_name(
     repo_path: &str,
     name: &str,
 ) -> Result<WorkflowDef> {
+    // Reject names with path separators or traversal sequences as defense-in-depth.
+    if name.contains('/') || name.contains('\\') || name.contains("..") || name.is_empty() {
+        return Err(ConductorError::Workflow(format!(
+            "Invalid workflow name: '{name}'"
+        )));
+    }
+
     let defs = load_workflow_defs(worktree_path, repo_path)?;
     defs.into_iter().find(|d| d.name == name).ok_or_else(|| {
         ConductorError::Workflow(format!(

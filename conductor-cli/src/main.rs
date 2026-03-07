@@ -19,9 +19,10 @@ use conductor_core::post_run::{self, PostRunInput};
 use conductor_core::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
-use conductor_core::workflow::{WorkflowExecConfig, WorkflowManager};
+use conductor_core::workflow::{
+    collect_agent_names, count_nodes, WorkflowExecConfig, WorkflowManager,
+};
 use conductor_core::workflow_config;
-use conductor_core::workflow_dsl;
 use conductor_core::worktree::WorktreeManager;
 
 /// Environment variable name used to pass the current agent run ID to subprocesses.
@@ -1230,11 +1231,10 @@ fn main() -> Result<()> {
                 let wt = wt_mgr.get_by_slug(&r.id, &worktree)?;
 
                 // Try new .wf files first, fall back to legacy .md
-                let wf_defs = workflow_dsl::load_workflow_defs(&wt.path, &r.local_path)?;
+                let wf_defs = WorkflowManager::list_defs(&wt.path, &r.local_path)?;
                 if !wf_defs.is_empty() {
                     for def in &wf_defs {
-                        let node_count = workflow_dsl::count_nodes(&def.body)
-                            + workflow_dsl::count_nodes(&def.always);
+                        let node_count = count_nodes(&def.body) + count_nodes(&def.always);
                         println!(
                             "  {:<20} {:<40} [{}, {} nodes]",
                             def.name, def.description, def.trigger, node_count
@@ -1274,7 +1274,7 @@ fn main() -> Result<()> {
                 let wt_mgr = WorktreeManager::new(&conn, &config);
                 let wt = wt_mgr.get_by_slug(&r.id, &worktree)?;
 
-                let workflow = workflow_dsl::load_workflow_by_name(&wt.path, &r.local_path, &name)?;
+                let workflow = WorkflowManager::load_def_by_name(&wt.path, &r.local_path, &name)?;
 
                 // Parse input key=value pairs
                 let mut input_map = std::collections::HashMap::new();
@@ -1316,8 +1316,7 @@ fn main() -> Result<()> {
                     ..Default::default()
                 };
 
-                let node_count = workflow_dsl::count_nodes(&workflow.body)
-                    + workflow_dsl::count_nodes(&workflow.always);
+                let node_count = count_nodes(&workflow.body) + count_nodes(&workflow.always);
                 println!(
                     "Running workflow '{}' ({} nodes) on {}/{}...",
                     workflow.name, node_count, repo, worktree
@@ -1435,10 +1434,10 @@ fn main() -> Result<()> {
                 let wt_mgr = WorktreeManager::new(&conn, &config);
                 let wt = wt_mgr.get_by_slug(&r.id, &worktree)?;
 
-                let workflow = workflow_dsl::load_workflow_by_name(&wt.path, &r.local_path, &name)?;
+                let workflow = WorkflowManager::load_def_by_name(&wt.path, &r.local_path, &name)?;
 
-                let mut all_names = workflow_dsl::collect_agent_names(&workflow.body);
-                all_names.extend(workflow_dsl::collect_agent_names(&workflow.always));
+                let mut all_names = collect_agent_names(&workflow.body);
+                all_names.extend(collect_agent_names(&workflow.always));
 
                 // Deduplicate
                 all_names.sort();
@@ -1461,8 +1460,7 @@ fn main() -> Result<()> {
                 println!("Workflow: {}", workflow.name);
                 println!("  Description: {}", workflow.description);
                 println!("  Trigger: {}", workflow.trigger);
-                let node_count = workflow_dsl::count_nodes(&workflow.body)
-                    + workflow_dsl::count_nodes(&workflow.always);
+                let node_count = count_nodes(&workflow.body) + count_nodes(&workflow.always);
                 println!("  Nodes: {node_count}");
                 println!("  Agents referenced: {}", all_names.len());
 

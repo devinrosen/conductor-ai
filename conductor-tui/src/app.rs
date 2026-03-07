@@ -1,4 +1,6 @@
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -73,6 +75,8 @@ pub struct App {
     conn: Connection,
     config: Config,
     bg_tx: Option<BackgroundSender>,
+    /// Guard to prevent multiple concurrent workflow poll threads.
+    workflow_poll_in_flight: Arc<AtomicBool>,
 }
 
 impl App {
@@ -82,6 +86,7 @@ impl App {
             conn,
             config,
             bg_tx: None,
+            workflow_poll_in_flight: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -3722,8 +3727,20 @@ impl App {
             None => return,
         };
 
+        // Skip if a poll is already in flight to avoid thread pile-up.
+        if self
+            .workflow_poll_in_flight
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+
         let wt = self.state.data.worktrees.iter().find(|w| w.id == wt_id);
-        let Some(wt) = wt else { return };
+        let Some(wt) = wt else {
+            self.workflow_poll_in_flight.store(false, Ordering::SeqCst);
+            return;
+        };
         let worktree_path = wt.path.clone();
         let repo_path = self
             .state
@@ -3735,12 +3752,14 @@ impl App {
             .unwrap_or_default();
         let selected_run_id = self.state.selected_workflow_run_id.clone();
 
-        crate::background::spawn_workflow_poll_once(
+        let in_flight = Arc::clone(&self.workflow_poll_in_flight);
+        crate::background::spawn_workflow_poll_once_guarded(
             tx.clone(),
             wt_id,
             worktree_path,
             repo_path,
             selected_run_id,
+            in_flight,
         );
     }
 

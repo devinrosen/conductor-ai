@@ -244,6 +244,7 @@ fn poll_workflow_data(
 
 /// One-shot async workflow data poll. Spawns a thread that loads defs, runs,
 /// and steps and sends a `WorkflowDataRefreshed` action back.
+#[allow(dead_code)]
 pub fn spawn_workflow_poll_once(
     tx: BackgroundSender,
     worktree_id: String,
@@ -258,6 +259,31 @@ pub fn spawn_workflow_poll_once(
             &repo_path,
             selected_run_id.as_deref(),
         ) {
+            let _ = tx.send(action);
+        }
+    });
+}
+
+/// Like [`spawn_workflow_poll_once`] but clears an `AtomicBool` guard when done,
+/// so the caller can prevent concurrent polls.
+pub fn spawn_workflow_poll_once_guarded(
+    tx: BackgroundSender,
+    worktree_id: String,
+    worktree_path: String,
+    repo_path: String,
+    selected_run_id: Option<String>,
+    in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    thread::spawn(move || {
+        let result = poll_workflow_data(
+            &worktree_id,
+            &worktree_path,
+            &repo_path,
+            selected_run_id.as_deref(),
+        );
+        // Clear the guard before sending so the next tick can enqueue a new poll.
+        in_flight.store(false, std::sync::atomic::Ordering::SeqCst);
+        if let Some(action) = result {
             let _ = tx.send(action);
         }
     });

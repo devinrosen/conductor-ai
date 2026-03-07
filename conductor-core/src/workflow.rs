@@ -21,8 +21,11 @@ use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::{
     self, CallNode, GateNode, GateType, IfNode, OnMaxIter, OnTimeout, ParallelNode, WhileNode,
-    WorkflowDef, WorkflowNode,
+    WorkflowNode,
 };
+
+// Re-export DSL types so consumers go through `workflow::` instead of `workflow_dsl::` directly.
+pub use crate::workflow_dsl::{collect_agent_names, count_nodes, InputDecl, WorkflowDef};
 use crate::worktree::WorktreeManager;
 
 // ---------------------------------------------------------------------------

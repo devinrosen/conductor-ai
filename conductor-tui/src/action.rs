@@ -4,8 +4,7 @@ use conductor_core::agent::{AgentRun, TicketAgentTotals};
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::Ticket;
-use conductor_core::workflow::{WorkflowRun, WorkflowRunStep};
-use conductor_core::workflow_dsl::WorkflowDef;
+use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStep};
 use conductor_core::worktree::Worktree;
 use crossterm::event::KeyEvent;
 

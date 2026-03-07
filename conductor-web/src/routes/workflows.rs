@@ -8,10 +8,9 @@ use serde::{Deserialize, Serialize};
 use conductor_core::error::ConductorError;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
-    execute_workflow, WorkflowExecConfig, WorkflowExecInput, WorkflowManager, WorkflowRun,
-    WorkflowRunStatus, WorkflowRunStep,
+    execute_workflow, InputDecl, WorkflowDef, WorkflowExecConfig, WorkflowExecInput,
+    WorkflowManager, WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
 };
-use conductor_core::workflow_dsl::{InputDecl, WorkflowDef};
 use conductor_core::worktree::WorktreeManager;
 
 use crate::error::ApiError;
