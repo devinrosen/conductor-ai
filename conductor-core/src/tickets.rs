@@ -188,8 +188,9 @@ impl<'a> TicketSyncer<'a> {
             })
     }
 
-    /// After syncing tickets for a repo, update any linked worktrees whose
-    /// ticket is now closed: set worktree status to 'merged'.
+    /// After syncing tickets, mark any linked worktrees whose ticket is now
+    /// closed by setting their status to `'merged'`. Called as part of the
+    /// ticket sync flow, typically after [`TicketSyncer::close_missing_tickets`].
     /// Returns the number of worktrees updated.
     pub fn mark_worktrees_for_closed_tickets(&self, repo_id: &str) -> Result<usize> {
         let count = self.conn.execute(
