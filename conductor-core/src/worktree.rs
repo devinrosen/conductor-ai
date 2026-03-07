@@ -238,14 +238,11 @@ impl<'a> WorktreeManager<'a> {
             }
         };
 
-        let mut stmt = self.conn.prepare_cached(&query)?;
-        let rows = if let Some(slug) = repo_slug {
-            stmt.query_map(params![slug], map_worktree_row)?
+        let worktrees = if let Some(slug) = repo_slug {
+            query_collect(self.conn, &query, params![slug], map_worktree_row)?
         } else {
-            stmt.query_map([], map_worktree_row)?
+            query_collect(self.conn, &query, [], map_worktree_row)?
         };
-
-        let worktrees = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(worktrees)
     }
 

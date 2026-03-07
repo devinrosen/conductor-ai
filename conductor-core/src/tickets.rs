@@ -2,6 +2,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
+use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,14 +140,11 @@ impl<'a> TicketSyncer<'a> {
             }
         };
 
-        let mut stmt = self.conn.prepare_cached(query)?;
-        let rows = if let Some(rid) = repo_id {
-            stmt.query_map(params![rid], map_ticket_row)?
+        let tickets = if let Some(rid) = repo_id {
+            query_collect(self.conn, query, params![rid], map_ticket_row)?
         } else {
-            stmt.query_map([], map_ticket_row)?
+            query_collect(self.conn, query, [], map_ticket_row)?
         };
-
-        let tickets = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(tickets)
     }
 

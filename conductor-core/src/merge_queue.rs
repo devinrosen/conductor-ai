@@ -238,15 +238,14 @@ impl<'a> MergeQueueManager<'a> {
 
     /// Get the count of entries by status for a repo.
     pub fn queue_stats(&self, repo_id: &str) -> Result<QueueStats> {
-        let mut stmt = self.conn.prepare_cached(
+        let rows = query_collect(
+            self.conn,
             "SELECT status, COUNT(*) FROM merge_queue WHERE repo_id = ?1 GROUP BY status",
+            params![repo_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
         )?;
         let mut stats = QueueStats::default();
-        let rows = stmt.query_map(params![repo_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })?;
-        for row in rows {
-            let (status, count) = row?;
+        for (status, count) in rows {
             match status.as_str() {
                 "queued" => stats.queued = count,
                 "processing" => stats.processing = count,
