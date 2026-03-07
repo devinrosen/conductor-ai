@@ -1586,6 +1586,30 @@ pub fn build_startup_context(
                     last_run.status, truncated
                 ));
             }
+
+            // Include feedback Q&A from the prior run
+            if let Ok(feedback_list) = mgr.list_feedback_for_run(&last_run.id) {
+                let responded: Vec<&FeedbackRequest> = feedback_list
+                    .iter()
+                    .filter(|f| f.status == FeedbackStatus::Responded && f.response.is_some())
+                    .collect();
+                if !responded.is_empty() {
+                    let lines: Vec<String> = responded
+                        .iter()
+                        .map(|f| {
+                            format!(
+                                "- **Q:** {}\n  **A:** {}",
+                                f.prompt,
+                                f.response.as_deref().unwrap_or("")
+                            )
+                        })
+                        .collect();
+                    sections.push(format!(
+                        "**Feedback from prior run:**\n{}",
+                        lines.join("\n")
+                    ));
+                }
+            }
         }
     }
 
@@ -2741,6 +2765,57 @@ mod tests {
         for c in truncated_part.chars() {
             assert_eq!(c, 'é');
         }
+    }
+
+    #[test]
+    fn test_startup_context_includes_feedback_from_prior_run() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a prior run
+        let prior = mgr.create_run("w1", "Prior task", None, None).unwrap();
+
+        // Add feedback Q&A (before completion, as in real flow)
+        let fb = mgr
+            .request_feedback(&prior.id, "Should I close this as false positive?")
+            .unwrap();
+        mgr.submit_feedback(&fb.id, "Yes, close it").unwrap();
+
+        // Add a dismissed feedback (should NOT appear)
+        let fb2 = mgr
+            .request_feedback(&prior.id, "Dismissed question?")
+            .unwrap();
+        mgr.dismiss_feedback(&fb2.id).unwrap();
+
+        // Complete the run after feedback
+        mgr.update_run_completed(&prior.id, None, Some("Done"), None, None, None)
+            .unwrap();
+
+        // Create current run
+        let current = mgr.create_run("w1", "Next task", None, None).unwrap();
+
+        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        assert!(ctx.contains("**Feedback from prior run:**"));
+        assert!(ctx.contains("Should I close this as false positive?"));
+        assert!(ctx.contains("Yes, close it"));
+        // Dismissed feedback should not appear
+        assert!(!ctx.contains("Dismissed question?"));
+    }
+
+    #[test]
+    fn test_startup_context_no_feedback_section_when_none() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a prior completed run with NO feedback
+        let prior = mgr.create_run("w1", "Prior task", None, None).unwrap();
+        mgr.update_run_completed(&prior.id, None, Some("Done"), None, None, None)
+            .unwrap();
+
+        let current = mgr.create_run("w1", "Next task", None, None).unwrap();
+
+        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        assert!(!ctx.contains("**Feedback from prior run:**"));
     }
 
     // ── Auto-resume tests ────────────────────────────────────────────
