@@ -877,7 +877,7 @@ impl App {
                 let old = self.state.workflow_step_index;
                 self.state.workflow_step_index = old.saturating_sub(1);
                 if self.state.workflow_step_index != old {
-                    self.reload_step_agent_events();
+                    self.poll_workflow_data_async();
                 }
             }
             _ => {}
@@ -1028,7 +1028,7 @@ impl App {
                 let old = self.state.workflow_step_index;
                 if old < max {
                     self.state.workflow_step_index = old + 1;
-                    self.reload_step_agent_events();
+                    self.poll_workflow_data_async();
                 }
             }
             _ => {}
@@ -1135,17 +1135,15 @@ impl App {
                 }
             }
             View::WorkflowRunDetail => {
-                // Clone the step to avoid borrow issues with self.reload_step_agent_events()
-                let step = self
+                // Build modal title+body from cached data, then assign modal after borrows end
+                let modal = if let Some(step) = self
                     .state
                     .data
                     .workflow_steps
                     .get(self.state.workflow_step_index)
-                    .cloned();
-                if let Some(step) = step {
+                {
                     if step.child_run_id.is_some() {
-                        // Step has an agent run — show agent activity in EventDetail modal
-                        self.reload_step_agent_events();
+                        // Step has an agent run — show agent activity from cached data
                         let events = &self.state.data.step_agent_events;
                         let run = &self.state.data.step_agent_run;
 
@@ -1155,7 +1153,6 @@ impl App {
                         );
                         let mut parts: Vec<String> = Vec::new();
 
-                        // Show run metadata header
                         if let Some(ref r) = run {
                             parts.push(format!(
                                 "Agent: {}  Model: {}  Status: {}",
@@ -1172,14 +1169,12 @@ impl App {
                             parts.push(String::new());
                         }
 
-                        // Show result text if available
                         if let Some(ref rt) = step.result_text {
                             parts.push("── Result ──".to_string());
                             parts.push(rt.clone());
                             parts.push(String::new());
                         }
 
-                        // Show agent events
                         if events.is_empty() {
                             parts.push("No agent events recorded yet.".to_string());
                         } else {
@@ -1196,13 +1191,13 @@ impl App {
 
                         let body = parts.join("\n");
                         let line_count = body.lines().count();
-                        self.state.modal = Modal::EventDetail {
+                        Some(Modal::EventDetail {
                             title,
                             body,
                             line_count,
                             scroll_offset: 0,
                             horizontal_offset: 0,
-                        };
+                        })
                     } else {
                         // No agent run — show step metadata modal
                         let title = format!("Step: {} ({})", step.step_name, step.status);
@@ -1247,14 +1242,19 @@ impl App {
                         }
                         let body = parts.join("\n");
                         let line_count = body.lines().count();
-                        self.state.modal = Modal::EventDetail {
+                        Some(Modal::EventDetail {
                             title,
                             body,
                             line_count,
                             scroll_offset: 0,
                             horizontal_offset: 0,
-                        };
+                        })
                     }
+                } else {
+                    None
+                };
+                if let Some(m) = modal {
+                    self.state.modal = m;
                 }
             }
             View::WorktreeDetail => {}
