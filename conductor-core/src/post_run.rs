@@ -145,7 +145,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
     // Resolve GitHub App token (if configured) for bot-identity comments.
     // Re-acquired before each use because installation tokens expire after 1 hour
     // and the review-fix loop may run longer than that.
-    let app_token = github_app::resolve_app_token(config, "post-run");
+    let token_resolution = github_app::resolve_app_token(config, "post-run");
 
     // Post initial cost summary now that we have a PR number
     post_cost_summary(
@@ -154,7 +154,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
         repo_name,
         pr_number,
         &wt.id,
-        app_token.as_deref(),
+        token_resolution.token(),
     );
 
     // ── Phase 3: Review → Fix Loop ───────────────────────────────────
@@ -175,7 +175,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
         );
 
         // Re-acquire app token each iteration to handle expiry during long loops
-        let app_token = github_app::resolve_app_token(config, "post-run");
+        let token_resolution = github_app::resolve_app_token(config, "post-run");
 
         let swarm_result = pr_review::run_review_swarm(&ReviewSwarmInput {
             conn,
@@ -187,7 +187,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
             model: None,
             conductor_bin: input.conductor_bin,
             swarm_config: &swarm_config,
-            app_token: app_token.as_deref(),
+            app_token: token_resolution.token(),
         })?;
 
         if swarm_result.all_required_approved {
@@ -215,14 +215,14 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
                         break;
                     }
                     // Fresh token for cost summary after fix iteration
-                    let app_token = github_app::resolve_app_token(config, "post-run");
+                    let token_resolution = github_app::resolve_app_token(config, "post-run");
                     post_cost_summary(
                         conn,
                         owner,
                         repo_name,
                         pr_number,
                         &wt.id,
-                        app_token.as_deref(),
+                        token_resolution.token(),
                     );
                 }
                 Err(e) => {
