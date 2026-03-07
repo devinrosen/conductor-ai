@@ -242,6 +242,24 @@ impl<'a> TicketSyncer<'a> {
 
         Ok(infos)
     }
+
+    /// Convenience wrapper: marks worktrees for closed tickets, removes their
+    /// git artifacts, and returns the number of worktrees cleaned up.
+    /// Errors from the DB query or git cleanup are silently ignored.
+    pub fn mark_and_remove_merged_worktrees(&self, repo_id: &str) -> usize {
+        let infos = self
+            .mark_worktrees_for_closed_tickets(repo_id)
+            .unwrap_or_default();
+        let count = infos.len();
+        for info in infos {
+            crate::worktree::remove_git_artifacts(
+                &info.repo_path,
+                &info.worktree_path,
+                &info.branch,
+            );
+        }
+        count
+    }
 }
 
 /// Build a rich agent prompt from a ticket's context.

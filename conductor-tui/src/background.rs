@@ -9,7 +9,7 @@ use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig}
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::TicketSyncer;
-use conductor_core::worktree::{self, WorktreeManager};
+use conductor_core::worktree::WorktreeManager;
 
 use crate::action::{Action, DataRefreshedPayload};
 use crate::event::BackgroundSender;
@@ -135,16 +135,7 @@ fn sync_jira_repo(
             match syncer.upsert_tickets(repo_id, &tickets) {
                 Ok(count) => {
                     let _ = syncer.close_missing_tickets(repo_id, "jira", &synced_ids);
-                    for info in syncer
-                        .mark_worktrees_for_closed_tickets(repo_id)
-                        .unwrap_or_default()
-                    {
-                        worktree::remove_git_artifacts(
-                            &info.repo_path,
-                            &info.worktree_path,
-                            &info.branch,
-                        );
-                    }
+                    syncer.mark_and_remove_merged_worktrees(repo_id);
                     Action::TicketSyncComplete {
                         repo_slug: repo_slug.to_string(),
                         count,
@@ -177,16 +168,7 @@ fn sync_github_repo(
             match syncer.upsert_tickets(repo_id, &tickets) {
                 Ok(count) => {
                     let _ = syncer.close_missing_tickets(repo_id, "github", &synced_ids);
-                    for info in syncer
-                        .mark_worktrees_for_closed_tickets(repo_id)
-                        .unwrap_or_default()
-                    {
-                        worktree::remove_git_artifacts(
-                            &info.repo_path,
-                            &info.worktree_path,
-                            &info.branch,
-                        );
-                    }
+                    syncer.mark_and_remove_merged_worktrees(repo_id);
                     Action::TicketSyncComplete {
                         repo_slug: repo_slug.to_string(),
                         count,

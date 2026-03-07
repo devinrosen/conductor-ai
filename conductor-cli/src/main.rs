@@ -19,7 +19,7 @@ use conductor_core::post_run::{self, PostRunInput};
 use conductor_core::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
-use conductor_core::worktree::{self, WorktreeManager};
+use conductor_core::worktree::WorktreeManager;
 
 /// Environment variable name used to pass the current agent run ID to subprocesses.
 const CONDUCTOR_RUN_ID_ENV: &str = "CONDUCTOR_RUN_ID";
@@ -1726,22 +1726,13 @@ fn sync_jira(syncer: &TicketSyncer, repo_id: &str, repo_slug: &str, jql: &str, b
                     let closed = syncer
                         .close_missing_tickets(repo_id, "jira", &synced_ids)
                         .unwrap_or(0);
-                    let merged = syncer
-                        .mark_worktrees_for_closed_tickets(repo_id)
-                        .unwrap_or_default();
-                    for info in &merged {
-                        worktree::remove_git_artifacts(
-                            &info.repo_path,
-                            &info.worktree_path,
-                            &info.branch,
-                        );
-                    }
+                    let merged = syncer.mark_and_remove_merged_worktrees(repo_id);
                     print!("  {} — synced {count} Jira issues", repo_slug);
                     if closed > 0 {
                         print!(", {closed} marked closed");
                     }
-                    if !merged.is_empty() {
-                        print!(", {} worktrees merged", merged.len());
+                    if merged > 0 {
+                        print!(", {merged} worktrees merged");
                     }
                     println!();
                 }
@@ -1766,22 +1757,13 @@ fn sync_github(syncer: &TicketSyncer, repo_id: &str, repo_slug: &str, owner: &st
                     let closed = syncer
                         .close_missing_tickets(repo_id, "github", &synced_ids)
                         .unwrap_or(0);
-                    let merged = syncer
-                        .mark_worktrees_for_closed_tickets(repo_id)
-                        .unwrap_or_default();
-                    for info in &merged {
-                        worktree::remove_git_artifacts(
-                            &info.repo_path,
-                            &info.worktree_path,
-                            &info.branch,
-                        );
-                    }
+                    let merged = syncer.mark_and_remove_merged_worktrees(repo_id);
                     print!("  {} — synced {count} GitHub issues", repo_slug);
                     if closed > 0 {
                         print!(", {closed} marked closed");
                     }
-                    if !merged.is_empty() {
-                        print!(", {} worktrees merged", merged.len());
+                    if merged > 0 {
+                        print!(", {merged} worktrees merged");
                     }
                     println!();
                 }

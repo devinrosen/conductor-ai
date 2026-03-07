@@ -8,7 +8,7 @@ use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig}
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{Ticket, TicketSyncer};
-use conductor_core::worktree::{self, Worktree};
+use conductor_core::worktree::Worktree;
 
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
@@ -70,12 +70,7 @@ pub async fn sync_tickets(
             total_closed += syncer
                 .close_missing_tickets(&repo.id, "github", &synced_ids)
                 .unwrap_or(0);
-            for info in syncer
-                .mark_worktrees_for_closed_tickets(&repo.id)
-                .unwrap_or_default()
-            {
-                worktree::remove_git_artifacts(&info.repo_path, &info.worktree_path, &info.branch);
-            }
+            syncer.mark_and_remove_merged_worktrees(&repo.id);
         }
     } else {
         for source in sources {
@@ -89,16 +84,7 @@ pub async fn sync_tickets(
                             total_closed += syncer
                                 .close_missing_tickets(&repo.id, "github", &synced_ids)
                                 .unwrap_or(0);
-                            for info in syncer
-                                .mark_worktrees_for_closed_tickets(&repo.id)
-                                .unwrap_or_default()
-                            {
-                                worktree::remove_git_artifacts(
-                                    &info.repo_path,
-                                    &info.worktree_path,
-                                    &info.branch,
-                                );
-                            }
+                            syncer.mark_and_remove_merged_worktrees(&repo.id);
                         }
                     }
                 }
@@ -111,16 +97,7 @@ pub async fn sync_tickets(
                             total_closed += syncer
                                 .close_missing_tickets(&repo.id, "jira", &synced_ids)
                                 .unwrap_or(0);
-                            for info in syncer
-                                .mark_worktrees_for_closed_tickets(&repo.id)
-                                .unwrap_or_default()
-                            {
-                                worktree::remove_git_artifacts(
-                                    &info.repo_path,
-                                    &info.worktree_path,
-                                    &info.branch,
-                                );
-                            }
+                            syncer.mark_and_remove_merged_worktrees(&repo.id);
                         }
                     }
                 }
