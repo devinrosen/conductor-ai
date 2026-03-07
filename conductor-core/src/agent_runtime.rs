@@ -11,6 +11,32 @@ use rusqlite::Connection;
 
 use crate::agent::{AgentManager, AgentRun, AgentRunStatus};
 
+/// After a successful `tmux new-window`, wait briefly and verify the window
+/// actually exists. Returns `Ok(())` if the window is alive, or an `Err`
+/// describing the failure.
+pub fn verify_tmux_window(window_name: &str) -> std::result::Result<(), String> {
+    // Give tmux a moment to register the window.
+    thread::sleep(Duration::from_millis(100));
+
+    let output = Command::new("tmux")
+        .args(["list-windows", "-a", "-F", "#{window_name}"])
+        .output()
+        .map_err(|e| format!("Failed to list tmux windows: {e}"))?;
+
+    if !output.status.success() {
+        return Err("tmux list-windows failed — tmux may not be running".to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.lines().any(|line| line.trim() == window_name) {
+        Ok(())
+    } else {
+        Err(format!(
+            "tmux window '{window_name}' not found after spawn — agent process may have exited immediately"
+        ))
+    }
+}
+
 /// Poll the database for a child run to reach a terminal status.
 pub fn poll_child_completion(
     conn: &Connection,
@@ -90,9 +116,22 @@ pub fn spawn_child_tmux(
         .map_err(|e| format!("Failed to spawn tmux: {e}"))?;
 
     if result.status.success() {
-        Ok(())
+        // Verify the window actually exists after spawn.
+        verify_tmux_window(window_name)
     } else {
         let stderr = String::from_utf8_lossy(&result.stderr);
         Err(format!("tmux failed: {stderr}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verify_tmux_window_rejects_nonexistent_window() {
+        // Whether or not tmux is running, a bogus window name should fail.
+        let result = verify_tmux_window("conductor-test-nonexistent-xyz-99999");
+        assert!(result.is_err());
     }
 }

@@ -174,11 +174,17 @@ pub async fn start_agent(
 
     match result {
         Ok(o) if o.status.success() => {
-            state.events.emit(ConductorEvent::AgentStarted {
-                run_id: run.id.clone(),
-                worktree_id: wt.id.clone(),
-            });
-            Ok((StatusCode::CREATED, Json(run)))
+            // Verify the window actually exists after spawn.
+            if let Err(e) = conductor_core::agent_runtime::verify_tmux_window(&wt.slug) {
+                let _ = agent_mgr.update_run_failed(&run.id, &e);
+                Err(conductor_core::error::ConductorError::Agent(e).into())
+            } else {
+                state.events.emit(ConductorEvent::AgentStarted {
+                    run_id: run.id.clone(),
+                    worktree_id: wt.id.clone(),
+                });
+                Ok((StatusCode::CREATED, Json(run)))
+            }
         }
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
@@ -593,11 +599,17 @@ pub async fn orchestrate_agent(
 
     match result {
         Ok(o) if o.status.success() => {
-            state.events.emit(ConductorEvent::AgentStarted {
-                run_id: run.id.clone(),
-                worktree_id: wt.id.clone(),
-            });
-            Ok((StatusCode::CREATED, Json(run)))
+            // Verify the window actually exists after spawn.
+            if let Err(e) = conductor_core::agent_runtime::verify_tmux_window(&wt.slug) {
+                let _ = agent_mgr.update_run_failed(&run.id, &e);
+                Err(conductor_core::error::ConductorError::Agent(e).into())
+            } else {
+                state.events.emit(ConductorEvent::AgentStarted {
+                    run_id: run.id.clone(),
+                    worktree_id: wt.id.clone(),
+                });
+                Ok((StatusCode::CREATED, Json(run)))
+            }
         }
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);

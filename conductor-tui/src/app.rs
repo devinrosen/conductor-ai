@@ -3304,10 +3304,16 @@ impl App {
 
         match result {
             Ok(o) if o.status.success() => {
-                self.state.status_message = Some(format!(
-                    "Orchestrator launched in tmux window: {worktree_slug}"
-                ));
-                self.refresh_data();
+                // Verify the window actually exists after spawn.
+                if let Err(e) = conductor_core::agent_runtime::verify_tmux_window(&worktree_slug) {
+                    let _ = mgr.update_run_failed(&run.id, &e);
+                    self.state.modal = Modal::Error { message: e };
+                } else {
+                    self.state.status_message = Some(format!(
+                        "Orchestrator launched in tmux window: {worktree_slug}"
+                    ));
+                    self.refresh_data();
+                }
             }
             Ok(o) => {
                 let stderr = String::from_utf8_lossy(&o.stderr);
@@ -3496,9 +3502,15 @@ impl App {
 
         match result {
             Ok(o) if o.status.success() => {
-                self.state.status_message =
-                    Some(format!("Agent launched in tmux window: {worktree_slug}"));
-                self.refresh_data();
+                // Verify the window actually exists after spawn.
+                if let Err(e) = conductor_core::agent_runtime::verify_tmux_window(&worktree_slug) {
+                    let _ = mgr.update_run_failed(&run.id, &e);
+                    self.state.modal = Modal::Error { message: e };
+                } else {
+                    self.state.status_message =
+                        Some(format!("Agent launched in tmux window: {worktree_slug}"));
+                    self.refresh_data();
+                }
             }
             Ok(o) => {
                 let stderr = String::from_utf8_lossy(&o.stderr);

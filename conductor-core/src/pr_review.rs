@@ -995,7 +995,8 @@ fn spawn_reviewer_tmux(
         .map_err(|e| format!("Failed to spawn tmux: {e}"))?;
 
     if result.status.success() {
-        Ok(())
+        // Verify the window actually exists after spawn.
+        crate::agent_runtime::verify_tmux_window(window_name)
     } else {
         let stderr = String::from_utf8_lossy(&result.stderr);
         Err(format!("tmux failed: {stderr}"))
