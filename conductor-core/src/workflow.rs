@@ -145,23 +145,7 @@ impl std::str::FromStr for WorkflowRunStatus {
     }
 }
 
-impl rusqlite::types::ToSql for WorkflowRunStatus {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-        Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
-    }
-}
-
-impl rusqlite::types::FromSql for WorkflowRunStatus {
-    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
-        let s = String::column_result(value)?;
-        s.parse().map_err(|e: String| {
-            rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                e,
-            )))
-        })
-    }
-}
+crate::impl_sql_enum!(WorkflowRunStatus);
 
 /// Status of a single workflow step execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,23 +188,7 @@ impl std::str::FromStr for WorkflowStepStatus {
     }
 }
 
-impl rusqlite::types::ToSql for WorkflowStepStatus {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-        Ok(rusqlite::types::ToSqlOutput::from(self.to_string()))
-    }
-}
-
-impl rusqlite::types::FromSql for WorkflowStepStatus {
-    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
-        let s = String::column_result(value)?;
-        s.parse().map_err(|e: String| {
-            rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                e,
-            )))
-        })
-    }
-}
+crate::impl_sql_enum!(WorkflowStepStatus);
 
 // ---------------------------------------------------------------------------
 // Data structs
