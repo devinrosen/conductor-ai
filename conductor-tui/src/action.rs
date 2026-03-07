@@ -168,6 +168,15 @@ pub enum Action {
         message: String,
     },
 
+    // Background result for worktree delete readiness check
+    DeleteWorktreeReady {
+        repo_slug: String,
+        wt_slug: String,
+        issue_closed: bool,
+        pr_merged: bool,
+        has_ticket: bool,
+    },
+
     // Workflow actions
     RunWorkflow,
     CancelWorkflow,

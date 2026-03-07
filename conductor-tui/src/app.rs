@@ -570,6 +570,22 @@ impl App {
                 self.state.status_message = Some(message);
                 self.refresh_data();
             }
+            Action::DeleteWorktreeReady {
+                repo_slug,
+                wt_slug,
+                issue_closed,
+                pr_merged,
+                has_ticket,
+            } => {
+                self.state.status_message = None;
+                self.show_delete_worktree_modal(
+                    &repo_slug,
+                    &wt_slug,
+                    issue_closed,
+                    pr_merged,
+                    has_ticket,
+                );
+            }
         }
         true
     }
@@ -2369,6 +2385,50 @@ impl App {
         }
     }
 
+    fn show_delete_worktree_modal(
+        &mut self,
+        repo_slug: &str,
+        wt_slug: &str,
+        issue_closed: bool,
+        pr_merged: bool,
+        has_ticket: bool,
+    ) {
+        let on_confirm = ConfirmAction::DeleteWorktree {
+            repo_slug: repo_slug.to_string(),
+            wt_slug: wt_slug.to_string(),
+        };
+
+        if issue_closed && pr_merged {
+            // Work is done — simple confirm
+            self.state.modal = Modal::Confirm {
+                title: "Delete Worktree".to_string(),
+                message: format!(
+                    "Delete worktree {}/{}? Issue is closed and PR is merged.",
+                    repo_slug, wt_slug
+                ),
+                on_confirm,
+            };
+        } else {
+            // Work may be in progress — require typing the slug
+            let reason = if !has_ticket {
+                "This worktree has no linked issue."
+            } else if !issue_closed && !pr_merged {
+                "This worktree has an open issue and unmerged code."
+            } else if !issue_closed {
+                "This worktree has an open issue."
+            } else {
+                "This worktree has unmerged code."
+            };
+            self.state.modal = Modal::ConfirmByName {
+                title: "Delete Worktree".to_string(),
+                message: format!("{reason} This removes the git worktree and branch."),
+                expected: wt_slug.to_string(),
+                value: String::new(),
+                on_confirm,
+            };
+        }
+    }
+
     fn handle_delete(&mut self) {
         match self.state.view {
             View::WorktreeDetail => {
@@ -2387,53 +2447,51 @@ impl App {
                             .cloned()
                             .unwrap_or_else(|| "?".to_string());
 
-                        let on_confirm = ConfirmAction::DeleteWorktree {
-                            repo_slug: repo_slug.clone(),
-                            wt_slug: wt.slug.clone(),
-                        };
-
                         // Check if work is completed (issue closed + PR merged)
                         let issue_closed = wt
                             .ticket_id
                             .as_ref()
                             .and_then(|tid| self.state.data.ticket_map.get(tid))
                             .is_some_and(|t| t.state == "closed");
+                        let has_ticket = wt.ticket_id.is_some();
 
-                        let repo = self.state.data.repos.iter().find(|r| r.id == wt.repo_id);
-                        let pr_merged = repo.is_some_and(|r| {
-                            conductor_core::github::has_merged_pr(&r.remote_url, &wt.branch)
-                        });
-
-                        if issue_closed && pr_merged {
-                            // Work is done — simple confirm
-                            self.state.modal = Modal::Confirm {
-                                title: "Delete Worktree".to_string(),
-                                message: format!(
-                                    "Delete worktree {}/{}? Issue is closed and PR is merged.",
-                                    repo_slug, wt.slug
-                                ),
-                                on_confirm,
-                            };
+                        if issue_closed {
+                            // Issue is closed — check PR status in background
+                            let remote_url = self
+                                .state
+                                .data
+                                .repos
+                                .iter()
+                                .find(|r| r.id == wt.repo_id)
+                                .map(|r| r.remote_url.clone())
+                                .unwrap_or_default();
+                            let branch = wt.branch.clone();
+                            let slug = wt.slug.clone();
+                            let rs = repo_slug.clone();
+                            if let Some(ref tx) = self.bg_tx {
+                                let tx = tx.clone();
+                                std::thread::spawn(move || {
+                                    let pr_merged =
+                                        conductor_core::github::has_merged_pr(&remote_url, &branch);
+                                    let _ = tx.send(Action::DeleteWorktreeReady {
+                                        repo_slug: rs,
+                                        wt_slug: slug,
+                                        issue_closed: true,
+                                        pr_merged,
+                                        has_ticket: true,
+                                    });
+                                });
+                                self.state.status_message = Some("Checking PR status…".to_string());
+                            }
                         } else {
-                            // Work may be in progress — require typing the slug
-                            let reason = if wt.ticket_id.is_none() {
-                                "This worktree has no linked issue."
-                            } else if !issue_closed && !pr_merged {
-                                "This worktree has an open issue and unmerged code."
-                            } else if !issue_closed {
-                                "This worktree has an open issue."
-                            } else {
-                                "This worktree has unmerged code."
-                            };
-                            self.state.modal = Modal::ConfirmByName {
-                                title: "Delete Worktree".to_string(),
-                                message: format!(
-                                    "{reason} This removes the git worktree and branch.",
-                                ),
-                                expected: wt.slug.clone(),
-                                value: String::new(),
-                                on_confirm,
-                            };
+                            // Issue is open or no ticket — no network call needed
+                            self.show_delete_worktree_modal(
+                                &repo_slug,
+                                &wt.slug.clone(),
+                                issue_closed,
+                                false,
+                                has_ticket,
+                            );
                         }
                     }
                 }
