@@ -571,6 +571,27 @@ mod tests {
     }
 
     #[test]
+    fn test_mark_worktrees_skips_open_ticket() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Insert an open ticket and link a worktree to it
+        let tickets = vec![make_ticket("1", "Issue 1")];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
+
+        // Do NOT close the ticket — it stays open
+        let count = syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(get_worktree_status(&conn, "wt1"), "active");
+    }
+
+    #[test]
     fn test_mark_worktrees_idempotent() {
         let conn = setup_db();
         let syncer = TicketSyncer::new(&conn);
