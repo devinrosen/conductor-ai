@@ -666,7 +666,7 @@ fn main() -> Result<()> {
 
                 if auto_agent {
                     if let Some(ref tid) = ticket {
-                        let syncer = TicketSyncer::new(&conn);
+                        let syncer = TicketSyncer::new(&conn, &config);
                         match syncer.get_by_id(tid) {
                             Ok(t) => {
                                 let prompt = build_agent_prompt(&t);
@@ -956,7 +956,7 @@ fn main() -> Result<()> {
                     repo_mgr.list()?
                 };
 
-                let syncer = TicketSyncer::new(&conn);
+                let syncer = TicketSyncer::new(&conn, &config);
                 let source_mgr = IssueSourceManager::new(&conn);
 
                 for r in repos {
@@ -1031,7 +1031,7 @@ fn main() -> Result<()> {
                     None
                 };
 
-                let syncer = TicketSyncer::new(&conn);
+                let syncer = TicketSyncer::new(&conn, &config);
                 let tickets = syncer.list(repo_id.as_deref())?;
                 if tickets.is_empty() {
                     println!("No tickets. Run `conductor tickets sync` first.");
@@ -1072,7 +1072,7 @@ fn main() -> Result<()> {
                     anyhow::bail!("Worktree '{worktree}' already has a linked ticket");
                 }
 
-                let syncer = TicketSyncer::new(&conn);
+                let syncer = TicketSyncer::new(&conn, &config);
                 syncer.link_to_worktree(&ticket_id, &worktree_id)?;
                 println!("Linked ticket #{ticket} to worktree '{worktree}'");
             }
@@ -1084,7 +1084,7 @@ fn main() -> Result<()> {
                     None
                 };
 
-                let syncer = TicketSyncer::new(&conn);
+                let syncer = TicketSyncer::new(&conn, &config);
                 let tickets = syncer.list(repo_id.as_deref())?;
                 let agent_mgr = AgentManager::new(&conn);
                 let totals = agent_mgr.totals_by_ticket_all()?;
