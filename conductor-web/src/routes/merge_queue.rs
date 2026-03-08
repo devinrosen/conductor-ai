@@ -5,8 +5,6 @@ use serde::Deserialize;
 use conductor_core::merge_queue::{MergeQueueEntry, MergeQueueManager, QueueStats};
 use conductor_core::worktree::WorktreeManager;
 
-use conductor_core::error::ConductorError;
-
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -75,14 +73,9 @@ pub async fn mark_merged(
     let db = state.db.lock().await;
     let config = state.config.read().await;
     let mgr = MergeQueueManager::new(&db);
-    let entry = mgr.get(&entry_id)?.ok_or_else(|| {
-        ApiError(ConductorError::MergeQueueEntryNotFound {
-            id: entry_id.clone(),
-        })
-    })?;
-    mgr.mark_merged(&entry_id)?;
     let wt_mgr = WorktreeManager::new(&db, &config);
-    if let Err(e) = wt_mgr.delete_by_id_as_merged(&entry.worktree_id) {
+    let (entry, cleanup) = mgr.mark_merged_and_cleanup(&entry_id, &wt_mgr)?;
+    if let Err(e) = cleanup {
         tracing::warn!(
             "mark_merged: could not clean up worktree {}: {e}",
             entry.worktree_id

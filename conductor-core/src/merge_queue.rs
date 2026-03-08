@@ -3,7 +3,8 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::db::query_collect;
-use crate::error::Result;
+use crate::error::{ConductorError, Result};
+use crate::worktree::{Worktree, WorktreeManager};
 
 /// A single entry in the merge queue — represents a worktree whose changes
 /// should be landed onto the target branch by the refinery agent.
@@ -217,6 +218,27 @@ impl<'a> MergeQueueManager<'a> {
             params![now, entry_id],
         )?;
         Ok(())
+    }
+
+    /// Mark an entry as merged and best-effort clean up its git worktree.
+    ///
+    /// Returns the entry and the worktree cleanup result. The outer `Result`
+    /// fails if the entry is not found or `mark_merged` fails; the inner
+    /// `Result<Worktree>` carries the cleanup outcome so callers can surface
+    /// it however is appropriate (log, print, ignore).
+    pub fn mark_merged_and_cleanup(
+        &self,
+        entry_id: &str,
+        wt_mgr: &WorktreeManager<'_>,
+    ) -> Result<(MergeQueueEntry, Result<Worktree>)> {
+        let entry = self
+            .get(entry_id)?
+            .ok_or_else(|| ConductorError::MergeQueueEntryNotFound {
+                id: entry_id.to_string(),
+            })?;
+        self.mark_merged(entry_id)?;
+        let cleanup = wt_mgr.delete_by_id_as_merged(&entry.worktree_id);
+        Ok((entry, cleanup))
     }
 
     /// Mark an entry as failed.
