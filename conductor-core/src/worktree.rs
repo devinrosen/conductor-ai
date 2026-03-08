@@ -352,15 +352,7 @@ impl<'a> WorktreeManager<'a> {
         };
         let now = Utc::now().to_rfc3339();
 
-        // Remove git worktree
-        let _ = git_in(&repo.local_path)
-            .args(["worktree", "remove", &worktree.path, "--force"])
-            .output();
-
-        // Delete git branch
-        let _ = git_in(&repo.local_path)
-            .args(["branch", "-D", "--", &worktree.branch])
-            .output();
+        remove_git_artifacts(&repo.local_path, &worktree.path, &worktree.branch);
 
         // Soft-delete: update status + completed_at instead of deleting the row
         self.conn.execute(
@@ -643,6 +635,18 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
     }
 
     Ok(warnings)
+}
+
+/// Remove the git worktree directory and delete the associated branch.
+/// Both operations are best-effort: failures are silently ignored because the
+/// worktree or branch may already be gone (e.g. manually removed).
+fn remove_git_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
+    let _ = git_in(repo_path)
+        .args(["worktree", "remove", worktree_path, "--force"])
+        .output();
+    let _ = git_in(repo_path)
+        .args(["branch", "-D", "--", branch])
+        .output();
 }
 
 /// Check if a branch has been merged into the default branch.
