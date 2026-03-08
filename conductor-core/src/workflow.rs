@@ -627,6 +627,18 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// List recent workflow runs across all worktrees, ordered by started_at DESC.
+    pub fn list_all_workflow_runs(&self, limit: usize) -> Result<Vec<WorkflowRun>> {
+        query_collect(
+            self.conn,
+            &format!(
+                "SELECT {RUN_COLUMNS} FROM workflow_runs ORDER BY started_at DESC LIMIT {limit}"
+            ),
+            params![],
+            row_to_workflow_run,
+        )
+    }
+
     /// Find the waiting gate step for a workflow run.
     pub fn find_waiting_gate(&self, workflow_run_id: &str) -> Result<Option<WorkflowRunStep>> {
         let result = self.conn.query_row(

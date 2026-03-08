@@ -38,6 +38,8 @@ pub struct DataRefreshedPayload {
     pub tickets: Vec<Ticket>,
     pub latest_agent_runs: HashMap<String, AgentRun>,
     pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
+    /// Most recent workflow run per worktree (for inline indicators in the Worktrees panel).
+    pub latest_workflow_runs_by_worktree: HashMap<String, WorkflowRun>,
 }
 
 /// Every user intent or background result flows through this enum.
@@ -187,6 +189,10 @@ pub enum Action {
     CancelWorkflow,
     ApproveGate,
     RejectGate,
+    /// View the selected workflow definition's YAML source in a scrollable modal.
+    ViewWorkflowDef,
+    /// Open the selected workflow definition's source file in $EDITOR.
+    EditWorkflowDef,
     GateInputChar(char),
     GateInputBackspace,
     WorkflowDataRefreshed(Box<WorkflowDataPayload>),

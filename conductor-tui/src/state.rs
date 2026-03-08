@@ -393,9 +393,11 @@ pub struct DataCache {
     pub agent_created_issues: Vec<AgentCreatedIssue>,
     /// Pending feedback request for the currently viewed worktree (if any)
     pub pending_feedback: Option<FeedbackRequest>,
+    /// Most recent workflow run per worktree (worktree_id → run), for inline indicators.
+    pub latest_workflow_runs_by_worktree: HashMap<String, WorkflowRun>,
     /// Workflow definitions for the currently viewed worktree
     pub workflow_defs: Vec<WorkflowDef>,
-    /// Workflow runs for the currently viewed worktree
+    /// Workflow runs for the currently viewed worktree (or all worktrees in global mode)
     pub workflow_runs: Vec<WorkflowRun>,
     /// Steps for the currently viewed workflow run
     pub workflow_steps: Vec<WorkflowRunStep>,

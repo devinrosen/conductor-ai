@@ -61,12 +61,24 @@ pub fn poll_data() -> Option<Action> {
     let latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
     let ticket_agent_totals = agent_mgr.totals_by_ticket_all().unwrap_or_default();
 
+    use conductor_core::workflow::WorkflowManager;
+    let wf_mgr = WorkflowManager::new(&conn);
+    // Build a per-worktree map of the most recent run (any status) for inline indicators.
+    // Fetch recent runs sorted DESC; the first entry per worktree_id wins.
+    let mut latest_workflow_runs_by_worktree = std::collections::HashMap::new();
+    for run in wf_mgr.list_all_workflow_runs(100).unwrap_or_default() {
+        latest_workflow_runs_by_worktree
+            .entry(run.worktree_id.clone())
+            .or_insert(run);
+    }
+
     Some(Action::DataRefreshed(Box::new(DataRefreshedPayload {
         repos,
         worktrees,
         tickets,
         latest_agent_runs,
         ticket_agent_totals,
+        latest_workflow_runs_by_worktree,
     })))
 }
 
@@ -201,7 +213,7 @@ fn sync_repo(
 pub fn spawn_workflow_poller(
     tx: BackgroundSender,
     interval: Duration,
-    worktree_id: String,
+    worktree_id: Option<String>,
     worktree_path: String,
     repo_path: String,
     selected_run_id: Option<String>,
@@ -210,7 +222,7 @@ pub fn spawn_workflow_poller(
     thread::spawn(move || loop {
         thread::sleep(interval);
         if let Some(action) = poll_workflow_data(
-            &worktree_id,
+            worktree_id.as_deref(),
             &worktree_path,
             &repo_path,
             selected_run_id.as_deref(),
@@ -224,7 +236,7 @@ pub fn spawn_workflow_poller(
 }
 
 fn poll_workflow_data(
-    worktree_id: &str,
+    worktree_id: Option<&str>,
     worktree_path: &str,
     repo_path: &str,
     selected_run_id: Option<&str>,
@@ -235,9 +247,38 @@ fn poll_workflow_data(
     let db = db_path();
     let conn = open_database(&db).ok()?;
 
-    let defs = WorkflowManager::list_defs(worktree_path, repo_path).unwrap_or_default();
+    // Load defs: scoped to one worktree, or aggregated across all worktrees in global mode.
+    let defs = if !worktree_path.is_empty() {
+        WorkflowManager::list_defs(worktree_path, repo_path).unwrap_or_default()
+    } else {
+        // Global mode: scan every registered worktree for workflow definitions.
+        let mut all_defs = Vec::new();
+        if let Ok(config) = conductor_core::config::load_config() {
+            let wt_mgr = conductor_core::worktree::WorktreeManager::new(&conn, &config);
+            let repo_mgr = conductor_core::repo::RepoManager::new(&conn, &config);
+            let repo_paths: std::collections::HashMap<String, String> = repo_mgr
+                .list()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| (r.id, r.local_path))
+                .collect();
+            for wt in wt_mgr.list(None, true).unwrap_or_default() {
+                let rp = repo_paths
+                    .get(&wt.repo_id)
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                let mut wt_defs = WorkflowManager::list_defs(&wt.path, rp).unwrap_or_default();
+                all_defs.append(&mut wt_defs);
+            }
+        }
+        all_defs
+    };
     let wf_mgr = WorkflowManager::new(&conn);
-    let runs = wf_mgr.list_workflow_runs(worktree_id).unwrap_or_default();
+    let runs = if let Some(wt_id) = worktree_id {
+        wf_mgr.list_workflow_runs(wt_id).unwrap_or_default()
+    } else {
+        wf_mgr.list_all_workflow_runs(50).unwrap_or_default()
+    };
     let steps = if let Some(run_id) = selected_run_id {
         wf_mgr.get_workflow_steps(run_id).unwrap_or_default()
     } else {
@@ -273,7 +314,7 @@ fn poll_workflow_data(
 #[allow(dead_code)]
 pub fn spawn_workflow_poll_once(
     tx: BackgroundSender,
-    worktree_id: String,
+    worktree_id: Option<String>,
     worktree_path: String,
     repo_path: String,
     selected_run_id: Option<String>,
@@ -281,7 +322,7 @@ pub fn spawn_workflow_poll_once(
 ) {
     thread::spawn(move || {
         if let Some(action) = poll_workflow_data(
-            &worktree_id,
+            worktree_id.as_deref(),
             &worktree_path,
             &repo_path,
             selected_run_id.as_deref(),
@@ -296,7 +337,7 @@ pub fn spawn_workflow_poll_once(
 /// so the caller can prevent concurrent polls.
 pub fn spawn_workflow_poll_once_guarded(
     tx: BackgroundSender,
-    worktree_id: String,
+    worktree_id: Option<String>,
     worktree_path: String,
     repo_path: String,
     selected_run_id: Option<String>,
@@ -305,7 +346,7 @@ pub fn spawn_workflow_poll_once_guarded(
 ) {
     thread::spawn(move || {
         let result = poll_workflow_data(
-            &worktree_id,
+            worktree_id.as_deref(),
             &worktree_path,
             &repo_path,
             selected_run_id.as_deref(),
