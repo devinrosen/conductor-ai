@@ -215,12 +215,14 @@ impl App {
         match action {
             Action::None => return false,
             Action::Tick => {
-                // On workflow views, poll workflow data asynchronously
-                // to avoid blocking the main loop with FS + DB I/O.
-                if matches!(self.state.view, View::Workflows | View::WorkflowRunDetail) {
-                    self.poll_workflow_data_async();
-                }
-                return false;
+                // Poll workflow data asynchronously on every tick so the global
+                // status bar (and workflow views) stay current regardless of which
+                // view is active.
+                self.poll_workflow_data_async();
+                // Always redraw on tick so elapsed times, spinners, and other
+                // time-sensitive indicators update smoothly (ratatui diffs cells,
+                // so this is cheap).
+                return true;
             }
             Action::Quit => self.state.should_quit = true,
 
