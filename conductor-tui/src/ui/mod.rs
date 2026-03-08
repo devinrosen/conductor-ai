@@ -15,13 +15,18 @@ use crate::state::{AppState, Modal, View};
 pub fn render(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
 
+    // Compute global status once per frame — used for both header height and rendering.
+    let gs = state.global_status();
+
     // Layout: header (1–2 lines) + body (fill) + status bar (1 line).
     // Header height is dynamic: 1 line when nothing is active or 4+ items are
     // collapsed, 2 lines when 1–3 active items or the user has expanded the bar.
+    let header_h = state.header_height(&gs);
+
     let layout = ratatui::layout::Layout::default()
         .direction(ratatui::layout::Direction::Vertical)
         .constraints([
-            ratatui::layout::Constraint::Length(state.header_height()),
+            ratatui::layout::Constraint::Length(header_h),
             ratatui::layout::Constraint::Min(0),
             ratatui::layout::Constraint::Length(1),
         ])
@@ -31,7 +36,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     let body_area = layout[1];
     let status_area = layout[2];
 
-    common::render_header(frame, header_area, state);
+    common::render_header(frame, header_area, state, &gs);
 
     match state.view {
         View::Dashboard => dashboard::render(frame, body_area, state),

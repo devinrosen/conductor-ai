@@ -676,6 +676,13 @@ impl AppState {
             .map(|wt| (wt.id.as_str(), wt.slug.as_str()))
             .collect();
 
+        let resolve_slug = |id: &str| {
+            slug_map
+                .get(id)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| id.to_string())
+        };
+
         let mut gs = GlobalStatus::default();
 
         for run in self.data.latest_agent_runs.values() {
@@ -685,10 +692,7 @@ impl AppState {
                 _ => {}
             }
             if run.is_active() {
-                let worktree_slug = slug_map
-                    .get(run.worktree_id.as_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| run.worktree_id.clone());
+                let worktree_slug = resolve_slug(run.worktree_id.as_str());
                 let elapsed_secs = chrono::DateTime::parse_from_rfc3339(&run.started_at)
                     .ok()
                     .map(|dt| {
@@ -714,10 +718,7 @@ impl AppState {
                 run.status,
                 WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
             ) {
-                let worktree_slug = slug_map
-                    .get(run.worktree_id.as_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| run.worktree_id.clone());
+                let worktree_slug = resolve_slug(run.worktree_id.as_str());
                 gs.active_items.push(GlobalStatusItem::Workflow {
                     worktree_slug,
                     workflow_name: run.workflow_name.clone(),
@@ -747,8 +748,10 @@ impl AppState {
     /// - 0 active items  → 1 line (just the Conductor title)
     /// - 1–3 active items → 2 lines (auto-expanded detail view)
     /// - 4+ active items  → 1 line by default; 2 lines when `status_bar_expanded`
-    pub fn header_height(&self) -> u16 {
-        let gs = self.global_status();
+    ///
+    /// Accepts a pre-computed `GlobalStatus` so callers that already hold one
+    /// (e.g. the render loop) don't trigger a second full recomputation.
+    pub fn header_height(&self, gs: &GlobalStatus) -> u16 {
         let total = gs.total_active();
         if total == 0 {
             1
@@ -921,6 +924,25 @@ mod tests {
         assert!(!state.show_closed_tickets);
     }
 
+    fn make_workflow_run(
+        worktree_id: &str,
+        status: WorkflowRunStatus,
+    ) -> conductor_core::workflow::WorkflowRun {
+        conductor_core::workflow::WorkflowRun {
+            id: "wfrun-1".into(),
+            workflow_name: "test-workflow".into(),
+            worktree_id: worktree_id.into(),
+            parent_run_id: "run-1".into(),
+            status,
+            dry_run: false,
+            trigger: "manual".into(),
+            started_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
+            result_summary: None,
+            definition_snapshot: None,
+        }
+    }
+
     fn make_agent_run(
         worktree_id: &str,
         status: AgentRunStatus,
@@ -995,7 +1017,7 @@ mod tests {
     #[test]
     fn header_height_no_active() {
         let state = AppState::new();
-        assert_eq!(state.header_height(), 1);
+        assert_eq!(state.header_height(&state.global_status()), 1);
     }
 
     #[test]
@@ -1005,7 +1027,8 @@ mod tests {
             .data
             .latest_agent_runs
             .insert("wt1".into(), make_agent_run("wt1", AgentRunStatus::Running));
-        assert_eq!(state.header_height(), 2);
+        let gs = state.global_status();
+        assert_eq!(state.header_height(&gs), 2);
     }
 
     #[test]
@@ -1017,7 +1040,8 @@ mod tests {
                 make_agent_run(&format!("wt{i}"), AgentRunStatus::Running),
             );
         }
-        assert_eq!(state.header_height(), 1);
+        let gs = state.global_status();
+        assert_eq!(state.header_height(&gs), 1);
     }
 
     #[test]
@@ -1030,6 +1054,120 @@ mod tests {
             );
         }
         state.status_bar_expanded = true;
-        assert_eq!(state.header_height(), 2);
+        let gs = state.global_status();
+        assert_eq!(state.header_height(&gs), 2);
+    }
+
+    #[test]
+    fn global_status_running_workflow() {
+        let mut state = AppState::new();
+        state.data.latest_workflow_runs_by_worktree.insert(
+            "wt1".into(),
+            make_workflow_run("wt1", WorkflowRunStatus::Running),
+        );
+        let gs = state.global_status();
+        assert_eq!(gs.running_workflows, 1);
+        assert_eq!(gs.waiting_workflows, 0);
+        assert_eq!(gs.total_active(), 1);
+        assert_eq!(gs.active_items.len(), 1);
+        assert!(matches!(
+            &gs.active_items[0],
+            GlobalStatusItem::Workflow {
+                status: WorkflowRunStatus::Running,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn global_status_waiting_workflow_sorted_first() {
+        let mut state = AppState::new();
+        state
+            .data
+            .latest_agent_runs
+            .insert("wt1".into(), make_agent_run("wt1", AgentRunStatus::Running));
+        state.data.latest_workflow_runs_by_worktree.insert(
+            "wt2".into(),
+            make_workflow_run("wt2", WorkflowRunStatus::Waiting),
+        );
+        let gs = state.global_status();
+        assert_eq!(gs.running_agents, 1);
+        assert_eq!(gs.waiting_workflows, 1);
+        assert_eq!(gs.total_active(), 2);
+        // Waiting workflow should be sorted before running agent
+        assert!(matches!(
+            &gs.active_items[0],
+            GlobalStatusItem::Workflow {
+                status: WorkflowRunStatus::Waiting,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn global_status_completed_and_failed_agents_excluded() {
+        let mut state = AppState::new();
+        state.data.latest_agent_runs.insert(
+            "wt1".into(),
+            make_agent_run("wt1", AgentRunStatus::Completed),
+        );
+        state
+            .data
+            .latest_agent_runs
+            .insert("wt2".into(), make_agent_run("wt2", AgentRunStatus::Failed));
+        let gs = state.global_status();
+        assert_eq!(gs.total_active(), 0);
+        assert!(gs.active_items.is_empty());
+    }
+
+    #[test]
+    fn global_status_slug_resolved_from_worktree() {
+        let mut state = AppState::new();
+        state
+            .data
+            .worktrees
+            .push(conductor_core::worktree::Worktree {
+                id: "wt-id-1".into(),
+                repo_id: "repo-1".into(),
+                slug: "feat-my-feature".into(),
+                branch: "feat/my-feature".into(),
+                path: "/tmp/wt".into(),
+                ticket_id: None,
+                status: conductor_core::worktree::WorktreeStatus::Active,
+                created_at: "2026-01-01T00:00:00Z".into(),
+                completed_at: None,
+                model: None,
+                base_branch: None,
+            });
+        state.data.latest_agent_runs.insert(
+            "wt-id-1".into(),
+            make_agent_run("wt-id-1", AgentRunStatus::Running),
+        );
+        let gs = state.global_status();
+        assert_eq!(gs.total_active(), 1);
+        match &gs.active_items[0] {
+            GlobalStatusItem::Agent { worktree_slug, .. } => {
+                assert_eq!(worktree_slug, "feat-my-feature");
+            }
+            _ => panic!("expected Agent item"),
+        }
+    }
+
+    #[test]
+    fn global_status_slug_fallback_to_id_when_not_found() {
+        let mut state = AppState::new();
+        // No worktrees registered — slug_map is empty
+        state.data.latest_agent_runs.insert(
+            "unknown-wt-id".into(),
+            make_agent_run("unknown-wt-id", AgentRunStatus::Running),
+        );
+        let gs = state.global_status();
+        assert_eq!(gs.total_active(), 1);
+        match &gs.active_items[0] {
+            GlobalStatusItem::Agent { worktree_slug, .. } => {
+                assert_eq!(worktree_slug, "unknown-wt-id");
+            }
+            _ => panic!("expected Agent item"),
+        }
     }
 }

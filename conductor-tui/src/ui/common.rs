@@ -9,8 +9,12 @@ use ratatui::Frame;
 
 use crate::state::{AppState, GlobalStatusItem, View};
 
-pub fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
-    let gs = state.global_status();
+pub fn render_header(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    gs: &crate::state::GlobalStatus,
+) {
     let total_active = gs.total_active();
 
     if area.height >= 2 {
@@ -18,10 +22,10 @@ pub fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(1), Constraint::Length(1)])
             .split(area);
-        render_header_summary(frame, rows[0], state, total_active, &gs);
-        render_header_detail(frame, rows[1], &gs, state.status_bar_expanded, total_active);
+        render_header_summary(frame, rows[0], state, total_active, gs);
+        render_header_detail(frame, rows[1], gs, state.status_bar_expanded, total_active);
     } else {
-        render_header_summary(frame, area, state, total_active, &gs);
+        render_header_summary(frame, area, state, total_active, gs);
     }
 }
 
