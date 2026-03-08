@@ -367,6 +367,13 @@ impl<'a> WorktreeManager<'a> {
         })
     }
 
+    /// Remove the git worktree directory and delete the associated branch (best-effort).
+    /// Failures are logged but not propagated. Delegates to the module-private
+    /// `remove_git_artifacts` to keep the implementation detail encapsulated.
+    pub fn remove_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
+        remove_git_artifacts(repo_path, worktree_path, branch);
+    }
+
     pub fn update_status(&self, worktree_id: &str, status: WorktreeStatus) -> Result<()> {
         let completed_at = if status != WorktreeStatus::Active {
             Some(Utc::now().to_rfc3339())
@@ -640,7 +647,7 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
 /// Remove the git worktree directory and delete the associated branch.
 /// Both operations are best-effort: failures are logged but not propagated because the
 /// worktree or branch may already be gone (e.g. manually removed).
-pub(crate) fn remove_git_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
+fn remove_git_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
     match git_in(repo_path)
         .args(["worktree", "remove", worktree_path, "--force"])
         .output()

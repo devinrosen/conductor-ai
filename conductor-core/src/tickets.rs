@@ -5,7 +5,7 @@ use tracing::warn;
 
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
-use crate::worktree::remove_git_artifacts;
+use crate::worktree::WorktreeManager;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ticket {
@@ -252,7 +252,7 @@ impl<'a> TicketSyncer<'a> {
         )?;
 
         for (repo_path, worktree_path, branch) in artifacts {
-            remove_git_artifacts(&repo_path, &worktree_path, &branch);
+            WorktreeManager::remove_artifacts(&repo_path, &worktree_path, &branch);
         }
 
         Ok(count)
