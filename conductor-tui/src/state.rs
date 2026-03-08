@@ -32,14 +32,47 @@ impl FilterState {
 }
 
 use conductor_core::agent::{
-    AgentCreatedIssue, AgentRun, AgentRunEvent, FeedbackRequest, TicketAgentTotals,
+    AgentCreatedIssue, AgentRun, AgentRunEvent, AgentRunStatus, FeedbackRequest, TicketAgentTotals,
 };
 use conductor_core::config::WorkTarget;
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::issue_source::IssueSource;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::Ticket;
-use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStep};
+use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep};
+
+/// A single active item for the global status bar detail line.
+#[derive(Debug, Clone)]
+pub enum GlobalStatusItem {
+    Agent {
+        worktree_slug: String,
+        status: AgentRunStatus,
+        /// Elapsed seconds since the run started (0 if unknown).
+        elapsed_secs: u64,
+    },
+    Workflow {
+        worktree_slug: String,
+        workflow_name: String,
+        status: WorkflowRunStatus,
+    },
+}
+
+/// Aggregated global status for the persistent top status bar.
+#[derive(Debug, Clone, Default)]
+pub struct GlobalStatus {
+    pub running_agents: usize,
+    pub waiting_agents: usize,
+    pub running_workflows: usize,
+    pub waiting_workflows: usize,
+    /// Active items sorted by priority (waiting first, then running).
+    pub active_items: Vec<GlobalStatusItem>,
+}
+
+impl GlobalStatus {
+    pub fn total_active(&self) -> usize {
+        self.running_agents + self.waiting_agents + self.running_workflows + self.waiting_workflows
+    }
+}
 use conductor_core::worktree::Worktree;
 use ratatui::widgets::ListState;
 use tui_textarea::TextArea;
@@ -568,6 +601,10 @@ pub struct AppState {
 
     /// True while a manual ticket sync is running in the background.
     pub ticket_sync_in_progress: bool,
+
+    /// When true, force the global status bar detail line to expand even when
+    /// there are 4+ active items (which default to the collapsed 1-line view).
+    pub status_bar_expanded: bool,
 }
 
 impl AppState {
@@ -601,6 +638,7 @@ impl AppState {
             should_quit: false,
             show_closed_tickets: false,
             ticket_sync_in_progress: false,
+            status_bar_expanded: false,
         }
     }
 
@@ -627,6 +665,101 @@ impl AppState {
     /// Returns whether any filter is currently active.
     pub fn any_filter_active(&self) -> bool {
         self.filter.active || self.detail_ticket_filter.active
+    }
+
+    /// Compute the current global status from cached data.
+    pub fn global_status(&self) -> GlobalStatus {
+        let slug_map: HashMap<&str, &str> = self
+            .data
+            .worktrees
+            .iter()
+            .map(|wt| (wt.id.as_str(), wt.slug.as_str()))
+            .collect();
+
+        let resolve_slug = |id: &str| {
+            slug_map
+                .get(id)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| id.to_string())
+        };
+
+        let mut gs = GlobalStatus::default();
+
+        for run in self.data.latest_agent_runs.values() {
+            match run.status {
+                AgentRunStatus::Running => gs.running_agents += 1,
+                AgentRunStatus::WaitingForFeedback => gs.waiting_agents += 1,
+                _ => {}
+            }
+            if run.is_active() {
+                let worktree_slug = resolve_slug(run.worktree_id.as_str());
+                let elapsed_secs = chrono::DateTime::parse_from_rfc3339(&run.started_at)
+                    .ok()
+                    .map(|dt| {
+                        let now = chrono::Utc::now();
+                        now.signed_duration_since(dt).num_seconds().max(0) as u64
+                    })
+                    .unwrap_or(0);
+                gs.active_items.push(GlobalStatusItem::Agent {
+                    worktree_slug,
+                    status: run.status.clone(),
+                    elapsed_secs,
+                });
+            }
+        }
+
+        for run in self.data.latest_workflow_runs_by_worktree.values() {
+            match run.status {
+                WorkflowRunStatus::Running => gs.running_workflows += 1,
+                WorkflowRunStatus::Waiting => gs.waiting_workflows += 1,
+                _ => {}
+            }
+            if matches!(
+                run.status,
+                WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
+            ) {
+                let worktree_slug = resolve_slug(run.worktree_id.as_str());
+                gs.active_items.push(GlobalStatusItem::Workflow {
+                    worktree_slug,
+                    workflow_name: run.workflow_name.clone(),
+                    status: run.status.clone(),
+                });
+            }
+        }
+
+        // Sort: waiting items first (they block progress), then running.
+        gs.active_items.sort_by_key(|item| match item {
+            GlobalStatusItem::Agent {
+                status: AgentRunStatus::WaitingForFeedback,
+                ..
+            }
+            | GlobalStatusItem::Workflow {
+                status: WorkflowRunStatus::Waiting,
+                ..
+            } => 0u8,
+            _ => 1,
+        });
+
+        gs
+    }
+
+    /// Number of lines the persistent header bar occupies.
+    ///
+    /// - 0 active items  → 1 line (just the Conductor title)
+    /// - 1–3 active items → 2 lines (auto-expanded detail view)
+    /// - 4+ active items  → 1 line by default; 2 lines when `status_bar_expanded`
+    ///
+    /// Accepts a pre-computed `GlobalStatus` so callers that already hold one
+    /// (e.g. the render loop) don't trigger a second full recomputation.
+    pub fn header_height(&self, gs: &GlobalStatus) -> u16 {
+        let total = gs.total_active();
+        if total == 0 {
+            1
+        } else if total <= 3 || self.status_bar_expanded {
+            2
+        } else {
+            1
+        }
     }
 
     /// Returns (current_index, list_length) for the currently focused pane.
@@ -789,5 +922,252 @@ mod tests {
         assert!(state.show_closed_tickets);
         state.show_closed_tickets = false;
         assert!(!state.show_closed_tickets);
+    }
+
+    fn make_workflow_run(
+        worktree_id: &str,
+        status: WorkflowRunStatus,
+    ) -> conductor_core::workflow::WorkflowRun {
+        conductor_core::workflow::WorkflowRun {
+            id: "wfrun-1".into(),
+            workflow_name: "test-workflow".into(),
+            worktree_id: worktree_id.into(),
+            parent_run_id: "run-1".into(),
+            status,
+            dry_run: false,
+            trigger: "manual".into(),
+            started_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
+            result_summary: None,
+            definition_snapshot: None,
+        }
+    }
+
+    fn make_agent_run(
+        worktree_id: &str,
+        status: AgentRunStatus,
+    ) -> conductor_core::agent::AgentRun {
+        conductor_core::agent::AgentRun {
+            id: "run-1".into(),
+            worktree_id: worktree_id.into(),
+            claude_session_id: None,
+            prompt: "do stuff".into(),
+            status,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
+            tmux_window: None,
+            log_file: None,
+            model: None,
+            plan: None,
+            parent_run_id: None,
+        }
+    }
+
+    #[test]
+    fn global_status_empty() {
+        let state = AppState::new();
+        let gs = state.global_status();
+        assert_eq!(gs.total_active(), 0);
+        assert!(gs.active_items.is_empty());
+    }
+
+    #[test]
+    fn global_status_running_agent() {
+        let mut state = AppState::new();
+        state
+            .data
+            .latest_agent_runs
+            .insert("wt1".into(), make_agent_run("wt1", AgentRunStatus::Running));
+        let gs = state.global_status();
+        assert_eq!(gs.running_agents, 1);
+        assert_eq!(gs.waiting_agents, 0);
+        assert_eq!(gs.total_active(), 1);
+        assert_eq!(gs.active_items.len(), 1);
+    }
+
+    #[test]
+    fn global_status_waiting_sorted_first() {
+        let mut state = AppState::new();
+        state
+            .data
+            .latest_agent_runs
+            .insert("wt1".into(), make_agent_run("wt1", AgentRunStatus::Running));
+        state.data.latest_agent_runs.insert(
+            "wt2".into(),
+            make_agent_run("wt2", AgentRunStatus::WaitingForFeedback),
+        );
+        let gs = state.global_status();
+        assert_eq!(gs.running_agents, 1);
+        assert_eq!(gs.waiting_agents, 1);
+        assert_eq!(gs.total_active(), 2);
+        // Waiting item should be sorted first
+        assert!(matches!(
+            &gs.active_items[0],
+            GlobalStatusItem::Agent {
+                status: AgentRunStatus::WaitingForFeedback,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn header_height_no_active() {
+        let state = AppState::new();
+        assert_eq!(state.header_height(&state.global_status()), 1);
+    }
+
+    #[test]
+    fn header_height_few_active_auto_expands() {
+        let mut state = AppState::new();
+        state
+            .data
+            .latest_agent_runs
+            .insert("wt1".into(), make_agent_run("wt1", AgentRunStatus::Running));
+        let gs = state.global_status();
+        assert_eq!(state.header_height(&gs), 2);
+    }
+
+    #[test]
+    fn header_height_many_active_collapsed_by_default() {
+        let mut state = AppState::new();
+        for i in 0..5 {
+            state.data.latest_agent_runs.insert(
+                format!("wt{i}"),
+                make_agent_run(&format!("wt{i}"), AgentRunStatus::Running),
+            );
+        }
+        let gs = state.global_status();
+        assert_eq!(state.header_height(&gs), 1);
+    }
+
+    #[test]
+    fn header_height_many_active_expanded_when_toggled() {
+        let mut state = AppState::new();
+        for i in 0..5 {
+            state.data.latest_agent_runs.insert(
+                format!("wt{i}"),
+                make_agent_run(&format!("wt{i}"), AgentRunStatus::Running),
+            );
+        }
+        state.status_bar_expanded = true;
+        let gs = state.global_status();
+        assert_eq!(state.header_height(&gs), 2);
+    }
+
+    #[test]
+    fn global_status_running_workflow() {
+        let mut state = AppState::new();
+        state.data.latest_workflow_runs_by_worktree.insert(
+            "wt1".into(),
+            make_workflow_run("wt1", WorkflowRunStatus::Running),
+        );
+        let gs = state.global_status();
+        assert_eq!(gs.running_workflows, 1);
+        assert_eq!(gs.waiting_workflows, 0);
+        assert_eq!(gs.total_active(), 1);
+        assert_eq!(gs.active_items.len(), 1);
+        assert!(matches!(
+            &gs.active_items[0],
+            GlobalStatusItem::Workflow {
+                status: WorkflowRunStatus::Running,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn global_status_waiting_workflow_sorted_first() {
+        let mut state = AppState::new();
+        state
+            .data
+            .latest_agent_runs
+            .insert("wt1".into(), make_agent_run("wt1", AgentRunStatus::Running));
+        state.data.latest_workflow_runs_by_worktree.insert(
+            "wt2".into(),
+            make_workflow_run("wt2", WorkflowRunStatus::Waiting),
+        );
+        let gs = state.global_status();
+        assert_eq!(gs.running_agents, 1);
+        assert_eq!(gs.waiting_workflows, 1);
+        assert_eq!(gs.total_active(), 2);
+        // Waiting workflow should be sorted before running agent
+        assert!(matches!(
+            &gs.active_items[0],
+            GlobalStatusItem::Workflow {
+                status: WorkflowRunStatus::Waiting,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn global_status_completed_and_failed_agents_excluded() {
+        let mut state = AppState::new();
+        state.data.latest_agent_runs.insert(
+            "wt1".into(),
+            make_agent_run("wt1", AgentRunStatus::Completed),
+        );
+        state
+            .data
+            .latest_agent_runs
+            .insert("wt2".into(), make_agent_run("wt2", AgentRunStatus::Failed));
+        let gs = state.global_status();
+        assert_eq!(gs.total_active(), 0);
+        assert!(gs.active_items.is_empty());
+    }
+
+    #[test]
+    fn global_status_slug_resolved_from_worktree() {
+        let mut state = AppState::new();
+        state
+            .data
+            .worktrees
+            .push(conductor_core::worktree::Worktree {
+                id: "wt-id-1".into(),
+                repo_id: "repo-1".into(),
+                slug: "feat-my-feature".into(),
+                branch: "feat/my-feature".into(),
+                path: "/tmp/wt".into(),
+                ticket_id: None,
+                status: conductor_core::worktree::WorktreeStatus::Active,
+                created_at: "2026-01-01T00:00:00Z".into(),
+                completed_at: None,
+                model: None,
+                base_branch: None,
+            });
+        state.data.latest_agent_runs.insert(
+            "wt-id-1".into(),
+            make_agent_run("wt-id-1", AgentRunStatus::Running),
+        );
+        let gs = state.global_status();
+        assert_eq!(gs.total_active(), 1);
+        match &gs.active_items[0] {
+            GlobalStatusItem::Agent { worktree_slug, .. } => {
+                assert_eq!(worktree_slug, "feat-my-feature");
+            }
+            _ => panic!("expected Agent item"),
+        }
+    }
+
+    #[test]
+    fn global_status_slug_fallback_to_id_when_not_found() {
+        let mut state = AppState::new();
+        // No worktrees registered — slug_map is empty
+        state.data.latest_agent_runs.insert(
+            "unknown-wt-id".into(),
+            make_agent_run("unknown-wt-id", AgentRunStatus::Running),
+        );
+        let gs = state.global_status();
+        assert_eq!(gs.total_active(), 1);
+        match &gs.active_items[0] {
+            GlobalStatusItem::Agent { worktree_slug, .. } => {
+                assert_eq!(worktree_slug, "unknown-wt-id");
+            }
+            _ => panic!("expected Agent item"),
+        }
     }
 }
