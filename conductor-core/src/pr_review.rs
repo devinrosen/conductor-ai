@@ -1058,13 +1058,15 @@ fn poll_all_reviewers(
             .unwrap_or_default();
         let approved = is_review_approved(run, &parsed);
         let off_diff = parsed.off_diff_findings;
-        if let Some(ref step_id) = steps[step_idx].id {
-            let step_status = if run.status == AgentRunStatus::Completed {
-                StepStatus::Completed
-            } else {
-                StepStatus::Failed
-            };
-            let _ = mgr.update_step_status(step_id, step_status);
+        if let Some(step) = steps.get(step_idx) {
+            if let Some(ref step_id) = step.id {
+                let step_status = if run.status == AgentRunStatus::Completed {
+                    StepStatus::Completed
+                } else {
+                    StepStatus::Failed
+                };
+                let _ = mgr.update_step_status(step_id, step_status);
+            }
         }
         eprintln!(
             "[review-swarm] {} reviewer: {} (approved={}, off_diff={})",
@@ -1107,8 +1109,10 @@ fn poll_all_reviewers(
                     timeout.as_secs_f64()
                 );
                 eprintln!("[review-swarm] {} reviewer error: {err}", role.name);
-                if let Some(ref step_id) = steps[*step_idx].id {
-                    let _ = mgr.update_step_status(step_id, StepStatus::Failed);
+                if let Some(step) = steps.get(*step_idx) {
+                    if let Some(ref step_id) = step.id {
+                        let _ = mgr.update_step_status(step_id, StepStatus::Failed);
+                    }
                 }
                 let _ = mgr.update_run_cancelled(&child_run.id);
                 results[idx] = Some(ReviewerResult {
