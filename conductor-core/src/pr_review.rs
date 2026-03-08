@@ -694,7 +694,15 @@ fn file_off_diff_issues(
     // Batch-fetch all conductor-review issues once to avoid N subprocess spawns.
     let existing_issues =
         github::list_issues_by_search(owner, repo, "", "conductor-review", 200, app_token)
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    "failed to fetch existing conductor-review issues for {}/{}: {e}; \
+                     skipping deduplication — duplicates may be filed",
+                    owner,
+                    repo
+                );
+                Vec::new()
+            });
 
     let mut filed = Vec::new();
 
