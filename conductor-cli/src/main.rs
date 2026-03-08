@@ -245,9 +245,6 @@ enum WorkflowCommands {
         /// Input variables (key=value pairs)
         #[arg(long = "input", value_name = "KEY=VALUE")]
         inputs: Vec<String>,
-        /// PR URL shorthand; equivalent to --input pr_url=<URL>
-        #[arg(long, value_name = "URL")]
-        pr: Option<String>,
     },
     /// Show details of a workflow run
     Show {
@@ -1300,7 +1297,6 @@ fn main() -> Result<()> {
                 no_fail_fast,
                 step_timeout_secs,
                 inputs,
-                pr,
             } => {
                 let repo_mgr = RepoManager::new(&conn, &config);
                 let r = repo_mgr.get_by_slug(&repo)?;
@@ -1318,19 +1314,10 @@ fn main() -> Result<()> {
                         anyhow::bail!("Invalid input format: '{}'. Use key=value.", input);
                     }
                 }
-                // --pr <URL> is shorthand for --input pr_url=<URL>
-                if let Some(pr_url) = pr {
-                    input_map.entry("pr_url".to_string()).or_insert(pr_url);
-                }
 
                 // Validate required inputs
                 for input_decl in &workflow.inputs {
                     if input_decl.required && !input_map.contains_key(&input_decl.name) {
-                        if input_decl.name == "pr_url" {
-                            anyhow::bail!(
-                                "Missing required input: 'pr_url'. Use --pr <URL> or --input pr_url=<URL>."
-                            );
-                        }
                         anyhow::bail!(
                             "Missing required input: '{}'. Use --input {}=<value>.",
                             input_decl.name,
