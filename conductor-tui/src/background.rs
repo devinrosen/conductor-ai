@@ -36,7 +36,7 @@ pub fn poll_data() -> Option<Action> {
 
     let repo_mgr = RepoManager::new(&conn, &config);
     let wt_mgr = WorktreeManager::new(&conn, &config);
-    let ticket_syncer = TicketSyncer::new(&conn, &config);
+    let ticket_syncer = TicketSyncer::new(&conn);
     let agent_mgr = AgentManager::new(&conn);
 
     // Reap orphaned runs whose tmux windows have disappeared.
@@ -85,7 +85,7 @@ fn sync_all_tickets(tx: &BackgroundSender) {
     let repo_mgr = RepoManager::new(&conn, &config);
     let Ok(repos) = repo_mgr.list() else { return };
 
-    let syncer = TicketSyncer::new(&conn, &config);
+    let syncer = TicketSyncer::new(&conn);
     let source_mgr = IssueSourceManager::new(&conn);
 
     for repo in repos {

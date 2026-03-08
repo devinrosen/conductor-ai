@@ -92,7 +92,7 @@ pub fn run_post_lifecycle(input: &PostRunInput<'_>) -> Result<PostRunResult> {
     }
 
     let diff = stage_all_and_get_diff(&wt.path)?;
-    let ticket = fetch_linked_ticket(conn, config, wt);
+    let ticket = fetch_linked_ticket(conn, wt);
     let ticket_context = ticket
         .as_ref()
         .map(format_ticket_context)
@@ -314,7 +314,7 @@ pub fn approve_and_merge(input: &PostRunInput<'_>) -> Result<PostRunResult> {
     let (pr_number, pr_url) = github::detect_pr(owner, repo_name, &wt.branch)?
         .ok_or_else(|| ConductorError::Agent(format!("No PR found for branch {}", wt.branch)))?;
 
-    let ticket = fetch_linked_ticket(input.conn, input.config, wt);
+    let ticket = fetch_linked_ticket(input.conn, wt);
     merge_and_cleanup(
         owner,
         repo_name,
@@ -390,13 +390,9 @@ fn stage_all_and_get_diff(worktree_path: &str) -> Result<String> {
 }
 
 /// Fetch the linked ticket for a worktree, if any.
-fn fetch_linked_ticket(
-    conn: &Connection,
-    config: &Config,
-    wt: &crate::worktree::Worktree,
-) -> Option<Ticket> {
+fn fetch_linked_ticket(conn: &Connection, wt: &crate::worktree::Worktree) -> Option<Ticket> {
     let ticket_id = wt.ticket_id.as_ref()?;
-    TicketSyncer::new(conn, config).get_by_id(ticket_id).ok()
+    TicketSyncer::new(conn).get_by_id(ticket_id).ok()
 }
 
 /// Format a ticket into context text for AI prompts.

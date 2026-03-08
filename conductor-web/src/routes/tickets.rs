@@ -32,8 +32,7 @@ pub async fn list_all_tickets(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Ticket>>, ApiError> {
     let db = state.db.lock().await;
-    let config = state.config.read().await;
-    let syncer = TicketSyncer::new(&db, &config);
+    let syncer = TicketSyncer::new(&db);
     let tickets = syncer.list(None)?;
     Ok(Json(tickets))
 }
@@ -45,7 +44,7 @@ pub async fn list_tickets(
     let db = state.db.lock().await;
     let config = state.config.read().await;
     RepoManager::new(&db, &config).get_by_id(&repo_id)?;
-    let syncer = TicketSyncer::new(&db, &config);
+    let syncer = TicketSyncer::new(&db);
     let tickets = syncer.list(Some(&repo_id))?;
     Ok(Json(tickets))
 }
@@ -75,7 +74,7 @@ pub async fn sync_tickets(
     let config = state.config.read().await;
     let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
     let source_mgr = IssueSourceManager::new(&db);
-    let syncer = TicketSyncer::new(&db, &config);
+    let syncer = TicketSyncer::new(&db);
 
     let sources = source_mgr.list(&repo.id)?;
     let mut total_synced = 0usize;
