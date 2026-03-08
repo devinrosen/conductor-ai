@@ -128,20 +128,31 @@ pub fn discover_github_repos(owner: Option<&str>) -> Result<Vec<DiscoveredRepo>>
 
 /// Sync open GitHub issues for a repo using the `gh` CLI.
 /// Returns a list of normalized TicketInputs ready for upsert.
-pub fn sync_github_issues(owner: &str, repo: &str) -> Result<Vec<TicketInput>> {
+///
+/// When `token` is `Some`, the sync runs under that identity
+/// (e.g. a GitHub App installation). When `None`, falls back to the
+/// default `gh` CLI user.
+pub fn sync_github_issues(
+    owner: &str,
+    repo: &str,
+    token: Option<&str>,
+) -> Result<Vec<TicketInput>> {
     let repo_slug = repo_slug(owner, repo);
-    let output = run_gh(&[
-        "issue",
-        "list",
-        "--repo",
-        &repo_slug,
-        "--state",
-        "open",
-        "--limit",
-        "200",
-        "--json",
-        "number,title,body,labels,assignees,state,url",
-    ])?;
+    let output = run_gh_with_token(
+        &[
+            "issue",
+            "list",
+            "--repo",
+            &repo_slug,
+            "--state",
+            "open",
+            "--limit",
+            "200",
+            "--json",
+            "number,title,body,labels,assignees,state,url",
+        ],
+        token,
+    )?;
 
     let json_str = String::from_utf8_lossy(&output.stdout);
     let issues: Vec<serde_json::Value> = serde_json::from_str(&json_str)
@@ -589,6 +600,39 @@ mod tests {
         let default_branch = item["defaultBranchRef"]["name"].as_str().unwrap_or("main");
         assert_eq!(default_branch, "main");
         assert!(item["isPrivate"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_sync_github_issues_passes_token() {
+        // Verify build_gh_cmd wires token correctly — the same path used by sync_github_issues.
+        let cmd = build_gh_cmd(
+            &[
+                "issue",
+                "list",
+                "--repo",
+                "alice/my-repo",
+                "--state",
+                "open",
+                "--limit",
+                "200",
+                "--json",
+                "number,title,body,labels,assignees,state,url",
+            ],
+            Some("app-token"),
+        );
+        let gh_token = cmd
+            .get_envs()
+            .find(|(k, _)| *k == "GH_TOKEN")
+            .map(|(_, v)| v);
+        assert_eq!(gh_token, Some(Some(std::ffi::OsStr::new("app-token"))));
+    }
+
+    #[test]
+    fn test_sync_github_issues_no_token() {
+        // When token is None, GH_TOKEN must not be set.
+        let cmd = build_gh_cmd(&["issue", "list", "--repo", "alice/my-repo"], None);
+        let has_gh_token = cmd.get_envs().any(|(k, _)| k == "GH_TOKEN");
+        assert!(!has_gh_token);
     }
 
     #[test]

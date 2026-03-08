@@ -99,7 +99,7 @@ pub async fn sync_tickets(
         // Backward compat: auto-detect GitHub from remote URL
         if let Some((owner, name)) = github::parse_github_remote(&repo.remote_url) {
             let (synced, closed) = sync_source(&syncer, &repo.id, "github", || {
-                github::sync_github_issues(&owner, &name)
+                github::sync_github_issues(&owner, &name, None)
             });
             total_synced += synced;
             total_closed += closed;
@@ -110,7 +110,7 @@ pub async fn sync_tickets(
                 "github" => {
                     if let Ok(cfg) = serde_json::from_str::<GitHubConfig>(&source.config_json) {
                         let (synced, closed) = sync_source(&syncer, &repo.id, "github", || {
-                            github::sync_github_issues(&cfg.owner, &cfg.repo)
+                            github::sync_github_issues(&cfg.owner, &cfg.repo, None)
                         });
                         total_synced += synced;
                         total_closed += closed;

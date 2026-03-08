@@ -2608,7 +2608,7 @@ impl App {
         let mut total = 0;
         for repo in &repos {
             if let Some((owner, name)) = github::parse_github_remote(&repo.remote_url) {
-                match github::sync_github_issues(&owner, &name) {
+                match github::sync_github_issues(&owner, &name, None) {
                     Ok(tickets) => {
                         let synced_ids: Vec<&str> =
                             tickets.iter().map(|t| t.source_id.as_str()).collect();

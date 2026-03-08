@@ -966,7 +966,7 @@ fn main() -> Result<()> {
                         // Backward compat: auto-detect GitHub from remote_url
                         if let Some((owner, name)) = github::parse_github_remote(&r.remote_url) {
                             sync_repo(&syncer, &r.id, &r.slug, "github", "GitHub issues", || {
-                                github::sync_github_issues(&owner, &name)
+                                github::sync_github_issues(&owner, &name, None)
                             });
                         }
                     } else {
@@ -984,7 +984,7 @@ fn main() -> Result<()> {
                                                 "GitHub issues",
                                                 || {
                                                     github::sync_github_issues(
-                                                        &cfg.owner, &cfg.repo,
+                                                        &cfg.owner, &cfg.repo, None,
                                                     )
                                                 },
                                             );
