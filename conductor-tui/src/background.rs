@@ -7,6 +7,7 @@ use conductor_core::config::{db_path, load_config};
 use conductor_core::db::open_database;
 use conductor_core::error::ConductorError;
 use conductor_core::github;
+use conductor_core::github_app;
 use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
@@ -87,6 +88,8 @@ fn sync_all_tickets(tx: &BackgroundSender) {
 
     let syncer = TicketSyncer::new(&conn);
     let source_mgr = IssueSourceManager::new(&conn);
+    let token_res = github_app::resolve_app_token(&config, "github-issues-sync");
+    let token = token_res.token();
 
     for repo in repos {
         let sources = source_mgr.list(&repo.id).unwrap_or_default();
@@ -95,7 +98,7 @@ fn sync_all_tickets(tx: &BackgroundSender) {
             // Backward compat: auto-detect GitHub from remote_url
             if let Some((owner, name)) = github::parse_github_remote(&repo.remote_url) {
                 let action = sync_repo(&syncer, &repo.id, &repo.slug, "github", || {
-                    github::sync_github_issues(&owner, &name, None)
+                    github::sync_github_issues(&owner, &name, token)
                 });
                 if !tx.send(action) {
                     return;
@@ -108,7 +111,7 @@ fn sync_all_tickets(tx: &BackgroundSender) {
                         let action = match serde_json::from_str::<GitHubConfig>(&source.config_json)
                         {
                             Ok(cfg) => sync_repo(&syncer, &repo.id, &repo.slug, "github", || {
-                                github::sync_github_issues(&cfg.owner, &cfg.repo, None)
+                                github::sync_github_issues(&cfg.owner, &cfg.repo, token)
                             }),
                             Err(e) => Action::TicketSyncFailed {
                                 repo_slug: repo.slug.clone(),

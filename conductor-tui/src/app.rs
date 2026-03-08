@@ -11,6 +11,7 @@ use rusqlite::Connection;
 use conductor_core::agent::{AgentManager, FeedbackRequest};
 use conductor_core::config::{save_config, AutoStartAgent, Config, WorkTarget};
 use conductor_core::github;
+use conductor_core::github_app;
 use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
@@ -2604,11 +2605,13 @@ impl App {
         let repo_mgr = RepoManager::new(&self.conn, &self.config);
         let repos = repo_mgr.list().unwrap_or_default();
         let syncer = TicketSyncer::new(&self.conn);
+        let token_res = github_app::resolve_app_token(&self.config, "github-issues-sync");
+        let token = token_res.token();
 
         let mut total = 0;
         for repo in &repos {
             if let Some((owner, name)) = github::parse_github_remote(&repo.remote_url) {
-                match github::sync_github_issues(&owner, &name, None) {
+                match github::sync_github_issues(&owner, &name, token) {
                     Ok(tickets) => {
                         let synced_ids: Vec<&str> =
                             tickets.iter().map(|t| t.source_id.as_str()).collect();

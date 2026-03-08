@@ -958,6 +958,8 @@ fn main() -> Result<()> {
 
                 let syncer = TicketSyncer::new(&conn);
                 let source_mgr = IssueSourceManager::new(&conn);
+                let token_res = github_app::resolve_app_token(&config, "github-issues-sync");
+                let token = token_res.token();
 
                 for r in repos {
                     let sources = source_mgr.list(&r.id)?;
@@ -966,7 +968,7 @@ fn main() -> Result<()> {
                         // Backward compat: auto-detect GitHub from remote_url
                         if let Some((owner, name)) = github::parse_github_remote(&r.remote_url) {
                             sync_repo(&syncer, &r.id, &r.slug, "github", "GitHub issues", || {
-                                github::sync_github_issues(&owner, &name, None)
+                                github::sync_github_issues(&owner, &name, token)
                             });
                         }
                     } else {
@@ -984,7 +986,7 @@ fn main() -> Result<()> {
                                                 "GitHub issues",
                                                 || {
                                                     github::sync_github_issues(
-                                                        &cfg.owner, &cfg.repo, None,
+                                                        &cfg.owner, &cfg.repo, token,
                                                     )
                                                 },
                                             );

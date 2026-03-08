@@ -6,6 +6,7 @@ use tracing::warn;
 use conductor_core::agent::{AgentManager, TicketAgentTotals};
 use conductor_core::error::ConductorError;
 use conductor_core::github;
+use conductor_core::github_app;
 use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
@@ -92,6 +93,8 @@ pub async fn sync_tickets(
     let syncer = TicketSyncer::new(&db);
 
     let sources = source_mgr.list(&repo.id)?;
+    let token_res = github_app::resolve_app_token(&config, "github-issues-sync");
+    let token = token_res.token();
     let mut total_synced = 0usize;
     let mut total_closed = 0usize;
 
@@ -99,7 +102,7 @@ pub async fn sync_tickets(
         // Backward compat: auto-detect GitHub from remote URL
         if let Some((owner, name)) = github::parse_github_remote(&repo.remote_url) {
             let (synced, closed) = sync_source(&syncer, &repo.id, "github", || {
-                github::sync_github_issues(&owner, &name, None)
+                github::sync_github_issues(&owner, &name, token)
             });
             total_synced += synced;
             total_closed += closed;
@@ -110,7 +113,7 @@ pub async fn sync_tickets(
                 "github" => {
                     if let Ok(cfg) = serde_json::from_str::<GitHubConfig>(&source.config_json) {
                         let (synced, closed) = sync_source(&syncer, &repo.id, "github", || {
-                            github::sync_github_issues(&cfg.owner, &cfg.repo, None)
+                            github::sync_github_issues(&cfg.owner, &cfg.repo, token)
                         });
                         total_synced += synced;
                         total_closed += closed;
