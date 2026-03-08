@@ -3405,6 +3405,39 @@ mod tests {
     }
 
     #[test]
+    fn test_capture_agent_log_no_panic_on_bad_window() {
+        // Verifies that capture_agent_log is resilient: when tmux is unavailable or the
+        // window doesn't exist, the method returns without panicking and log_file stays None.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run("w1", "test prompt", Some("nonexistent-win-xyz"), None)
+            .unwrap();
+        assert!(run.log_file.is_none());
+
+        // Must not panic regardless of tmux availability
+        mgr.capture_agent_log(&run.id, "nonexistent-win-xyz");
+
+        // log_file should remain None since capture failed
+        let updated = mgr.get_run(&run.id).unwrap().unwrap();
+        assert!(
+            updated.log_file.is_none(),
+            "log_file should stay None when tmux capture fails"
+        );
+    }
+
+    #[test]
+    fn test_capture_agent_log_unknown_run_id_no_panic() {
+        // Verifies that capture_agent_log handles a DB update failure (unknown run_id)
+        // gracefully without panicking — it just logs a warning.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Call with a run_id that doesn't exist in the DB — should not panic
+        mgr.capture_agent_log("nonexistent-run-id", "nonexistent-win-xyz");
+    }
+
+    #[test]
     fn test_reap_orphaned_runs_no_tmux_window() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
