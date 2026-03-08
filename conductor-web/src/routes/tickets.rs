@@ -158,3 +158,128 @@ pub async fn ticket_detail(
         worktrees,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use conductor_core::config::Config;
+    use conductor_core::tickets::{TicketInput, TicketSyncer};
+    use tokio::sync::{Mutex, RwLock};
+    use tower::ServiceExt;
+
+    use crate::events::EventBus;
+    use crate::routes::api_router;
+
+    fn open_test_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        conductor_core::db::migrations::run(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+             VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    /// Build an AppState with an in-memory DB seeded with one open ticket (source_id "10")
+    /// and one closed ticket (source_id "11").
+    fn seeded_state() -> AppState {
+        let conn = open_test_db();
+        let syncer = TicketSyncer::new(&conn);
+        let tickets = vec![
+            TicketInput {
+                source_type: "github".to_string(),
+                source_id: "10".to_string(),
+                title: "Open issue".to_string(),
+                body: String::new(),
+                state: "open".to_string(),
+                labels: "[]".to_string(),
+                assignee: None,
+                priority: None,
+                url: String::new(),
+                raw_json: "{}".to_string(),
+            },
+            TicketInput {
+                source_type: "github".to_string(),
+                source_id: "11".to_string(),
+                title: "Closed issue".to_string(),
+                body: String::new(),
+                state: "open".to_string(),
+                labels: "[]".to_string(),
+                assignee: None,
+                priority: None,
+                url: String::new(),
+                raw_json: "{}".to_string(),
+            },
+        ];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+        // Close ticket 11 by telling the syncer only "10" is still open
+        syncer
+            .close_missing_tickets("r1", "github", &["10"])
+            .unwrap();
+        AppState {
+            db: Arc::new(Mutex::new(conn)),
+            config: Arc::new(RwLock::new(Config::default())),
+            events: EventBus::new(1),
+        }
+    }
+
+    async fn get_json(uri: &str, state: AppState) -> (StatusCode, Vec<serde_json::Value>) {
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn list_all_tickets_hides_closed_by_default() {
+        let (status, tickets) = get_json("/api/tickets", seeded_state()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(tickets.len(), 1, "closed ticket must be hidden by default");
+        assert_eq!(tickets[0]["state"], "open");
+    }
+
+    #[tokio::test]
+    async fn list_all_tickets_shows_closed_when_requested() {
+        let (status, tickets) = get_json("/api/tickets?show_closed=true", seeded_state()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            tickets.len(),
+            2,
+            "show_closed=true must include closed tickets"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_repo_tickets_hides_closed_by_default() {
+        let (status, tickets) = get_json("/api/repos/r1/tickets", seeded_state()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(tickets.len(), 1, "closed ticket must be hidden by default");
+        assert_eq!(tickets[0]["state"], "open");
+    }
+
+    #[tokio::test]
+    async fn list_repo_tickets_shows_closed_when_requested() {
+        let (status, tickets) =
+            get_json("/api/repos/r1/tickets?show_closed=true", seeded_state()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            tickets.len(),
+            2,
+            "show_closed=true must include closed tickets"
+        );
+    }
+}

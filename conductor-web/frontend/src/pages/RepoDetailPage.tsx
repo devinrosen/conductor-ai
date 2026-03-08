@@ -26,6 +26,8 @@ export function RepoDetailPage() {
   const { repos, refreshRepos } = useRepos();
   const repo = repos.find((r) => r.id === repoId);
 
+  const [showClosedTickets, setShowClosedTickets] = useState(false);
+
   const {
     data: worktrees,
     loading: wtLoading,
@@ -84,7 +86,6 @@ export function RepoDetailPage() {
   const navigate = useNavigate();
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
-  const [showClosedTickets, setShowClosedTickets] = useState(false);
   const [togglingAgentIssues, setTogglingAgentIssues] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleteRepoConfirm, setDeleteRepoConfirm] = useState(false);
