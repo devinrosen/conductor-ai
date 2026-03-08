@@ -1,13 +1,15 @@
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::Serialize;
+use tracing::warn;
 
 use conductor_core::agent::{AgentManager, TicketAgentTotals};
+use conductor_core::error::ConductorError;
 use conductor_core::github;
 use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
-use conductor_core::tickets::{Ticket, TicketSyncer};
+use conductor_core::tickets::{Ticket, TicketInput, TicketSyncer};
 use conductor_core::worktree::{Worktree, WorktreeManager};
 
 use crate::error::ApiError;
@@ -47,6 +49,23 @@ pub async fn list_tickets(
     Ok(Json(tickets))
 }
 
+/// Fetch tickets using `fetch`, then apply the sync (upsert + close + mark worktrees).
+/// Returns `(synced, closed)` counts. Fetch errors are logged as warnings.
+fn sync_source(
+    syncer: &TicketSyncer,
+    repo_id: &str,
+    source_type: &str,
+    fetch: impl FnOnce() -> Result<Vec<TicketInput>, ConductorError>,
+) -> (usize, usize) {
+    match fetch() {
+        Ok(tickets) => syncer.sync_and_close_tickets(repo_id, source_type, &tickets),
+        Err(e) => {
+            warn!("sync {source_type} failed for {repo_id}: {e}");
+            (0, 0)
+        }
+    }
+}
+
 pub async fn sync_tickets(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
@@ -64,8 +83,9 @@ pub async fn sync_tickets(
     if sources.is_empty() {
         // Backward compat: auto-detect GitHub from remote URL
         if let Some((owner, name)) = github::parse_github_remote(&repo.remote_url) {
-            let tickets = github::sync_github_issues(&owner, &name)?;
-            let (synced, closed) = syncer.sync_and_close_tickets(&repo.id, "github", &tickets);
+            let (synced, closed) = sync_source(&syncer, &repo.id, "github", || {
+                github::sync_github_issues(&owner, &name)
+            });
             total_synced += synced;
             total_closed += closed;
         }
@@ -74,22 +94,20 @@ pub async fn sync_tickets(
             match source.source_type.as_str() {
                 "github" => {
                     if let Ok(cfg) = serde_json::from_str::<GitHubConfig>(&source.config_json) {
-                        if let Ok(tickets) = github::sync_github_issues(&cfg.owner, &cfg.repo) {
-                            let (synced, closed) =
-                                syncer.sync_and_close_tickets(&repo.id, "github", &tickets);
-                            total_synced += synced;
-                            total_closed += closed;
-                        }
+                        let (synced, closed) = sync_source(&syncer, &repo.id, "github", || {
+                            github::sync_github_issues(&cfg.owner, &cfg.repo)
+                        });
+                        total_synced += synced;
+                        total_closed += closed;
                     }
                 }
                 "jira" => {
                     if let Ok(cfg) = serde_json::from_str::<JiraConfig>(&source.config_json) {
-                        if let Ok(tickets) = jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url) {
-                            let (synced, closed) =
-                                syncer.sync_and_close_tickets(&repo.id, "jira", &tickets);
-                            total_synced += synced;
-                            total_closed += closed;
-                        }
+                        let (synced, closed) = sync_source(&syncer, &repo.id, "jira", || {
+                            jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url)
+                        });
+                        total_synced += synced;
+                        total_closed += closed;
                     }
                 }
                 _ => {}
