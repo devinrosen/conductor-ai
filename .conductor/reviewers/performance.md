@@ -1,7 +1,7 @@
 ---
 name: performance
 description: Unnecessary allocations, N+1 queries, blocking calls
-model: opus
+model: sonnet
 required: false
 ---
 

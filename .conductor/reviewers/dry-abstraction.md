@@ -1,7 +1,7 @@
 ---
 name: dry-abstraction
 description: Duplication, premature abstraction, missing helpers
-model: opus
+model: sonnet
 required: false
 ---
 
