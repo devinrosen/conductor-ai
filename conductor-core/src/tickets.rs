@@ -5,6 +5,7 @@ use tracing::warn;
 
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
+use crate::worktree::remove_git_artifacts;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ticket {
@@ -219,10 +220,26 @@ impl<'a> TicketSyncer<'a> {
     }
 
     /// After syncing tickets, mark any linked worktrees whose ticket is now
-    /// closed by setting their status to `'merged'`. Called as part of the
-    /// ticket sync flow, typically after [`TicketSyncer::close_missing_tickets`].
+    /// closed by setting their status to `'merged'`. Also removes the git
+    /// worktree directory and branch for each affected worktree (best-effort).
+    /// Called as part of the ticket sync flow, typically after
+    /// [`TicketSyncer::close_missing_tickets`].
     /// Returns the number of worktrees updated.
     pub fn mark_worktrees_for_closed_tickets(&self, repo_id: &str) -> Result<usize> {
+        // Collect git paths before updating so we can clean up worktree dirs and branches.
+        let artifacts: Vec<(String, String, String)> = query_collect(
+            self.conn,
+            "SELECT r.local_path, w.path, w.branch
+             FROM worktrees w
+             JOIN repos r ON r.id = w.repo_id
+             WHERE w.repo_id = ?1
+               AND w.status != 'merged'
+               AND w.ticket_id IS NOT NULL
+               AND w.ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')",
+            params![repo_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+
         let count = self.conn.execute(
             "UPDATE worktrees SET status = 'merged'
              WHERE repo_id = ?1
@@ -231,6 +248,11 @@ impl<'a> TicketSyncer<'a> {
              AND ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')",
             params![repo_id],
         )?;
+
+        for (repo_path, worktree_path, branch) in artifacts {
+            remove_git_artifacts(&repo_path, &worktree_path, &branch);
+        }
+
         Ok(count)
     }
 }

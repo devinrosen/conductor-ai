@@ -368,13 +368,6 @@ impl<'a> WorktreeManager<'a> {
     }
 
     pub fn update_status(&self, worktree_id: &str, status: WorktreeStatus) -> Result<()> {
-        if status != WorktreeStatus::Active {
-            let worktree = self.get_by_id(worktree_id)?;
-            let repo_mgr = RepoManager::new(self.conn, self.config);
-            let repo = repo_mgr.get_by_id(&worktree.repo_id)?;
-            remove_git_artifacts(&repo.local_path, &worktree.path, &worktree.branch);
-        }
-
         let completed_at = if status != WorktreeStatus::Active {
             Some(Utc::now().to_rfc3339())
         } else {
@@ -647,7 +640,7 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
 /// Remove the git worktree directory and delete the associated branch.
 /// Both operations are best-effort: failures are logged but not propagated because the
 /// worktree or branch may already be gone (e.g. manually removed).
-fn remove_git_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
+pub(crate) fn remove_git_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
     match git_in(repo_path)
         .args(["worktree", "remove", worktree_path, "--force"])
         .output()
