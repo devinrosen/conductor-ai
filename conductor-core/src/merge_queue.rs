@@ -391,6 +391,46 @@ mod tests {
     }
 
     #[test]
+    fn test_mark_merged_and_cleanup_happy_path() {
+        let (conn, repo_id) = setup();
+        let wt1 = insert_worktree(&conn, &repo_id, "feature-a");
+
+        let mgr = MergeQueueManager::new(&conn);
+        let entry = mgr.enqueue(&repo_id, &wt1, None, None).unwrap();
+        mgr.pop_next(&repo_id).unwrap();
+
+        let config = crate::config::Config::default();
+        let wt_mgr = WorktreeManager::new(&conn, &config);
+        let (returned_entry, cleanup) = mgr.mark_merged_and_cleanup(&entry.id, &wt_mgr).unwrap();
+
+        assert_eq!(returned_entry.id, entry.id);
+        assert_eq!(returned_entry.worktree_id, wt1);
+        // DB status updated to merged
+        let persisted = mgr.get(&entry.id).unwrap().unwrap();
+        assert_eq!(persisted.status, "merged");
+        assert!(persisted.completed_at.is_some());
+        // cleanup may fail on fake paths but must return a Result, not panic
+        let _ = cleanup;
+    }
+
+    #[test]
+    fn test_mark_merged_and_cleanup_nonexistent_entry() {
+        let (conn, _repo_id) = setup();
+        let config = crate::config::Config::default();
+        let mgr = MergeQueueManager::new(&conn);
+        let wt_mgr = WorktreeManager::new(&conn, &config);
+
+        let result = mgr.mark_merged_and_cleanup("nonexistent-id", &wt_mgr);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            crate::error::ConductorError::MergeQueueEntryNotFound { id } => {
+                assert_eq!(id, "nonexistent-id");
+            }
+            e => panic!("expected MergeQueueEntryNotFound, got {e:?}"),
+        }
+    }
+
+    #[test]
     fn test_mark_failed() {
         let (conn, repo_id) = setup();
         let wt1 = insert_worktree(&conn, &repo_id, "feature-a");
