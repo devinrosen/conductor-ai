@@ -2172,10 +2172,18 @@ fn sync_repo(
                 Ok(count) => {
                     let closed = syncer
                         .close_missing_tickets(repo_id, source_type, &synced_ids)
-                        .unwrap_or(0);
+                        .unwrap_or_else(|e| {
+                            eprintln!("  {repo_slug} — warning: close_missing_tickets failed: {e}");
+                            0
+                        });
                     let merged = syncer
                         .mark_worktrees_for_closed_tickets(repo_id)
-                        .unwrap_or(0);
+                        .unwrap_or_else(|e| {
+                            eprintln!(
+                                "  {repo_slug} — warning: mark_worktrees_for_closed_tickets failed: {e}"
+                            );
+                            0
+                        });
                     print!("  {} — synced {count} {label}", repo_slug);
                     if closed > 0 {
                         print!(", {closed} marked closed");

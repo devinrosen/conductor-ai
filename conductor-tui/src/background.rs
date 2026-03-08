@@ -153,8 +153,15 @@ fn sync_repo(
             let synced_ids: Vec<&str> = tickets.iter().map(|t| t.source_id.as_str()).collect();
             match syncer.upsert_tickets(repo_id, &tickets) {
                 Ok(count) => {
-                    let _ = syncer.close_missing_tickets(repo_id, source_type, &synced_ids);
-                    let _ = syncer.mark_worktrees_for_closed_tickets(repo_id);
+                    if let Err(e) = syncer.close_missing_tickets(repo_id, source_type, &synced_ids)
+                    {
+                        eprintln!("warn: close_missing_tickets failed for {repo_slug}: {e}");
+                    }
+                    if let Err(e) = syncer.mark_worktrees_for_closed_tickets(repo_id) {
+                        eprintln!(
+                            "warn: mark_worktrees_for_closed_tickets failed for {repo_slug}: {e}"
+                        );
+                    }
                     Action::TicketSyncComplete {
                         repo_slug: repo_slug.to_string(),
                         count,

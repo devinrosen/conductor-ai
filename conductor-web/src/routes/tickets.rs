@@ -1,6 +1,7 @@
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::Serialize;
+use tracing::warn;
 
 use conductor_core::agent::{AgentManager, TicketAgentTotals};
 use conductor_core::github;
@@ -70,7 +71,12 @@ pub async fn sync_tickets(
             total_closed += syncer
                 .close_missing_tickets(&repo.id, "github", &synced_ids)
                 .unwrap_or(0);
-            let _ = syncer.mark_worktrees_for_closed_tickets(&repo.id);
+            if let Err(e) = syncer.mark_worktrees_for_closed_tickets(&repo.id) {
+                warn!(
+                    "mark_worktrees_for_closed_tickets failed for {}: {e}",
+                    repo.id
+                );
+            }
         }
     } else {
         for source in sources {
@@ -84,7 +90,12 @@ pub async fn sync_tickets(
                             total_closed += syncer
                                 .close_missing_tickets(&repo.id, "github", &synced_ids)
                                 .unwrap_or(0);
-                            let _ = syncer.mark_worktrees_for_closed_tickets(&repo.id);
+                            if let Err(e) = syncer.mark_worktrees_for_closed_tickets(&repo.id) {
+                                warn!(
+                                    "mark_worktrees_for_closed_tickets failed for {}: {e}",
+                                    repo.id
+                                );
+                            }
                         }
                     }
                 }
@@ -97,7 +108,12 @@ pub async fn sync_tickets(
                             total_closed += syncer
                                 .close_missing_tickets(&repo.id, "jira", &synced_ids)
                                 .unwrap_or(0);
-                            let _ = syncer.mark_worktrees_for_closed_tickets(&repo.id);
+                            if let Err(e) = syncer.mark_worktrees_for_closed_tickets(&repo.id) {
+                                warn!(
+                                    "mark_worktrees_for_closed_tickets failed for {}: {e}",
+                                    repo.id
+                                );
+                            }
                         }
                     }
                 }
