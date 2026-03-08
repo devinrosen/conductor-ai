@@ -563,6 +563,9 @@ pub struct AppState {
 
     /// When false (default), closed tickets are hidden in all ticket views.
     pub show_closed_tickets: bool,
+
+    /// True while a manual ticket sync is running in the background.
+    pub ticket_sync_in_progress: bool,
 }
 
 impl AppState {
@@ -595,6 +598,7 @@ impl AppState {
             selected_workflow_run_id: None,
             should_quit: false,
             show_closed_tickets: false,
+            ticket_sync_in_progress: false,
         }
     }
 

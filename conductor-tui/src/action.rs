@@ -162,6 +162,8 @@ pub enum Action {
         repo_slug: String,
         error: String,
     },
+    /// Sent after all repos have been processed in a manual one-shot sync.
+    TicketSyncDone,
     #[allow(dead_code)]
     BackgroundError {
         message: String,

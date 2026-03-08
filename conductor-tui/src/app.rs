@@ -11,7 +11,6 @@ use rusqlite::Connection;
 use conductor_core::agent::{AgentManager, FeedbackRequest};
 use conductor_core::config::{save_config, AutoStartAgent, Config, WorkTarget};
 use conductor_core::github;
-use conductor_core::github_app;
 use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
@@ -558,10 +557,13 @@ impl App {
             }
             Action::TicketSyncComplete { repo_slug, count } => {
                 self.state.status_message = Some(format!("Synced {count} tickets for {repo_slug}"));
-                self.refresh_data();
             }
             Action::TicketSyncFailed { repo_slug, error } => {
                 self.state.status_message = Some(format!("Sync failed for {repo_slug}: {error}"));
+            }
+            Action::TicketSyncDone => {
+                self.state.ticket_sync_in_progress = false;
+                self.refresh_data();
             }
             Action::BackgroundError { message } => {
                 self.state.modal = Modal::Error { message };
@@ -2600,36 +2602,17 @@ impl App {
     }
 
     fn handle_sync_tickets(&mut self) {
-        self.state.status_message = Some("Syncing tickets...".to_string());
-
-        let repo_mgr = RepoManager::new(&self.conn, &self.config);
-        let repos = repo_mgr.list().unwrap_or_default();
-        let syncer = TicketSyncer::new(&self.conn);
-        let token_res = github_app::resolve_app_token(&self.config, "github-issues-sync");
-        let token = token_res.token();
-
-        let mut total = 0;
-        for repo in &repos {
-            if let Some((owner, name)) = github::parse_github_remote(&repo.remote_url) {
-                match github::sync_github_issues(&owner, &name, token) {
-                    Ok(tickets) => {
-                        let synced_ids: Vec<&str> =
-                            tickets.iter().map(|t| t.source_id.as_str()).collect();
-                        if let Ok(count) = syncer.upsert_tickets(&repo.id, &tickets) {
-                            total += count;
-                            let _ = syncer.close_missing_tickets(&repo.id, "github", &synced_ids);
-                        }
-                    }
-                    Err(e) => {
-                        self.state.status_message =
-                            Some(format!("Sync error for {}: {e}", repo.slug));
-                    }
-                }
-            }
+        if self.state.ticket_sync_in_progress {
+            self.state.status_message = Some("Sync already in progress...".to_string());
+            return;
         }
-
-        self.state.status_message = Some(format!("Synced {total} tickets"));
-        self.refresh_data();
+        let Some(ref tx) = self.bg_tx else {
+            self.state.status_message = Some("Background sender not ready".to_string());
+            return;
+        };
+        self.state.ticket_sync_in_progress = true;
+        self.state.status_message = Some("Syncing tickets...".to_string());
+        background::spawn_ticket_sync_once(tx.clone());
     }
 
     fn handle_link_ticket(&mut self) {
