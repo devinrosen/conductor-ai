@@ -26,6 +26,8 @@ export function RepoDetailPage() {
   const { repos, refreshRepos } = useRepos();
   const repo = repos.find((r) => r.id === repoId);
 
+  const [showClosedTickets, setShowClosedTickets] = useState(false);
+
   const {
     data: worktrees,
     loading: wtLoading,
@@ -36,7 +38,7 @@ export function RepoDetailPage() {
     data: tickets,
     loading: ticketsLoading,
     refetch: refetchTickets,
-  } = useApi(() => api.listTickets(repoId!), [repoId]);
+  } = useApi(() => api.listTickets(repoId!, showClosedTickets), [repoId, showClosedTickets]);
 
   const { data: latestRuns, refetch: refetchRuns } = useApi(
     () => api.latestRunsByWorktree(),
@@ -319,6 +321,16 @@ export function RepoDetailPage() {
             {syncResult && (
               <span className="text-xs text-gray-500">{syncResult}</span>
             )}
+            <button
+              onClick={() => setShowClosedTickets((v) => !v)}
+              className={`px-3 py-1.5 text-sm rounded-md border ${
+                showClosedTickets
+                  ? "border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+                  : "border-gray-300 text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              {showClosedTickets ? "Hiding open only" : "Show closed"}
+            </button>
             <button
               onClick={handleSyncTickets}
               disabled={syncing}

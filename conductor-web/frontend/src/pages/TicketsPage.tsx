@@ -22,7 +22,11 @@ function matchesFilter(ticket: Ticket, filter: string): boolean {
 
 export function TicketsPage() {
   const { repos } = useRepos();
-  const { data: tickets, loading } = useApi(() => api.listAllTickets(), []);
+  const [showClosed, setShowClosed] = useState(false);
+  const { data: tickets, loading } = useApi(
+    () => api.listAllTickets(showClosed),
+    [showClosed],
+  );
   const { data: ticketTotals } = useApi(() => api.ticketAgentTotals(), []);
   const [filter, setFilter] = useState("");
   const [selected, setSelected] = useState<Ticket | null>(null);
@@ -73,14 +77,26 @@ export function TicketsPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold text-gray-900">Tickets</h2>
-        <input
-          ref={filterRef}
-          type="text"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter by title, ID, or label..."
-          className="w-80 px-3 py-1.5 text-sm rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-        />
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowClosed((v) => !v)}
+            className={`px-3 py-1.5 text-sm rounded-md border ${
+              showClosed
+                ? "border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+                : "border-gray-300 text-gray-600 hover:bg-gray-50"
+            }`}
+          >
+            {showClosed ? "Hiding open only" : "Show closed"}
+          </button>
+          <input
+            ref={filterRef}
+            type="text"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter by title, ID, or label..."
+            className="w-80 px-3 py-1.5 text-sm rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+          />
+        </div>
       </div>
 
       {loading ? (

@@ -740,4 +740,41 @@ mod tests {
         assert!(prompt.contains("Labels: None"));
         assert!(prompt.contains("(No description provided)"));
     }
+
+    /// Verify that `TicketSyncer::list` returns all tickets regardless of state,
+    /// including closed ones. The display-layer filtering (hide closed by default)
+    /// is intentionally done in the TUI / web route, not in core.
+    #[test]
+    fn test_list_includes_closed_tickets() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Upsert two tickets: one open, one that will be closed
+        let tickets = vec![
+            make_ticket("10", "Open issue"),
+            make_ticket("11", "Soon closed"),
+        ];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+
+        // Close ticket 11
+        syncer
+            .close_missing_tickets("r1", "github", &["10"])
+            .unwrap();
+
+        let all = syncer.list(None).unwrap();
+        assert_eq!(
+            all.len(),
+            2,
+            "list() must return all tickets including closed"
+        );
+
+        let states: Vec<&str> = all.iter().map(|t| t.state.as_str()).collect();
+        assert!(states.contains(&"open"), "open ticket must be present");
+        assert!(states.contains(&"closed"), "closed ticket must be present");
+
+        // Simulate the web-route filter (show_closed=false)
+        let visible: Vec<_> = all.iter().filter(|t| t.state != "closed").collect();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].source_id, "10");
+    }
 }

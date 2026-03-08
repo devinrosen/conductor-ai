@@ -105,6 +105,9 @@ pub enum Action {
     // Agent issue creation toggle (repo-level)
     ToggleAgentIssues,
 
+    // Toggle visibility of closed tickets in all ticket views
+    ToggleClosedTickets,
+
     // Agent triggers (tmux-based)
     LaunchAgent,
     OrchestrateAgent,
