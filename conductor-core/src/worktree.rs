@@ -100,9 +100,8 @@ impl<'a> WorktreeManager<'a> {
         let wt_path = Path::new(&repo.workspace_dir).join(&wt_slug);
 
         // Create git branch
-        let output = Command::new("git")
+        let output = git_in(&repo.local_path)
             .args(["branch", "--", &branch, &base])
-            .current_dir(&repo.local_path)
             .output()?;
         if !output.status.success() {
             return Err(ConductorError::Git(
@@ -111,9 +110,8 @@ impl<'a> WorktreeManager<'a> {
         }
 
         // Create git worktree
-        let output = Command::new("git")
+        let output = git_in(&repo.local_path)
             .args(["worktree", "add", &wt_path.to_string_lossy(), &branch])
-            .current_dir(&repo.local_path)
             .output()?;
         if !output.status.success() {
             return Err(ConductorError::Git(
@@ -295,15 +293,13 @@ impl<'a> WorktreeManager<'a> {
         let now = Utc::now().to_rfc3339();
 
         // Remove git worktree
-        let _ = Command::new("git")
+        let _ = git_in(&repo.local_path)
             .args(["worktree", "remove", &worktree.path, "--force"])
-            .current_dir(&repo.local_path)
             .output();
 
         // Delete git branch
-        let _ = Command::new("git")
+        let _ = git_in(&repo.local_path)
             .args(["branch", "-D", "--", &worktree.branch])
-            .current_dir(&repo.local_path)
             .output();
 
         // Soft-delete: update status + completed_at instead of deleting the row
@@ -353,9 +349,8 @@ impl<'a> WorktreeManager<'a> {
     pub fn push(&self, repo_slug: &str, name: &str) -> Result<String> {
         let (_repo, worktree) = self.get_active_worktree(repo_slug, name)?;
 
-        let output = Command::new("git")
+        let output = git_in(&worktree.path)
             .args(["push", "-u", "origin", &worktree.branch])
-            .current_dir(&worktree.path)
             .output()?;
 
         if !output.status.success() {
@@ -486,9 +481,8 @@ fn resolve_base_branch(repo_path: &str, configured_default: &str) -> String {
 
 /// Check if a local branch exists.
 fn branch_exists(repo_path: &str, branch: &str) -> bool {
-    Command::new("git")
+    git_in(repo_path)
         .args(["rev-parse", "--verify", &format!("refs/heads/{branch}")])
-        .current_dir(repo_path)
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -496,9 +490,8 @@ fn branch_exists(repo_path: &str, branch: &str) -> bool {
 
 /// Detect the default branch from the remote's HEAD ref.
 fn detect_remote_head(repo_path: &str) -> Option<String> {
-    let output = Command::new("git")
+    let output = git_in(repo_path)
         .args(["symbolic-ref", "refs/remotes/origin/HEAD"])
-        .current_dir(repo_path)
         .output()
         .ok()?;
     if !output.status.success() {
@@ -518,10 +511,7 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
     let mut warnings = Vec::new();
 
     // 1. Check for uncommitted changes in the repo working tree
-    let output = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(repo_path)
-        .output()?;
+    let output = git_in(repo_path).args(["status", "--porcelain"]).output()?;
     if output.status.success() && !output.stdout.is_empty() {
         return Err(ConductorError::Git(
             "uncommitted changes on base branch, please commit or stash first".to_string(),
@@ -529,10 +519,7 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
     }
 
     // 2. Fetch from remote (soft failure — warn and allow local-only creation)
-    let fetch = Command::new("git")
-        .args(["fetch", "origin"])
-        .current_dir(repo_path)
-        .output();
+    let fetch = git_in(repo_path).args(["fetch", "origin"]).output();
     match fetch {
         Ok(o) if o.status.success() => {}
         _ => {
@@ -545,9 +532,8 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
 
     // 3. Check if the remote tracking branch exists
     let remote_ref = format!("refs/remotes/origin/{base_branch}");
-    let has_remote = Command::new("git")
+    let has_remote = git_in(repo_path)
         .args(["rev-parse", "--verify", &remote_ref])
-        .current_dir(repo_path)
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
@@ -557,9 +543,8 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
     }
 
     // 4. Determine which branch is currently checked out
-    let current_branch = Command::new("git")
+    let current_branch = git_in(repo_path)
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(repo_path)
         .output()
         .ok()
         .filter(|o| o.status.success())
@@ -570,9 +555,8 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
     let origin_ref = format!("origin/{base_branch}");
     if current_branch == base_branch {
         // Base is already checked out — merge directly
-        let merge = Command::new("git")
+        let merge = git_in(repo_path)
             .args(["merge", "--ff-only", &origin_ref])
-            .current_dir(repo_path)
             .output();
         if !merge.map(|o| o.status.success()).unwrap_or(false) {
             warnings.push(format!(
@@ -582,15 +566,11 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
         }
     } else {
         // Need to checkout base branch first (handles detached HEAD too)
-        let checkout = Command::new("git")
-            .args(["checkout", base_branch])
-            .current_dir(repo_path)
-            .output();
+        let checkout = git_in(repo_path).args(["checkout", base_branch]).output();
         match checkout {
             Ok(o) if o.status.success() => {
-                let merge = Command::new("git")
+                let merge = git_in(repo_path)
                     .args(["merge", "--ff-only", &origin_ref])
-                    .current_dir(repo_path)
                     .output();
                 if !merge.map(|o| o.status.success()).unwrap_or(false) {
                     warnings.push(format!(
@@ -613,9 +593,8 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
 
 /// Check if a branch has been merged into the default branch.
 fn is_branch_merged(repo_path: &str, branch: &str, default_branch: &str) -> bool {
-    let output = Command::new("git")
+    let output = git_in(repo_path)
         .args(["branch", "--merged", default_branch])
-        .current_dir(repo_path)
         .output();
     match output {
         Ok(o) if o.status.success() => {
@@ -626,6 +605,13 @@ fn is_branch_merged(repo_path: &str, branch: &str, default_branch: &str) -> bool
         }
         _ => false,
     }
+}
+
+/// Return a `Command` for `git` rooted at `dir`.
+fn git_in(dir: impl AsRef<std::path::Path>) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(dir);
+    cmd
 }
 
 /// Detect package manager and install dependencies if applicable.
