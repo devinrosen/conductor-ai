@@ -1,13 +1,37 @@
+use conductor_core::agent::AgentRunStatus;
+use conductor_core::workflow::WorkflowRunStatus;
 use conductor_core::worktree::{Worktree, WorktreeStatus};
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{ListItem, Paragraph};
 use ratatui::Frame;
 
-use crate::state::{AppState, View};
+use crate::state::{AppState, GlobalStatusItem, View};
 
 pub fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
+    let gs = state.global_status();
+    let total_active = gs.total_active();
+
+    if area.height >= 2 {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Length(1)])
+            .split(area);
+        render_header_summary(frame, rows[0], state, total_active, &gs);
+        render_header_detail(frame, rows[1], &gs, state.status_bar_expanded, total_active);
+    } else {
+        render_header_summary(frame, area, state, total_active, &gs);
+    }
+}
+
+fn render_header_summary(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    total_active: usize,
+    gs: &crate::state::GlobalStatus,
+) {
     let view_name = match state.view {
         View::Dashboard => "Dashboard",
         View::RepoDetail => "Repo Detail",
@@ -17,7 +41,7 @@ pub fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
         View::WorkflowRunDetail => "Workflow Run",
     };
 
-    let header = Line::from(vec![
+    let mut spans = vec![
         Span::styled(
             " Conductor ",
             Style::default()
@@ -31,9 +55,118 @@ pub fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-    ]);
+    ];
 
-    frame.render_widget(Paragraph::new(header), area);
+    if total_active > 0 {
+        spans.push(Span::raw("   "));
+
+        // Waiting items (magenta) — highest priority
+        let waiting = gs.waiting_agents + gs.waiting_workflows;
+        if waiting > 0 {
+            spans.push(Span::styled(
+                format!("⏸ {waiting} waiting"),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            if gs.running_agents + gs.running_workflows > 0 {
+                spans.push(Span::raw("  "));
+            }
+        }
+
+        // Running items (yellow)
+        let running = gs.running_agents + gs.running_workflows;
+        if running > 0 {
+            spans.push(Span::styled(
+                format!("● {running} running"),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+
+        // For 4+ items show a toggle hint
+        if total_active > 3 {
+            spans.push(Span::raw("  "));
+            let hint = if state.status_bar_expanded {
+                "!:collapse"
+            } else {
+                "!:expand"
+            };
+            spans.push(Span::styled(hint, Style::default().fg(Color::DarkGray)));
+        }
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn render_header_detail(
+    frame: &mut Frame,
+    area: Rect,
+    gs: &crate::state::GlobalStatus,
+    expanded: bool,
+    total_active: usize,
+) {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+
+    let limit = if total_active > 3 && expanded {
+        gs.active_items.len()
+    } else {
+        gs.active_items.len().min(3)
+    };
+
+    for (i, item) in gs.active_items.iter().take(limit).enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  "));
+        }
+        match item {
+            GlobalStatusItem::Agent {
+                worktree_slug,
+                status,
+                elapsed_secs,
+            } => {
+                let (symbol, color) = match status {
+                    AgentRunStatus::WaitingForFeedback => ("⏸", Color::Magenta),
+                    AgentRunStatus::Running => ("●", Color::Yellow),
+                    _ => ("○", Color::DarkGray),
+                };
+                let label = if matches!(status, AgentRunStatus::Running) && *elapsed_secs > 0 {
+                    let elapsed_str = if *elapsed_secs < 60 {
+                        format!("{}s", elapsed_secs)
+                    } else {
+                        format!("{}m", elapsed_secs / 60)
+                    };
+                    format!("{symbol} {worktree_slug} ({elapsed_str})")
+                } else {
+                    format!("{symbol} {worktree_slug}")
+                };
+                spans.push(Span::styled(label, Style::default().fg(color)));
+            }
+            GlobalStatusItem::Workflow {
+                worktree_slug,
+                workflow_name,
+                status,
+            } => {
+                let (symbol, color) = match status {
+                    WorkflowRunStatus::Waiting => ("⏸", Color::Magenta),
+                    WorkflowRunStatus::Running => ("⚙", Color::Cyan),
+                    _ => ("○", Color::DarkGray),
+                };
+                let label = format!("{symbol} {worktree_slug}: {workflow_name}");
+                spans.push(Span::styled(label, Style::default().fg(color)));
+            }
+        }
+    }
+
+    // Show overflow indicator if items were truncated
+    if gs.active_items.len() > limit {
+        let overflow = gs.active_items.len() - limit;
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("+{overflow} more  !:expand"),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {

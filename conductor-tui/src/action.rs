@@ -110,6 +110,9 @@ pub enum Action {
     // Toggle visibility of closed tickets in all ticket views
     ToggleClosedTickets,
 
+    // Toggle the global status bar expanded/collapsed (for 4+ active items)
+    ToggleStatusBar,
+
     // Agent triggers (tmux-based)
     LaunchAgent,
     OrchestrateAgent,

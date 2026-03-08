@@ -15,11 +15,13 @@ use crate::state::{AppState, Modal, View};
 pub fn render(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
 
-    // Layout: header (1 line) + body (fill) + status bar (1 line)
+    // Layout: header (1–2 lines) + body (fill) + status bar (1 line).
+    // Header height is dynamic: 1 line when nothing is active or 4+ items are
+    // collapsed, 2 lines when 1–3 active items or the user has expanded the bar.
     let layout = ratatui::layout::Layout::default()
         .direction(ratatui::layout::Direction::Vertical)
         .constraints([
-            ratatui::layout::Constraint::Length(1),
+            ratatui::layout::Constraint::Length(state.header_height()),
             ratatui::layout::Constraint::Min(0),
             ratatui::layout::Constraint::Length(1),
         ])

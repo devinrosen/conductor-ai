@@ -392,6 +392,11 @@ impl App {
                 self.state.detail_ticket_index = 0;
             }
 
+            // Global status bar toggle (expand/collapse detail line for 4+ active items)
+            Action::ToggleStatusBar => {
+                self.state.status_bar_expanded = !self.state.status_bar_expanded;
+            }
+
             // Agent (tmux-based)
             Action::LaunchAgent => self.handle_launch_agent(),
             Action::OrchestrateAgent => self.handle_orchestrate_agent(),

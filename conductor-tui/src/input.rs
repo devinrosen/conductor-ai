@@ -344,6 +344,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         // Toggle closed tickets visibility (all ticket views)
         KeyCode::Char('A') => Action::ToggleClosedTickets,
 
+        // Toggle global status bar expansion (useful when 4+ items are active)
+        KeyCode::Char('!') => Action::ToggleStatusBar,
+
         // CRUD actions
         KeyCode::Char('a') => Action::AddRepo,
         KeyCode::Char('c') => Action::Create,
