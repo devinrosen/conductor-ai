@@ -55,11 +55,10 @@ fn generate_jwt(app_config: &GitHubAppConfig) -> Result<String> {
     // Warn early when a configured value looks wrong so auth failures are easier to diagnose.
     if let Some(ref cid) = app_config.client_id {
         if !cid.starts_with("Iv") {
-            eprintln!(
-                "warning: github.app.client_id {:?} does not match the expected \
-                 GitHub App client ID format (\"Iv...\"). \
-                 Verify the value on your App's settings page.",
-                cid
+            tracing::warn!(
+                client_id = %cid,
+                "github.app.client_id does not match the expected GitHub App client ID format \
+                 (\"Iv...\"). Verify the value on your App's settings page."
             );
         }
     }
@@ -180,7 +179,7 @@ pub fn resolve_app_token(config: &Config, context: &str) -> TokenResolution {
     match get_app_token(app_config) {
         Ok(token) => TokenResolution::AppToken(token),
         Err(e) => {
-            eprintln!("[{context}] GitHub App token failed, falling back to gh user: {e}");
+            tracing::warn!(context, error = %e, "GitHub App token failed, falling back to gh user");
             TokenResolution::Fallback {
                 reason: e.to_string(),
             }
