@@ -1127,4 +1127,17 @@ mod tests {
         // Both the worktree path and branch are nonexistent; must not panic
         remove_git_artifacts(local_str, "/nonexistent/path/wt", "feat/no-such-branch");
     }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn test_remove_git_artifacts_logs_warnings_on_git_failure() {
+        let (_tmp, _, local) = setup_repo_with_remote();
+        let local_str = local.to_str().unwrap();
+
+        // Both are nonexistent so git will exit non-zero — the warn! arms fire
+        remove_git_artifacts(local_str, "/nonexistent/path/wt", "feat/no-such-branch");
+
+        assert!(logs_contain("git worktree remove failed"));
+        assert!(logs_contain("git branch -D failed"));
+    }
 }
