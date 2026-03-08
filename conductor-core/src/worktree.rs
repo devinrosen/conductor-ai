@@ -922,4 +922,75 @@ mod tests {
         // Verify we're now on main and have the extra file
         assert!(local.join("extra.txt").exists());
     }
+
+    #[test]
+    fn test_worktree_status_as_str() {
+        assert_eq!(WorktreeStatus::Active.as_str(), "active");
+        assert_eq!(WorktreeStatus::Merged.as_str(), "merged");
+        assert_eq!(WorktreeStatus::Abandoned.as_str(), "abandoned");
+    }
+
+    #[test]
+    fn test_worktree_status_display() {
+        assert_eq!(WorktreeStatus::Active.to_string(), "active");
+        assert_eq!(WorktreeStatus::Merged.to_string(), "merged");
+        assert_eq!(WorktreeStatus::Abandoned.to_string(), "abandoned");
+    }
+
+    #[test]
+    fn test_update_status_to_merged_sets_completed_at() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt1', 'r1', 'feat-a', 'feat/a', '/tmp/ws/feat-a', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        mgr.update_status("wt1", WorktreeStatus::Merged).unwrap();
+
+        let wt = mgr.get_by_id("wt1").unwrap();
+        assert_eq!(wt.status, "merged");
+        assert!(wt.completed_at.is_some());
+    }
+
+    #[test]
+    fn test_update_status_to_abandoned_sets_completed_at() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt1', 'r1', 'feat-a', 'feat/a', '/tmp/ws/feat-a', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        mgr.update_status("wt1", WorktreeStatus::Abandoned).unwrap();
+
+        let wt = mgr.get_by_id("wt1").unwrap();
+        assert_eq!(wt.status, "abandoned");
+        assert!(wt.completed_at.is_some());
+    }
+
+    #[test]
+    fn test_update_status_to_active_clears_completed_at() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, completed_at) \
+             VALUES ('wt1', 'r1', 'feat-a', 'feat/a', '/tmp/ws/feat-a', 'merged', '2024-01-01T00:00:00Z', '2024-02-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        mgr.update_status("wt1", WorktreeStatus::Active).unwrap();
+
+        let wt = mgr.get_by_id("wt1").unwrap();
+        assert_eq!(wt.status, "active");
+        assert!(wt.completed_at.is_none());
+    }
 }
