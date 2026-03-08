@@ -970,6 +970,28 @@ mod tests {
     }
 
     #[test]
+    fn test_worktree_status_from_str_valid() {
+        assert_eq!(
+            "active".parse::<WorktreeStatus>().unwrap(),
+            WorktreeStatus::Active
+        );
+        assert_eq!(
+            "merged".parse::<WorktreeStatus>().unwrap(),
+            WorktreeStatus::Merged
+        );
+        assert_eq!(
+            "abandoned".parse::<WorktreeStatus>().unwrap(),
+            WorktreeStatus::Abandoned
+        );
+    }
+
+    #[test]
+    fn test_worktree_status_from_str_invalid() {
+        let err = "unknown_value".parse::<WorktreeStatus>().unwrap_err();
+        assert_eq!(err, "unknown WorktreeStatus: unknown_value");
+    }
+
+    #[test]
     fn test_update_status_to_merged_sets_completed_at() {
         let conn = crate::test_helpers::setup_db();
         let config = Config::default();
