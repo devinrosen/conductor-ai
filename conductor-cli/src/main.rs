@@ -84,9 +84,9 @@ enum MergeQueueCommands {
         repo: String,
         /// Worktree slug
         worktree: String,
-        /// Target branch (defaults to main)
-        #[arg(long, default_value = "main")]
-        target: String,
+        /// Target branch (defaults to worktree's base branch, or main)
+        #[arg(long)]
+        target: Option<String>,
     },
     /// List merge queue entries for a repo
     List {
@@ -1125,7 +1125,10 @@ fn main() -> Result<()> {
                     let repo_obj = repo_mgr.get_by_slug(&repo)?;
                     let wt_mgr = WorktreeManager::new(&conn, &config);
                     let wt = wt_mgr.get_by_slug(&repo_obj.id, &worktree)?;
-                    let entry = mqm.enqueue(&repo_obj.id, &wt.id, None, Some(&target))?;
+                    let effective_target = target
+                        .as_deref()
+                        .unwrap_or_else(|| wt.effective_base(&repo_obj.default_branch));
+                    let entry = mqm.enqueue(&repo_obj.id, &wt.id, None, Some(effective_target))?;
                     println!(
                         "Enqueued {} at position {} (id: {})",
                         worktree, entry.position, entry.id
