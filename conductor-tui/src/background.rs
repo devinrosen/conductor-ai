@@ -84,7 +84,9 @@ pub fn spawn_ticket_sync(tx: BackgroundSender, interval: Duration) {
 pub fn spawn_ticket_sync_once(tx: BackgroundSender) {
     thread::spawn(move || {
         sync_all_tickets(&tx);
-        let _ = tx.send(Action::TicketSyncDone);
+        if !tx.send(Action::TicketSyncDone) {
+            eprintln!("failed to send TicketSyncDone: channel closed");
+        }
     });
 }
 
