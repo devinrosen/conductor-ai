@@ -2,13 +2,6 @@
 
 Priority order as of 2026-03-08. See linked GitHub issues for full details.
 
-## Completed
-
-| Issue | Title |
-|-------|-------|
-| [#275](https://github.com/devinrosen/conductor-ai/issues/275) | Support custom base/target branch for worktrees and PRs |
-| [#217](https://github.com/devinrosen/conductor-ai/issues/217) | Use GitHub App identity when filing off-diff issues during PR review |
-
 ## Tier 1 — Near-term, High Value
 
 Small scope, immediately useful. Start here.
