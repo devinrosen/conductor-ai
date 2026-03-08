@@ -78,6 +78,18 @@ pub fn spawn_ticket_sync(tx: BackgroundSender, interval: Duration) {
     });
 }
 
+/// Spawn a one-shot ticket sync for all repos. Sends per-repo
+/// `TicketSyncComplete`/`TicketSyncFailed` actions followed by a final
+/// `TicketSyncDone` when all repos have been processed.
+pub fn spawn_ticket_sync_once(tx: BackgroundSender) {
+    thread::spawn(move || {
+        sync_all_tickets(&tx);
+        if !tx.send(Action::TicketSyncDone) {
+            eprintln!("failed to send TicketSyncDone: channel closed");
+        }
+    });
+}
+
 fn sync_all_tickets(tx: &BackgroundSender) {
     let db = db_path();
     let Ok(conn) = open_database(&db) else { return };
