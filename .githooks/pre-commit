@@ -1,5 +1,5 @@
 #!/bin/sh
-# Pre-commit hook: enforce rustfmt formatting.
+# Pre-commit hook: enforce rustfmt formatting and frontend TypeScript build.
 # Enable with: git config core.hooksPath .githooks
 
 set -e
@@ -7,4 +7,18 @@ set -e
 if ! cargo fmt --all --check 2>/dev/null; then
   echo "error: rustfmt check failed. Run 'cargo fmt --all' to fix." >&2
   exit 1
+fi
+
+# Check if any frontend files are staged
+if git diff --cached --name-only | grep -q '^conductor-web/frontend/'; then
+  FRONTEND_DIR="conductor-web/frontend"
+  if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
+    echo "warning: $FRONTEND_DIR/node_modules not found, skipping frontend build check." >&2
+    echo "Run 'npm install' in $FRONTEND_DIR to enable this check." >&2
+  else
+    if ! npm run build --prefix "$FRONTEND_DIR" 2>&1; then
+      echo "error: frontend build failed. Fix TypeScript/build errors before committing." >&2
+      exit 1
+    fi
+  fi
 fi
