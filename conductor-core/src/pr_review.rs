@@ -2382,6 +2382,48 @@ mod tests {
     }
 
     #[test]
+    fn test_poll_all_reviewers_fewer_steps_than_runs() {
+        // Regression test: steps.get(step_idx) must not panic when steps is shorter than child_runs
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let (r1, r2, child_runs) = setup_two_child_runs(&mgr);
+
+        mgr.update_run_completed(
+            &r1.id,
+            None,
+            Some("VERDICT: APPROVE"),
+            Some(0.05),
+            Some(3),
+            Some(5000),
+        )
+        .unwrap();
+        mgr.update_run_completed(
+            &r2.id,
+            None,
+            Some("VERDICT: APPROVE"),
+            Some(0.10),
+            Some(5),
+            Some(8000),
+        )
+        .unwrap();
+
+        // Pass zero steps — both step_idx values (0 and 1) are out of bounds
+        let steps = make_plan_steps(0);
+
+        // Must not panic
+        let results = poll_all_reviewers(
+            &mgr,
+            &child_runs,
+            &steps,
+            Duration::from_millis(10),
+            Duration::from_secs(1),
+        );
+
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.approved));
+    }
+
+    #[test]
     fn test_poll_all_reviewers_recovers_from_log() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
