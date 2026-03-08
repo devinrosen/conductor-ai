@@ -36,6 +36,20 @@ impl fmt::Display for WorktreeStatus {
     }
 }
 
+impl std::str::FromStr for WorktreeStatus {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "active" => Ok(Self::Active),
+            "merged" => Ok(Self::Merged),
+            "abandoned" => Ok(Self::Abandoned),
+            _ => Err(format!("unknown WorktreeStatus: {s}")),
+        }
+    }
+}
+
+crate::impl_sql_enum!(WorktreeStatus);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Worktree {
     pub id: String,
@@ -44,7 +58,7 @@ pub struct Worktree {
     pub branch: String,
     pub path: String,
     pub ticket_id: Option<String>,
-    pub status: String,
+    pub status: WorktreeStatus,
     pub created_at: String,
     pub completed_at: Option<String>,
     /// Per-worktree default model override. Overrides global config; overridden by per-run.
@@ -55,7 +69,7 @@ pub struct Worktree {
 
 impl Worktree {
     pub fn is_active(&self) -> bool {
-        self.status == WorktreeStatus::Active.as_str()
+        self.status == WorktreeStatus::Active
     }
 
     /// Resolve the effective base branch: the worktree's own base, or the repo default.
@@ -104,7 +118,7 @@ impl<'a> WorktreeManager<'a> {
         };
 
         // Check for existing worktree with same slug
-        let existing_status: Option<String> = self
+        let existing_status: Option<WorktreeStatus> = self
             .conn
             .query_row(
                 "SELECT status FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
@@ -114,7 +128,7 @@ impl<'a> WorktreeManager<'a> {
             .optional()?;
 
         match existing_status {
-            Some(ref s) if s == WorktreeStatus::Active.as_str() => {
+            Some(WorktreeStatus::Active) => {
                 return Err(ConductorError::WorktreeAlreadyExists {
                     slug: wt_slug.clone(),
                 });
@@ -163,7 +177,7 @@ impl<'a> WorktreeManager<'a> {
             branch,
             path: wt_path.to_string_lossy().to_string(),
             ticket_id: ticket_id.map(|s| s.to_string()),
-            status: WorktreeStatus::Active.to_string(),
+            status: WorktreeStatus::Active,
             created_at: now,
             completed_at: None,
             model: None,
@@ -355,7 +369,7 @@ impl<'a> WorktreeManager<'a> {
         )?;
 
         Ok(Worktree {
-            status: new_status.to_string(),
+            status: new_status,
             completed_at: Some(now),
             ..worktree
         })
@@ -488,7 +502,7 @@ fn map_worktree_row(row: &rusqlite::Row) -> rusqlite::Result<Worktree> {
         branch: row.get(3)?,
         path: row.get(4)?,
         ticket_id: row.get(5)?,
-        status: row.get(6)?,
+        status: row.get::<_, WorktreeStatus>(6)?,
         created_at: row.get(7)?,
         completed_at: row.get(8)?,
         model: row.get(9)?,
@@ -970,7 +984,7 @@ mod tests {
         mgr.update_status("wt1", WorktreeStatus::Merged).unwrap();
 
         let wt = mgr.get_by_id("wt1").unwrap();
-        assert_eq!(wt.status, "merged");
+        assert_eq!(wt.status, WorktreeStatus::Merged);
         assert!(wt.completed_at.is_some());
     }
 
@@ -989,7 +1003,7 @@ mod tests {
         mgr.update_status("wt1", WorktreeStatus::Abandoned).unwrap();
 
         let wt = mgr.get_by_id("wt1").unwrap();
-        assert_eq!(wt.status, "abandoned");
+        assert_eq!(wt.status, WorktreeStatus::Abandoned);
         assert!(wt.completed_at.is_some());
     }
 
@@ -1008,7 +1022,7 @@ mod tests {
         mgr.update_status("wt1", WorktreeStatus::Active).unwrap();
 
         let wt = mgr.get_by_id("wt1").unwrap();
-        assert_eq!(wt.status, "active");
+        assert_eq!(wt.status, WorktreeStatus::Active);
         assert!(wt.completed_at.is_none());
     }
 }

@@ -4,6 +4,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
+use conductor_core::worktree::WorktreeStatus;
+
 use crate::state::{AppState, VisualRow};
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -56,10 +58,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         ]
     };
 
-    let status_color = match wt.status.as_str() {
-        "active" => Color::Green,
-        "merged" => Color::Blue,
-        _ => Color::Red,
+    let status_color = match wt.status {
+        WorktreeStatus::Active => Color::Green,
+        WorktreeStatus::Merged => Color::Blue,
+        WorktreeStatus::Abandoned => Color::Red,
     };
 
     let mut lines = vec![
@@ -88,7 +90,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         ]),
         Line::from(vec![
             Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&wt.status, Style::default().fg(status_color)),
+            Span::styled(wt.status.to_string(), Style::default().fg(status_color)),
         ]),
         Line::from(vec![
             Span::styled("Model: ", Style::default().fg(Color::DarkGray)),

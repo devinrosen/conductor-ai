@@ -1,4 +1,4 @@
-use conductor_core::worktree::Worktree;
+use conductor_core::worktree::{Worktree, WorktreeStatus};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -102,11 +102,10 @@ pub fn worktree_list_item(
     show_branch: bool,
 ) -> ListItem<'static> {
     let is_active = wt.is_active();
-    let status_color = match wt.status.as_str() {
-        "active" => Color::Green,
-        "merged" => Color::Blue,
-        "abandoned" => Color::Red,
-        _ => Color::White,
+    let status_color = match wt.status {
+        WorktreeStatus::Active => Color::Green,
+        WorktreeStatus::Merged => Color::Blue,
+        WorktreeStatus::Abandoned => Color::Red,
     };
     let text_style = if is_active {
         Style::default()
