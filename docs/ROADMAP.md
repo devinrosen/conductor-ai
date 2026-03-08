@@ -33,6 +33,12 @@ High value but require more design and implementation work.
 | 9 | [#142](https://github.com/devinrosen/conductor-ai/issues/142) | Cost budgeting and spending limits per run, campaign, and repo | Safety net before running workflows at scale |
 | 10 | [#144](https://github.com/devinrosen/conductor-ai/issues/144) | Cost analytics dashboard — spend over time by repo | Do after #142 |
 
+## Known Limitations
+
+| Area | Limitation | Details |
+|------|-----------|---------|
+| GitHub sync | Sub-issues not supported | Ticket sync uses `gh issue list` which returns a flat list. GitHub sub-issues (parent/child relationships) require the GraphQL API and are not yet pulled in. |
+
 ## Deferred — Phase 5
 
 | Issue | Title | Notes |
