@@ -11,9 +11,15 @@ use conductor_web::state::AppState;
 
 /// Spawn a test server on a random port and return the base URL.
 async fn spawn_test_server() -> String {
+    spawn_test_server_with_setup(|_| {}).await
+}
+
+/// Spawn a test server with a DB setup callback invoked after migrations.
+async fn spawn_test_server_with_setup(setup: impl Fn(&Connection)) -> String {
     let conn = Connection::open_in_memory().unwrap();
     conn.pragma_update(None, "foreign_keys", "on").unwrap();
     migrations::run(&conn).unwrap();
+    setup(&conn);
 
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
@@ -217,6 +223,78 @@ async fn test_list_worktrees_nonexistent_repo_404() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 404);
+}
+
+fn seed_worktrees_with_completed(conn: &Connection) {
+    conn.execute(
+        "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+         VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+         VALUES ('w1', 'r1', 'feat-active', 'feat/active', '/tmp/ws/feat-active', 'active', '2024-01-01T00:00:00Z')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, completed_at) \
+         VALUES ('w2', 'r1', 'feat-merged', 'feat/merged', '/tmp/ws/feat-merged', 'merged', '2024-01-01T00:00:00Z', '2024-02-01T00:00:00Z')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, completed_at) \
+         VALUES ('w3', 'r1', 'feat-abandoned', 'feat/abandoned', '/tmp/ws/feat-abandoned', 'abandoned', '2024-01-01T00:00:00Z', '2024-02-01T00:00:00Z')",
+        [],
+    ).unwrap();
+}
+
+#[tokio::test]
+async fn test_list_worktrees_default_hides_completed() {
+    let base = spawn_test_server_with_setup(seed_worktrees_with_completed).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/api/repos/r1/worktrees"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0]["slug"], "feat-active");
+}
+
+#[tokio::test]
+async fn test_list_worktrees_show_completed_true_includes_all() {
+    let base = spawn_test_server_with_setup(seed_worktrees_with_completed).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/api/repos/r1/worktrees?show_completed=true"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 3);
+}
+
+#[tokio::test]
+async fn test_list_worktrees_show_completed_false_explicit_hides_completed() {
+    let base = spawn_test_server_with_setup(seed_worktrees_with_completed).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!(
+            "{base}/api/repos/r1/worktrees?show_completed=false"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0]["slug"], "feat-active");
 }
 
 #[tokio::test]
