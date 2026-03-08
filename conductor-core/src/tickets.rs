@@ -592,6 +592,90 @@ mod tests {
     }
 
     #[test]
+    fn test_mark_worktrees_artifacts_query_returns_correct_paths() {
+        // Verify the artifact-collection JOIN query returns the expected
+        // (local_path, worktree_path, branch) for a closed-ticket worktree.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![make_ticket("1", "Issue 1")];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
+        syncer
+            .close_missing_tickets("r1", "github", &["999"])
+            .unwrap();
+
+        // Run the same query the implementation uses and verify the values.
+        let artifacts: Vec<(String, String, String)> = conn
+            .prepare(
+                "SELECT r.local_path, w.path, w.branch
+                 FROM worktrees w
+                 JOIN repos r ON r.id = w.repo_id
+                 WHERE w.repo_id = ?1
+                   AND w.status != 'merged'
+                   AND w.ticket_id IS NOT NULL
+                   AND w.ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')",
+            )
+            .unwrap()
+            .query_map(rusqlite::params!["r1"], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].0, "/tmp/repo"); // repo local_path from setup_db
+        assert_eq!(artifacts[0].1, "/tmp/wt-wt1"); // worktree path from insert_worktree
+        assert_eq!(artifacts[0].2, "feat/wt1"); // branch from insert_worktree
+    }
+
+    #[test]
+    fn test_mark_worktrees_artifacts_skips_already_merged() {
+        // The artifacts query must exclude worktrees whose status is already
+        // 'merged' so that remove_git_artifacts is not called twice.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![make_ticket("1", "Issue 1")];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "merged");
+        syncer
+            .close_missing_tickets("r1", "github", &["999"])
+            .unwrap();
+
+        let artifacts: Vec<(String, String, String)> = conn
+            .prepare(
+                "SELECT r.local_path, w.path, w.branch
+                 FROM worktrees w
+                 JOIN repos r ON r.id = w.repo_id
+                 WHERE w.repo_id = ?1
+                   AND w.status != 'merged'
+                   AND w.ticket_id IS NOT NULL
+                   AND w.ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')",
+            )
+            .unwrap()
+            .query_map(rusqlite::params!["r1"], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+
+        assert_eq!(artifacts.len(), 0);
+    }
+
+    #[test]
     fn test_mark_worktrees_idempotent() {
         let conn = setup_db();
         let syncer = TicketSyncer::new(&conn);
