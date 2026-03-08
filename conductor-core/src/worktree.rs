@@ -22,6 +22,8 @@ pub struct Worktree {
     pub completed_at: Option<String>,
     /// Per-worktree default model override. Overrides global config; overridden by per-run.
     pub model: Option<String>,
+    /// The branch this worktree was created from. NULL means the repo's default branch.
+    pub base_branch: Option<String>,
 }
 
 impl Worktree {
@@ -127,11 +129,12 @@ impl<'a> WorktreeManager<'a> {
             created_at: now,
             completed_at: None,
             model: None,
+            base_branch: Some(base.clone()),
         };
 
         self.conn.execute(
-            "INSERT INTO worktrees (id, repo_id, slug, branch, path, ticket_id, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, ticket_id, status, created_at, base_branch)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 worktree.id,
                 worktree.repo_id,
@@ -141,6 +144,7 @@ impl<'a> WorktreeManager<'a> {
                 worktree.ticket_id,
                 worktree.status,
                 worktree.created_at,
+                worktree.base_branch,
             ],
         )?;
 
@@ -150,7 +154,7 @@ impl<'a> WorktreeManager<'a> {
     pub fn get_by_id(&self, id: &str) -> Result<Worktree> {
         self.conn
             .query_row(
-                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model
+                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch
                  FROM worktrees WHERE id = ?1",
                 params![id],
                 map_worktree_row,
@@ -163,7 +167,7 @@ impl<'a> WorktreeManager<'a> {
     pub fn get_by_slug(&self, repo_id: &str, slug: &str) -> Result<Worktree> {
         self.conn
             .query_row(
-                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model
+                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch
                  FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
                 params![repo_id, slug],
                 map_worktree_row,
@@ -176,7 +180,7 @@ impl<'a> WorktreeManager<'a> {
     pub fn list_by_ticket(&self, ticket_id: &str) -> Result<Vec<Worktree>> {
         query_collect(
             self.conn,
-            "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model
+            "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch
              FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC",
             params![ticket_id],
             map_worktree_row,
@@ -190,7 +194,7 @@ impl<'a> WorktreeManager<'a> {
             ""
         };
         let query = format!(
-            "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model
+            "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch
              FROM worktrees WHERE repo_id = ?1{}
              ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at",
             status_filter
@@ -208,7 +212,7 @@ impl<'a> WorktreeManager<'a> {
         let query = match repo_slug {
             Some(_) => {
                 format!(
-                    "SELECT w.id, w.repo_id, w.slug, w.branch, w.path, w.ticket_id, w.status, w.created_at, w.completed_at, w.model
+                    "SELECT w.id, w.repo_id, w.slug, w.branch, w.path, w.ticket_id, w.status, w.created_at, w.completed_at, w.model, w.base_branch
                      FROM worktrees w
                      JOIN repos r ON r.id = w.repo_id
                      WHERE r.slug = ?1{}
@@ -218,7 +222,7 @@ impl<'a> WorktreeManager<'a> {
             }
             None => {
                 format!(
-                    "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model
+                    "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch
                      FROM worktrees
                      WHERE 1=1{}
                      ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at",
@@ -242,7 +246,7 @@ impl<'a> WorktreeManager<'a> {
         let worktree = self
             .conn
             .query_row(
-                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model
+                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch
                  FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
                 params![repo.id, name],
                 map_worktree_row,
@@ -350,9 +354,21 @@ impl<'a> WorktreeManager<'a> {
 
     /// Create a pull request for the worktree branch using `gh`.
     pub fn create_pr(&self, repo_slug: &str, name: &str, draft: bool) -> Result<String> {
-        let (_repo, worktree) = self.get_active_worktree(repo_slug, name)?;
+        let (repo, worktree) = self.get_active_worktree(repo_slug, name)?;
 
-        let mut args = vec!["pr", "create", "--fill", "--head", &worktree.branch];
+        let base = worktree
+            .base_branch
+            .as_deref()
+            .unwrap_or(&repo.default_branch);
+        let mut args = vec![
+            "pr",
+            "create",
+            "--fill",
+            "--head",
+            &worktree.branch,
+            "--base",
+            base,
+        ];
         if draft {
             args.push("--draft");
         }
@@ -375,7 +391,7 @@ impl<'a> WorktreeManager<'a> {
         let worktree = self
             .conn
             .query_row(
-                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model
+                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch
                  FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
                 params![repo.id, wt_slug],
                 map_worktree_row,
@@ -427,6 +443,7 @@ fn map_worktree_row(row: &rusqlite::Row) -> rusqlite::Result<Worktree> {
         created_at: row.get(7)?,
         completed_at: row.get(8)?,
         model: row.get(9)?,
+        base_branch: row.get(10)?,
     })
 }
 

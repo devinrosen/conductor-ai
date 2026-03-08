@@ -365,5 +365,16 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 21)?;
     }
 
+    // Migration 022: add base_branch column to worktrees.
+    let has_base_branch: bool = conn
+        .prepare("SELECT base_branch FROM worktrees LIMIT 0")
+        .is_ok();
+    if !has_base_branch {
+        conn.execute_batch(include_str!("migrations/022_worktree_base_branch.sql"))?;
+    }
+    if version < 22 {
+        bump_version(conn, 22)?;
+    }
+
     Ok(())
 }
