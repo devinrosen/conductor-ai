@@ -447,11 +447,16 @@ fn build_reviewer_prompt(role: &ReviewerRole, diff: &str, branch: &str) -> Strin
          ```diff\n\
          {diff}\n\
          ```\n\n\
-         Review the diff above. At the end of your review, include a verdict line:\n\
+         Review the diff above. Output ONLY the findings — do not include:\n\
+         - A title or header for your review\n\
+         - A list of files reviewed\n\
+         - Notes on things you checked but found no issues with\n\
+         - Summaries of what the PR does\n\
+         - Any preamble or closing remarks\n\n\
+         At the end of your review, include a verdict line:\n\
          - `VERDICT: APPROVE` if no critical or warning issues found in `+` lines\n\
          - `VERDICT: REQUEST_CHANGES` if any critical or warning issues found in `+` lines\n\n\
-         Important: `suggestion`-severity findings alone should NOT produce REQUEST_CHANGES.\n\n\
-         Be thorough but concise.",
+         Important: `suggestion`-severity findings alone should NOT produce REQUEST_CHANGES.",
         system_prompt = role.system_prompt,
         branch = branch,
         focus = role.focus,
