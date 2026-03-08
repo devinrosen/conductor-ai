@@ -56,8 +56,12 @@ export const api = {
     }),
 
   // Worktrees
-  listWorktrees: (repoId: string) =>
-    request<Worktree[]>(`/repos/${repoId}/worktrees`),
+  listWorktrees: (repoId: string, showCompleted = false) =>
+    request<Worktree[]>(
+      showCompleted
+        ? `/repos/${repoId}/worktrees?show_completed=true`
+        : `/repos/${repoId}/worktrees`,
+    ),
   createWorktree: (repoId: string, data: CreateWorktreeRequest) =>
     request<Worktree>(`/repos/${repoId}/worktrees`, {
       method: "POST",

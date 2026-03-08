@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::Deserialize;
@@ -29,16 +29,25 @@ pub struct LinkTicketRequest {
     pub ticket_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct WorktreeListQuery {
+    /// When true, include merged/abandoned worktrees. Defaults to false (completed worktrees hidden).
+    #[serde(default)]
+    pub show_completed: bool,
+}
+
 pub async fn list_worktrees(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
+    Query(params): Query<WorktreeListQuery>,
 ) -> Result<Json<Vec<Worktree>>, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
     // Verify repo exists
     RepoManager::new(&db, &config).get_by_id(&repo_id)?;
     let mgr = WorktreeManager::new(&db, &config);
-    let worktrees = mgr.list_by_repo_id(&repo_id, true)?;
+    let active_only = !params.show_completed;
+    let worktrees = mgr.list_by_repo_id(&repo_id, active_only)?;
     Ok(Json(worktrees))
 }
 

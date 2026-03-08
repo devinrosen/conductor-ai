@@ -27,12 +27,13 @@ export function RepoDetailPage() {
   const repo = repos.find((r) => r.id === repoId);
 
   const [showClosedTickets, setShowClosedTickets] = useState(false);
+  const [showCompletedWorktrees, setShowCompletedWorktrees] = useState(false);
 
   const {
     data: worktrees,
     loading: wtLoading,
     refetch: refetchWorktrees,
-  } = useApi(() => api.listWorktrees(repoId!), [repoId]);
+  } = useApi(() => api.listWorktrees(repoId!, showCompletedWorktrees), [repoId, showCompletedWorktrees]);
 
   const {
     data: tickets,
@@ -275,7 +276,19 @@ export function RepoDetailPage() {
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
             Worktrees
           </h3>
-          <CreateWorktreeForm repoId={repoId!} onCreated={refetchWorktrees} open={createWtOpen} onOpenChange={setCreateWtOpen} />
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowCompletedWorktrees((v) => !v)}
+              className={`px-3 py-1.5 text-sm rounded-md border ${
+                showCompletedWorktrees
+                  ? "border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+                  : "border-gray-300 text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              {showCompletedWorktrees ? "Hiding active only" : "Show completed"}
+            </button>
+            <CreateWorktreeForm repoId={repoId!} onCreated={refetchWorktrees} open={createWtOpen} onOpenChange={setCreateWtOpen} />
+          </div>
         </div>
         {wtLoading ? (
           <LoadingSpinner />
