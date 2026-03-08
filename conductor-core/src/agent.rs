@@ -309,6 +309,11 @@ impl AgentRun {
         )
     }
 
+    /// Returns true if this run is waiting for human feedback.
+    pub fn is_waiting_for_feedback(&self) -> bool {
+        self.status == AgentRunStatus::WaitingForFeedback
+    }
+
     /// Returns true if this run ended (failed/cancelled) with incomplete plan steps
     /// and has a session_id available for resume.
     pub fn needs_resume(&self) -> bool {
