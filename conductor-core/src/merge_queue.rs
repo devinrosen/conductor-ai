@@ -353,6 +353,22 @@ mod tests {
     }
 
     #[test]
+    fn test_mark_merged() {
+        let (conn, repo_id) = setup();
+        let wt1 = insert_worktree(&conn, &repo_id, "feature-a");
+
+        let mgr = MergeQueueManager::new(&conn);
+        let entry = mgr.enqueue(&repo_id, &wt1, None, None).unwrap();
+
+        mgr.pop_next(&repo_id).unwrap();
+        mgr.mark_merged(&entry.id).unwrap();
+
+        let e = mgr.get(&entry.id).unwrap().unwrap();
+        assert_eq!(e.status, "merged");
+        assert!(e.completed_at.is_some());
+    }
+
+    #[test]
     fn test_mark_failed() {
         let (conn, repo_id) = setup();
         let wt1 = insert_worktree(&conn, &repo_id, "feature-a");

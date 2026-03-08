@@ -1099,6 +1099,34 @@ mod tests {
     }
 
     #[test]
+    fn test_delete_by_id_as_merged_updates_status() {
+        // setup_db() inserts repo 'r1' (local_path = /tmp/repo) and worktree 'w1'
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+
+        // git operations will fail on fake paths but are best-effort; should not propagate
+        let wt = mgr.delete_by_id_as_merged("w1").unwrap();
+        assert_eq!(wt.status, WorktreeStatus::Merged);
+        assert!(wt.completed_at.is_some());
+
+        // verify persisted in DB
+        let persisted = mgr.get_by_id("w1").unwrap();
+        assert_eq!(persisted.status, WorktreeStatus::Merged);
+        assert!(persisted.completed_at.is_some());
+    }
+
+    #[test]
+    fn test_delete_by_id_as_merged_unknown_id_returns_error() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+
+        let result = mgr.delete_by_id_as_merged("nonexistent-id");
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_remove_git_artifacts_success() {
         let (_tmp, _, local) = setup_repo_with_remote();
         let local_str = local.to_str().unwrap();
