@@ -199,17 +199,22 @@ impl<'a> TicketSyncer<'a> {
         source_type: &str,
         tickets: &[TicketInput],
     ) -> (usize, usize) {
-        let synced_ids: Vec<&str> = tickets.iter().map(|t| t.source_id.as_str()).collect();
-        let synced = self.upsert_tickets(repo_id, tickets).unwrap_or(0);
-        let closed = self
-            .close_missing_tickets(repo_id, source_type, &synced_ids)
-            .unwrap_or_else(|e| {
-                warn!("close_missing_tickets failed for {repo_id}: {e}");
+        let warn_and_default = |result: Result<usize>, ctx: &str| {
+            result.unwrap_or_else(|e| {
+                warn!("{ctx} failed for {repo_id}: {e}");
                 0
-            });
-        if let Err(e) = self.mark_worktrees_for_closed_tickets(repo_id) {
-            warn!("mark_worktrees_for_closed_tickets failed for {repo_id}: {e}");
-        }
+            })
+        };
+        let synced_ids: Vec<&str> = tickets.iter().map(|t| t.source_id.as_str()).collect();
+        let synced = warn_and_default(self.upsert_tickets(repo_id, tickets), "upsert_tickets");
+        let closed = warn_and_default(
+            self.close_missing_tickets(repo_id, source_type, &synced_ids),
+            "close_missing_tickets",
+        );
+        warn_and_default(
+            self.mark_worktrees_for_closed_tickets(repo_id),
+            "mark_worktrees_for_closed_tickets",
+        );
         (synced, closed)
     }
 
