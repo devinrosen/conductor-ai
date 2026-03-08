@@ -30,6 +30,11 @@ impl Worktree {
     pub fn is_active(&self) -> bool {
         self.status == "active"
     }
+
+    /// Resolve the effective base branch: the worktree's own base, or the repo default.
+    pub fn effective_base<'a>(&'a self, repo_default: &'a str) -> &'a str {
+        self.base_branch.as_deref().unwrap_or(repo_default)
+    }
 }
 
 pub struct WorktreeManager<'a> {
@@ -356,10 +361,7 @@ impl<'a> WorktreeManager<'a> {
     pub fn create_pr(&self, repo_slug: &str, name: &str, draft: bool) -> Result<String> {
         let (repo, worktree) = self.get_active_worktree(repo_slug, name)?;
 
-        let base = worktree
-            .base_branch
-            .as_deref()
-            .unwrap_or(&repo.default_branch);
+        let base = worktree.effective_base(&repo.default_branch);
         let mut args = vec![
             "pr",
             "create",

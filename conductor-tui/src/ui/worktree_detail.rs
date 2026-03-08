@@ -78,7 +78,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         Line::from(vec![
             Span::styled("Base: ", Style::default().fg(Color::DarkGray)),
             match wt.base_branch.as_deref() {
-                Some(b) => Span::raw(b.to_string()),
+                Some(b) => Span::raw(b),
                 None => Span::styled("(repo default)", Style::default().fg(Color::DarkGray)),
             },
         ]),
