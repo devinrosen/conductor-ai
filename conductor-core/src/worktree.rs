@@ -1,6 +1,7 @@
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::Path;
 use std::process::Command;
 
@@ -8,6 +9,32 @@ use crate::config::Config;
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::repo::RepoManager;
+
+/// Typed representation of the three worktree lifecycle states stored in the DB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorktreeStatus {
+    Active,
+    Merged,
+    Abandoned,
+}
+
+impl WorktreeStatus {
+    /// Return the canonical lowercase string stored in the database.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WorktreeStatus::Active => "active",
+            WorktreeStatus::Merged => "merged",
+            WorktreeStatus::Abandoned => "abandoned",
+        }
+    }
+}
+
+impl fmt::Display for WorktreeStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Worktree {
@@ -28,7 +55,7 @@ pub struct Worktree {
 
 impl Worktree {
     pub fn is_active(&self) -> bool {
-        self.status == "active"
+        self.status == WorktreeStatus::Active.as_str()
     }
 
     /// Resolve the effective base branch: the worktree's own base, or the repo default.
@@ -87,7 +114,7 @@ impl<'a> WorktreeManager<'a> {
             .optional()?;
 
         match existing_status {
-            Some(ref s) if s == "active" => {
+            Some(ref s) if s == WorktreeStatus::Active.as_str() => {
                 return Err(ConductorError::WorktreeAlreadyExists {
                     slug: wt_slug.clone(),
                 });
@@ -136,7 +163,7 @@ impl<'a> WorktreeManager<'a> {
             branch,
             path: wt_path.to_string_lossy().to_string(),
             ticket_id: ticket_id.map(|s| s.to_string()),
-            status: "active".to_string(),
+            status: WorktreeStatus::Active.to_string(),
             created_at: now,
             completed_at: None,
             model: None,
@@ -286,7 +313,11 @@ impl<'a> WorktreeManager<'a> {
             .unwrap_or(false);
         let is_merged = ticket_closed
             || is_branch_merged(&repo.local_path, &worktree.branch, &repo.default_branch);
-        let new_status = if is_merged { "merged" } else { "abandoned" };
+        let new_status = if is_merged {
+            WorktreeStatus::Merged
+        } else {
+            WorktreeStatus::Abandoned
+        };
         let now = Utc::now().to_rfc3339();
 
         // Remove git worktree
@@ -302,7 +333,7 @@ impl<'a> WorktreeManager<'a> {
         // Soft-delete: update status + completed_at instead of deleting the row
         self.conn.execute(
             "UPDATE worktrees SET status = ?1, completed_at = ?2 WHERE id = ?3",
-            params![new_status, now, worktree.id],
+            params![new_status.as_str(), now, worktree.id],
         )?;
 
         Ok(Worktree {
@@ -312,15 +343,15 @@ impl<'a> WorktreeManager<'a> {
         })
     }
 
-    pub fn update_status(&self, worktree_id: &str, status: &str) -> Result<()> {
-        let completed_at = if status != "active" {
+    pub fn update_status(&self, worktree_id: &str, status: WorktreeStatus) -> Result<()> {
+        let completed_at = if status != WorktreeStatus::Active {
             Some(Utc::now().to_rfc3339())
         } else {
             None
         };
         self.conn.execute(
             "UPDATE worktrees SET status = ?1, completed_at = ?2 WHERE id = ?3",
-            params![status, completed_at, worktree_id],
+            params![status.as_str(), completed_at, worktree_id],
         )?;
         Ok(())
     }
