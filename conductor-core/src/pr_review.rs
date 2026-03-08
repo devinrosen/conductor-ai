@@ -1058,13 +1058,15 @@ fn poll_all_reviewers(
             .unwrap_or_default();
         let approved = is_review_approved(run, &parsed);
         let off_diff = parsed.off_diff_findings;
-        if let Some(ref step_id) = steps[step_idx].id {
-            let step_status = if run.status == AgentRunStatus::Completed {
-                StepStatus::Completed
-            } else {
-                StepStatus::Failed
-            };
-            let _ = mgr.update_step_status(step_id, step_status);
+        if let Some(step) = steps.get(step_idx) {
+            if let Some(ref step_id) = step.id {
+                let step_status = if run.status == AgentRunStatus::Completed {
+                    StepStatus::Completed
+                } else {
+                    StepStatus::Failed
+                };
+                let _ = mgr.update_step_status(step_id, step_status);
+            }
         }
         eprintln!(
             "[review-swarm] {} reviewer: {} (approved={}, off_diff={})",
@@ -1107,8 +1109,10 @@ fn poll_all_reviewers(
                     timeout.as_secs_f64()
                 );
                 eprintln!("[review-swarm] {} reviewer error: {err}", role.name);
-                if let Some(ref step_id) = steps[*step_idx].id {
-                    let _ = mgr.update_step_status(step_id, StepStatus::Failed);
+                if let Some(step) = steps.get(*step_idx) {
+                    if let Some(ref step_id) = step.id {
+                        let _ = mgr.update_step_status(step_id, StepStatus::Failed);
+                    }
                 }
                 let _ = mgr.update_run_cancelled(&child_run.id);
                 results[idx] = Some(ReviewerResult {
@@ -2375,6 +2379,48 @@ mod tests {
     fn test_find_existing_issue_empty_list() {
         let issues: Vec<github::IssueRef> = Vec::new();
         assert_eq!(find_existing_issue(&issues, "anything"), None);
+    }
+
+    #[test]
+    fn test_poll_all_reviewers_fewer_steps_than_runs() {
+        // Regression test: steps.get(step_idx) must not panic when steps is shorter than child_runs
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let (r1, r2, child_runs) = setup_two_child_runs(&mgr);
+
+        mgr.update_run_completed(
+            &r1.id,
+            None,
+            Some("VERDICT: APPROVE"),
+            Some(0.05),
+            Some(3),
+            Some(5000),
+        )
+        .unwrap();
+        mgr.update_run_completed(
+            &r2.id,
+            None,
+            Some("VERDICT: APPROVE"),
+            Some(0.10),
+            Some(5),
+            Some(8000),
+        )
+        .unwrap();
+
+        // Pass zero steps — both step_idx values (0 and 1) are out of bounds
+        let steps = make_plan_steps(0);
+
+        // Must not panic
+        let results = poll_all_reviewers(
+            &mgr,
+            &child_runs,
+            &steps,
+            Duration::from_millis(10),
+            Duration::from_secs(1),
+        );
+
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.approved));
     }
 
     #[test]
