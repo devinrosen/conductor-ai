@@ -3183,7 +3183,7 @@ impl App {
 
         // Best-effort: capture tmux scrollback before killing
         if let Some(ref window) = tmux_window {
-            capture_agent_log(&mgr, &run_id, window);
+            mgr.capture_agent_log(&run_id, window);
         }
 
         // Kill the tmux window
@@ -4207,41 +4207,6 @@ fn extract_last_code_block(reader: impl std::io::BufRead) -> Option<String> {
     }
 
     last_block
-}
-
-/// Best-effort capture of tmux scrollback to `~/.conductor/agent-logs/<run_id>.log`.
-fn capture_agent_log(mgr: &AgentManager, run_id: &str, tmux_window: &str) {
-    let log_dir = conductor_core::config::agent_log_dir();
-
-    if let Err(e) = std::fs::create_dir_all(&log_dir) {
-        eprintln!("[conductor] Warning: could not create agent-logs dir: {e}");
-        return;
-    }
-
-    let log_path = conductor_core::config::agent_log_path(run_id);
-
-    let output = Command::new("tmux")
-        .args([
-            "capture-pane",
-            "-t",
-            &format!(":{tmux_window}"),
-            "-p",
-            "-S",
-            "-",
-        ])
-        .output();
-
-    match output {
-        Ok(o) if o.status.success() => {
-            if let Err(e) = std::fs::write(&log_path, &o.stdout) {
-                eprintln!("[conductor] Warning: could not write agent log: {e}");
-                return;
-            }
-            let path_str = log_path.to_string_lossy().to_string();
-            let _ = mgr.update_run_log_file(run_id, &path_str);
-        }
-        _ => {}
-    }
 }
 
 #[cfg(test)]

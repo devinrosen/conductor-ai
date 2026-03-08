@@ -803,6 +803,53 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Best-effort capture of tmux scrollback to `~/.conductor/agent-logs/<run_id>.log`.
+    pub fn capture_agent_log(&self, run_id: &str, tmux_window: &str) {
+        let log_dir = crate::config::agent_log_dir();
+
+        if let Err(e) = std::fs::create_dir_all(&log_dir) {
+            tracing::warn!("could not create agent-logs dir: {e}");
+            return;
+        }
+
+        let log_path = crate::config::agent_log_path(run_id);
+
+        let output = Command::new("tmux")
+            .args([
+                "capture-pane",
+                "-t",
+                &format!(":{tmux_window}"),
+                "-p",
+                "-S",
+                "-",
+            ])
+            .output();
+
+        match output {
+            Ok(o) if o.status.success() => {
+                if let Err(e) = std::fs::write(&log_path, &o.stdout) {
+                    tracing::warn!("could not write agent log: {e}");
+                    return;
+                }
+                let path_str = log_path.to_string_lossy().to_string();
+                if let Err(e) = self.update_run_log_file(run_id, &path_str) {
+                    tracing::warn!(
+                        "captured agent log but failed to record path in DB for run {run_id}: {e}"
+                    );
+                }
+            }
+            Ok(o) => {
+                tracing::warn!(
+                    "tmux capture-pane failed for run {run_id} window {tmux_window}: {}",
+                    String::from_utf8_lossy(&o.stderr)
+                );
+            }
+            Err(e) => {
+                tracing::warn!("could not execute tmux capture-pane for run {run_id}: {e}");
+            }
+        }
+    }
+
     /// Store the two-phase plan for a run. Replaces any existing plan steps.
     /// Inserts individual records into `agent_run_steps`.
     pub fn update_run_plan(&self, run_id: &str, steps: &[PlanStep]) -> Result<()> {
@@ -3355,6 +3402,39 @@ mod tests {
         .unwrap();
 
         assert!(super::scan_log_for_result_at(&log_path).is_none());
+    }
+
+    #[test]
+    fn test_capture_agent_log_no_panic_on_bad_window() {
+        // Verifies that capture_agent_log is resilient: when tmux is unavailable or the
+        // window doesn't exist, the method returns without panicking and log_file stays None.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run("w1", "test prompt", Some("nonexistent-win-xyz"), None)
+            .unwrap();
+        assert!(run.log_file.is_none());
+
+        // Must not panic regardless of tmux availability
+        mgr.capture_agent_log(&run.id, "nonexistent-win-xyz");
+
+        // log_file should remain None since capture failed
+        let updated = mgr.get_run(&run.id).unwrap().unwrap();
+        assert!(
+            updated.log_file.is_none(),
+            "log_file should stay None when tmux capture fails"
+        );
+    }
+
+    #[test]
+    fn test_capture_agent_log_unknown_run_id_no_panic() {
+        // Verifies that capture_agent_log handles a DB update failure (unknown run_id)
+        // gracefully without panicking — it just logs a warning.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Call with a run_id that doesn't exist in the DB — should not panic
+        mgr.capture_agent_log("nonexistent-run-id", "nonexistent-win-xyz");
     }
 
     #[test]
