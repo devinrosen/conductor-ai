@@ -37,6 +37,12 @@ impl Worktree {
     }
 }
 
+const WORKTREE_COLUMNS: &str =
+    "id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch";
+
+const WORKTREE_COLUMNS_W: &str =
+    "w.id, w.repo_id, w.slug, w.branch, w.path, w.ticket_id, w.status, w.created_at, w.completed_at, w.model, w.base_branch";
+
 pub struct WorktreeManager<'a> {
     conn: &'a Connection,
     config: &'a Config,
@@ -159,8 +165,7 @@ impl<'a> WorktreeManager<'a> {
     pub fn get_by_id(&self, id: &str) -> Result<Worktree> {
         self.conn
             .query_row(
-                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch
-                 FROM worktrees WHERE id = ?1",
+                &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE id = ?1"),
                 params![id],
                 map_worktree_row,
             )
@@ -172,8 +177,9 @@ impl<'a> WorktreeManager<'a> {
     pub fn get_by_slug(&self, repo_id: &str, slug: &str) -> Result<Worktree> {
         self.conn
             .query_row(
-                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch
-                 FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
+                &format!(
+                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = ?1 AND slug = ?2"
+                ),
                 params![repo_id, slug],
                 map_worktree_row,
             )
@@ -185,8 +191,7 @@ impl<'a> WorktreeManager<'a> {
     pub fn list_by_ticket(&self, ticket_id: &str) -> Result<Vec<Worktree>> {
         query_collect(
             self.conn,
-            "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch
-             FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC",
+            &format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE ticket_id = ?1 ORDER BY created_at DESC"),
             params![ticket_id],
             map_worktree_row,
         )
@@ -199,9 +204,7 @@ impl<'a> WorktreeManager<'a> {
             ""
         };
         let query = format!(
-            "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch
-             FROM worktrees WHERE repo_id = ?1{}
-             ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at",
+            "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = ?1{} ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at",
             status_filter
         );
         query_collect(self.conn, &query, params![repo_id], map_worktree_row)
@@ -217,20 +220,13 @@ impl<'a> WorktreeManager<'a> {
         let query = match repo_slug {
             Some(_) => {
                 format!(
-                    "SELECT w.id, w.repo_id, w.slug, w.branch, w.path, w.ticket_id, w.status, w.created_at, w.completed_at, w.model, w.base_branch
-                     FROM worktrees w
-                     JOIN repos r ON r.id = w.repo_id
-                     WHERE r.slug = ?1{}
-                     ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
+                    "SELECT {WORKTREE_COLUMNS_W} FROM worktrees w JOIN repos r ON r.id = w.repo_id WHERE r.slug = ?1{} ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
                     status_filter
                 )
             }
             None => {
                 format!(
-                    "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch
-                     FROM worktrees
-                     WHERE 1=1{}
-                     ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at",
+                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE 1=1{} ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at",
                     status_filter
                 )
             }
@@ -251,8 +247,9 @@ impl<'a> WorktreeManager<'a> {
         let worktree = self
             .conn
             .query_row(
-                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch
-                 FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
+                &format!(
+                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = ?1 AND slug = ?2"
+                ),
                 params![repo.id, name],
                 map_worktree_row,
             )
@@ -393,8 +390,9 @@ impl<'a> WorktreeManager<'a> {
         let worktree = self
             .conn
             .query_row(
-                "SELECT id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch
-                 FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
+                &format!(
+                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = ?1 AND slug = ?2"
+                ),
                 params![repo.id, wt_slug],
                 map_worktree_row,
             )
