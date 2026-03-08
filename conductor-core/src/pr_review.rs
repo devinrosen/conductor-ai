@@ -1003,7 +1003,6 @@ fn poll_all_reviewers(
     poll_interval: Duration,
     timeout: Duration,
 ) -> Vec<ReviewerResult> {
-    let start = std::time::Instant::now();
     let mut results: Vec<Option<ReviewerResult>> = vec![None; child_runs.len()];
     let mut pending_count = child_runs.len();
     let watched_ids: HashSet<String> = child_runs.iter().map(|(_, r, _)| r.id.clone()).collect();
@@ -1039,6 +1038,11 @@ fn poll_all_reviewers(
         }
         watcher.ok()
     };
+
+    // Start the timeout clock after watcher initialisation so that slow watcher
+    // setup (e.g. FSEvents on macOS) does not consume time that should count
+    // against actual polling.
+    let start = std::time::Instant::now();
 
     // Run IDs notified by the file watcher since last poll cycle.
     // When empty (timeout or first iteration), all pending runs are scanned as a fallback.
@@ -1759,7 +1763,7 @@ mod tests {
             &child_runs,
             &steps,
             Duration::from_millis(10),
-            Duration::from_secs(2),
+            Duration::from_millis(100),
         );
 
         assert_eq!(results.len(), 2);
@@ -2411,7 +2415,7 @@ mod tests {
             &child_runs,
             &steps,
             Duration::from_millis(10),
-            Duration::from_secs(2),
+            Duration::from_millis(100),
         );
 
         // Clean up log file
