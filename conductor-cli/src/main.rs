@@ -847,7 +847,7 @@ fn main() -> Result<()> {
 
                     // Create the GitHub issue
                     let (source_id, url) =
-                        github::create_github_issue(&owner, &repo_name, &title, &body, &[])?;
+                        github::create_github_issue(&owner, &repo_name, &title, &body, &[], None)?;
 
                     // Record in DB
                     agent_mgr.record_created_issue(

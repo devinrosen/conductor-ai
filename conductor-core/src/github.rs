@@ -185,12 +185,16 @@ pub fn sync_github_issues(owner: &str, repo: &str) -> Result<Vec<TicketInput>> {
 
 /// Create a new GitHub issue via the `gh` CLI.
 /// Returns `(source_id, url)` where `source_id` is the issue number as a string.
+///
+/// When `token` is `Some`, the issue is created under that identity
+/// (e.g. a GitHub App bot). When `None`, falls back to the default `gh` CLI user.
 pub fn create_github_issue(
     owner: &str,
     repo: &str,
     title: &str,
     body: &str,
     labels: &[&str],
+    token: Option<&str>,
 ) -> Result<(String, String)> {
     let repo_slug = repo_slug(owner, repo);
     let mut args = vec![
@@ -200,7 +204,7 @@ pub fn create_github_issue(
         args.push("--label");
         args.push(label);
     }
-    let output = run_gh(&args)?;
+    let output = run_gh_with_token(&args, token)?;
 
     // `gh issue create` prints the issue URL on stdout, e.g.
     // https://github.com/owner/repo/issues/42
@@ -219,29 +223,36 @@ pub fn create_github_issue(
 }
 
 /// Search for existing GitHub issues matching a query, filtered by label.
+///
+/// When `token` is `Some`, the search runs under that identity
+/// (e.g. a GitHub App bot). When `None`, falls back to the default `gh` CLI user.
 pub fn list_issues_by_search(
     owner: &str,
     repo: &str,
     query: &str,
     label: &str,
     limit: u32,
+    token: Option<&str>,
 ) -> Result<Vec<IssueRef>> {
     let repo_slug = repo_slug(owner, repo);
     let limit_str = limit.to_string();
-    let output = run_gh(&[
-        "issue",
-        "list",
-        "--repo",
-        &repo_slug,
-        "--search",
-        query,
-        "--label",
-        label,
-        "--json",
-        "title,url",
-        "--limit",
-        &limit_str,
-    ])?;
+    let output = run_gh_with_token(
+        &[
+            "issue",
+            "list",
+            "--repo",
+            &repo_slug,
+            "--search",
+            query,
+            "--label",
+            label,
+            "--json",
+            "title,url",
+            "--limit",
+            &limit_str,
+        ],
+        token,
+    )?;
 
     let json_str = String::from_utf8_lossy(&output.stdout);
     let issues: Vec<IssueRef> = serde_json::from_str(json_str.trim())

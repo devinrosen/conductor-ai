@@ -262,7 +262,13 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
 
     let off_diff_issues_filed = if !deduped_off_diff.is_empty() {
         if let Some((ref owner, ref repo_name)) = gh_remote {
-            file_off_diff_issues(owner, repo_name, pr_branch, &deduped_off_diff)
+            file_off_diff_issues(
+                owner,
+                repo_name,
+                pr_branch,
+                &deduped_off_diff,
+                input.app_token,
+            )
         } else {
             Vec::new()
         }
@@ -670,15 +676,21 @@ fn find_existing_issue(existing_issues: &[github::IssueRef], title: &str) -> Opt
 }
 
 /// File off-diff findings as GitHub issues (or reference existing ones).
+///
+/// When `app_token` is `Some`, issues are created and searched under that
+/// identity (e.g. a GitHub App bot). When `None`, falls back to the default
+/// `gh` CLI user.
 fn file_off_diff_issues(
     owner: &str,
     repo: &str,
     pr_branch: &str,
     findings: &[OffDiffFinding],
+    app_token: Option<&str>,
 ) -> Vec<FiledIssue> {
     // Batch-fetch all conductor-review issues once to avoid N subprocess spawns.
     let existing_issues =
-        github::list_issues_by_search(owner, repo, "", "conductor-review", 200).unwrap_or_default();
+        github::list_issues_by_search(owner, repo, "", "conductor-review", 200, app_token)
+            .unwrap_or_default();
 
     let mut filed = Vec::new();
 
@@ -721,6 +733,7 @@ fn file_off_diff_issues(
             &finding.title,
             &issue_body,
             &["conductor-review"],
+            app_token,
         ) {
             Ok((_number, url)) => {
                 eprintln!(
