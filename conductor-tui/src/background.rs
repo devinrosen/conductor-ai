@@ -274,11 +274,9 @@ fn poll_workflow_data(
         all_defs
     };
     let wf_mgr = WorkflowManager::new(&conn);
-    let runs = if let Some(wt_id) = worktree_id {
-        wf_mgr.list_workflow_runs(wt_id).unwrap_or_default()
-    } else {
-        wf_mgr.list_all_workflow_runs(50).unwrap_or_default()
-    };
+    let runs = wf_mgr
+        .list_workflow_runs_for_scope(worktree_id, 50)
+        .unwrap_or_default();
     let steps = if let Some(run_id) = selected_run_id {
         wf_mgr.get_workflow_steps(run_id).unwrap_or_default()
     } else {

@@ -3933,17 +3933,18 @@ impl App {
         let wf_mgr = WorkflowManager::new(&self.conn);
 
         if let Some(ref wt_id) = self.state.selected_worktree_id.clone() {
-            // Worktree-scoped: load defs from FS and runs for this worktree
+            // Worktree-scoped: load defs from FS
             if let Some((wt_path, rp)) = self.resolve_worktree_paths(wt_id) {
                 self.state.data.workflow_defs =
                     WorkflowManager::list_defs(&wt_path, &rp).unwrap_or_default();
             }
-            self.state.data.workflow_runs = wf_mgr.list_workflow_runs(wt_id).unwrap_or_default();
         } else {
-            // Global mode: no defs (cross-worktree), all recent runs
+            // Global mode: defs are cross-worktree, cleared here and populated by background poller
             self.state.data.workflow_defs.clear();
-            self.state.data.workflow_runs = wf_mgr.list_all_workflow_runs(50).unwrap_or_default();
         }
+        self.state.data.workflow_runs = wf_mgr
+            .list_workflow_runs_for_scope(self.state.selected_worktree_id.as_deref(), 50)
+            .unwrap_or_default();
 
         // Load steps for the currently selected run
         self.reload_workflow_steps();

@@ -4,9 +4,20 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
+use conductor_core::worktree::Worktree;
+
 use super::common::truncate;
 use crate::state::AppState;
 use crate::state::WorkflowsFocus;
+
+/// Return the slug of the worktree matching `predicate`, or `"?"` if not found.
+fn worktree_slug(worktrees: &[Worktree], predicate: impl Fn(&Worktree) -> bool) -> &str {
+    worktrees
+        .iter()
+        .find(|wt| predicate(wt))
+        .map(|wt| wt.slug.as_str())
+        .unwrap_or("?")
+}
 
 /// Render the Workflows split-pane view: defs (left) + runs (right).
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -42,13 +53,9 @@ fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             )];
             if global_mode {
                 // Derive worktree slug from source_path by matching against known worktrees
-                let wt_slug = state
-                    .data
-                    .worktrees
-                    .iter()
-                    .find(|wt| def.source_path.starts_with(&wt.path))
-                    .map(|wt| wt.slug.as_str())
-                    .unwrap_or("?");
+                let wt_slug = worktree_slug(&state.data.worktrees, |wt| {
+                    def.source_path.starts_with(&wt.path)
+                });
                 spans.push(Span::styled(
                     format!("  {wt_slug}"),
                     Style::default().fg(Color::DarkGray),
@@ -132,13 +139,7 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
             ];
 
             if global_mode {
-                let wt_slug = state
-                    .data
-                    .worktrees
-                    .iter()
-                    .find(|w| w.id == run.worktree_id)
-                    .map(|w| w.slug.as_str())
-                    .unwrap_or("?");
+                let wt_slug = worktree_slug(&state.data.worktrees, |w| w.id == run.worktree_id);
                 spans.push(Span::styled(
                     format!("  {wt_slug}"),
                     Style::default().fg(Color::DarkGray),
