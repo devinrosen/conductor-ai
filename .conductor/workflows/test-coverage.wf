@@ -4,9 +4,15 @@ workflow test-coverage {
     trigger     = "manual"
   }
 
+  inputs {
+    pr_url required
+  }
+
   call analyze-coverage
 
   if analyze-coverage.has_missing_tests {
     call write-tests
   }
+
+  call report-coverage
 }
