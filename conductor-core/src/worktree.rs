@@ -310,7 +310,7 @@ impl<'a> WorktreeManager<'a> {
 
     /// Like [`delete_by_id`] but skips the ticket-state DB query when the
     /// caller already knows the worktree was merged.
-    pub fn delete_by_id_as_merged(&self, worktree_id: &str) -> Result<Worktree> {
+    pub(crate) fn delete_by_id_as_merged(&self, worktree_id: &str) -> Result<Worktree> {
         let worktree = self.get_by_id(worktree_id)?;
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_id(&worktree.repo_id)?;
