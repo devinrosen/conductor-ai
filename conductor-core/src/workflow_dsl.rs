@@ -22,7 +22,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -836,7 +836,7 @@ pub fn parse_workflow_str(input: &str, source_path: &str) -> Result<WorkflowDef>
 
 /// Load all workflow definitions from `.conductor/workflows/*.wf`.
 pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<WorkflowDef>> {
-    let workflows_dir = match resolve_workflows_dir(worktree_path, repo_path) {
+    let workflows_dir = match resolve_conductor_subdir(worktree_path, repo_path, "workflows") {
         Some(dir) => dir,
         None => return Ok(Vec::new()),
     };
@@ -880,11 +880,6 @@ pub fn validate_workflow_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Resolve the `.conductor/workflows/` directory, preferring worktree over repo.
-fn resolve_workflows_dir(worktree_path: &str, repo_path: &str) -> Option<PathBuf> {
-    resolve_conductor_subdir(worktree_path, repo_path, "workflows")
-}
-
 /// Load a single workflow definition by name.
 pub fn load_workflow_by_name(
     worktree_path: &str,
@@ -893,11 +888,12 @@ pub fn load_workflow_by_name(
 ) -> Result<WorkflowDef> {
     validate_workflow_name(name)?;
 
-    let workflows_dir = resolve_workflows_dir(worktree_path, repo_path).ok_or_else(|| {
-        ConductorError::Workflow(format!(
-            "Workflow '{name}' not found in .conductor/workflows/"
-        ))
-    })?;
+    let workflows_dir = resolve_conductor_subdir(worktree_path, repo_path, "workflows")
+        .ok_or_else(|| {
+            ConductorError::Workflow(format!(
+                "Workflow '{name}' not found in .conductor/workflows/"
+            ))
+        })?;
 
     let path = workflows_dir.join(format!("{name}.wf"));
     if !path.is_file() {

@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Deserialize;
 
@@ -210,17 +210,13 @@ fn parse_sections(body: &str) -> HashMap<String, String> {
     sections
 }
 
-/// Resolve the `.conductor/workflows/` directory, preferring worktree over repo.
-fn resolve_workflows_dir(worktree_path: &str, repo_path: &str) -> Option<PathBuf> {
-    resolve_conductor_subdir(worktree_path, repo_path, "workflows")
-}
-
 /// Load all workflow definitions from `.conductor/workflows/*.md`.
 ///
 /// Checks `worktree_path` first, then falls back to `repo_path`,
 /// consistent with `load_reviewer_roles`.
 pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<WorkflowDef>> {
-    let Some(workflows_dir) = resolve_workflows_dir(worktree_path, repo_path) else {
+    let Some(workflows_dir) = resolve_conductor_subdir(worktree_path, repo_path, "workflows")
+    else {
         // No workflows directory — return empty list (not an error, unlike reviewers).
         return Ok(Vec::new());
     };
@@ -254,11 +250,12 @@ pub fn load_workflow_by_name(
 ) -> Result<WorkflowDef> {
     crate::workflow_dsl::validate_workflow_name(name)?;
 
-    let workflows_dir = resolve_workflows_dir(worktree_path, repo_path).ok_or_else(|| {
-        ConductorError::Workflow(format!(
-            "Workflow '{name}' not found in .conductor/workflows/"
-        ))
-    })?;
+    let workflows_dir = resolve_conductor_subdir(worktree_path, repo_path, "workflows")
+        .ok_or_else(|| {
+            ConductorError::Workflow(format!(
+                "Workflow '{name}' not found in .conductor/workflows/"
+            ))
+        })?;
 
     let path = workflows_dir.join(format!("{name}.md"));
     if !path.is_file() {
