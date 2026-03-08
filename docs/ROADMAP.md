@@ -28,10 +28,10 @@ High value but require more design and implementation work.
 
 | Priority | Issue | Title | Notes |
 |----------|-------|-------|-------|
-| 7 | [#274](https://github.com/devinrosen/conductor-ai/issues/274) | Ticket labels, code impact analysis, and conflict-aware scheduling | Phased: labels first, then impact analysis, then scheduling |
+| 7 | [#274](https://github.com/devinrosen/conductor-ai/issues/274) | Dependency graph, impact analysis, and conflict-aware scheduling | Phased: dependency edges → impact analysis → DAG-aware scheduling → merge queue integration. Absorbs cost-awareness from #142 as a scheduling signal. |
 | 8 | [#137](https://github.com/devinrosen/conductor-ai/issues/137) | Agent-to-human notifications from agent runs | |
-| 9 | [#142](https://github.com/devinrosen/conductor-ai/issues/142) | Cost budgeting and spending limits per run, campaign, and repo | Safety net before running workflows at scale |
-| 10 | [#144](https://github.com/devinrosen/conductor-ai/issues/144) | Cost analytics dashboard — spend over time by repo | Do after #142 |
+| 9 | [#144](https://github.com/devinrosen/conductor-ai/issues/144) | Cost analytics dashboard — spend over time by repo | Feeds into #274's cost-aware scheduling |
+| 10 | [#142](https://github.com/devinrosen/conductor-ai/issues/142) | Cost budgeting and spending limits per run, workflow, and repo | Deferred — smart scheduling (#274) is higher priority; hard spend caps remain useful as a safety net |
 
 ## Known Limitations
 
