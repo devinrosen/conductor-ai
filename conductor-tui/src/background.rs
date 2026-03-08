@@ -214,8 +214,8 @@ pub fn spawn_workflow_poller(
     tx: BackgroundSender,
     interval: Duration,
     worktree_id: Option<String>,
-    worktree_path: String,
-    repo_path: String,
+    worktree_path: Option<String>,
+    repo_path: Option<String>,
     selected_run_id: Option<String>,
     selected_step_child_run_id: Option<String>,
 ) {
@@ -223,8 +223,8 @@ pub fn spawn_workflow_poller(
         thread::sleep(interval);
         if let Some(action) = poll_workflow_data(
             worktree_id.as_deref(),
-            &worktree_path,
-            &repo_path,
+            worktree_path.as_deref(),
+            repo_path.as_deref(),
             selected_run_id.as_deref(),
             selected_step_child_run_id.as_deref(),
         ) {
@@ -237,8 +237,8 @@ pub fn spawn_workflow_poller(
 
 fn poll_workflow_data(
     worktree_id: Option<&str>,
-    worktree_path: &str,
-    repo_path: &str,
+    worktree_path: Option<&str>,
+    repo_path: Option<&str>,
     selected_run_id: Option<&str>,
     selected_step_child_run_id: Option<&str>,
 ) -> Option<Action> {
@@ -248,8 +248,8 @@ fn poll_workflow_data(
     let conn = open_database(&db).ok()?;
 
     // Load defs: scoped to one worktree, or aggregated across all worktrees in global mode.
-    let defs = if !worktree_path.is_empty() {
-        WorkflowManager::list_defs(worktree_path, repo_path).unwrap_or_default()
+    let defs = if let Some(wt_path) = worktree_path {
+        WorkflowManager::list_defs(wt_path, repo_path.unwrap_or("")).unwrap_or_default()
     } else {
         // Global mode: scan every registered worktree for workflow definitions.
         let mut all_defs = Vec::new();
@@ -315,16 +315,16 @@ fn poll_workflow_data(
 pub fn spawn_workflow_poll_once(
     tx: BackgroundSender,
     worktree_id: Option<String>,
-    worktree_path: String,
-    repo_path: String,
+    worktree_path: Option<String>,
+    repo_path: Option<String>,
     selected_run_id: Option<String>,
     selected_step_child_run_id: Option<String>,
 ) {
     thread::spawn(move || {
         if let Some(action) = poll_workflow_data(
             worktree_id.as_deref(),
-            &worktree_path,
-            &repo_path,
+            worktree_path.as_deref(),
+            repo_path.as_deref(),
             selected_run_id.as_deref(),
             selected_step_child_run_id.as_deref(),
         ) {
@@ -338,8 +338,8 @@ pub fn spawn_workflow_poll_once(
 pub fn spawn_workflow_poll_once_guarded(
     tx: BackgroundSender,
     worktree_id: Option<String>,
-    worktree_path: String,
-    repo_path: String,
+    worktree_path: Option<String>,
+    repo_path: Option<String>,
     selected_run_id: Option<String>,
     selected_step_child_run_id: Option<String>,
     in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -347,8 +347,8 @@ pub fn spawn_workflow_poll_once_guarded(
     thread::spawn(move || {
         let result = poll_workflow_data(
             worktree_id.as_deref(),
-            &worktree_path,
-            &repo_path,
+            worktree_path.as_deref(),
+            repo_path.as_deref(),
             selected_run_id.as_deref(),
             selected_step_child_run_id.as_deref(),
         );

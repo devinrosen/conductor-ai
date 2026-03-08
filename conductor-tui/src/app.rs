@@ -3901,26 +3901,15 @@ impl App {
 
         let wt_id = self.state.selected_worktree_id.clone();
         let (worktree_path, repo_path) = if let Some(ref id) = wt_id {
-            let wt = self.state.data.worktrees.iter().find(|w| &w.id == id);
-            match wt {
-                Some(wt) => {
-                    let rp = self
-                        .state
-                        .data
-                        .repos
-                        .iter()
-                        .find(|r| r.id == wt.repo_id)
-                        .map(|r| r.local_path.clone())
-                        .unwrap_or_default();
-                    (wt.path.clone(), rp)
-                }
+            match self.resolve_worktree_paths(id) {
+                Some((wt_path, rp)) => (Some(wt_path), Some(rp)),
                 None => {
                     self.workflow_poll_in_flight.store(false, Ordering::SeqCst);
                     return;
                 }
             }
         } else {
-            (String::new(), String::new())
+            (None, None)
         };
 
         let selected_run_id = self.state.selected_workflow_run_id.clone();
@@ -3945,18 +3934,9 @@ impl App {
 
         if let Some(ref wt_id) = self.state.selected_worktree_id.clone() {
             // Worktree-scoped: load defs from FS and runs for this worktree
-            let wt = self.state.data.worktrees.iter().find(|w| &w.id == wt_id);
-            if let Some(wt) = wt {
-                let repo_path = self
-                    .state
-                    .data
-                    .repos
-                    .iter()
-                    .find(|r| r.id == wt.repo_id)
-                    .map(|r| r.local_path.as_str())
-                    .unwrap_or("");
+            if let Some((wt_path, rp)) = self.resolve_worktree_paths(wt_id) {
                 self.state.data.workflow_defs =
-                    WorkflowManager::list_defs(&wt.path, repo_path).unwrap_or_default();
+                    WorkflowManager::list_defs(&wt_path, &rp).unwrap_or_default();
             }
             self.state.data.workflow_runs = wf_mgr.list_workflow_runs(wt_id).unwrap_or_default();
         } else {
@@ -4173,13 +4153,7 @@ impl App {
 
     /// Show the selected workflow definition's source file in a scrollable modal.
     fn handle_view_workflow_def(&mut self) {
-        let Some(def) = self
-            .state
-            .data
-            .workflow_defs
-            .get(self.state.workflow_def_index)
-            .cloned()
-        else {
+        let Some(def) = self.selected_workflow_def() else {
             self.state.status_message = Some("No workflow definition selected".to_string());
             return;
         };
@@ -4198,15 +4172,33 @@ impl App {
         };
     }
 
-    /// Open the selected workflow definition's source file in $EDITOR.
-    fn handle_edit_workflow_def(&mut self) {
-        let Some(def) = self
+    /// Return `(worktree_path, repo_local_path)` for the given worktree ID,
+    /// or `None` if the worktree (or its repo) is not found in the data cache.
+    fn resolve_worktree_paths(&self, wt_id: &str) -> Option<(String, String)> {
+        let wt = self.state.data.worktrees.iter().find(|w| w.id == wt_id)?;
+        let repo_path = self
             .state
+            .data
+            .repos
+            .iter()
+            .find(|r| r.id == wt.repo_id)
+            .map(|r| r.local_path.clone())
+            .unwrap_or_default();
+        Some((wt.path.clone(), repo_path))
+    }
+
+    /// Return the currently selected workflow definition, if any.
+    fn selected_workflow_def(&self) -> Option<conductor_core::workflow::WorkflowDef> {
+        self.state
             .data
             .workflow_defs
             .get(self.state.workflow_def_index)
             .cloned()
-        else {
+    }
+
+    /// Open the selected workflow definition's source file in $EDITOR.
+    fn handle_edit_workflow_def(&mut self) {
+        let Some(def) = self.selected_workflow_def() else {
             self.state.status_message = Some("No workflow definition selected".to_string());
             return;
         };

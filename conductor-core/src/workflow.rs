@@ -2388,6 +2388,61 @@ And here is my actual output:
     }
 
     #[test]
+    fn test_list_all_workflow_runs_cross_worktree() {
+        let conn = setup_db();
+        // Insert a second worktree so we can test cross-worktree aggregation.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w2', 'r1', 'feat-other', 'feat/other', '/tmp/ws/other', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let agent_mgr = AgentManager::new(&conn);
+        let p1 = agent_mgr.create_run("w1", "wf1", None, None).unwrap();
+        let p2 = agent_mgr.create_run("w2", "wf2", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        mgr.create_workflow_run("flow-a", "w1", &p1.id, false, "manual", None)
+            .unwrap();
+        mgr.create_workflow_run("flow-b", "w2", &p2.id, false, "manual", None)
+            .unwrap();
+
+        // list_all returns both runs regardless of worktree
+        let all = mgr.list_all_workflow_runs(100).unwrap();
+        assert_eq!(all.len(), 2);
+        let names: Vec<&str> = all.iter().map(|r| r.workflow_name.as_str()).collect();
+        assert!(names.contains(&"flow-a"));
+        assert!(names.contains(&"flow-b"));
+    }
+
+    #[test]
+    fn test_list_all_workflow_runs_respects_limit() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+
+        let mgr = WorkflowManager::new(&conn);
+        for i in 0..5 {
+            let p = agent_mgr
+                .create_run("w1", &format!("wf{i}"), None, None)
+                .unwrap();
+            mgr.create_workflow_run(&format!("flow-{i}"), "w1", &p.id, false, "manual", None)
+                .unwrap();
+        }
+
+        let limited = mgr.list_all_workflow_runs(3).unwrap();
+        assert_eq!(limited.len(), 3);
+    }
+
+    #[test]
+    fn test_list_all_workflow_runs_empty() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let runs = mgr.list_all_workflow_runs(50).unwrap();
+        assert!(runs.is_empty());
+    }
+
+    #[test]
     fn test_get_workflow_run_not_found() {
         let conn = setup_db();
         let mgr = WorkflowManager::new(&conn);
