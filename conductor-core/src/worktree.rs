@@ -638,15 +638,54 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
 }
 
 /// Remove the git worktree directory and delete the associated branch.
-/// Both operations are best-effort: failures are silently ignored because the
+/// Both operations are best-effort: failures are logged but not propagated because the
 /// worktree or branch may already be gone (e.g. manually removed).
 fn remove_git_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
-    let _ = git_in(repo_path)
+    match git_in(repo_path)
         .args(["worktree", "remove", worktree_path, "--force"])
-        .output();
-    let _ = git_in(repo_path)
+        .output()
+    {
+        Ok(o) if !o.status.success() => {
+            tracing::warn!(
+                repo = repo_path,
+                worktree = worktree_path,
+                stderr = %String::from_utf8_lossy(&o.stderr).trim(),
+                "git worktree remove failed"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                repo = repo_path,
+                worktree = worktree_path,
+                error = %e,
+                "failed to run git worktree remove"
+            );
+        }
+        Ok(_) => {}
+    }
+
+    match git_in(repo_path)
         .args(["branch", "-D", "--", branch])
-        .output();
+        .output()
+    {
+        Ok(o) if !o.status.success() => {
+            tracing::warn!(
+                repo = repo_path,
+                branch = branch,
+                stderr = %String::from_utf8_lossy(&o.stderr).trim(),
+                "git branch -D failed"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                repo = repo_path,
+                branch = branch,
+                error = %e,
+                "failed to run git branch -D"
+            );
+        }
+        Ok(_) => {}
+    }
 }
 
 /// Check if a branch has been merged into the default branch.
@@ -1050,5 +1089,42 @@ mod tests {
         let wt = mgr.get_by_id("wt1").unwrap();
         assert_eq!(wt.status, WorktreeStatus::Active);
         assert!(wt.completed_at.is_none());
+    }
+
+    #[test]
+    fn test_remove_git_artifacts_success() {
+        let (_tmp, _, local) = setup_repo_with_remote();
+        let local_str = local.to_str().unwrap();
+
+        // Create a branch and a worktree for it
+        let wt_path = local.parent().unwrap().join("feat-test-wt");
+        git(
+            &[
+                "worktree",
+                "add",
+                wt_path.to_str().unwrap(),
+                "-b",
+                "feat/test-wt",
+            ],
+            &local,
+        );
+
+        assert!(wt_path.exists());
+        assert!(branch_exists(local_str, "feat/test-wt"));
+
+        // remove_git_artifacts should cleanly remove both
+        remove_git_artifacts(local_str, wt_path.to_str().unwrap(), "feat/test-wt");
+
+        assert!(!wt_path.exists());
+        assert!(!branch_exists(local_str, "feat/test-wt"));
+    }
+
+    #[test]
+    fn test_remove_git_artifacts_nonexistent_does_not_panic() {
+        let (_tmp, _, local) = setup_repo_with_remote();
+        let local_str = local.to_str().unwrap();
+
+        // Both the worktree path and branch are nonexistent; must not panic
+        remove_git_artifacts(local_str, "/nonexistent/path/wt", "feat/no-such-branch");
     }
 }
