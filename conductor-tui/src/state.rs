@@ -560,6 +560,9 @@ pub struct AppState {
     pub selected_workflow_run_id: Option<String>,
 
     pub should_quit: bool,
+
+    /// When false (default), closed tickets are hidden in all ticket views.
+    pub show_closed_tickets: bool,
 }
 
 impl AppState {
@@ -591,6 +594,7 @@ impl AppState {
             workflow_step_index: 0,
             selected_workflow_run_id: None,
             should_quit: false,
+            show_closed_tickets: false,
         }
     }
 
@@ -763,5 +767,21 @@ mod tests {
         // 3 events + 3 separators (r1, r2, r1 transitions) = 6
         assert_eq!(cache.agent_activity_len(), 6);
         assert_eq!(cache.agent_activity_len(), cache.visual_rows().len());
+    }
+
+    #[test]
+    fn show_closed_tickets_defaults_to_false() {
+        let state = AppState::new();
+        assert!(!state.show_closed_tickets);
+    }
+
+    #[test]
+    fn show_closed_tickets_toggle() {
+        let mut state = AppState::new();
+        assert!(!state.show_closed_tickets);
+        state.show_closed_tickets = true;
+        assert!(state.show_closed_tickets);
+        state.show_closed_tickets = false;
+        assert!(!state.show_closed_tickets);
     }
 }

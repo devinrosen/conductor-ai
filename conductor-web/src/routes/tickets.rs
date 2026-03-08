@@ -1,6 +1,6 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use conductor_core::agent::{AgentManager, TicketAgentTotals};
@@ -28,24 +28,39 @@ pub struct TicketDetail {
     pub worktrees: Vec<Worktree>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TicketListQuery {
+    /// When true, include closed tickets. Defaults to false (closed tickets hidden).
+    #[serde(default)]
+    pub show_closed: bool,
+}
+
 pub async fn list_all_tickets(
     State(state): State<AppState>,
+    Query(params): Query<TicketListQuery>,
 ) -> Result<Json<Vec<Ticket>>, ApiError> {
     let db = state.db.lock().await;
     let syncer = TicketSyncer::new(&db);
-    let tickets = syncer.list(None)?;
+    let mut tickets = syncer.list(None)?;
+    if !params.show_closed {
+        tickets.retain(|t| t.state != "closed");
+    }
     Ok(Json(tickets))
 }
 
 pub async fn list_tickets(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
+    Query(params): Query<TicketListQuery>,
 ) -> Result<Json<Vec<Ticket>>, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
     RepoManager::new(&db, &config).get_by_id(&repo_id)?;
     let syncer = TicketSyncer::new(&db);
-    let tickets = syncer.list(Some(&repo_id))?;
+    let mut tickets = syncer.list(Some(&repo_id))?;
+    if !params.show_closed {
+        tickets.retain(|t| t.state != "closed");
+    }
     Ok(Json(tickets))
 }
 

@@ -140,6 +140,7 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
         .data
         .tickets
         .iter()
+        .filter(|t| state.show_closed_tickets || t.state != "closed")
         .filter(|t| match state.filter.as_query().as_deref() {
             Some(f) if !f.is_empty() => t.matches_filter(f),
             _ => true,
@@ -178,12 +179,17 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
         })
         .collect();
 
+    let ticket_title = if state.show_closed_tickets {
+        " Tickets "
+    } else {
+        " Tickets (hiding closed) "
+    };
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(border_style)
-                .title(" Tickets "),
+                .title(ticket_title),
         )
         .highlight_style(
             Style::default()

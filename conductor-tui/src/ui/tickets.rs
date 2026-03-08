@@ -14,6 +14,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         .data
         .tickets
         .iter()
+        .filter(|t| state.show_closed_tickets || t.state != "closed")
         .filter(|t| match filter.as_deref() {
             Some(f) if !f.is_empty() => t.matches_filter(f),
             _ => true,
@@ -62,12 +63,21 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         })
         .collect();
 
+    let hiding = !state.show_closed_tickets;
     let title = if let Some(ref f) = filter {
         if f.is_empty() {
-            " Tickets ".to_string()
+            if hiding {
+                " Tickets (hiding closed) [A to show all] ".to_string()
+            } else {
+                " Tickets ".to_string()
+            }
+        } else if hiding {
+            format!(" Tickets (filter: {f}, hiding closed) [A to show all] ")
         } else {
             format!(" Tickets (filter: {f}) ")
         }
+    } else if hiding {
+        " Tickets (hiding closed) [A to show all] ".to_string()
     } else {
         " Tickets ".to_string()
     };

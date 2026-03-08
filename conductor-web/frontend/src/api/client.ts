@@ -84,9 +84,14 @@ export const api = {
     }),
 
   // Tickets
-  listAllTickets: () => request<Ticket[]>("/tickets"),
-  listTickets: (repoId: string) =>
-    request<Ticket[]>(`/repos/${repoId}/tickets`),
+  listAllTickets: (showClosed = false) =>
+    request<Ticket[]>(showClosed ? "/tickets?show_closed=true" : "/tickets"),
+  listTickets: (repoId: string, showClosed = false) =>
+    request<Ticket[]>(
+      showClosed
+        ? `/repos/${repoId}/tickets?show_closed=true`
+        : `/repos/${repoId}/tickets`,
+    ),
   syncTickets: (repoId: string) =>
     request<SyncResult>(`/repos/${repoId}/tickets/sync`, { method: "POST" }),
   getTicketDetail: (ticketId: string) =>

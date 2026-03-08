@@ -334,6 +334,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('g') => Action::PendingG,
         KeyCode::Home => Action::GoToTop,
 
+        // Toggle closed tickets visibility (all ticket views)
+        KeyCode::Char('A') => Action::ToggleClosedTickets,
+
         // CRUD actions
         KeyCode::Char('a') => Action::AddRepo,
         KeyCode::Char('c') => Action::Create,

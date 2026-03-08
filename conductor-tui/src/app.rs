@@ -393,6 +393,14 @@ impl App {
             // Agent issue creation toggle
             Action::ToggleAgentIssues => self.handle_toggle_agent_issues(),
 
+            // Ticket closed visibility toggle
+            Action::ToggleClosedTickets => {
+                self.state.show_closed_tickets = !self.state.show_closed_tickets;
+                // Reset selection indices so they don't point past the filtered list
+                self.state.ticket_index = 0;
+                self.state.detail_ticket_index = 0;
+            }
+
             // Agent (tmux-based)
             Action::LaunchAgent => self.handle_launch_agent(),
             Action::OrchestrateAgent => self.handle_orchestrate_agent(),
