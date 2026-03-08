@@ -271,8 +271,15 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
     // View-specific keybindings (Workflows)
     if state.view == View::Workflows {
-        if let KeyCode::Char('r') = key.code {
-            return Action::RunWorkflow;
+        match key.code {
+            KeyCode::Char('r') => return Action::RunWorkflow,
+            KeyCode::Char('v') if state.workflows_focus == crate::state::WorkflowsFocus::Defs => {
+                return Action::ViewWorkflowDef;
+            }
+            KeyCode::Char('e') if state.workflows_focus == crate::state::WorkflowsFocus::Defs => {
+                return Action::EditWorkflowDef;
+            }
+            _ => {}
         }
     }
 

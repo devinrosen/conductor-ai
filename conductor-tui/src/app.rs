@@ -259,23 +259,14 @@ impl App {
                 self.state.ticket_index = 0;
             }
             Action::GoToWorkflows => {
-                // Navigate to workflows view; need a worktree context
-                let wt_id = self
-                    .state
-                    .selected_worktree_id
-                    .clone()
-                    .or_else(|| self.state.selected_worktree().map(|w| w.id.clone()));
-                if let Some(wt_id) = wt_id {
-                    self.state.selected_worktree_id = Some(wt_id);
-                    self.state.view = View::Workflows;
-                    self.state.workflows_focus = crate::state::WorkflowsFocus::Defs;
-                    self.state.workflow_def_index = 0;
-                    self.state.workflow_run_index = 0;
-                    self.reload_workflow_data();
-                } else {
-                    self.state.status_message =
-                        Some("Select a worktree first to view workflows".to_string());
-                }
+                // Navigate to the global workflows view.
+                // If a worktree is already selected (e.g. from WorktreeDetail), keep it
+                // for scoped defs/runs; otherwise show all runs across all worktrees.
+                self.state.view = View::Workflows;
+                self.state.workflows_focus = crate::state::WorkflowsFocus::Runs;
+                self.state.workflow_def_index = 0;
+                self.state.workflow_run_index = 0;
+                self.reload_workflow_data();
             }
 
             // Filter
@@ -508,6 +499,8 @@ impl App {
             Action::CancelWorkflow => self.handle_cancel_workflow(),
             Action::ApproveGate => self.handle_approve_gate(),
             Action::RejectGate => self.handle_reject_gate(),
+            Action::ViewWorkflowDef => self.handle_view_workflow_def(),
+            Action::EditWorkflowDef => self.handle_edit_workflow_def(),
             Action::GateInputChar(c) => {
                 if let Modal::GateAction {
                     ref mut feedback, ..
@@ -544,15 +537,20 @@ impl App {
                 self.state.data.tickets = payload.tickets;
                 self.state.data.latest_agent_runs = payload.latest_agent_runs;
                 self.state.data.ticket_agent_totals = payload.ticket_agent_totals;
+                self.state.data.latest_workflow_runs_by_worktree =
+                    payload.latest_workflow_runs_by_worktree;
                 self.refresh_pending_feedback();
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();
                 self.clamp_indices();
-                // Redraw when viewing worktree detail / workflows so the
-                // activity pane updates live; other views refresh silently.
+                // Redraw when viewing worktree detail / workflows, or on the
+                // dashboard (which now has a live workflow panel).
                 return matches!(
                     self.state.view,
-                    View::WorktreeDetail | View::Workflows | View::WorkflowRunDetail
+                    View::Dashboard
+                        | View::WorktreeDetail
+                        | View::Workflows
+                        | View::WorkflowRunDetail
                 );
             }
             Action::TicketSyncComplete { repo_slug, count } => {
@@ -1149,6 +1147,10 @@ impl App {
                             .get(self.state.workflow_run_index)
                         {
                             let run_id = run.id.clone();
+                            // In global mode, set the worktree context from the run
+                            if self.state.selected_worktree_id.is_none() {
+                                self.state.selected_worktree_id = Some(run.worktree_id.clone());
+                            }
                             self.state.selected_workflow_run_id = Some(run_id);
                             self.state.view = View::WorkflowRunDetail;
                             self.state.workflow_step_index = 0;
@@ -3884,12 +3886,9 @@ impl App {
     /// Dispatch workflow data loading to a background thread. The result
     /// arrives as a `WorkflowDataRefreshed` action, avoiding synchronous
     /// FS + DB I/O on the main loop tick.
+    /// When no worktree is selected (global mode), loads all runs across worktrees.
     fn poll_workflow_data_async(&self) {
         let Some(ref tx) = self.bg_tx else { return };
-        let wt_id = match self.state.selected_worktree_id {
-            Some(ref id) => id.clone(),
-            None => return,
-        };
 
         // Skip if a poll is already in flight to avoid thread pile-up.
         if self
@@ -3900,20 +3899,19 @@ impl App {
             return;
         }
 
-        let wt = self.state.data.worktrees.iter().find(|w| w.id == wt_id);
-        let Some(wt) = wt else {
-            self.workflow_poll_in_flight.store(false, Ordering::SeqCst);
-            return;
+        let wt_id = self.state.selected_worktree_id.clone();
+        let (worktree_path, repo_path) = if let Some(ref id) = wt_id {
+            match self.resolve_worktree_paths(id) {
+                Some((wt_path, rp)) => (Some(wt_path), Some(rp)),
+                None => {
+                    self.workflow_poll_in_flight.store(false, Ordering::SeqCst);
+                    return;
+                }
+            }
+        } else {
+            (None, None)
         };
-        let worktree_path = wt.path.clone();
-        let repo_path = self
-            .state
-            .data
-            .repos
-            .iter()
-            .find(|r| r.id == wt.repo_id)
-            .map(|r| r.local_path.clone())
-            .unwrap_or_default();
+
         let selected_run_id = self.state.selected_workflow_run_id.clone();
         let selected_step_child_run_id = self.selected_step_child_run_id();
 
@@ -3932,29 +3930,21 @@ impl App {
     fn reload_workflow_data(&mut self) {
         use conductor_core::workflow::WorkflowManager;
 
-        let wt_id = match self.state.selected_worktree_id {
-            Some(ref id) => id.clone(),
-            None => return,
-        };
-
-        // Load defs from filesystem via manager
-        let wt = self.state.data.worktrees.iter().find(|w| w.id == wt_id);
-        if let Some(wt) = wt {
-            let repo_path = self
-                .state
-                .data
-                .repos
-                .iter()
-                .find(|r| r.id == wt.repo_id)
-                .map(|r| r.local_path.as_str())
-                .unwrap_or("");
-            self.state.data.workflow_defs =
-                WorkflowManager::list_defs(&wt.path, repo_path).unwrap_or_default();
-        }
-
-        // Load runs from DB
         let wf_mgr = WorkflowManager::new(&self.conn);
-        self.state.data.workflow_runs = wf_mgr.list_workflow_runs(&wt_id).unwrap_or_default();
+
+        if let Some(ref wt_id) = self.state.selected_worktree_id.clone() {
+            // Worktree-scoped: load defs from FS
+            if let Some((wt_path, rp)) = self.resolve_worktree_paths(wt_id) {
+                self.state.data.workflow_defs =
+                    WorkflowManager::list_defs(&wt_path, &rp).unwrap_or_default();
+            }
+        } else {
+            // Global mode: defs are cross-worktree, cleared here and populated by background poller
+            self.state.data.workflow_defs.clear();
+        }
+        self.state.data.workflow_runs = wf_mgr
+            .list_workflow_runs_for_scope(self.state.selected_worktree_id.as_deref(), 50)
+            .unwrap_or_default();
 
         // Load steps for the currently selected run
         self.reload_workflow_steps();
@@ -4159,6 +4149,86 @@ impl App {
             }
             self.state.modal = Modal::None;
             self.reload_workflow_steps();
+        }
+    }
+
+    /// Show the selected workflow definition's source file in a scrollable modal.
+    fn handle_view_workflow_def(&mut self) {
+        let Some(def) = self.selected_workflow_def() else {
+            self.state.status_message = Some("No workflow definition selected".to_string());
+            return;
+        };
+
+        let body = match std::fs::read_to_string(&def.source_path) {
+            Ok(s) => s,
+            Err(e) => format!("Could not read {}: {e}", def.source_path),
+        };
+        let line_count = body.lines().count();
+        self.state.modal = Modal::EventDetail {
+            title: format!(" {} ", def.source_path),
+            body,
+            line_count,
+            scroll_offset: 0,
+            horizontal_offset: 0,
+        };
+    }
+
+    /// Return `(worktree_path, repo_local_path)` for the given worktree ID,
+    /// or `None` if the worktree (or its repo) is not found in the data cache.
+    fn resolve_worktree_paths(&self, wt_id: &str) -> Option<(String, String)> {
+        let wt = self.state.data.worktrees.iter().find(|w| w.id == wt_id)?;
+        let repo_path = self
+            .state
+            .data
+            .repos
+            .iter()
+            .find(|r| r.id == wt.repo_id)
+            .map(|r| r.local_path.clone())
+            .unwrap_or_default();
+        Some((wt.path.clone(), repo_path))
+    }
+
+    /// Return the currently selected workflow definition, if any.
+    fn selected_workflow_def(&self) -> Option<conductor_core::workflow::WorkflowDef> {
+        self.state
+            .data
+            .workflow_defs
+            .get(self.state.workflow_def_index)
+            .cloned()
+    }
+
+    /// Open the selected workflow definition's source file in $EDITOR.
+    fn handle_edit_workflow_def(&mut self) {
+        let Some(def) = self.selected_workflow_def() else {
+            self.state.status_message = Some("No workflow definition selected".to_string());
+            return;
+        };
+
+        let editor = std::env::var("EDITOR")
+            .or_else(|_| std::env::var("VISUAL"))
+            .unwrap_or_else(|_| "vi".to_string());
+
+        // Suspend the TUI, open the editor, then restore
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+
+        let status = Command::new(&editor).arg(&def.source_path).status();
+
+        let _ = crossterm::terminal::enable_raw_mode();
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen);
+
+        match status {
+            Ok(s) if s.success() => {
+                self.state.status_message = Some(format!("Saved {}", def.source_path));
+                // Reload defs so changes are reflected immediately
+                self.reload_workflow_data();
+            }
+            Ok(_) => {
+                self.state.status_message = Some("Editor exited with non-zero status".to_string());
+            }
+            Err(e) => {
+                self.state.status_message = Some(format!("Could not launch {editor}: {e}"));
+            }
         }
     }
 }

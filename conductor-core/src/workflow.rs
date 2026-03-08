@@ -627,6 +627,32 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// List recent workflow runs across all worktrees, ordered by started_at DESC.
+    pub fn list_all_workflow_runs(&self, limit: usize) -> Result<Vec<WorkflowRun>> {
+        query_collect(
+            self.conn,
+            &format!(
+                "SELECT {RUN_COLUMNS} FROM workflow_runs ORDER BY started_at DESC LIMIT {limit}"
+            ),
+            params![],
+            row_to_workflow_run,
+        )
+    }
+
+    /// Load runs for a single worktree, or the most recent `global_limit` runs across all
+    /// worktrees when `worktree_id` is `None`. Consolidates the scoped-vs-global branching
+    /// that would otherwise be duplicated at every call site.
+    pub fn list_workflow_runs_for_scope(
+        &self,
+        worktree_id: Option<&str>,
+        global_limit: usize,
+    ) -> Result<Vec<WorkflowRun>> {
+        match worktree_id {
+            Some(wt_id) => self.list_workflow_runs(wt_id),
+            None => self.list_all_workflow_runs(global_limit),
+        }
+    }
+
     /// Find the waiting gate step for a workflow run.
     pub fn find_waiting_gate(&self, workflow_run_id: &str) -> Result<Option<WorkflowRunStep>> {
         let result = self.conn.query_row(
@@ -2373,6 +2399,107 @@ And here is my actual output:
 
         let runs = mgr.list_workflow_runs("w1").unwrap();
         assert_eq!(runs.len(), 2);
+    }
+
+    #[test]
+    fn test_list_all_workflow_runs_cross_worktree() {
+        let conn = setup_db();
+        // Insert a second worktree so we can test cross-worktree aggregation.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w2', 'r1', 'feat-other', 'feat/other', '/tmp/ws/other', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let agent_mgr = AgentManager::new(&conn);
+        let p1 = agent_mgr.create_run("w1", "wf1", None, None).unwrap();
+        let p2 = agent_mgr.create_run("w2", "wf2", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        mgr.create_workflow_run("flow-a", "w1", &p1.id, false, "manual", None)
+            .unwrap();
+        mgr.create_workflow_run("flow-b", "w2", &p2.id, false, "manual", None)
+            .unwrap();
+
+        // list_all returns both runs regardless of worktree
+        let all = mgr.list_all_workflow_runs(100).unwrap();
+        assert_eq!(all.len(), 2);
+        let names: Vec<&str> = all.iter().map(|r| r.workflow_name.as_str()).collect();
+        assert!(names.contains(&"flow-a"));
+        assert!(names.contains(&"flow-b"));
+    }
+
+    #[test]
+    fn test_list_all_workflow_runs_respects_limit() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+
+        let mgr = WorkflowManager::new(&conn);
+        for i in 0..5 {
+            let p = agent_mgr
+                .create_run("w1", &format!("wf{i}"), None, None)
+                .unwrap();
+            mgr.create_workflow_run(&format!("flow-{i}"), "w1", &p.id, false, "manual", None)
+                .unwrap();
+        }
+
+        let limited = mgr.list_all_workflow_runs(3).unwrap();
+        assert_eq!(limited.len(), 3);
+    }
+
+    #[test]
+    fn test_list_all_workflow_runs_empty() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let runs = mgr.list_all_workflow_runs(50).unwrap();
+        assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn test_list_workflow_runs_for_scope_scoped() {
+        let conn = setup_db();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w2', 'r1', 'feat-other', 'feat/other', '/tmp/ws/other', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let agent_mgr = AgentManager::new(&conn);
+        let p1 = agent_mgr.create_run("w1", "wf1", None, None).unwrap();
+        let p2 = agent_mgr.create_run("w2", "wf2", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        mgr.create_workflow_run("only-w1", "w1", &p1.id, false, "manual", None)
+            .unwrap();
+        mgr.create_workflow_run("only-w2", "w2", &p2.id, false, "manual", None)
+            .unwrap();
+
+        // Scoped: only w1's run
+        let scoped = mgr.list_workflow_runs_for_scope(Some("w1"), 50).unwrap();
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].workflow_name, "only-w1");
+
+        // Global: both runs
+        let global = mgr.list_workflow_runs_for_scope(None, 50).unwrap();
+        assert_eq!(global.len(), 2);
+    }
+
+    #[test]
+    fn test_list_workflow_runs_for_scope_global_limit() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let mgr = WorkflowManager::new(&conn);
+        for i in 0..5 {
+            let p = agent_mgr
+                .create_run("w1", &format!("wf{i}"), None, None)
+                .unwrap();
+            mgr.create_workflow_run(&format!("flow-{i}"), "w1", &p.id, false, "manual", None)
+                .unwrap();
+        }
+        let limited = mgr.list_workflow_runs_for_scope(None, 2).unwrap();
+        assert_eq!(limited.len(), 2);
     }
 
     #[test]

@@ -4,9 +4,20 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
+use conductor_core::worktree::Worktree;
+
 use super::common::truncate;
 use crate::state::AppState;
 use crate::state::WorkflowsFocus;
+
+/// Return the slug of the worktree matching `predicate`, or `"?"` if not found.
+fn worktree_slug(worktrees: &[Worktree], predicate: impl Fn(&Worktree) -> bool) -> &str {
+    worktrees
+        .iter()
+        .find(|wt| predicate(wt))
+        .map(|wt| wt.slug.as_str())
+        .unwrap_or("?")
+}
 
 /// Render the Workflows split-pane view: defs (left) + runs (right).
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -27,6 +38,8 @@ fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
         Color::DarkGray
     };
 
+    let global_mode = state.selected_worktree_id.is_none();
+
     let items: Vec<ListItem> = state
         .data
         .workflow_defs
@@ -34,20 +47,29 @@ fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
         .map(|def| {
             let node_count = def.body.len();
             let input_count = def.inputs.len();
-            let mut spans = vec![
-                Span::styled(
-                    format!("{:<20}", def.name),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
+            let mut spans = vec![Span::styled(
+                format!("{:<20}", def.name),
+                Style::default().add_modifier(Modifier::BOLD),
+            )];
+            if global_mode {
+                // Derive worktree slug from source_path by matching against known worktrees
+                let wt_slug = worktree_slug(&state.data.worktrees, |wt| {
+                    def.source_path.starts_with(&wt.path)
+                });
+                spans.push(Span::styled(
+                    format!("  {wt_slug}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            } else {
+                spans.push(Span::styled(
                     format!("  {}", truncate(&def.description, 30)),
                     Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    format!("  {node_count} steps"),
-                    Style::default().fg(Color::Yellow),
-                ),
-            ];
+                ));
+            }
+            spans.push(Span::styled(
+                format!("  {node_count} steps"),
+                Style::default().fg(Color::Yellow),
+            ));
             if input_count > 0 {
                 spans.push(Span::styled(
                     format!("  {input_count} inputs"),
@@ -58,12 +80,17 @@ fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
         })
         .collect();
 
+    let defs_title = if global_mode {
+        " All Workflow Definitions "
+    } else {
+        " Workflow Definitions "
+    };
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color))
-                .title(" Workflow Definitions "),
+                .title(defs_title),
         )
         .highlight_style(
             Style::default()
@@ -87,6 +114,9 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
         Color::DarkGray
     };
 
+    // In global mode (no worktree selected), show worktree context on each run row.
+    let global_mode = state.selected_worktree_id.is_none();
+
     let items: Vec<ListItem> = state
         .data
         .workflow_runs
@@ -99,29 +129,48 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                 "…".to_string()
             };
 
-            let spans = vec![
+            let mut spans = vec![
                 Span::styled(status_symbol, Style::default().fg(status_color)),
                 Span::raw("  "),
                 Span::styled(
                     format!("{:<20}", run.workflow_name),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(
+            ];
+
+            if global_mode {
+                let wt_slug = worktree_slug(&state.data.worktrees, |w| w.id == run.worktree_id);
+                spans.push(Span::styled(
+                    format!("  {wt_slug}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            } else {
+                spans.push(Span::styled(
                     format!("  {}", &run.started_at[..19].replace('T', " ")),
                     Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(format!("  {duration}"), Style::default().fg(Color::Yellow)),
-            ];
+                ));
+            }
+
+            spans.push(Span::styled(
+                format!("  {duration}"),
+                Style::default().fg(Color::Yellow),
+            ));
             ListItem::new(Line::from(spans))
         })
         .collect();
+
+    let runs_title = if global_mode {
+        " All Workflow Runs "
+    } else {
+        " Workflow Runs "
+    };
 
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color))
-                .title(" Workflow Runs "),
+                .title(runs_title),
         )
         .highlight_style(
             Style::default()

@@ -172,6 +172,22 @@ pub fn worktree_list_item(
         spans.push(Span::styled(symbol, Style::default().fg(color)));
     }
 
+    if let Some(wf_run) = state.data.latest_workflow_runs_by_worktree.get(&wt.id) {
+        use conductor_core::workflow::WorkflowRunStatus;
+        let (symbol, color) = match wf_run.status {
+            WorkflowRunStatus::Running => ("⚙ running", Color::Cyan),
+            WorkflowRunStatus::Waiting => ("⏸ waiting", Color::Magenta),
+            WorkflowRunStatus::Completed => ("✓", Color::DarkGray),
+            WorkflowRunStatus::Failed => ("✗ failed", Color::Red),
+            WorkflowRunStatus::Pending | WorkflowRunStatus::Cancelled => ("", Color::DarkGray),
+        };
+        if !symbol.is_empty() {
+            let label = format!("{symbol} {}", wf_run.workflow_name);
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(label, Style::default().fg(color)));
+        }
+    }
+
     ListItem::new(Line::from(spans))
 }
 
