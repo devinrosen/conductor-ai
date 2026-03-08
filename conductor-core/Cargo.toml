@@ -18,6 +18,7 @@ dirs = "6"
 jsonwebtoken = "9"
 serde_yml = "0.0"
 notify = "6"
+tracing = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

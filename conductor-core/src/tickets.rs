@@ -1,6 +1,7 @@
 use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
@@ -188,6 +189,27 @@ impl<'a> TicketSyncer<'a> {
             })
     }
 
+    /// Upsert a batch of synced tickets, close any missing ones, and mark their
+    /// worktrees. Returns `(synced, closed)` counts. Errors from the close and
+    /// mark steps are logged as warnings rather than propagated, matching the
+    /// intent that one source failure should not abort the entire sync.
+    pub fn sync_and_close_tickets(
+        &self,
+        repo_id: &str,
+        source_type: &str,
+        tickets: &[TicketInput],
+    ) -> (usize, usize) {
+        let synced_ids: Vec<&str> = tickets.iter().map(|t| t.source_id.as_str()).collect();
+        let synced = self.upsert_tickets(repo_id, tickets).unwrap_or(0);
+        let closed = self
+            .close_missing_tickets(repo_id, source_type, &synced_ids)
+            .unwrap_or(0);
+        if let Err(e) = self.mark_worktrees_for_closed_tickets(repo_id) {
+            warn!("mark_worktrees_for_closed_tickets failed for {repo_id}: {e}");
+        }
+        (synced, closed)
+    }
+
     /// After syncing tickets, mark any linked worktrees whose ticket is now
     /// closed by setting their status to `'merged'`. Called as part of the
     /// ticket sync flow, typically after [`TicketSyncer::close_missing_tickets`].
@@ -287,6 +309,34 @@ mod tests {
             |row| row.get(0),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn test_sync_and_close_tickets_returns_counts_and_marks_worktrees() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // First sync: two open tickets
+        let first = vec![make_ticket("1", "Issue 1"), make_ticket("2", "Issue 2")];
+        let (synced, closed) = syncer.sync_and_close_tickets("r1", "github", &first);
+        assert_eq!(synced, 2);
+        assert_eq!(closed, 0);
+
+        // Get ticket id for issue 1 and link a worktree to it
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
+
+        // Second sync: only issue 2 remains open → issue 1 closed, worktree merged
+        let second = vec![make_ticket("2", "Issue 2")];
+        let (synced2, closed2) = syncer.sync_and_close_tickets("r1", "github", &second);
+        assert_eq!(synced2, 1);
+        assert_eq!(closed2, 1);
+        assert_eq!(get_ticket_state(&conn, "1"), "closed");
+        assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
     }
 
     #[test]
