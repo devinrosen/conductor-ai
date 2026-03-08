@@ -8,7 +8,7 @@ use conductor_core::github;
 use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
-use conductor_core::tickets::{Ticket, TicketSyncer};
+use conductor_core::tickets::{Ticket, TicketInput, TicketSyncer};
 use conductor_core::worktree::{Worktree, WorktreeManager};
 
 use crate::error::ApiError;
@@ -48,6 +48,27 @@ pub async fn list_tickets(
     Ok(Json(tickets))
 }
 
+/// Upsert a batch of synced tickets, close any missing ones, and mark their
+/// worktrees. Returns `(synced, closed)` counts. Errors from the close and
+/// mark steps are logged as warnings rather than propagated, matching the
+/// intent that one source failure should not abort the entire sync.
+fn apply_ticket_sync(
+    syncer: &TicketSyncer,
+    repo_id: &str,
+    source_type: &str,
+    tickets: &[TicketInput],
+) -> (usize, usize) {
+    let synced_ids: Vec<&str> = tickets.iter().map(|t| t.source_id.as_str()).collect();
+    let synced = syncer.upsert_tickets(repo_id, tickets).unwrap_or(0);
+    let closed = syncer
+        .close_missing_tickets(repo_id, source_type, &synced_ids)
+        .unwrap_or(0);
+    if let Err(e) = syncer.mark_worktrees_for_closed_tickets(repo_id) {
+        warn!("mark_worktrees_for_closed_tickets failed for {repo_id}: {e}");
+    }
+    (synced, closed)
+}
+
 pub async fn sync_tickets(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
@@ -66,17 +87,9 @@ pub async fn sync_tickets(
         // Backward compat: auto-detect GitHub from remote URL
         if let Some((owner, name)) = github::parse_github_remote(&repo.remote_url) {
             let tickets = github::sync_github_issues(&owner, &name)?;
-            let synced_ids: Vec<&str> = tickets.iter().map(|t| t.source_id.as_str()).collect();
-            total_synced += syncer.upsert_tickets(&repo.id, &tickets)?;
-            total_closed += syncer
-                .close_missing_tickets(&repo.id, "github", &synced_ids)
-                .unwrap_or(0);
-            if let Err(e) = syncer.mark_worktrees_for_closed_tickets(&repo.id) {
-                warn!(
-                    "mark_worktrees_for_closed_tickets failed for {}: {e}",
-                    repo.id
-                );
-            }
+            let (synced, closed) = apply_ticket_sync(&syncer, &repo.id, "github", &tickets);
+            total_synced += synced;
+            total_closed += closed;
         }
     } else {
         for source in sources {
@@ -84,36 +97,20 @@ pub async fn sync_tickets(
                 "github" => {
                     if let Ok(cfg) = serde_json::from_str::<GitHubConfig>(&source.config_json) {
                         if let Ok(tickets) = github::sync_github_issues(&cfg.owner, &cfg.repo) {
-                            let synced_ids: Vec<&str> =
-                                tickets.iter().map(|t| t.source_id.as_str()).collect();
-                            total_synced += syncer.upsert_tickets(&repo.id, &tickets).unwrap_or(0);
-                            total_closed += syncer
-                                .close_missing_tickets(&repo.id, "github", &synced_ids)
-                                .unwrap_or(0);
-                            if let Err(e) = syncer.mark_worktrees_for_closed_tickets(&repo.id) {
-                                warn!(
-                                    "mark_worktrees_for_closed_tickets failed for {}: {e}",
-                                    repo.id
-                                );
-                            }
+                            let (synced, closed) =
+                                apply_ticket_sync(&syncer, &repo.id, "github", &tickets);
+                            total_synced += synced;
+                            total_closed += closed;
                         }
                     }
                 }
                 "jira" => {
                     if let Ok(cfg) = serde_json::from_str::<JiraConfig>(&source.config_json) {
                         if let Ok(tickets) = jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url) {
-                            let synced_ids: Vec<&str> =
-                                tickets.iter().map(|t| t.source_id.as_str()).collect();
-                            total_synced += syncer.upsert_tickets(&repo.id, &tickets).unwrap_or(0);
-                            total_closed += syncer
-                                .close_missing_tickets(&repo.id, "jira", &synced_ids)
-                                .unwrap_or(0);
-                            if let Err(e) = syncer.mark_worktrees_for_closed_tickets(&repo.id) {
-                                warn!(
-                                    "mark_worktrees_for_closed_tickets failed for {}: {e}",
-                                    repo.id
-                                );
-                            }
+                            let (synced, closed) =
+                                apply_ticket_sync(&syncer, &repo.id, "jira", &tickets);
+                            total_synced += synced;
+                            total_closed += closed;
                         }
                     }
                 }
