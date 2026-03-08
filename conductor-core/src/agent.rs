@@ -101,15 +101,21 @@ pub(crate) fn scan_log_for_result_at(path: &std::path::Path) -> Option<LogResult
     None
 }
 
-/// Scan the canonical log file for a given run ID.
-pub(crate) fn scan_log_for_result(run_id: &str) -> Option<LogResult> {
-    scan_log_for_result_at(&crate::config::agent_log_path(run_id))
-}
-
 /// Try to recover a stuck run by scanning its log file for a result event.
 /// If found, updates the DB and returns the refreshed run. Otherwise returns `None`.
 pub(crate) fn try_recover_from_log(mgr: &AgentManager<'_>, run_id: &str) -> Option<AgentRun> {
-    let log_result = scan_log_for_result(run_id)?;
+    try_recover_from_log_at(mgr, run_id, &crate::config::agent_log_dir())
+}
+
+/// Like [`try_recover_from_log`] but reads from `log_dir` instead of the default agent-log
+/// directory. Useful in tests to avoid writing to the real `~/.conductor/agent-logs/`.
+pub(crate) fn try_recover_from_log_at(
+    mgr: &AgentManager<'_>,
+    run_id: &str,
+    log_dir: &std::path::Path,
+) -> Option<AgentRun> {
+    let log_path = log_dir.join(format!("{run_id}.log"));
+    let log_result = scan_log_for_result_at(&log_path)?;
     if log_result.is_error {
         let error_msg = log_result
             .result_text

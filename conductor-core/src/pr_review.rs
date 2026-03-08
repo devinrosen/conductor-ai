@@ -17,7 +17,7 @@ use notify::{Event as NotifyEvent, RecursiveMode, Watcher};
 use rusqlite::Connection;
 
 use crate::agent::{
-    try_recover_from_log, AgentManager, AgentRun, AgentRunStatus, PlanStep, StepStatus,
+    try_recover_from_log_at, AgentManager, AgentRun, AgentRunStatus, PlanStep, StepStatus,
     PR_REVIEW_SWARM_PROMPT_PREFIX,
 };
 use crate::config::{self, Config};
@@ -226,6 +226,7 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
         &steps,
         swarm_config.poll_interval,
         swarm_config.reviewer_timeout,
+        &config::agent_log_dir(),
     );
 
     // Aggregate results
@@ -1002,6 +1003,7 @@ fn poll_all_reviewers(
     steps: &[PlanStep],
     poll_interval: Duration,
     timeout: Duration,
+    log_dir: &std::path::Path,
 ) -> Vec<ReviewerResult> {
     let mut results: Vec<Option<ReviewerResult>> = vec![None; child_runs.len()];
     let mut pending_count = child_runs.len();
@@ -1012,8 +1014,7 @@ fn poll_all_reviewers(
     let (notify_tx, notify_rx) = mpsc::channel::<String>();
     // Must stay alive: dropping stops the watcher.
     let _watcher_guard = {
-        let log_dir = config::agent_log_dir();
-        let _ = std::fs::create_dir_all(&log_dir);
+        let _ = std::fs::create_dir_all(log_dir);
         let mut watcher =
             notify::recommended_watcher(move |res: std::result::Result<NotifyEvent, _>| {
                 if let Ok(event) = res {
@@ -1028,7 +1029,7 @@ fn poll_all_reviewers(
             });
         match watcher {
             Ok(ref mut w) => {
-                if let Err(e) = w.watch(&log_dir, RecursiveMode::NonRecursive) {
+                if let Err(e) = w.watch(log_dir, RecursiveMode::NonRecursive) {
                     eprintln!("[review-swarm] Warning: could not watch log dir: {e}");
                 }
             }
@@ -1149,7 +1150,9 @@ fn poll_all_reviewers(
                         let should_scan =
                             !watcher_triggered || notified_ids.contains(&child_run.id);
                         if should_scan {
-                            if let Some(recovered) = try_recover_from_log(mgr, &child_run.id) {
+                            if let Some(recovered) =
+                                try_recover_from_log_at(mgr, &child_run.id, log_dir)
+                            {
                                 match recovered.status {
                                     AgentRunStatus::Completed
                                     | AgentRunStatus::Failed
@@ -1706,6 +1709,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
         let (r1, r2, child_runs) = setup_two_child_runs(&mgr);
+        let log_dir = tempfile::tempdir().unwrap();
 
         mgr.update_run_completed(
             &r1.id,
@@ -1734,6 +1738,7 @@ mod tests {
             &steps,
             Duration::from_millis(10),
             Duration::from_secs(1),
+            log_dir.path(),
         );
 
         assert_eq!(results.len(), 2);
@@ -1748,6 +1753,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
         let (r1, _r2, child_runs) = setup_two_child_runs(&mgr);
+        let log_dir = tempfile::tempdir().unwrap();
 
         // r1 completes, r2 stays running (never completed)
         mgr.update_run_completed(
@@ -1768,6 +1774,7 @@ mod tests {
             &steps,
             Duration::from_millis(10),
             Duration::from_millis(100),
+            log_dir.path(),
         );
 
         assert_eq!(results.len(), 2);
@@ -1785,6 +1792,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
         let (r1, r2, child_runs) = setup_two_child_runs(&mgr);
+        let log_dir = tempfile::tempdir().unwrap();
 
         mgr.update_run_completed(
             &r1.id,
@@ -1805,6 +1813,7 @@ mod tests {
             &steps,
             Duration::from_millis(10),
             Duration::from_secs(1),
+            log_dir.path(),
         );
 
         assert_eq!(results.len(), 2);
@@ -2387,6 +2396,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
         let (r1, r2, child_runs) = setup_two_child_runs(&mgr);
+        let log_dir = tempfile::tempdir().unwrap();
 
         mgr.update_run_completed(
             &r1.id,
@@ -2417,6 +2427,7 @@ mod tests {
             &steps,
             Duration::from_millis(10),
             Duration::from_secs(1),
+            log_dir.path(),
         );
 
         assert_eq!(results.len(), 2);
@@ -2442,9 +2453,9 @@ mod tests {
 
         // r2: stays "running" in DB, but write a result to its log file
         // to simulate the producer being killed after log write but before DB update.
-        let log_dir = config::agent_log_dir();
-        let _ = std::fs::create_dir_all(&log_dir);
-        let log_path = config::agent_log_path(&r2.id);
+        // Use a temp dir to avoid touching the real ~/.conductor/agent-logs/ directory.
+        let log_dir = tempfile::tempdir().unwrap();
+        let log_path = log_dir.path().join(format!("{}.log", r2.id));
         std::fs::write(
             &log_path,
             format!(
@@ -2462,10 +2473,8 @@ mod tests {
             &steps,
             Duration::from_millis(10),
             Duration::from_millis(100),
+            log_dir.path(),
         );
-
-        // Clean up log file
-        let _ = std::fs::remove_file(&log_path);
 
         assert_eq!(results.len(), 2);
         // Both should be resolved
