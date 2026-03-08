@@ -38,7 +38,7 @@ pub async fn list_worktrees(
     // Verify repo exists
     RepoManager::new(&db, &config).get_by_id(&repo_id)?;
     let mgr = WorktreeManager::new(&db, &config);
-    let worktrees = mgr.list_by_repo_id(&repo_id, false)?;
+    let worktrees = mgr.list_by_repo_id(&repo_id, true)?;
     Ok(Json(worktrees))
 }
 
