@@ -368,6 +368,13 @@ impl<'a> WorktreeManager<'a> {
     }
 
     pub fn update_status(&self, worktree_id: &str, status: WorktreeStatus) -> Result<()> {
+        if status != WorktreeStatus::Active {
+            let worktree = self.get_by_id(worktree_id)?;
+            let repo_mgr = RepoManager::new(self.conn, self.config);
+            let repo = repo_mgr.get_by_id(&worktree.repo_id)?;
+            remove_git_artifacts(&repo.local_path, &worktree.path, &worktree.branch);
+        }
+
         let completed_at = if status != WorktreeStatus::Active {
             Some(Utc::now().to_rfc3339())
         } else {
