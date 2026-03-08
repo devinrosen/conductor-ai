@@ -1128,7 +1128,7 @@ fn main() -> Result<()> {
                     let effective_target = target
                         .as_deref()
                         .or(wt.base_branch.as_deref())
-                        .unwrap_or("main");
+                        .unwrap_or(repo_obj.default_branch.as_str());
                     let entry = mqm.enqueue(&repo_obj.id, &wt.id, None, Some(effective_target))?;
                     println!(
                         "Enqueued {} at position {} (id: {})",
