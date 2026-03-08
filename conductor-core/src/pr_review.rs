@@ -687,6 +687,10 @@ fn file_off_diff_issues(
     findings: &[OffDiffFinding],
     app_token: Option<&str>,
 ) -> Vec<FiledIssue> {
+    if findings.is_empty() {
+        return Vec::new();
+    }
+
     // Batch-fetch all conductor-review issues once to avoid N subprocess spawns.
     let existing_issues =
         github::list_issues_by_search(owner, repo, "", "conductor-review", 200, app_token)
@@ -2401,6 +2405,15 @@ mod tests {
     fn test_find_existing_issue_empty_list() {
         let issues: Vec<github::IssueRef> = Vec::new();
         assert_eq!(find_existing_issue(&issues, "anything"), None);
+    }
+
+    #[test]
+    fn test_file_off_diff_issues_empty_findings_skips_gh_call() {
+        // With no findings, file_off_diff_issues must return an empty vec without
+        // invoking `gh` — even when app_token is Some. This exercises the
+        // token=Some path without requiring a real gh installation.
+        let result = file_off_diff_issues("owner", "repo", "feat/branch", &[], Some("tok"));
+        assert!(result.is_empty());
     }
 
     #[test]

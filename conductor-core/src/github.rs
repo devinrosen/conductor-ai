@@ -592,6 +592,23 @@ mod tests {
     }
 
     #[test]
+    fn test_build_gh_cmd_sets_gh_token_when_some() {
+        let cmd = build_gh_cmd(&["issue", "list"], Some("my-app-token"));
+        let gh_token = cmd
+            .get_envs()
+            .find(|(k, _)| *k == "GH_TOKEN")
+            .map(|(_, v)| v);
+        assert_eq!(gh_token, Some(Some(std::ffi::OsStr::new("my-app-token"))));
+    }
+
+    #[test]
+    fn test_build_gh_cmd_does_not_set_gh_token_when_none() {
+        let cmd = build_gh_cmd(&["issue", "list"], None);
+        let has_gh_token = cmd.get_envs().any(|(k, _)| k == "GH_TOKEN");
+        assert!(!has_gh_token);
+    }
+
+    #[test]
     fn test_parse_pr_number_from_url() {
         assert_eq!(
             parse_pr_number_from_url("https://github.com/owner/repo/pull/42"),
