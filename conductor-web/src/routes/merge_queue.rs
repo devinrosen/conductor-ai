@@ -3,6 +3,7 @@ use axum::Json;
 use serde::Deserialize;
 
 use conductor_core::merge_queue::{MergeQueueEntry, MergeQueueManager, QueueStats};
+use conductor_core::worktree::WorktreeManager;
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -70,8 +71,16 @@ pub async fn mark_merged(
     Path(entry_id): Path<String>,
 ) -> Result<Json<()>, ApiError> {
     let db = state.db.lock().await;
+    let config = state.config.read().await;
     let mgr = MergeQueueManager::new(&db);
-    mgr.mark_merged(&entry_id)?;
+    let wt_mgr = WorktreeManager::new(&db, &config);
+    let (entry, cleanup) = mgr.mark_merged_and_cleanup(&entry_id, &wt_mgr)?;
+    if let Err(e) = cleanup {
+        tracing::warn!(
+            "mark_merged: could not clean up worktree {}: {e}",
+            entry.worktree_id
+        );
+    }
     Ok(Json(()))
 }
 

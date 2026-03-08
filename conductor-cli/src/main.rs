@@ -1187,8 +1187,20 @@ fn main() -> Result<()> {
                     }
                 }
                 MergeQueueCommands::Merged { id } => {
-                    mqm.mark_merged(&id)?;
-                    println!("Marked {} as merged.", id);
+                    let wt_mgr = WorktreeManager::new(&conn, &config);
+                    match mqm.mark_merged_and_cleanup(&id, &wt_mgr)? {
+                        (_, Ok(wt)) => println!(
+                            "Marked {} as merged and cleaned up worktree '{}'.",
+                            id, wt.slug
+                        ),
+                        (entry, Err(e)) => {
+                            println!("Marked {} as merged.", id);
+                            eprintln!(
+                                "Warning: could not clean up worktree {}: {e}",
+                                entry.worktree_id
+                            );
+                        }
+                    }
                 }
                 MergeQueueCommands::Failed { id } => {
                     mqm.mark_failed(&id)?;
