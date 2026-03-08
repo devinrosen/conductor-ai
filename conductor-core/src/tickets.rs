@@ -203,7 +203,10 @@ impl<'a> TicketSyncer<'a> {
         let synced = self.upsert_tickets(repo_id, tickets).unwrap_or(0);
         let closed = self
             .close_missing_tickets(repo_id, source_type, &synced_ids)
-            .unwrap_or(0);
+            .unwrap_or_else(|e| {
+                warn!("close_missing_tickets failed for {repo_id}: {e}");
+                0
+            });
         if let Err(e) = self.mark_worktrees_for_closed_tickets(repo_id) {
             warn!("mark_worktrees_for_closed_tickets failed for {repo_id}: {e}");
         }
