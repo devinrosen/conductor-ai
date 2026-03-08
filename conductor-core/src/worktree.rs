@@ -100,24 +100,15 @@ impl<'a> WorktreeManager<'a> {
         let wt_path = Path::new(&repo.workspace_dir).join(&wt_slug);
 
         // Create git branch
-        let output = git_in(&repo.local_path)
-            .args(["branch", "--", &branch, &base])
-            .output()?;
-        if !output.status.success() {
-            return Err(ConductorError::Git(
-                String::from_utf8_lossy(&output.stderr).to_string(),
-            ));
-        }
+        check_output(git_in(&repo.local_path).args(["branch", "--", &branch, &base]))?;
 
         // Create git worktree
-        let output = git_in(&repo.local_path)
-            .args(["worktree", "add", &wt_path.to_string_lossy(), &branch])
-            .output()?;
-        if !output.status.success() {
-            return Err(ConductorError::Git(
-                String::from_utf8_lossy(&output.stderr).to_string(),
-            ));
-        }
+        check_output(git_in(&repo.local_path).args([
+            "worktree",
+            "add",
+            &wt_path.to_string_lossy(),
+            &branch,
+        ]))?;
 
         // Detect and install deps
         install_deps(&wt_path);
@@ -349,15 +340,7 @@ impl<'a> WorktreeManager<'a> {
     pub fn push(&self, repo_slug: &str, name: &str) -> Result<String> {
         let (_repo, worktree) = self.get_active_worktree(repo_slug, name)?;
 
-        let output = git_in(&worktree.path)
-            .args(["push", "-u", "origin", &worktree.branch])
-            .output()?;
-
-        if !output.status.success() {
-            return Err(ConductorError::Git(
-                String::from_utf8_lossy(&output.stderr).to_string(),
-            ));
-        }
+        check_output(git_in(&worktree.path).args(["push", "-u", "origin", &worktree.branch]))?;
 
         Ok(format!(
             "Pushed {} to origin/{}",
@@ -374,16 +357,7 @@ impl<'a> WorktreeManager<'a> {
             args.push("--draft");
         }
 
-        let output = Command::new("gh")
-            .args(&args)
-            .current_dir(&worktree.path)
-            .output()?;
-
-        if !output.status.success() {
-            return Err(ConductorError::Git(
-                String::from_utf8_lossy(&output.stderr).to_string(),
-            ));
-        }
+        let output = check_output(Command::new("gh").args(&args).current_dir(&worktree.path))?;
 
         let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(url)
@@ -608,10 +582,21 @@ fn is_branch_merged(repo_path: &str, branch: &str, default_branch: &str) -> bool
 }
 
 /// Return a `Command` for `git` rooted at `dir`.
-fn git_in(dir: impl AsRef<std::path::Path>) -> Command {
+pub(crate) fn git_in(dir: impl AsRef<std::path::Path>) -> Command {
     let mut cmd = Command::new("git");
     cmd.current_dir(dir);
     cmd
+}
+
+/// Run `cmd`, returning its `Output` on success or a `ConductorError::Git` on non-zero exit.
+pub(crate) fn check_output(cmd: &mut Command) -> Result<std::process::Output> {
+    let output = cmd.output()?;
+    if !output.status.success() {
+        return Err(ConductorError::Git(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+    Ok(output)
 }
 
 /// Detect package manager and install dependencies if applicable.

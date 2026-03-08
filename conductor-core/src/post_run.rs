@@ -19,7 +19,7 @@ use crate::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
 use crate::repo::RepoManager;
 use crate::text_util::truncate_str;
 use crate::tickets::{Ticket, TicketSyncer};
-use crate::worktree::WorktreeManager;
+use crate::worktree::{check_output, git_in, WorktreeManager};
 
 /// Outcome of the post-run lifecycle.
 #[derive(Debug, Clone)]
@@ -536,15 +536,7 @@ fn stage_and_commit(worktree_path: &str, message: &str) -> Result<()> {
 }
 
 fn push_branch(worktree_path: &str, branch: &str) -> Result<()> {
-    let output = Command::new("git")
-        .args(["push", "-u", "origin", branch])
-        .current_dir(worktree_path)
-        .output()?;
-    if !output.status.success() {
-        return Err(ConductorError::Git(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
-    }
+    check_output(git_in(worktree_path).args(["push", "-u", "origin", branch]))?;
     Ok(())
 }
 
