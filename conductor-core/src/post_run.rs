@@ -619,7 +619,7 @@ fn merge_and_cleanup(
         }
     }
 
-    wt_mgr.delete_by_id(&wt.id)?;
+    wt_mgr.delete_by_id_as_merged(&wt.id)?;
     eprintln!("{log_prefix} Cleaned up worktree '{}'", wt.slug);
     Ok(())
 }

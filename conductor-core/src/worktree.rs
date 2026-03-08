@@ -257,33 +257,51 @@ impl<'a> WorktreeManager<'a> {
                 slug: name.to_string(),
             })?;
 
-        self.delete_internal(&repo, worktree)
+        self.delete_internal(&repo, worktree, None)
     }
 
     pub fn delete_by_id(&self, worktree_id: &str) -> Result<Worktree> {
         let worktree = self.get_by_id(worktree_id)?;
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_id(&worktree.repo_id)?;
-        self.delete_internal(&repo, worktree)
+        self.delete_internal(&repo, worktree, None)
     }
 
-    fn delete_internal(&self, repo: &crate::repo::Repo, worktree: Worktree) -> Result<Worktree> {
+    /// Like [`delete_by_id`] but skips the ticket-state DB query when the
+    /// caller already knows the worktree was merged.
+    pub(crate) fn delete_by_id_as_merged(&self, worktree_id: &str) -> Result<Worktree> {
+        let worktree = self.get_by_id(worktree_id)?;
+        let repo_mgr = RepoManager::new(self.conn, self.config);
+        let repo = repo_mgr.get_by_id(&worktree.repo_id)?;
+        self.delete_internal(&repo, worktree, Some(true))
+    }
+
+    /// `ticket_closed_hint`: when `Some(true)` the caller already knows the
+    /// linked ticket is closed; the per-ticket DB query is skipped.
+    fn delete_internal(
+        &self,
+        repo: &crate::repo::Repo,
+        worktree: Worktree,
+        ticket_closed_hint: Option<bool>,
+    ) -> Result<Worktree> {
         // Determine merged vs abandoned:
         // 1. Check if the linked ticket is closed (covers squash merges that git can't detect)
         // 2. Fall back to git branch --merged (covers cases without a linked ticket)
-        let ticket_closed = worktree
-            .ticket_id
-            .as_ref()
-            .map(|tid| {
-                self.conn
-                    .query_row(
-                        "SELECT state = 'closed' FROM tickets WHERE id = ?1",
-                        params![tid],
-                        |row| row.get::<_, bool>(0),
-                    )
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
+        let ticket_closed = ticket_closed_hint.unwrap_or_else(|| {
+            worktree
+                .ticket_id
+                .as_ref()
+                .map(|tid| {
+                    self.conn
+                        .query_row(
+                            "SELECT state = 'closed' FROM tickets WHERE id = ?1",
+                            params![tid],
+                            |row| row.get::<_, bool>(0),
+                        )
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false)
+        });
         let is_merged = ticket_closed
             || is_branch_merged(&repo.local_path, &worktree.branch, &repo.default_branch);
         let new_status = if is_merged { "merged" } else { "abandoned" };
