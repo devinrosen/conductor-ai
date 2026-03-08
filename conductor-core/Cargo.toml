@@ -16,6 +16,7 @@ ulid = "1"
 toml = "0.8"
 dirs = "6"
 jsonwebtoken = "9"
+ureq = { version = "2", features = ["json"] }
 serde_yml = "0.0"
 notify = "6"
 tracing = "0.1"

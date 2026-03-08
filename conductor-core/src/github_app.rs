@@ -78,40 +78,30 @@ fn generate_jwt(app_config: &GitHubAppConfig) -> Result<String> {
 
 /// Exchange a GitHub App JWT for a short-lived installation access token.
 ///
-/// Uses `gh api` with the JWT as an explicit `Authorization: Bearer` header to
-/// call the `POST /app/installations/{installation_id}/access_tokens` endpoint.
-///
-/// Note: `GH_TOKEN` / `--auth-token` make `gh` send `Authorization: token <value>`,
-/// which is the PAT format. GitHub App JWT auth requires `Authorization: Bearer <jwt>`,
-/// so we override the header directly.
+/// Makes a direct HTTPS request to the GitHub API instead of using `gh api`,
+/// so that the JWT is kept in memory and never exposed as a command-line
+/// argument (which would be visible to other processes via `ps`/`/proc`).
 fn exchange_installation_token(app_config: &GitHubAppConfig, jwt: &str) -> Result<String> {
     let url = format!(
-        "app/installations/{}/access_tokens",
+        "https://api.github.com/app/installations/{}/access_tokens",
         app_config.installation_id
     );
 
-    let auth_header = format!("Authorization: Bearer {jwt}");
-    let output =
-        crate::github::build_gh_cmd(&["api", "--method", "POST", "-H", &auth_header, &url], None)
-            .output()
-            .map_err(|e| {
-                ConductorError::TicketSync(format!(
-                    "failed to exchange GitHub App installation token: {e}"
-                ))
-            })?;
+    let resp = ureq::post(&url)
+        .set("Authorization", &format!("Bearer {jwt}"))
+        .set("Accept", "application/vnd.github+json")
+        .set("X-GitHub-Api-Version", "2022-11-28")
+        .set("User-Agent", "conductor-ai")
+        .call()
+        .map_err(|e| {
+            ConductorError::TicketSync(format!("GitHub App token exchange failed: {e}"))
+        })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ConductorError::TicketSync(format!(
-            "GitHub App token exchange failed: {stderr}"
-        )));
-    }
-
-    let resp: InstallationTokenResponse = serde_json::from_slice(&output.stdout).map_err(|e| {
+    let token_resp: InstallationTokenResponse = resp.into_json().map_err(|e| {
         ConductorError::TicketSync(format!("failed to parse installation token response: {e}"))
     })?;
 
-    Ok(resp.token)
+    Ok(token_resp.token)
 }
 
 /// Obtain a GitHub App installation token, if configured.
