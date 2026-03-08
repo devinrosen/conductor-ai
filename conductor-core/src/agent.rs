@@ -803,6 +803,41 @@ impl<'a> AgentManager<'a> {
         Ok(())
     }
 
+    /// Best-effort capture of tmux scrollback to `~/.conductor/agent-logs/<run_id>.log`.
+    pub fn capture_agent_log(&self, run_id: &str, tmux_window: &str) {
+        let log_dir = crate::config::agent_log_dir();
+
+        if let Err(e) = std::fs::create_dir_all(&log_dir) {
+            tracing::warn!("could not create agent-logs dir: {e}");
+            return;
+        }
+
+        let log_path = crate::config::agent_log_path(run_id);
+
+        let output = Command::new("tmux")
+            .args([
+                "capture-pane",
+                "-t",
+                &format!(":{tmux_window}"),
+                "-p",
+                "-S",
+                "-",
+            ])
+            .output();
+
+        match output {
+            Ok(o) if o.status.success() => {
+                if let Err(e) = std::fs::write(&log_path, &o.stdout) {
+                    tracing::warn!("could not write agent log: {e}");
+                    return;
+                }
+                let path_str = log_path.to_string_lossy().to_string();
+                let _ = self.update_run_log_file(run_id, &path_str);
+            }
+            _ => {}
+        }
+    }
+
     /// Store the two-phase plan for a run. Replaces any existing plan steps.
     /// Inserts individual records into `agent_run_steps`.
     pub fn update_run_plan(&self, run_id: &str, steps: &[PlanStep]) -> Result<()> {
