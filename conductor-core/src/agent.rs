@@ -832,9 +832,21 @@ impl<'a> AgentManager<'a> {
                     return;
                 }
                 let path_str = log_path.to_string_lossy().to_string();
-                let _ = self.update_run_log_file(run_id, &path_str);
+                if let Err(e) = self.update_run_log_file(run_id, &path_str) {
+                    tracing::warn!(
+                        "captured agent log but failed to record path in DB for run {run_id}: {e}"
+                    );
+                }
             }
-            _ => {}
+            Ok(o) => {
+                tracing::warn!(
+                    "tmux capture-pane failed for run {run_id} window {tmux_window}: {}",
+                    String::from_utf8_lossy(&o.stderr)
+                );
+            }
+            Err(e) => {
+                tracing::warn!("could not execute tmux capture-pane for run {run_id}: {e}");
+            }
         }
     }
 
