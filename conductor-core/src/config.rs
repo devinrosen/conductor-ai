@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use crate::error::{ConductorError, Result};
 
@@ -216,10 +217,17 @@ impl Default for DefaultsConfig {
 }
 
 /// Returns the Conductor data directory: ~/.conductor
-pub fn conductor_dir() -> PathBuf {
-    dirs::home_dir()
-        .expect("could not determine home directory")
-        .join(".conductor")
+///
+/// The result is cached after the first call so that repeated invocations
+/// (e.g. inside loops that call `agent_log_path`) avoid redundant OS-level
+/// `home_dir()` lookups.
+pub fn conductor_dir() -> &'static PathBuf {
+    static CONDUCTOR_DIR: OnceLock<PathBuf> = OnceLock::new();
+    CONDUCTOR_DIR.get_or_init(|| {
+        dirs::home_dir()
+            .expect("could not determine home directory")
+            .join(".conductor")
+    })
 }
 
 /// Returns the path to the SQLite database.
