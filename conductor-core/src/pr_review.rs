@@ -748,9 +748,10 @@ fn file_off_diff_issues(
             app_token,
         ) {
             Ok((_number, url)) => {
-                eprintln!(
-                    "[review-swarm] Filed off-diff issue '{}': {}",
-                    finding.title, url
+                tracing::info!(
+                    title = %finding.title,
+                    url = %url,
+                    "[review-swarm] Filed off-diff issue"
                 );
                 filed.push(FiledIssue {
                     finding: finding.clone(),
@@ -758,9 +759,10 @@ fn file_off_diff_issues(
                 });
             }
             Err(e) => {
-                eprintln!(
-                    "[review-swarm] Failed to file off-diff issue '{}': {e}",
-                    finding.title
+                tracing::warn!(
+                    title = %finding.title,
+                    error = %e,
+                    "[review-swarm] Failed to file off-diff issue"
                 );
             }
         }
