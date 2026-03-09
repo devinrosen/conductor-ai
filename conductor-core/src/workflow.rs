@@ -3576,6 +3576,7 @@ And here is my actual output:
                 markers: vec!["build_ok".to_string()],
                 context: String::new(),
                 child_run_id: None,
+                structured_output: None,
             },
         );
 
@@ -3607,6 +3608,7 @@ And here is my actual output:
                 markers: vec!["has_errors".to_string()],
                 context: String::new(),
                 child_run_id: None,
+                structured_output: None,
             },
         );
 
