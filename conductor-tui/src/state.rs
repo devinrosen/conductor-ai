@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Default, Clone)]
 pub struct FilterState {
@@ -586,6 +587,8 @@ pub struct AppState {
 
     // Status bar message
     pub status_message: Option<String>,
+    /// When `status_message` was last set; used to auto-clear after a timeout.
+    pub status_message_at: Option<std::time::Instant>,
 
     /// Cached org list so navigating back from repo modal doesn't re-fetch.
     pub github_orgs_cache: Vec<String>,
@@ -635,6 +638,7 @@ impl AppState {
             filter: FilterState::default(),
             detail_ticket_filter: FilterState::default(),
             status_message: None,
+            status_message_at: None,
             github_orgs_cache: Vec::new(),
             workflows_focus: WorkflowsFocus::Defs,
             workflow_def_index: 0,
@@ -863,6 +867,27 @@ impl AppState {
     #[allow(dead_code)]
     pub fn selected_ticket(&self) -> Option<&Ticket> {
         self.data.tickets.get(self.ticket_index)
+    }
+
+    /// Called on each tick: clears `status_message` (and `status_message_at`) if
+    /// the message has been visible for longer than `timeout`.
+    pub(crate) fn tick_status_message(&mut self, timeout: Duration) {
+        if let Some(at) = self.status_message_at {
+            if at.elapsed() > timeout {
+                self.status_message = None;
+                self.status_message_at = None;
+            }
+        }
+    }
+
+    /// Updates `status_message_at` to reflect a change in `status_message` presence.
+    /// `had_message` is whether a message was present before the action ran.
+    pub(crate) fn track_status_message_change(&mut self, had_message: bool) {
+        match (had_message, self.status_message.is_some()) {
+            (false, true) => self.status_message_at = Some(Instant::now()),
+            (_, false) => self.status_message_at = None,
+            _ => {}
+        }
     }
 }
 
@@ -1306,5 +1331,72 @@ mod tests {
         assert_eq!(state.filtered_tickets[2].id, "4");
         // ticket_index=2 now correctly resolves to #4
         assert_eq!(state.filtered_tickets[2].id, "4");
+    }
+
+    // --- status message auto-clear tests ---
+
+    #[test]
+    fn tick_status_message_clears_after_timeout() {
+        let mut state = AppState::new();
+        state.status_message = Some("hello".into());
+        // Backdate the timestamp so it appears to have been set 5 seconds ago.
+        state.status_message_at = Some(Instant::now() - Duration::from_secs(5));
+
+        state.tick_status_message(Duration::from_secs(4));
+
+        assert!(state.status_message.is_none());
+        assert!(state.status_message_at.is_none());
+    }
+
+    #[test]
+    fn tick_status_message_keeps_message_within_timeout() {
+        let mut state = AppState::new();
+        state.status_message = Some("hello".into());
+        state.status_message_at = Some(Instant::now());
+
+        state.tick_status_message(Duration::from_secs(4));
+
+        assert!(state.status_message.is_some());
+        assert!(state.status_message_at.is_some());
+    }
+
+    #[test]
+    fn tick_status_message_no_op_when_none() {
+        let mut state = AppState::new();
+        // No message, no timestamp — should be a no-op.
+        state.tick_status_message(Duration::from_secs(4));
+        assert!(state.status_message.is_none());
+        assert!(state.status_message_at.is_none());
+    }
+
+    #[test]
+    fn track_status_message_change_sets_timestamp_on_appear() {
+        let mut state = AppState::new();
+        // Simulate: no message before, message present now.
+        state.status_message = Some("new".into());
+        state.track_status_message_change(false);
+        assert!(state.status_message_at.is_some());
+    }
+
+    #[test]
+    fn track_status_message_change_clears_timestamp_on_disappear() {
+        let mut state = AppState::new();
+        state.status_message_at = Some(Instant::now());
+        // Simulate: message was present before, gone now.
+        state.status_message = None;
+        state.track_status_message_change(true);
+        assert!(state.status_message_at.is_none());
+    }
+
+    #[test]
+    fn track_status_message_change_no_op_when_message_persists() {
+        let mut state = AppState::new();
+        let before = Instant::now() - Duration::from_secs(2);
+        state.status_message = Some("persisting".into());
+        state.status_message_at = Some(before);
+        // Simulate: had message before, still has message now.
+        state.track_status_message_change(true);
+        // Timestamp should not be reset.
+        assert!(state.status_message_at.unwrap() <= before + Duration::from_millis(1));
     }
 }

@@ -197,7 +197,17 @@ impl App {
     }
 
     /// Handle an action by mutating state. Returns true if the UI needs a redraw.
+    ///
+    /// This thin wrapper delegates to `handle_action` and updates
+    /// `status_message_at` whenever the status message presence changes.
     fn update(&mut self, action: Action) -> bool {
+        let had_message = self.state.status_message.is_some();
+        let dirty = self.handle_action(action);
+        self.state.track_status_message_change(had_message);
+        dirty
+    }
+
+    fn handle_action(&mut self, action: Action) -> bool {
         // Manage pending_g chord state
         match &action {
             Action::PendingG => {
@@ -219,6 +229,9 @@ impl App {
                 // status bar (and workflow views) stay current regardless of which
                 // view is active.
                 self.poll_workflow_data_async();
+                // Auto-clear status messages after 4 seconds so the context hint
+                // bar is restored without requiring user navigation.
+                self.state.tick_status_message(Duration::from_secs(4));
                 // Always redraw on tick so elapsed times, spinners, and other
                 // time-sensitive indicators update smoothly (ratatui diffs cells,
                 // so this is cheap).
