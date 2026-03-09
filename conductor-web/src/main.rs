@@ -28,25 +28,41 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Reap stale worktrees on startup.
+    {
+        use conductor_core::worktree::WorktreeManager;
+        let wt_mgr = WorktreeManager::new(&conn, &config);
+        if let Ok(n) = wt_mgr.reap_stale_worktrees() {
+            if n > 0 {
+                tracing::info!("Reaped {n} stale worktree(s) on startup");
+            }
+        }
+    }
+
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         config: Arc::new(RwLock::new(config)),
         events: EventBus::new(64),
     };
 
-    // Spawn a background task that periodically reaps orphaned runs.
-    // Uses spawn_blocking to avoid blocking the tokio runtime with
-    // synchronous DB queries and tmux subprocess calls.
+    // Spawn a background task that periodically reaps orphaned runs and
+    // stale worktrees. Uses spawn_blocking to avoid blocking the tokio
+    // runtime with synchronous DB queries and subprocess calls.
     let reaper_state = state.clone();
+    let reaper_config = state.config.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
         loop {
             interval.tick().await;
             let db = reaper_state.db.clone();
+            let cfg = reaper_config.clone();
             let _ = tokio::task::spawn_blocking(move || {
                 let conn = db.blocking_lock();
                 let mgr = AgentManager::new(&conn);
-                mgr.reap_orphaned_runs()
+                mgr.reap_orphaned_runs()?;
+                let cfg = cfg.blocking_read();
+                let wt_mgr = conductor_core::worktree::WorktreeManager::new(&conn, &cfg);
+                wt_mgr.reap_stale_worktrees()
             })
             .await;
         }

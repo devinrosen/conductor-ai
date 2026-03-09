@@ -648,97 +648,112 @@ fn main() -> Result<()> {
                 }
             }
         },
-        Commands::Worktree { command } => match command {
-            WorktreeCommands::Create {
-                repo,
-                name,
-                from,
-                ticket,
-                auto_agent,
-            } => {
-                let mgr = WorktreeManager::new(&conn, &config);
-                let (wt, warnings) =
-                    mgr.create(&repo, &name, from.as_deref(), ticket.as_deref())?;
-                for warning in &warnings {
-                    eprintln!("warning: {warning}");
-                }
-                println!("Created worktree: {} ({})", wt.slug, wt.branch);
-                println!("  Path: {}", wt.path);
+        Commands::Worktree { command } => {
+            // Reap stale worktrees before handling any worktree command.
+            {
+                let wt_mgr = WorktreeManager::new(&conn, &config);
+                let _ = wt_mgr.reap_stale_worktrees();
+            }
+            match command {
+                WorktreeCommands::Create {
+                    repo,
+                    name,
+                    from,
+                    ticket,
+                    auto_agent,
+                } => {
+                    let mgr = WorktreeManager::new(&conn, &config);
+                    let (wt, warnings) =
+                        mgr.create(&repo, &name, from.as_deref(), ticket.as_deref())?;
+                    for warning in &warnings {
+                        eprintln!("warning: {warning}");
+                    }
+                    println!("Created worktree: {} ({})", wt.slug, wt.branch);
+                    println!("  Path: {}", wt.path);
 
-                if auto_agent {
-                    if let Some(ref tid) = ticket {
-                        let syncer = TicketSyncer::new(&conn);
-                        match syncer.get_by_id(tid) {
-                            Ok(t) => {
-                                let prompt = build_agent_prompt(&t);
-                                println!("Starting agent...");
-                                // Resolve model: per-worktree → per-repo → global config
-                                let repo_mgr = RepoManager::new(&conn, &config);
-                                let repo_model =
-                                    repo_mgr.get_by_slug(&repo).ok().and_then(|r| r.model);
-                                let model = wt
-                                    .model
-                                    .as_deref()
-                                    .or(repo_model.as_deref())
-                                    .or(config.general.model.as_deref());
-                                let agent_mgr = AgentManager::new(&conn);
-                                let run =
-                                    agent_mgr.create_run(&wt.id, &prompt, Some(&wt.slug), model)?;
-                                run_agent(&conn, &run.id, &wt.path, &prompt, None, model)?;
+                    if auto_agent {
+                        if let Some(ref tid) = ticket {
+                            let syncer = TicketSyncer::new(&conn);
+                            match syncer.get_by_id(tid) {
+                                Ok(t) => {
+                                    let prompt = build_agent_prompt(&t);
+                                    println!("Starting agent...");
+                                    // Resolve model: per-worktree → per-repo → global config
+                                    let repo_mgr = RepoManager::new(&conn, &config);
+                                    let repo_model =
+                                        repo_mgr.get_by_slug(&repo).ok().and_then(|r| r.model);
+                                    let model = wt
+                                        .model
+                                        .as_deref()
+                                        .or(repo_model.as_deref())
+                                        .or(config.general.model.as_deref());
+                                    let agent_mgr = AgentManager::new(&conn);
+                                    let run = agent_mgr.create_run(
+                                        &wt.id,
+                                        &prompt,
+                                        Some(&wt.slug),
+                                        model,
+                                    )?;
+                                    run_agent(&conn, &run.id, &wt.path, &prompt, None, model)?;
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "Warning: could not load ticket for agent prompt: {e}"
+                                    );
+                                }
                             }
-                            Err(e) => {
-                                eprintln!("Warning: could not load ticket for agent prompt: {e}");
-                            }
+                        } else {
+                            eprintln!("Warning: --auto-agent requires --ticket to be set");
                         }
+                    }
+                }
+                WorktreeCommands::List { repo } => {
+                    let mgr = WorktreeManager::new(&conn, &config);
+                    let worktrees = mgr.list(repo.as_deref(), false)?;
+                    if worktrees.is_empty() {
+                        println!("No worktrees.");
                     } else {
-                        eprintln!("Warning: --auto-agent requires --ticket to be set");
+                        for wt in worktrees {
+                            println!("  {}  {}  [{}]", wt.slug, wt.branch, wt.status);
+                        }
+                    }
+                }
+                WorktreeCommands::Delete { repo, name } => {
+                    let mgr = WorktreeManager::new(&conn, &config);
+                    let wt = mgr.delete(&repo, &name)?;
+                    println!("Worktree {name} marked as {} ✓", wt.status);
+                }
+                WorktreeCommands::Purge { repo, name } => {
+                    let mgr = WorktreeManager::new(&conn, &config);
+                    let count = mgr.purge(&repo, name.as_deref())?;
+                    if count == 0 {
+                        println!("No completed worktrees to purge.");
+                    } else {
+                        println!("Purged {count} completed worktree record(s).");
+                    }
+                }
+                WorktreeCommands::Push { repo, name } => {
+                    let mgr = WorktreeManager::new(&conn, &config);
+                    let msg = mgr.push(&repo, &name)?;
+                    println!("{msg}");
+                }
+                WorktreeCommands::Pr { repo, name, draft } => {
+                    let mgr = WorktreeManager::new(&conn, &config);
+                    let url = mgr.create_pr(&repo, &name, draft)?;
+                    println!("PR created: {url}");
+                }
+                WorktreeCommands::SetModel { repo, name, model } => {
+                    let mgr = WorktreeManager::new(&conn, &config);
+                    mgr.set_model(&repo, &name, model.as_deref())?;
+                    match model {
+                        Some(m) => println!("Set model for {name} to: {m}"),
+                        None => {
+                            println!("Cleared model override for {name} (will use global default)")
+                        }
                     }
                 }
             }
-            WorktreeCommands::List { repo } => {
-                let mgr = WorktreeManager::new(&conn, &config);
-                let worktrees = mgr.list(repo.as_deref(), false)?;
-                if worktrees.is_empty() {
-                    println!("No worktrees.");
-                } else {
-                    for wt in worktrees {
-                        println!("  {}  {}  [{}]", wt.slug, wt.branch, wt.status);
-                    }
-                }
-            }
-            WorktreeCommands::Delete { repo, name } => {
-                let mgr = WorktreeManager::new(&conn, &config);
-                let wt = mgr.delete(&repo, &name)?;
-                println!("Worktree {name} marked as {} ✓", wt.status);
-            }
-            WorktreeCommands::Purge { repo, name } => {
-                let mgr = WorktreeManager::new(&conn, &config);
-                let count = mgr.purge(&repo, name.as_deref())?;
-                if count == 0 {
-                    println!("No completed worktrees to purge.");
-                } else {
-                    println!("Purged {count} completed worktree record(s).");
-                }
-            }
-            WorktreeCommands::Push { repo, name } => {
-                let mgr = WorktreeManager::new(&conn, &config);
-                let msg = mgr.push(&repo, &name)?;
-                println!("{msg}");
-            }
-            WorktreeCommands::Pr { repo, name, draft } => {
-                let mgr = WorktreeManager::new(&conn, &config);
-                let url = mgr.create_pr(&repo, &name, draft)?;
-                println!("PR created: {url}");
-            }
-            WorktreeCommands::SetModel { repo, name, model } => {
-                let mgr = WorktreeManager::new(&conn, &config);
-                mgr.set_model(&repo, &name, model.as_deref())?;
-                match model {
-                    Some(m) => println!("Set model for {name} to: {m}"),
-                    None => println!("Cleared model override for {name} (will use global default)"),
-                }
-            }
-        },
+        }
         Commands::Agent { command } => {
             // Reap orphaned runs before handling any agent command.
             {
