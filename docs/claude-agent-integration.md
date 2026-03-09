@@ -140,7 +140,7 @@ Each worktree can have its own agent running in a separate tmux window. The `lat
 
 ## Future: v2 Daemon Extraction
 
-See `docs/SPEC.md` section "v2: Daemon Extraction" for the full analysis. The daemon becomes the single owner of agent processes, DB writes, and state. The TUI becomes a thin display client connected via IPC.
+See `docs/VISION.md` section "v2: Daemon Extraction" for the full analysis. The daemon becomes the single owner of agent processes, DB writes, and state. The TUI becomes a thin display client connected via IPC.
 
 ---
 
