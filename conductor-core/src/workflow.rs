@@ -240,6 +240,21 @@ impl std::fmt::Display for WorkflowStepStatus {
     }
 }
 
+impl WorkflowStepStatus {
+    /// Short display label used in summaries and status columns.
+    pub fn short_label(&self) -> &'static str {
+        match self {
+            Self::Completed => "ok",
+            Self::Failed => "FAIL",
+            Self::Skipped => "skip",
+            Self::Running => "...",
+            Self::Pending => "-",
+            Self::Waiting => "wait",
+            Self::TimedOut => "tout",
+        }
+    }
+}
+
 impl std::str::FromStr for WorkflowStepStatus {
     type Err = String;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
@@ -2623,15 +2638,7 @@ fn build_workflow_summary(state: &ExecutionState<'_>) -> String {
     ));
 
     for step in &steps {
-        let marker = match step.status {
-            WorkflowStepStatus::Completed => "ok",
-            WorkflowStepStatus::Failed => "FAIL",
-            WorkflowStepStatus::Skipped => "skip",
-            WorkflowStepStatus::Running => "...",
-            WorkflowStepStatus::Pending => "-",
-            WorkflowStepStatus::Waiting => "wait",
-            WorkflowStepStatus::TimedOut => "tout",
-        };
+        let marker = step.status.short_label();
         let iter_label = if step.iteration > 0 {
             format!(" (iter {})", step.iteration)
         } else {

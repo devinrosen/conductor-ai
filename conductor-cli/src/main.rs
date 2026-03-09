@@ -1420,17 +1420,7 @@ fn main() -> Result<()> {
                         if !steps.is_empty() {
                             println!("\nSteps:");
                             for step in &steps {
-                                let marker = match step.status {
-                                    conductor_core::workflow::WorkflowStepStatus::Completed => "ok",
-                                    conductor_core::workflow::WorkflowStepStatus::Failed => "FAIL",
-                                    conductor_core::workflow::WorkflowStepStatus::Skipped => "skip",
-                                    conductor_core::workflow::WorkflowStepStatus::Running => "...",
-                                    conductor_core::workflow::WorkflowStepStatus::Pending => "-",
-                                    conductor_core::workflow::WorkflowStepStatus::Waiting => "wait",
-                                    conductor_core::workflow::WorkflowStepStatus::TimedOut => {
-                                        "tout"
-                                    }
-                                };
+                                let marker = step.status.short_label();
                                 let commit_flag = if step.can_commit { " [commit]" } else { "" };
                                 let iter_label = if step.iteration > 0 {
                                     format!(" iter={}", step.iteration)
