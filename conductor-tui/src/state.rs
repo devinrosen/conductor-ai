@@ -586,6 +586,8 @@ pub struct AppState {
 
     // Status bar message
     pub status_message: Option<String>,
+    /// When `status_message` was last set; used to auto-clear after a timeout.
+    pub status_message_at: Option<std::time::Instant>,
 
     /// Cached org list so navigating back from repo modal doesn't re-fetch.
     pub github_orgs_cache: Vec<String>,
@@ -635,6 +637,7 @@ impl AppState {
             filter: FilterState::default(),
             detail_ticket_filter: FilterState::default(),
             status_message: None,
+            status_message_at: None,
             github_orgs_cache: Vec::new(),
             workflows_focus: WorkflowsFocus::Defs,
             workflow_def_index: 0,
