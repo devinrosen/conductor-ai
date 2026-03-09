@@ -199,16 +199,14 @@ impl App {
     /// Handle an action by mutating state. Returns true if the UI needs a redraw.
     ///
     /// This thin wrapper delegates to `handle_action` and updates
-    /// `status_message_at` whenever the status message changes.
+    /// `status_message_at` whenever the status message presence changes.
     fn update(&mut self, action: Action) -> bool {
-        let prev = self.state.status_message.clone();
+        let had_message = self.state.status_message.is_some();
         let dirty = self.handle_action(action);
-        if self.state.status_message != prev {
-            if self.state.status_message.is_some() {
-                self.state.status_message_at = Some(std::time::Instant::now());
-            } else {
-                self.state.status_message_at = None;
-            }
+        match (had_message, self.state.status_message.is_some()) {
+            (false, true) => self.state.status_message_at = Some(std::time::Instant::now()),
+            (_, false) => self.state.status_message_at = None,
+            _ => {}
         }
         dirty
     }
