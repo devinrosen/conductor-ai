@@ -120,9 +120,9 @@ pub enum SchemaRef {
 impl SchemaRef {
     /// Create a `SchemaRef` from a raw string value.
     ///
-    /// Values containing `/` are treated as explicit paths; otherwise as names.
+    /// Values containing `/` or `\` are treated as explicit paths; otherwise as names.
     pub fn from_str_value(s: &str) -> Self {
-        if s.contains('/') {
+        if s.contains('/') || s.contains('\\') {
             Self::Path(s.to_string())
         } else {
             Self::Name(s.to_string())
@@ -154,6 +154,16 @@ pub fn load_schema(
     }
 }
 
+/// Check that a schema or workflow name does not contain path traversal components.
+fn validate_name_segment(name: &str, label: &str) -> Result<()> {
+    if name.contains("..") || name.contains('/') || name.contains('\\') || name.contains('\0') {
+        return Err(ConductorError::Schema(format!(
+            "{label} '{name}' contains invalid characters (path separators or '..' are not allowed)"
+        )));
+    }
+    Ok(())
+}
+
 /// Resolve a schema by short name using the search order.
 fn load_schema_by_name(
     worktree_path: &str,
@@ -161,6 +171,11 @@ fn load_schema_by_name(
     name: &str,
     workflow_name: Option<&str>,
 ) -> Result<OutputSchema> {
+    validate_name_segment(name, "Schema name")?;
+    if let Some(wf) = workflow_name {
+        validate_name_segment(wf, "Workflow name")?;
+    }
+
     let filename = format!("{name}.yaml");
     let bases = [worktree_path, repo_path];
 
@@ -533,7 +548,8 @@ pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<Stru
         .unwrap_or("")
         .to_string();
 
-    let json_string = serde_json::to_string(&value).unwrap_or_default();
+    let json_string = serde_json::to_string(&value)
+        .expect("re-serializing a valid serde_json::Value should never fail");
 
     Ok(StructuredOutput {
         value,
@@ -1314,5 +1330,160 @@ fields:
 
         let input3 = "{\"a\": 1}";
         assert_eq!(strip_code_fences(input3), "{\"a\": 1}");
+    }
+
+    // -----------------------------------------------------------------------
+    // load_schema_by_path tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_load_schema_by_path_rejects_absolute() {
+        let result = load_schema_by_path("/tmp", "/etc/passwd");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("must be relative"));
+    }
+
+    #[test]
+    fn test_load_schema_by_path_rejects_traversal() {
+        use tempfile::TempDir;
+        let repo = TempDir::new().unwrap();
+
+        // Create a schema file outside the repo to attempt traversal
+        let outside = TempDir::new().unwrap();
+        fs::write(
+            outside.path().join("evil.yaml"),
+            "fields:\n  name: string\n",
+        )
+        .unwrap();
+
+        // Build a relative path that escapes the repo root
+        let repo_path = repo.path().to_str().unwrap();
+        let outside_path = outside.path().to_str().unwrap();
+        // Compute relative traversal from repo to outside dir
+        let rel = format!(
+            "../../../{}/evil.yaml",
+            outside_path.trim_start_matches('/')
+        );
+
+        let result = load_schema_by_path(repo_path, &rel);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("path traversal") || msg.contains("not found"),
+            "Expected path traversal or not found error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_load_schema_by_path_valid() {
+        use tempfile::TempDir;
+        let repo = TempDir::new().unwrap();
+
+        let custom_dir = repo.path().join("custom").join("schemas");
+        fs::create_dir_all(&custom_dir).unwrap();
+        fs::write(
+            custom_dir.join("review.yaml"),
+            "fields:\n  verdict: string\n",
+        )
+        .unwrap();
+
+        let schema =
+            load_schema_by_path(repo.path().to_str().unwrap(), "custom/schemas/review.yaml")
+                .unwrap();
+        assert_eq!(schema.name, "review");
+        assert_eq!(schema.fields.len(), 1);
+        assert_eq!(schema.fields[0].name, "verdict");
+    }
+
+    // -----------------------------------------------------------------------
+    // Name sanitization tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_schema_name_rejects_path_traversal() {
+        use tempfile::TempDir;
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        let result = load_schema(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            &SchemaRef::Name("..".to_string()),
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid characters"));
+    }
+
+    #[test]
+    fn test_workflow_name_rejects_path_traversal() {
+        use tempfile::TempDir;
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        let result = load_schema(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            &SchemaRef::Name("review".to_string()),
+            Some("../../etc"),
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid characters"));
+    }
+
+    #[test]
+    fn test_schema_ref_backslash_treated_as_path() {
+        assert_eq!(
+            SchemaRef::from_str_value("..\\..\\etc\\passwd"),
+            SchemaRef::Path("..\\..\\etc\\passwd".to_string())
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Missing output block and malformed expression tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_structured_output_no_block() {
+        let schema = parse_schema_content("fields:\n  name: string\n", "test").unwrap();
+        let result = parse_structured_output("This output has no CONDUCTOR_OUTPUT block", &schema);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No <<<CONDUCTOR_OUTPUT>>>"));
+    }
+
+    #[test]
+    fn test_parse_structured_output_missing_end_marker() {
+        let schema = parse_schema_content("fields:\n  name: string\n", "test").unwrap();
+        let result = parse_structured_output(
+            "<<<CONDUCTOR_OUTPUT>>>\n{\"name\": \"hello\"}\nno end marker here",
+            &schema,
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("END_CONDUCTOR_OUTPUT"));
+    }
+
+    #[test]
+    fn test_malformed_marker_expressions_return_false() {
+        let value: serde_json::Value =
+            serde_json::from_str(r#"{"name": "test", "count": 5}"#).unwrap();
+
+        // Completely invalid expressions should return false, not panic
+        assert!(!evaluate_marker_expr(&value, ""));
+        assert!(!evaluate_marker_expr(&value, "not a valid expression"));
+        assert!(!evaluate_marker_expr(&value, "field !=! value"));
+        assert!(!evaluate_marker_expr(&value, "nonexistent_field == 5"));
     }
 }

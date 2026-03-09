@@ -25,7 +25,7 @@ use crate::workflow_dsl::{
 };
 
 // Re-export DSL types so consumers go through `workflow::` instead of `workflow_dsl::` directly.
-use crate::schema_config;
+use crate::schema_config::{self, OutputSchema};
 pub use crate::workflow_dsl::{
     collect_agent_names, collect_workflow_refs, detect_workflow_cycles, AgentRef, InputDecl,
     WorkflowDef, WorkflowTrigger, MAX_WORKFLOW_DEPTH,
@@ -104,6 +104,53 @@ pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
     let json_str = text[json_start..json_start + end].trim();
 
     serde_json::from_str(json_str).ok()
+}
+
+/// Resolve a schema by name using the standard search order.
+fn resolve_schema(state: &ExecutionState<'_>, name: &str) -> Result<OutputSchema> {
+    let schema_ref = schema_config::SchemaRef::from_str_value(name);
+    schema_config::load_schema(
+        &state.worktree_path,
+        &state.repo_path,
+        &schema_ref,
+        Some(&state.workflow_name),
+    )
+}
+
+/// Interpret agent output using a schema (if present) or generic `CONDUCTOR_OUTPUT` parsing.
+///
+/// Returns `(markers, context, structured_json)`. The `succeeded` flag controls whether
+/// a schema validation failure is treated as an error (`Err`) or silently falls back.
+fn interpret_agent_output(
+    result_text: Option<&str>,
+    schema: Option<&OutputSchema>,
+    succeeded: bool,
+) -> std::result::Result<(Vec<String>, String, Option<String>), String> {
+    if let Some(s) = schema {
+        match result_text.map(|text| schema_config::parse_structured_output(text, s)) {
+            Some(Ok(structured)) => Ok((
+                structured.markers,
+                structured.context,
+                Some(structured.json_string),
+            )),
+            Some(Err(e)) if succeeded => {
+                // Structured output validation failed on a successful run — caller should retry
+                Err(format!("structured output validation: {e}"))
+            }
+            _ => {
+                // No output block found or parsing error on a failed run — fall back
+                let fallback = result_text
+                    .and_then(parse_conductor_output)
+                    .unwrap_or_default();
+                Ok((fallback.markers, fallback.context, None))
+            }
+        }
+    } else {
+        let output = result_text
+            .and_then(parse_conductor_output)
+            .unwrap_or_default();
+        Ok((output.markers, output.context, None))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1320,17 +1367,9 @@ fn execute_call_with_schema(
     let step_key = node.agent.step_key();
 
     // Load output schema if specified
-    let schema = if let Some(name) = schema_name {
-        let schema_ref = schema_config::SchemaRef::from_str_value(name);
-        Some(schema_config::load_schema(
-            &state.worktree_path,
-            &state.repo_path,
-            &schema_ref,
-            Some(&state.workflow_name),
-        )?)
-    } else {
-        None
-    };
+    let schema = schema_name
+        .map(|name| resolve_schema(state, name))
+        .transpose()?;
 
     let prompt = build_agent_prompt(state, &agent_def, schema.as_ref());
     let step_model = agent_def.model.as_deref().or(state.model.as_deref());
@@ -1413,52 +1452,29 @@ fn execute_call_with_schema(
                 let succeeded = completed_run.status == AgentRunStatus::Completed;
 
                 // Parse output: structured (schema) or generic (markers + context)
-                let (markers, context, structured_json) = if let Some(ref s) = schema {
-                    match completed_run
-                        .result_text
-                        .as_deref()
-                        .map(|text| schema_config::parse_structured_output(text, s))
-                    {
-                        Some(Ok(structured)) => (
-                            structured.markers,
-                            structured.context,
-                            Some(structured.json_string),
-                        ),
-                        Some(Err(e)) if succeeded => {
-                            // Structured output validation failed — treat as step failure
-                            eprintln!(
-                                "[workflow] Step '{}' structured output validation failed: {e}",
-                                agent_label,
-                            );
-                            let _ = state.wf_mgr.update_step_status(
-                                &step_id,
-                                WorkflowStepStatus::Failed,
-                                Some(&completed_run.id),
-                                completed_run.result_text.as_deref(),
-                                None,
-                                None,
-                                Some(attempt as i64),
-                            );
-                            last_error = format!("structured output validation: {e}");
-                            continue;
-                        }
-                        _ => {
-                            // No output block found or parsing error on a failed run
-                            let fallback = completed_run
-                                .result_text
-                                .as_deref()
-                                .and_then(parse_conductor_output)
-                                .unwrap_or_default();
-                            (fallback.markers, fallback.context, None)
-                        }
+                let (markers, context, structured_json) = match interpret_agent_output(
+                    completed_run.result_text.as_deref(),
+                    schema.as_ref(),
+                    succeeded,
+                ) {
+                    Ok(result) => result,
+                    Err(validation_err) => {
+                        eprintln!(
+                            "[workflow] Step '{}' structured output validation failed: {validation_err}",
+                            agent_label,
+                        );
+                        state.wf_mgr.update_step_status(
+                            &step_id,
+                            WorkflowStepStatus::Failed,
+                            Some(&completed_run.id),
+                            completed_run.result_text.as_deref(),
+                            None,
+                            None,
+                            Some(attempt as i64),
+                        )?;
+                        last_error = validation_err;
+                        continue;
                     }
-                } else {
-                    let output = completed_run
-                        .result_text
-                        .as_deref()
-                        .and_then(parse_conductor_output)
-                        .unwrap_or_default();
-                    (output.markers, output.context, None)
                 };
 
                 let markers_json = serde_json::to_string(&markers).unwrap_or_default();
@@ -1959,17 +1975,11 @@ fn execute_parallel(
     );
 
     // Load block-level schema (if any)
-    let block_schema = if let Some(ref name) = node.output {
-        let schema_ref = schema_config::SchemaRef::from_str_value(name);
-        Some(schema_config::load_schema(
-            &state.worktree_path,
-            &state.repo_path,
-            &schema_ref,
-            Some(&state.workflow_name),
-        )?)
-    } else {
-        None
-    };
+    let block_schema = node
+        .output
+        .as_deref()
+        .map(|name| resolve_schema(state, name))
+        .transpose()?;
 
     // Spawn all agents
     struct ParallelChild {
@@ -1996,17 +2006,11 @@ fn execute_parallel(
         )?;
 
         // Determine schema for this call: per-call override > block-level
-        let call_schema = if let Some(override_name) = node.call_outputs.get(&i) {
-            let schema_ref = schema_config::SchemaRef::from_str_value(override_name);
-            Some(schema_config::load_schema(
-                &state.worktree_path,
-                &state.repo_path,
-                &schema_ref,
-                Some(&state.workflow_name),
-            )?)
-        } else {
-            None
-        };
+        let call_schema = node
+            .call_outputs
+            .get(&i)
+            .map(|name| resolve_schema(state, name))
+            .transpose()?;
         let effective_schema = call_schema.as_ref().or(block_schema.as_ref());
 
         let prompt = build_agent_prompt(state, &agent_def, effective_schema);
@@ -2131,31 +2135,25 @@ fn execute_parallel(
                         completed.insert(i);
                         let succeeded = run.status == AgentRunStatus::Completed;
 
-                        let (markers, context, structured_json) =
-                            if let Some(ref schema) = child.schema {
-                                match run
-                                    .result_text
-                                    .as_deref()
-                                    .map(|t| schema_config::parse_structured_output(t, schema))
-                                {
-                                    Some(Ok(s)) => (s.markers, s.context, Some(s.json_string)),
-                                    _ => {
-                                        let fb = run
-                                            .result_text
-                                            .as_deref()
-                                            .and_then(parse_conductor_output)
-                                            .unwrap_or_default();
-                                        (fb.markers, fb.context, None)
-                                    }
-                                }
-                            } else {
-                                let output = run
-                                    .result_text
-                                    .as_deref()
-                                    .and_then(parse_conductor_output)
-                                    .unwrap_or_default();
-                                (output.markers, output.context, None)
-                            };
+                        // In parallel blocks, schema validation failures fall back
+                        // to generic parsing (no retry mechanism for individual calls).
+                        let (markers, context, structured_json) = interpret_agent_output(
+                            run.result_text.as_deref(),
+                            child.schema.as_ref(),
+                            succeeded,
+                        )
+                        .unwrap_or_else(|e| {
+                            eprintln!(
+                                "[workflow] parallel: '{}' schema validation failed, falling back: {e}",
+                                child.agent_name
+                            );
+                            let fb = run
+                                .result_text
+                                .as_deref()
+                                .and_then(parse_conductor_output)
+                                .unwrap_or_default();
+                            (fb.markers, fb.context, None)
+                        });
 
                         let markers_json = serde_json::to_string(&markers).unwrap_or_default();
 
