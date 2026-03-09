@@ -793,25 +793,7 @@ fn build_variable_map<'a>(state: &'a ExecutionState<'_>) -> HashMap<&'a str, Str
 /// Handles: input variables, prior_context, prior_contexts, gate_feedback,
 /// dry-run prefix for committing agents, and CONDUCTOR_OUTPUT instruction.
 fn build_agent_prompt(state: &ExecutionState<'_>, agent_def: &agent_config::AgentDef) -> String {
-    let mut vars: HashMap<&str, String> = HashMap::new();
-    for (k, v) in &state.inputs {
-        vars.insert(k.as_str(), v.clone());
-    }
-
-    let prior_context = state
-        .contexts
-        .last()
-        .map(|c| c.context.clone())
-        .unwrap_or_default();
-    vars.insert("prior_context", prior_context);
-
-    let prior_contexts_json = serde_json::to_string(&state.contexts).unwrap_or_default();
-    vars.insert("prior_contexts", prior_contexts_json);
-
-    if let Some(ref feedback) = state.last_gate_feedback {
-        vars.insert("gate_feedback", feedback.clone());
-    }
-
+    let vars = build_variable_map(state);
     let mut prompt = substitute_variables(&agent_def.prompt, &vars);
 
     if agent_def.can_commit && state.exec_config.dry_run {
@@ -1081,6 +1063,86 @@ fn execute_nodes(state: &mut ExecutionState<'_>, nodes: &[WorkflowNode]) -> Resu
 }
 
 // ---------------------------------------------------------------------------
+// Shared helpers for retry-exhaustion epilogue
+// ---------------------------------------------------------------------------
+
+/// Run the on_fail agent after all retries for a step are exhausted.
+///
+/// Injects `failed_step`, `failure_reason`, and `retry_count` into the
+/// workflow inputs for the duration of the on_fail call, then cleans up.
+fn run_on_fail_agent(
+    state: &mut ExecutionState<'_>,
+    step_label: &str,
+    on_fail_agent: &crate::workflow_dsl::AgentRef,
+    last_error: &str,
+    retries: u32,
+    iteration: u32,
+) {
+    eprintln!(
+        "[workflow] All retries exhausted for '{}', running on_fail agent '{}'",
+        step_label,
+        on_fail_agent.label(),
+    );
+    state
+        .inputs
+        .insert("failed_step".to_string(), step_label.to_string());
+    state
+        .inputs
+        .insert("failure_reason".to_string(), last_error.to_string());
+    state
+        .inputs
+        .insert("retry_count".to_string(), retries.to_string());
+
+    let on_fail_node = CallNode {
+        agent: on_fail_agent.clone(),
+        retries: 0,
+        on_fail: None,
+    };
+    if let Err(e) = execute_call(state, &on_fail_node, iteration) {
+        eprintln!(
+            "[workflow] on_fail agent '{}' also failed: {e}",
+            on_fail_agent.label(),
+        );
+    }
+
+    state.inputs.remove("failed_step");
+    state.inputs.remove("failure_reason");
+    state.inputs.remove("retry_count");
+}
+
+/// Record a failed step result and optionally return a fail-fast error.
+fn record_step_failure(
+    state: &mut ExecutionState<'_>,
+    step_key: String,
+    step_label: &str,
+    last_error: String,
+    max_attempts: u32,
+) -> Result<()> {
+    state.all_succeeded = false;
+    let step_result = StepResult {
+        step_name: step_label.to_string(),
+        status: WorkflowStepStatus::Failed,
+        result_text: Some(last_error),
+        cost_usd: None,
+        num_turns: None,
+        duration_ms: None,
+        markers: Vec::new(),
+        context: String::new(),
+        child_run_id: None,
+    };
+    state.step_results.insert(step_key, step_result);
+
+    if state.exec_config.fail_fast {
+        return Err(ConductorError::Workflow(format!(
+            "Step '{}' failed after {} attempts",
+            step_label, max_attempts
+        )));
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Node executors
 // ---------------------------------------------------------------------------
 
@@ -1288,62 +1350,17 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
 
     // All retries exhausted — run on_fail agent if specified
     if let Some(ref on_fail_agent) = node.on_fail {
-        eprintln!(
-            "[workflow] All retries exhausted for '{}', running on_fail agent '{}'",
+        run_on_fail_agent(
+            state,
             agent_label,
-            on_fail_agent.label(),
+            on_fail_agent,
+            &last_error,
+            node.retries,
+            iteration,
         );
-        // Inject failure variables
-        state
-            .inputs
-            .insert("failed_step".to_string(), agent_label.to_string());
-        state
-            .inputs
-            .insert("failure_reason".to_string(), last_error.clone());
-        state
-            .inputs
-            .insert("retry_count".to_string(), node.retries.to_string());
-
-        let on_fail_node = CallNode {
-            agent: on_fail_agent.clone(),
-            retries: 0,
-            on_fail: None,
-        };
-        if let Err(e) = execute_call(state, &on_fail_node, iteration) {
-            eprintln!(
-                "[workflow] on_fail agent '{}' also failed: {e}",
-                on_fail_agent.label(),
-            );
-        }
-
-        // Clean up injected vars
-        state.inputs.remove("failed_step");
-        state.inputs.remove("failure_reason");
-        state.inputs.remove("retry_count");
     }
 
-    state.all_succeeded = false;
-    let step_result = StepResult {
-        step_name: agent_label.to_string(),
-        status: WorkflowStepStatus::Failed,
-        result_text: Some(last_error),
-        cost_usd: None,
-        num_turns: None,
-        duration_ms: None,
-        markers: Vec::new(),
-        context: String::new(),
-        child_run_id: None,
-    };
-    state.step_results.insert(step_key, step_result);
-
-    if state.exec_config.fail_fast {
-        return Err(ConductorError::Workflow(format!(
-            "Step '{}' failed after {} attempts",
-            agent_label, max_attempts
-        )));
-    }
-
-    Ok(())
+    record_step_failure(state, step_key, agent_label, last_error, max_attempts)
 }
 
 fn execute_call_workflow(
@@ -1577,66 +1594,32 @@ fn execute_call_workflow(
 
     // All retries exhausted — run on_fail agent if specified
     if let Some(ref on_fail_agent) = node.on_fail {
-        eprintln!(
-            "[workflow] All retries exhausted for sub-workflow '{}', running on_fail agent '{}'",
-            node.workflow,
-            on_fail_agent.label(),
+        run_on_fail_agent(
+            state,
+            &node.workflow,
+            on_fail_agent,
+            &last_error,
+            node.retries,
+            iteration,
         );
-        state
-            .inputs
-            .insert("failed_step".to_string(), node.workflow.clone());
-        state
-            .inputs
-            .insert("failure_reason".to_string(), last_error.clone());
-        state
-            .inputs
-            .insert("retry_count".to_string(), node.retries.to_string());
-
-        let on_fail_node = CallNode {
-            agent: on_fail_agent.clone(),
-            retries: 0,
-            on_fail: None,
-        };
-        if let Err(e) = execute_call(state, &on_fail_node, iteration) {
-            eprintln!(
-                "[workflow] on_fail agent '{}' also failed: {e}",
-                on_fail_agent.label(),
-            );
-        }
-
-        state.inputs.remove("failed_step");
-        state.inputs.remove("failure_reason");
-        state.inputs.remove("retry_count");
     }
 
-    state.all_succeeded = false;
-    let step_result = StepResult {
-        step_name: node.workflow.clone(),
-        status: WorkflowStepStatus::Failed,
-        result_text: Some(last_error),
-        cost_usd: None,
-        num_turns: None,
-        duration_ms: None,
-        markers: Vec::new(),
-        context: String::new(),
-        child_run_id: None,
-    };
-    state.step_results.insert(step_key, step_result);
-
-    if state.exec_config.fail_fast {
-        return Err(ConductorError::Workflow(format!(
-            "Sub-workflow '{}' failed after {} attempts",
-            node.workflow, max_attempts
-        )));
-    }
-
-    Ok(())
+    record_step_failure(state, step_key, &node.workflow, last_error, max_attempts)
 }
 
 /// Fetch the final step's markers and context from a completed child workflow run.
 fn fetch_child_final_output(conn: &Connection, workflow_run_id: &str) -> (Vec<String>, String) {
     let mgr = WorkflowManager::new(conn);
-    let steps = mgr.get_workflow_steps(workflow_run_id).unwrap_or_default();
+    let steps = match mgr.get_workflow_steps(workflow_run_id) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "[workflow] Failed to fetch steps for child workflow run '{}': {e}",
+                workflow_run_id,
+            );
+            return (Vec::new(), String::new());
+        }
+    };
 
     // Find the last completed step (by position descending)
     let last_completed = steps
@@ -1649,7 +1632,15 @@ fn fetch_child_final_output(conn: &Connection, workflow_run_id: &str) -> (Vec<St
             let markers: Vec<String> = step
                 .markers_out
                 .as_deref()
-                .and_then(|m| serde_json::from_str(m).ok())
+                .map(|m| {
+                    serde_json::from_str(m).unwrap_or_else(|e| {
+                        eprintln!(
+                            "[workflow] Malformed markers_out JSON in step '{}': {e}",
+                            step.step_name,
+                        );
+                        Vec::new()
+                    })
+                })
                 .unwrap_or_default();
             let context = step.context_out.clone().unwrap_or_default();
             (markers, context)
@@ -3026,5 +3017,123 @@ And here is my actual output:
             heading: "Markers Out",
             body: "marker1".into()
         }));
+    }
+
+    // -----------------------------------------------------------------------
+    // fetch_child_final_output tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_fetch_child_final_output_returns_last_completed_step() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("child-wf", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+
+        // Insert two completed steps; the second (position=1) should be returned
+        let step1_id = mgr
+            .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step1_id,
+            WorkflowStepStatus::Completed,
+            None,
+            Some("step-a done"),
+            Some("context-a"),
+            Some(r#"["marker_a"]"#),
+            Some(0),
+        )
+        .unwrap();
+
+        let step2_id = mgr
+            .insert_step(&run.id, "step-b", "actor", false, 1, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step2_id,
+            WorkflowStepStatus::Completed,
+            None,
+            Some("step-b done"),
+            Some("context-b"),
+            Some(r#"["marker_b1","marker_b2"]"#),
+            Some(0),
+        )
+        .unwrap();
+
+        let (markers, context) = fetch_child_final_output(&conn, &run.id);
+        assert_eq!(markers, vec!["marker_b1", "marker_b2"]);
+        assert_eq!(context, "context-b");
+    }
+
+    #[test]
+    fn test_fetch_child_final_output_no_completed_steps() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("child-wf", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+
+        // Insert a failed step only
+        let step_id = mgr
+            .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step_id,
+            WorkflowStepStatus::Failed,
+            None,
+            Some("failed"),
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+
+        let (markers, context) = fetch_child_final_output(&conn, &run.id);
+        assert!(markers.is_empty());
+        assert!(context.is_empty());
+    }
+
+    #[test]
+    fn test_fetch_child_final_output_malformed_markers_json() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("child-wf", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+
+        let step_id = mgr
+            .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step_id,
+            WorkflowStepStatus::Completed,
+            None,
+            Some("done"),
+            Some("some context"),
+            Some("not valid json {{{"),
+            Some(0),
+        )
+        .unwrap();
+
+        let (markers, context) = fetch_child_final_output(&conn, &run.id);
+        assert!(markers.is_empty()); // malformed JSON falls back to empty
+        assert_eq!(context, "some context");
+    }
+
+    #[test]
+    fn test_fetch_child_final_output_nonexistent_run() {
+        let conn = setup_db();
+        let (markers, context) = fetch_child_final_output(&conn, "nonexistent-run-id");
+        assert!(markers.is_empty());
+        assert!(context.is_empty());
     }
 }

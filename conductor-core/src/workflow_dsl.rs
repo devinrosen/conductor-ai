@@ -2104,6 +2104,47 @@ workflow parent {
         }
     }
 
+    #[test]
+    fn test_parse_call_workflow_in_while_block() {
+        let input = r#"
+workflow parent {
+    call analyze
+    while analyze.needs_fixes {
+        max_iterations = 3
+        call workflow lint-fix
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.body.len(), 2);
+        match &def.body[1] {
+            WorkflowNode::While(w) => {
+                assert_eq!(w.body.len(), 1);
+                match &w.body[0] {
+                    WorkflowNode::CallWorkflow(n) => assert_eq!(n.workflow, "lint-fix"),
+                    _ => panic!("Expected CallWorkflow node inside while"),
+                }
+            }
+            _ => panic!("Expected While node"),
+        }
+    }
+
+    #[test]
+    fn test_collect_workflow_refs_in_while() {
+        let input = r#"
+workflow parent {
+    call analyze
+    while analyze.needs_fixes {
+        max_iterations = 3
+        call workflow lint-fix
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let refs = collect_workflow_refs(&def.body);
+        assert_eq!(refs, vec!["lint-fix"]);
+    }
+
     /// A quoted string without a `/` in `call` position should produce
     /// `AgentRef::Path`, not `AgentRef::Name`.  In `call` position, quoting is
     /// always a deliberate signal that the value is an explicit path, so the
