@@ -9,8 +9,9 @@
 //! meta          := "meta" "{" kv* "}"
 //! inputs        := "inputs" "{" input_decl* "}"
 //! input_decl    := IDENT ("required" | "default" "=" STRING)
-//! node          := call | if_node | while_node | parallel | gate | always
+//! node          := call | call_workflow | if_node | while_node | parallel | gate | always
 //! call          := "call" agent_ref ("{" kv* "}")?
+//! call_workflow := "call" "workflow" IDENT ("{" inputs? kv* "}")?
 //! if_node       := "if" condition "{" kv* node* "}"
 //! while_node    := "while" condition "{" kv* node* "}"
 //! parallel      := "parallel" "{" kv* ("call" agent_ref)* "}"
@@ -100,6 +101,7 @@ pub struct InputDecl {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkflowNode {
     Call(CallNode),
+    CallWorkflow(CallWorkflowNode),
     If(IfNode),
     While(WhileNode),
     Parallel(ParallelNode),
@@ -154,6 +156,17 @@ impl std::fmt::Display for AgentRef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallNode {
     pub agent: AgentRef,
+    #[serde(default)]
+    pub retries: u32,
+    pub on_fail: Option<AgentRef>,
+}
+
+/// A sub-workflow invocation node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallWorkflowNode {
+    pub workflow: String,
+    #[serde(default)]
+    pub inputs: HashMap<String, String>,
     #[serde(default)]
     pub retries: u32,
     pub on_fail: Option<AgentRef>,
@@ -693,7 +706,14 @@ impl Parser {
 
     fn parse_node(&mut self) -> std::result::Result<WorkflowNode, String> {
         match self.peek() {
-            Token::Call => self.parse_call().map(WorkflowNode::Call),
+            Token::Call => {
+                // Peek ahead: `call workflow <ident>` is a sub-workflow call.
+                if self.tokens.get(self.pos + 1) == Some(&Token::Workflow) {
+                    self.parse_call_workflow().map(WorkflowNode::CallWorkflow)
+                } else {
+                    self.parse_call().map(WorkflowNode::Call)
+                }
+            }
             Token::If => self.parse_if().map(WorkflowNode::If),
             Token::While => self.parse_while().map(WorkflowNode::While),
             Token::Parallel => self.parse_parallel().map(WorkflowNode::Parallel),
@@ -730,6 +750,52 @@ impl Parser {
 
         Ok(CallNode {
             agent,
+            retries,
+            on_fail,
+        })
+    }
+
+    fn parse_call_workflow(&mut self) -> std::result::Result<CallWorkflowNode, String> {
+        self.expect(&Token::Call)?;
+        self.expect(&Token::Workflow)?;
+        let workflow_name = self.expect_ident()?;
+
+        let mut inputs = HashMap::new();
+        let mut retries = 0u32;
+        let mut on_fail = None;
+
+        if self.peek() == &Token::LBrace {
+            self.advance();
+
+            // Parse optional `inputs { ... }` block inside the braces
+            if self.peek() == &Token::Inputs {
+                self.advance();
+                self.expect(&Token::LBrace)?;
+                let input_kvs = self.parse_kvs()?;
+                self.expect(&Token::RBrace)?;
+                for (k, v) in input_kvs {
+                    inputs.insert(k, v.into_string());
+                }
+            }
+
+            // Parse remaining kvs (retries, on_fail)
+            let mut kvs = self.parse_kvs()?;
+            self.expect(&Token::RBrace)?;
+
+            if let Some(r) = kvs.get("retries") {
+                retries = r
+                    .as_str()
+                    .parse()
+                    .map_err(|e| format!("Invalid retries: {e}"))?;
+            }
+            if let Some(f) = kvs.remove("on_fail") {
+                on_fail = Some(f.into_agent_ref());
+            }
+        }
+
+        Ok(CallWorkflowNode {
+            workflow: workflow_name,
+            inputs,
             retries,
             on_fail,
         })
@@ -1046,7 +1112,7 @@ fn count_nodes(nodes: &[WorkflowNode]) -> usize {
     for node in nodes {
         count += 1;
         match node {
-            WorkflowNode::Call(_) => {}
+            WorkflowNode::Call(_) | WorkflowNode::CallWorkflow(_) => {}
             WorkflowNode::If(n) => count += count_nodes(&n.body),
             WorkflowNode::While(n) => count += count_nodes(&n.body),
             WorkflowNode::Parallel(n) => count += n.calls.len(),
@@ -1068,6 +1134,12 @@ pub fn collect_agent_names(nodes: &[WorkflowNode]) -> Vec<AgentRef> {
                     refs.push(f.clone());
                 }
             }
+            WorkflowNode::CallWorkflow(n) => {
+                // on_fail agents are still agent refs
+                if let Some(ref f) = n.on_fail {
+                    refs.push(f.clone());
+                }
+            }
             WorkflowNode::If(n) => refs.extend(collect_agent_names(&n.body)),
             WorkflowNode::While(n) => refs.extend(collect_agent_names(&n.body)),
             WorkflowNode::Parallel(n) => refs.extend(n.calls.iter().cloned()),
@@ -1076,6 +1148,75 @@ pub fn collect_agent_names(nodes: &[WorkflowNode]) -> Vec<AgentRef> {
         }
     }
     refs
+}
+
+/// Collect all `call workflow` references in a node tree (for cycle detection).
+pub fn collect_workflow_refs(nodes: &[WorkflowNode]) -> Vec<String> {
+    let mut refs = Vec::new();
+    for node in nodes {
+        match node {
+            WorkflowNode::Call(_) | WorkflowNode::Gate(_) => {}
+            WorkflowNode::CallWorkflow(n) => refs.push(n.workflow.clone()),
+            WorkflowNode::If(n) => refs.extend(collect_workflow_refs(&n.body)),
+            WorkflowNode::While(n) => refs.extend(collect_workflow_refs(&n.body)),
+            WorkflowNode::Parallel(_) => {} // parallel only contains agent calls
+            WorkflowNode::Always(n) => refs.extend(collect_workflow_refs(&n.body)),
+        }
+    }
+    refs
+}
+
+/// Maximum allowed workflow nesting depth.
+pub const MAX_WORKFLOW_DEPTH: u32 = 5;
+
+/// Detect circular workflow references via static reachability analysis.
+///
+/// Returns `Ok(())` if no cycles exist, or an error naming the cycle path.
+/// The `loader` callback loads a workflow by name — this keeps the function
+/// testable without touching the filesystem.
+pub fn detect_workflow_cycles<F>(root_name: &str, loader: &F) -> std::result::Result<(), String>
+where
+    F: Fn(&str) -> std::result::Result<WorkflowDef, String>,
+{
+    let mut visited = Vec::new();
+    detect_cycles_inner(root_name, loader, &mut visited)
+}
+
+fn detect_cycles_inner<F>(
+    name: &str,
+    loader: &F,
+    stack: &mut Vec<String>,
+) -> std::result::Result<(), String>
+where
+    F: Fn(&str) -> std::result::Result<WorkflowDef, String>,
+{
+    if stack.contains(&name.to_string()) {
+        stack.push(name.to_string());
+        let cycle_path = stack.join(" -> ");
+        return Err(format!("Circular workflow reference: {cycle_path}"));
+    }
+
+    if stack.len() >= MAX_WORKFLOW_DEPTH as usize {
+        return Err(format!(
+            "Workflow nesting depth exceeds maximum of {MAX_WORKFLOW_DEPTH}: {}",
+            stack.join(" -> ")
+        ));
+    }
+
+    stack.push(name.to_string());
+
+    let def = loader(name)?;
+    let mut child_refs = collect_workflow_refs(&def.body);
+    child_refs.extend(collect_workflow_refs(&def.always));
+    child_refs.sort();
+    child_refs.dedup();
+
+    for child_name in &child_refs {
+        detect_cycles_inner(child_name, loader, stack)?;
+    }
+
+    stack.pop();
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1733,6 +1874,233 @@ workflow test {
                 assert_eq!(c.on_fail, Some(AgentRef::Name("diagnose".to_string())));
             }
             _ => panic!("Expected Call node"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // call workflow tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_call_workflow_simple() {
+        let input = r#"
+workflow parent {
+    call workflow lint-fix
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.body.len(), 1);
+        match &def.body[0] {
+            WorkflowNode::CallWorkflow(n) => {
+                assert_eq!(n.workflow, "lint-fix");
+                assert!(n.inputs.is_empty());
+                assert_eq!(n.retries, 0);
+                assert!(n.on_fail.is_none());
+            }
+            _ => panic!("Expected CallWorkflow node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_call_workflow_with_inputs() {
+        let input = r#"
+workflow parent {
+    call workflow test-coverage {
+        inputs {
+            pr_url = "{{pr_url}}"
+            branch = "main"
+        }
+        retries = 1
+        on_fail = notify-lint-failure
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.body.len(), 1);
+        match &def.body[0] {
+            WorkflowNode::CallWorkflow(n) => {
+                assert_eq!(n.workflow, "test-coverage");
+                assert_eq!(n.inputs.get("pr_url").unwrap(), "{{pr_url}}");
+                assert_eq!(n.inputs.get("branch").unwrap(), "main");
+                assert_eq!(n.retries, 1);
+                assert_eq!(
+                    n.on_fail,
+                    Some(AgentRef::Name("notify-lint-failure".to_string()))
+                );
+            }
+            _ => panic!("Expected CallWorkflow node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_call_workflow_no_block() {
+        let input = "workflow parent { call workflow child }";
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.body.len(), 1);
+        match &def.body[0] {
+            WorkflowNode::CallWorkflow(n) => {
+                assert_eq!(n.workflow, "child");
+                assert!(n.inputs.is_empty());
+            }
+            _ => panic!("Expected CallWorkflow node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_mixed_call_and_call_workflow() {
+        let input = r#"
+workflow parent {
+    call plan
+    call workflow lint-fix
+    call implement
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.body.len(), 3);
+        assert!(matches!(&def.body[0], WorkflowNode::Call(_)));
+        assert!(matches!(&def.body[1], WorkflowNode::CallWorkflow(_)));
+        assert!(matches!(&def.body[2], WorkflowNode::Call(_)));
+    }
+
+    #[test]
+    fn test_parse_call_workflow_in_if_block() {
+        let input = r#"
+workflow parent {
+    call analyze
+    if analyze.needs_lint {
+        call workflow lint-fix
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.body.len(), 2);
+        match &def.body[1] {
+            WorkflowNode::If(i) => {
+                assert_eq!(i.body.len(), 1);
+                assert!(matches!(&i.body[0], WorkflowNode::CallWorkflow(_)));
+            }
+            _ => panic!("Expected If node"),
+        }
+    }
+
+    #[test]
+    fn test_collect_workflow_refs() {
+        let input = r#"
+workflow parent {
+    call plan
+    call workflow lint-fix
+    if plan.needs_tests {
+        call workflow test-coverage
+    }
+    always {
+        call workflow notify
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let mut refs = collect_workflow_refs(&def.body);
+        refs.extend(collect_workflow_refs(&def.always));
+        refs.sort();
+        assert_eq!(refs, vec!["lint-fix", "notify", "test-coverage"]);
+    }
+
+    #[test]
+    fn test_detect_workflow_cycles_no_cycle() {
+        let result = detect_workflow_cycles("a", &|name| match name {
+            "a" => parse_workflow_str("workflow a { call workflow b }", "a.wf")
+                .map_err(|e| e.to_string()),
+            "b" => {
+                parse_workflow_str("workflow b { call agent }", "b.wf").map_err(|e| e.to_string())
+            }
+            other => Err(format!("Unknown workflow: {other}")),
+        });
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_detect_workflow_cycles_direct_cycle() {
+        let result = detect_workflow_cycles("a", &|name| match name {
+            "a" => parse_workflow_str("workflow a { call workflow b }", "a.wf")
+                .map_err(|e| e.to_string()),
+            "b" => parse_workflow_str("workflow b { call workflow a }", "b.wf")
+                .map_err(|e| e.to_string()),
+            other => Err(format!("Unknown workflow: {other}")),
+        });
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Circular workflow reference"));
+        assert!(err.contains("a -> b -> a"));
+    }
+
+    #[test]
+    fn test_detect_workflow_cycles_self_reference() {
+        let result = detect_workflow_cycles("a", &|name| match name {
+            "a" => parse_workflow_str("workflow a { call workflow a }", "a.wf")
+                .map_err(|e| e.to_string()),
+            other => Err(format!("Unknown workflow: {other}")),
+        });
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Circular workflow reference"));
+        assert!(err.contains("a -> a"));
+    }
+
+    #[test]
+    fn test_detect_workflow_cycles_transitive() {
+        let result = detect_workflow_cycles("a", &|name| match name {
+            "a" => parse_workflow_str("workflow a { call workflow b }", "a.wf")
+                .map_err(|e| e.to_string()),
+            "b" => parse_workflow_str("workflow b { call workflow c }", "b.wf")
+                .map_err(|e| e.to_string()),
+            "c" => parse_workflow_str("workflow c { call workflow a }", "c.wf")
+                .map_err(|e| e.to_string()),
+            other => Err(format!("Unknown workflow: {other}")),
+        });
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("a -> b -> c -> a"));
+    }
+
+    #[test]
+    fn test_detect_workflow_cycles_depth_limit() {
+        // Build a chain of 6 workflows (exceeds MAX_WORKFLOW_DEPTH of 5)
+        let result = detect_workflow_cycles("w0", &|name| {
+            let idx: usize = name[1..].parse().unwrap();
+            if idx < 6 {
+                let next = format!("w{}", idx + 1);
+                let src = format!("workflow {name} {{ call workflow {next} }}");
+                parse_workflow_str(&src, &format!("{name}.wf")).map_err(|e| e.to_string())
+            } else {
+                let src = format!("workflow {name} {{ call agent }}");
+                parse_workflow_str(&src, &format!("{name}.wf")).map_err(|e| e.to_string())
+            }
+        });
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("nesting depth exceeds"));
+    }
+
+    #[test]
+    fn test_call_workflow_serialization_roundtrip() {
+        let input = r#"
+workflow parent {
+    call workflow test-coverage {
+        inputs { pr_url = "https://example.com" }
+        retries = 2
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let json = serde_json::to_string(&def).unwrap();
+        let restored: WorkflowDef = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.body.len(), 1);
+        match &restored.body[0] {
+            WorkflowNode::CallWorkflow(n) => {
+                assert_eq!(n.workflow, "test-coverage");
+                assert_eq!(n.inputs.get("pr_url").unwrap(), "https://example.com");
+                assert_eq!(n.retries, 2);
+            }
+            _ => panic!("Expected CallWorkflow node after deserialization"),
         }
     }
 

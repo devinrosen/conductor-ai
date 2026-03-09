@@ -154,6 +154,7 @@ pub async fn run_workflow(
                 model: model.as_deref(),
                 exec_config: &exec_config,
                 inputs: inputs.clone(),
+                depth: 0,
             };
 
             execute_workflow(&input)

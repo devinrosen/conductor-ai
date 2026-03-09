@@ -1361,6 +1361,7 @@ fn main() -> Result<()> {
                         model: model.as_deref(),
                         exec_config: &exec_config,
                         inputs: input_map,
+                        depth: 0,
                     },
                 ) {
                     Ok(result) => {
