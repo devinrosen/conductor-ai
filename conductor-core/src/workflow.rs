@@ -21,7 +21,7 @@ use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::{
     self, CallNode, CallWorkflowNode, GateNode, GateType, IfNode, OnMaxIter, OnTimeout,
-    ParallelNode, WhileNode, WorkflowNode,
+    ParallelNode, UnlessNode, WhileNode, WorkflowNode,
 };
 
 // Re-export DSL types so consumers go through `workflow::` instead of `workflow_dsl::` directly.
@@ -1050,6 +1050,7 @@ fn execute_single_node(
         WorkflowNode::Call(n) => execute_call(state, n, iteration)?,
         WorkflowNode::CallWorkflow(n) => execute_call_workflow(state, n, iteration)?,
         WorkflowNode::If(n) => execute_if(state, n)?,
+        WorkflowNode::Unless(n) => execute_unless(state, n)?,
         WorkflowNode::While(n) => execute_while(state, n)?,
         WorkflowNode::Parallel(n) => execute_parallel(state, n, iteration)?,
         WorkflowNode::Gate(n) => execute_gate(state, n, iteration)?,
@@ -1693,6 +1694,29 @@ fn execute_if(state: &mut ExecutionState<'_>, node: &IfNode) -> Result<()> {
     } else {
         eprintln!(
             "[workflow] if {}.{} — condition not met, skipping",
+            node.step, node.marker
+        );
+    }
+
+    Ok(())
+}
+
+fn execute_unless(state: &mut ExecutionState<'_>, node: &UnlessNode) -> Result<()> {
+    let has_marker = state
+        .step_results
+        .get(&node.step)
+        .map(|r| r.markers.iter().any(|m| m == &node.marker))
+        .unwrap_or(false);
+
+    if !has_marker {
+        eprintln!(
+            "[workflow] unless {}.{} — marker absent, executing body",
+            node.step, node.marker
+        );
+        execute_nodes(state, &node.body)?;
+    } else {
+        eprintln!(
+            "[workflow] unless {}.{} — marker present, skipping",
             node.step, node.marker
         );
     }

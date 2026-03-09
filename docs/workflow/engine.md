@@ -96,9 +96,10 @@ workflow_file  := "workflow" IDENT "{" meta? inputs? node* "}"
 meta           := "meta" "{" kv* "}"
 inputs         := "inputs" "{" input_decl* "}"
 input_decl     := IDENT ("required" | "default" "=" STRING)
-node           := call | if | while | parallel | gate | always
+node           := call | if | unless | while | parallel | gate | always
 call           := "call" IDENT ("{" kv* "}")?
 if             := "if" condition "{" kv* node* "}"
+unless         := "unless" condition "{" kv* node* "}"
 while          := "while" condition "{" kv* node* "}"
 parallel       := "parallel" "{" kv* call* "}"
 gate           := "gate" gate_type "{" kv* "}"
@@ -128,13 +129,17 @@ Runs a single agent to completion. The agent name is resolved to a `.md` file
 The `on_fail` agent receives additional template variables: `{{failed_step}}`,
 `{{failure_reason}}`, `{{retry_count}}`, and `{{prior_context}}`.
 
-### `if` / `while`
+### `if` / `unless` / `while`
 
 Conditional and looping control flow based on **markers** emitted by a prior
 step.
 
 ```
 if review.has_review_issues { ... }
+
+unless build.has_errors {
+  call deploy
+}
 
 while review.has_review_issues {
   max_iterations = 5
@@ -144,9 +149,10 @@ while review.has_review_issues {
 }
 ```
 
-Conditions reference `<step>.<marker>`. The engine checks whether the named
-step's most recent `CONDUCTOR_OUTPUT` includes that marker string in its
-`markers` array.
+Conditions reference `<step>.<marker>`. For `if`, the engine checks whether the
+named step's most recent `CONDUCTOR_OUTPUT` includes that marker string in its
+`markers` array. `unless` is the inverse — the body executes when the marker is
+**absent**.
 
 | `while` option | Required | Description |
 |---|---|---|
