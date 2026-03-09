@@ -21,7 +21,9 @@ use conductor_core::post_run::{self, PostRunInput};
 use conductor_core::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketInput, TicketSyncer};
-use conductor_core::workflow::{collect_agent_names, WorkflowExecConfig, WorkflowManager};
+use conductor_core::workflow::{
+    collect_agent_names, collect_snippet_refs, WorkflowExecConfig, WorkflowManager,
+};
 use conductor_core::workflow_config;
 use conductor_core::worktree::WorktreeManager;
 
@@ -1494,6 +1496,21 @@ fn main() -> Result<()> {
                 println!("  Nodes: {node_count}");
                 println!("  Agents referenced: {}", all_refs.len());
 
+                // Collect and validate prompt snippets
+                let mut all_snippets = collect_snippet_refs(&workflow.body);
+                all_snippets.extend(collect_snippet_refs(&workflow.always));
+                all_snippets.sort();
+                all_snippets.dedup();
+
+                let missing_snippets = conductor_core::prompt_config::find_missing_snippets(
+                    &wt.path,
+                    &r.local_path,
+                    &all_snippets,
+                    Some(&name),
+                );
+
+                let mut has_errors = false;
+
                 if missing.is_empty() {
                     println!("  All agents found.");
                 } else {
@@ -1501,6 +1518,27 @@ fn main() -> Result<()> {
                     for agent in &missing {
                         println!("    - {agent}");
                     }
+                    has_errors = true;
+                }
+
+                if !all_snippets.is_empty() {
+                    println!("  Prompt snippets referenced: {}", all_snippets.len());
+                    if missing_snippets.is_empty() {
+                        println!("  All prompt snippets found.");
+                    } else {
+                        println!(
+                            "\n  MISSING prompt snippets ({}/{}):",
+                            missing_snippets.len(),
+                            all_snippets.len()
+                        );
+                        for snippet in &missing_snippets {
+                            println!("    - {snippet}");
+                        }
+                        has_errors = true;
+                    }
+                }
+
+                if has_errors {
                     std::process::exit(1);
                 }
             }

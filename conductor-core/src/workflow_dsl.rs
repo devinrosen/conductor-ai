@@ -162,6 +162,9 @@ pub struct CallNode {
     pub on_fail: Option<AgentRef>,
     /// Optional output schema reference for structured output.
     pub output: Option<String>,
+    /// Prompt snippet references to append to the agent prompt.
+    #[serde(default)]
+    pub with: Vec<String>,
 }
 
 /// A sub-workflow invocation node.
@@ -217,6 +220,12 @@ pub struct ParallelNode {
     /// Per-call output schema overrides, keyed by index in `calls`.
     #[serde(default)]
     pub call_outputs: HashMap<usize, String>,
+    /// Block-level prompt snippet references (applied to all calls).
+    #[serde(default)]
+    pub with: Vec<String>,
+    /// Per-call prompt snippet additions, keyed by index in `calls`.
+    #[serde(default)]
+    pub call_with: HashMap<usize, Vec<String>>,
 }
 
 fn default_true() -> bool {
@@ -292,6 +301,9 @@ enum Token {
     // Punctuation
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
+    Comma,
     Equals,
     Dot,
     // Literals
@@ -374,6 +386,18 @@ impl Lexer {
             '}' => {
                 self.advance();
                 Ok(Token::RBrace)
+            }
+            '[' => {
+                self.advance();
+                Ok(Token::LBracket)
+            }
+            ']' => {
+                self.advance();
+                Ok(Token::RBracket)
+            }
+            ',' => {
+                self.advance();
+                Ok(Token::Comma)
             }
             '=' => {
                 self.advance();
@@ -466,18 +490,29 @@ enum KvValue {
     Quoted(String),
     /// Came from a bare identifier, keyword, or integer literal: `diagnose`, `3`.
     Bare(String),
+    /// Came from a bracket-delimited array: `["a", "b"]`.
+    Array(Vec<String>),
 }
 
 impl KvValue {
     fn as_str(&self) -> &str {
         match self {
             Self::Quoted(s) | Self::Bare(s) => s.as_str(),
+            Self::Array(_) => "",
         }
     }
 
     fn into_string(self) -> String {
         match self {
             Self::Quoted(s) | Self::Bare(s) => s,
+            Self::Array(_) => String::new(),
+        }
+    }
+
+    fn into_string_array(self) -> Vec<String> {
+        match self {
+            Self::Array(v) => v,
+            Self::Quoted(s) | Self::Bare(s) => vec![s],
         }
     }
 
@@ -502,6 +537,7 @@ impl KvValue {
             Self::Bare(s) => AgentRef::Name(s),
             Self::Quoted(s) if s.contains('/') => AgentRef::Path(s),
             Self::Quoted(s) => AgentRef::Name(s),
+            Self::Array(_) => AgentRef::Name(String::new()),
         }
     }
 }
@@ -569,8 +605,22 @@ impl Parser {
             Token::Parallel => Ok(KvValue::Bare("parallel".to_string())),
             Token::Gate => Ok(KvValue::Bare("gate".to_string())),
             Token::Always => Ok(KvValue::Bare("always".to_string())),
+            // Array literal: ["a", "b", "c"]
+            Token::LBracket => {
+                let mut items = Vec::new();
+                while self.peek() != &Token::RBracket && self.peek() != &Token::Eof {
+                    let item = self.expect_value()?;
+                    items.push(item.into_string());
+                    // Optional trailing comma
+                    if self.peek() == &Token::Comma {
+                        self.advance();
+                    }
+                }
+                self.expect(&Token::RBracket)?;
+                Ok(KvValue::Array(items))
+            }
             other => Err(format!(
-                "Expected value (string, int, or ident), got {other:?}"
+                "Expected value (string, int, ident, or array), got {other:?}"
             )),
         }
     }
@@ -751,6 +801,7 @@ impl Parser {
         let mut retries = 0u32;
         let mut on_fail = None;
         let mut output = None;
+        let mut with = Vec::new();
 
         if self.peek() == &Token::LBrace {
             self.advance();
@@ -769,6 +820,9 @@ impl Parser {
             if let Some(o) = kvs.remove("output") {
                 output = Some(o.into_string());
             }
+            if let Some(w) = kvs.remove("with") {
+                with = w.into_string_array();
+            }
         }
 
         Ok(CallNode {
@@ -776,6 +830,7 @@ impl Parser {
             retries,
             on_fail,
             output,
+            with,
         })
     }
 
@@ -912,7 +967,7 @@ impl Parser {
         self.expect(&Token::Parallel)?;
         self.expect(&Token::LBrace)?;
 
-        let kvs = self.parse_kvs()?;
+        let mut kvs = self.parse_kvs()?;
 
         let fail_fast = kvs
             .get("fail_fast")
@@ -927,19 +982,28 @@ impl Parser {
 
         let output = kvs.get("output").map(|v| v.as_str().to_string());
 
+        let block_with = kvs
+            .remove("with")
+            .map(|v| v.into_string_array())
+            .unwrap_or_default();
+
         let mut calls = Vec::new();
         let mut call_outputs: HashMap<usize, String> = HashMap::new();
+        let mut call_with: HashMap<usize, Vec<String>> = HashMap::new();
         while self.peek() == &Token::Call {
             self.advance(); // consume "call"
             let agent = self.expect_agent_ref()?;
             let idx = calls.len();
-            // Check for per-call options block { output = "..." }
+            // Check for per-call options block { output = "...", with = [...] }
             if self.peek() == &Token::LBrace {
                 self.advance();
-                let call_kvs = self.parse_kvs()?;
+                let mut call_kvs = self.parse_kvs()?;
                 self.expect(&Token::RBrace)?;
                 if let Some(o) = call_kvs.get("output") {
                     call_outputs.insert(idx, o.as_str().to_string());
+                }
+                if let Some(w) = call_kvs.remove("with") {
+                    call_with.insert(idx, w.into_string_array());
                 }
             }
             calls.push(agent);
@@ -956,6 +1020,8 @@ impl Parser {
             calls,
             output,
             call_outputs,
+            with: block_with,
+            call_with,
         })
     }
 
@@ -1203,6 +1269,28 @@ pub fn collect_agent_names(nodes: &[WorkflowNode]) -> Vec<AgentRef> {
             WorkflowNode::Parallel(n) => refs.extend(n.calls.iter().cloned()),
             WorkflowNode::Gate(_) => {}
             WorkflowNode::Always(n) => refs.extend(collect_agent_names(&n.body)),
+        }
+    }
+    refs
+}
+
+/// Collect all prompt snippet references (`with` values) from a node tree.
+pub fn collect_snippet_refs(nodes: &[WorkflowNode]) -> Vec<String> {
+    let mut refs = Vec::new();
+    for node in nodes {
+        match node {
+            WorkflowNode::Call(n) => refs.extend(n.with.iter().cloned()),
+            WorkflowNode::Parallel(n) => {
+                refs.extend(n.with.iter().cloned());
+                for extra in n.call_with.values() {
+                    refs.extend(extra.iter().cloned());
+                }
+            }
+            WorkflowNode::If(n) => refs.extend(collect_snippet_refs(&n.body)),
+            WorkflowNode::Unless(n) => refs.extend(collect_snippet_refs(&n.body)),
+            WorkflowNode::While(n) => refs.extend(collect_snippet_refs(&n.body)),
+            WorkflowNode::Always(n) => refs.extend(collect_snippet_refs(&n.body)),
+            WorkflowNode::CallWorkflow(_) | WorkflowNode::Gate(_) => {}
         }
     }
     refs
@@ -2417,6 +2505,123 @@ workflow parent {
                 );
             }
             _ => panic!("Expected Parallel node"),
+        }
+    }
+
+    #[test]
+    fn test_call_with_single_snippet() {
+        let input = r#"workflow test {
+            call plan { with = "ticket-context" }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(c.with, vec!["ticket-context".to_string()]);
+            }
+            _ => panic!("Expected Call node"),
+        }
+    }
+
+    #[test]
+    fn test_call_with_array_snippets() {
+        let input = r#"workflow test {
+            call plan { with = ["ticket-context", "rust-conventions"] }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(
+                    c.with,
+                    vec!["ticket-context".to_string(), "rust-conventions".to_string()]
+                );
+            }
+            _ => panic!("Expected Call node"),
+        }
+    }
+
+    #[test]
+    fn test_parallel_with_block_level_snippets() {
+        let input = r#"workflow test {
+            parallel {
+                with      = ["review-diff-scope", "rust-conventions"]
+                fail_fast = false
+                call review-security
+                call review-style
+            }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Parallel(p) => {
+                assert_eq!(
+                    p.with,
+                    vec![
+                        "review-diff-scope".to_string(),
+                        "rust-conventions".to_string()
+                    ]
+                );
+                assert!(p.call_with.is_empty());
+                assert_eq!(p.calls.len(), 2);
+            }
+            _ => panic!("Expected Parallel node"),
+        }
+    }
+
+    #[test]
+    fn test_parallel_with_per_call_snippets() {
+        let input = r#"workflow test {
+            parallel {
+                with = ["review-diff-scope"]
+                call ".conductor/reviewers/architecture.md"
+                call ".conductor/reviewers/db-migrations.md" { with = ["migration-rules"] }
+            }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Parallel(p) => {
+                assert_eq!(p.with, vec!["review-diff-scope".to_string()]);
+                assert!(p.call_with.get(&0).is_none());
+                assert_eq!(
+                    p.call_with.get(&1).unwrap(),
+                    &vec!["migration-rules".to_string()]
+                );
+            }
+            _ => panic!("Expected Parallel node"),
+        }
+    }
+
+    #[test]
+    fn test_collect_snippet_refs() {
+        let input = r#"workflow test {
+            call plan { with = ["context-a"] }
+            parallel {
+                with = ["scope-b"]
+                call agent-1
+                call agent-2 { with = ["extra-c"] }
+            }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let mut refs = collect_snippet_refs(&def.body);
+        refs.sort();
+        refs.dedup();
+        assert_eq!(
+            refs,
+            vec![
+                "context-a".to_string(),
+                "extra-c".to_string(),
+                "scope-b".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_call_with_no_snippets() {
+        let input = r#"workflow test { call plan }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert!(c.with.is_empty());
+            }
+            _ => panic!("Expected Call node"),
         }
     }
 }

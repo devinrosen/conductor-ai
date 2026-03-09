@@ -41,6 +41,7 @@ pub mod models;
 pub mod orchestrator;
 pub mod post_run;
 pub mod pr_review;
+pub mod prompt_config;
 pub mod repo;
 pub mod review_config;
 pub mod schema_config;
