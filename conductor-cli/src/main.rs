@@ -1462,24 +1462,24 @@ fn main() -> Result<()> {
 
                 let workflow = WorkflowManager::load_def_by_name(&wt.path, &r.local_path, &name)?;
 
-                let mut all_names = collect_agent_names(&workflow.body);
-                all_names.extend(collect_agent_names(&workflow.always));
+                let mut all_refs = collect_agent_names(&workflow.body);
+                all_refs.extend(collect_agent_names(&workflow.always));
 
                 // Deduplicate
-                all_names.sort();
-                all_names.dedup();
+                all_refs.sort();
+                all_refs.dedup();
 
                 let mut missing = Vec::new();
-                for agent_name in &all_names {
+                for agent_ref in &all_refs {
                     if conductor_core::agent_config::load_agent(
                         &wt.path,
                         &r.local_path,
-                        agent_name,
+                        agent_ref,
                         Some(&name),
                     )
                     .is_err()
                     {
-                        missing.push(agent_name.as_str());
+                        missing.push(agent_ref.label().to_string());
                     }
                 }
 
@@ -1488,18 +1488,14 @@ fn main() -> Result<()> {
                 println!("  Trigger: {}", workflow.trigger);
                 let node_count = workflow.total_nodes();
                 println!("  Nodes: {node_count}");
-                println!("  Agents referenced: {}", all_names.len());
+                println!("  Agents referenced: {}", all_refs.len());
 
                 if missing.is_empty() {
                     println!("  All agents found.");
                 } else {
-                    println!(
-                        "\n  MISSING agents ({}/{}):",
-                        missing.len(),
-                        all_names.len()
-                    );
-                    for name in &missing {
-                        println!("    - {name}");
+                    println!("\n  MISSING agents ({}/{}):", missing.len(), all_refs.len());
+                    for agent in &missing {
+                        println!("    - {agent}");
                     }
                     std::process::exit(1);
                 }
