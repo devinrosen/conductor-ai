@@ -1507,7 +1507,7 @@ fn execute_call_workflow(
 
                     // Bubble up the child's final step output (markers + context)
                     let (markers, context) =
-                        fetch_child_final_output(state.conn, &result.workflow_run_id);
+                        fetch_child_final_output(&state.wf_mgr, &result.workflow_run_id);
 
                     let markers_json = serde_json::to_string(&markers).unwrap_or_default();
 
@@ -1608,9 +1608,11 @@ fn execute_call_workflow(
 }
 
 /// Fetch the final step's markers and context from a completed child workflow run.
-fn fetch_child_final_output(conn: &Connection, workflow_run_id: &str) -> (Vec<String>, String) {
-    let mgr = WorkflowManager::new(conn);
-    let steps = match mgr.get_workflow_steps(workflow_run_id) {
+fn fetch_child_final_output(
+    wf_mgr: &WorkflowManager<'_>,
+    workflow_run_id: &str,
+) -> (Vec<String>, String) {
+    let steps = match wf_mgr.get_workflow_steps(workflow_run_id) {
         Ok(s) => s,
         Err(e) => {
             eprintln!(
@@ -3063,7 +3065,7 @@ And here is my actual output:
         )
         .unwrap();
 
-        let (markers, context) = fetch_child_final_output(&conn, &run.id);
+        let (markers, context) = fetch_child_final_output(&mgr, &run.id);
         assert_eq!(markers, vec!["marker_b1", "marker_b2"]);
         assert_eq!(context, "context-b");
     }
@@ -3094,7 +3096,7 @@ And here is my actual output:
         )
         .unwrap();
 
-        let (markers, context) = fetch_child_final_output(&conn, &run.id);
+        let (markers, context) = fetch_child_final_output(&mgr, &run.id);
         assert!(markers.is_empty());
         assert!(context.is_empty());
     }
@@ -3124,7 +3126,7 @@ And here is my actual output:
         )
         .unwrap();
 
-        let (markers, context) = fetch_child_final_output(&conn, &run.id);
+        let (markers, context) = fetch_child_final_output(&mgr, &run.id);
         assert!(markers.is_empty()); // malformed JSON falls back to empty
         assert_eq!(context, "some context");
     }
@@ -3132,7 +3134,8 @@ And here is my actual output:
     #[test]
     fn test_fetch_child_final_output_nonexistent_run() {
         let conn = setup_db();
-        let (markers, context) = fetch_child_final_output(&conn, "nonexistent-run-id");
+        let mgr = WorkflowManager::new(&conn);
+        let (markers, context) = fetch_child_final_output(&mgr, "nonexistent-run-id");
         assert!(markers.is_empty());
         assert!(context.is_empty());
     }
