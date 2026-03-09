@@ -3693,4 +3693,70 @@ And here is my actual output:
         // Should succeed (step not found → unwrap_or(false) → !false → body runs)
         execute_unless(&mut state, &node).unwrap();
     }
+
+    // -----------------------------------------------------------------------
+    // interpret_agent_output tests
+    // -----------------------------------------------------------------------
+
+    fn make_test_schema() -> OutputSchema {
+        schema_config::parse_schema_content(
+            "fields:\n  approved: boolean\n  summary: string\n",
+            "test",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_interpret_agent_output_schema_valid() {
+        let schema = make_test_schema();
+        let text = "<<<CONDUCTOR_OUTPUT>>>\n{\"approved\": true, \"summary\": \"all good\"}\n<<<END_CONDUCTOR_OUTPUT>>>";
+        let (markers, context, json) =
+            interpret_agent_output(Some(text), Some(&schema), true).unwrap();
+        assert_eq!(context, "all good");
+        assert!(json.is_some());
+        // approved=true → no not_approved marker
+        assert!(!markers.contains(&"not_approved".to_string()));
+    }
+
+    #[test]
+    fn test_interpret_agent_output_schema_validation_fails_succeeded() {
+        let schema = make_test_schema();
+        // Missing required field "approved"
+        let text = "<<<CONDUCTOR_OUTPUT>>>\n{\"summary\": \"oops\"}\n<<<END_CONDUCTOR_OUTPUT>>>";
+        let result = interpret_agent_output(Some(text), Some(&schema), true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("structured output validation"));
+    }
+
+    #[test]
+    fn test_interpret_agent_output_schema_validation_fails_not_succeeded_falls_back() {
+        let schema = make_test_schema();
+        // Missing required field — but succeeded=false so it falls back
+        let text = "<<<CONDUCTOR_OUTPUT>>>\n{\"summary\": \"oops\"}\n<<<END_CONDUCTOR_OUTPUT>>>";
+        let (markers, context, json) =
+            interpret_agent_output(Some(text), Some(&schema), false).unwrap();
+        // Falls back to generic parse_conductor_output which doesn't find markers/context
+        assert!(json.is_none());
+        assert!(markers.is_empty());
+        assert!(context.is_empty());
+    }
+
+    #[test]
+    fn test_interpret_agent_output_no_schema_generic_parsing() {
+        let text = "<<<CONDUCTOR_OUTPUT>>>\n{\"markers\": [\"done\"], \"context\": \"finished\"}\n<<<END_CONDUCTOR_OUTPUT>>>";
+        let (markers, context, json) = interpret_agent_output(Some(text), None, true).unwrap();
+        assert_eq!(markers, vec!["done"]);
+        assert_eq!(context, "finished");
+        assert!(json.is_none());
+    }
+
+    #[test]
+    fn test_interpret_agent_output_no_text() {
+        let schema = make_test_schema();
+        // result_text is None with schema — falls back
+        let (markers, context, json) = interpret_agent_output(None, Some(&schema), false).unwrap();
+        assert!(markers.is_empty());
+        assert!(context.is_empty());
+        assert!(json.is_none());
+    }
 }
