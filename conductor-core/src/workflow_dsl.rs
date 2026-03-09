@@ -2624,4 +2624,59 @@ workflow parent {
             _ => panic!("Expected Call node"),
         }
     }
+
+    #[test]
+    fn test_collect_snippet_refs_inside_if() {
+        let input = r#"workflow test {
+            call plan
+            if plan.approved {
+                call implement { with = ["if-context"] }
+            }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let refs = collect_snippet_refs(&def.body);
+        assert_eq!(refs, vec!["if-context".to_string()]);
+    }
+
+    #[test]
+    fn test_collect_snippet_refs_inside_unless() {
+        let input = r#"workflow test {
+            call review
+            unless review.approved {
+                call fix { with = ["unless-context"] }
+            }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let refs = collect_snippet_refs(&def.body);
+        assert_eq!(refs, vec!["unless-context".to_string()]);
+    }
+
+    #[test]
+    fn test_collect_snippet_refs_inside_while() {
+        let input = r#"workflow test {
+            call review
+            while review.has_issues {
+                max_iterations = 3
+                call fix { with = ["while-context"] }
+            }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let refs = collect_snippet_refs(&def.body);
+        assert_eq!(refs, vec!["while-context".to_string()]);
+    }
+
+    #[test]
+    fn test_collect_snippet_refs_inside_always() {
+        // Top-level `always { }` block is parsed into `def.always`, not `def.body`.
+        // The calling code runs collect_snippet_refs on both fields independently.
+        let input = r#"workflow test {
+            call plan
+            always {
+                call cleanup { with = ["always-context"] }
+            }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let refs = collect_snippet_refs(&def.always);
+        assert_eq!(refs, vec!["always-context".to_string()]);
+    }
 }

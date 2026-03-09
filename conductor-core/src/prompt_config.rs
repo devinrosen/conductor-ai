@@ -364,4 +364,20 @@ mod tests {
         let result = load_snippet_by_path(dir.path().to_str().unwrap(), "nonexistent/file.md");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_load_and_concat_snippets_missing_one_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompts_dir = dir.path().join(".conductor/prompts");
+        fs::create_dir_all(&prompts_dir).unwrap();
+        fs::write(prompts_dir.join("exists.md"), "I exist").unwrap();
+
+        let result = load_and_concat_snippets(
+            dir.path().to_str().unwrap(),
+            "/nonexistent",
+            &["exists".to_string(), "missing".to_string()],
+            None,
+        );
+        assert!(result.is_err());
+    }
 }
