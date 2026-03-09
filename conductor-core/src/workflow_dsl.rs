@@ -2579,7 +2579,7 @@ workflow parent {
         match &def.body[0] {
             WorkflowNode::Parallel(p) => {
                 assert_eq!(p.with, vec!["review-diff-scope".to_string()]);
-                assert!(p.call_with.get(&0).is_none());
+                assert!(!p.call_with.contains_key(&0));
                 assert_eq!(
                     p.call_with.get(&1).unwrap(),
                     &vec!["migration-rules".to_string()]

@@ -326,4 +326,42 @@ mod tests {
         assert!(validate_name_segment("a/b", "test").is_err());
         assert!(validate_name_segment("valid-name", "test").is_ok());
     }
+
+    #[test]
+    fn test_load_snippet_by_path_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let snippets_dir = dir.path().join("docs");
+        fs::create_dir_all(&snippets_dir).unwrap();
+        fs::write(snippets_dir.join("rules.md"), "explicit path content").unwrap();
+
+        let result = load_snippet_by_path(dir.path().to_str().unwrap(), "docs/rules.md");
+        assert_eq!(result.unwrap(), "explicit path content");
+    }
+
+    #[test]
+    fn test_load_snippet_by_path_rejects_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        let abs = dir.path().join("rules.md").to_str().unwrap().to_string();
+        let result = load_snippet_by_path(dir.path().to_str().unwrap(), &abs);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("must be relative"));
+    }
+
+    #[test]
+    fn test_load_snippet_by_path_rejects_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = load_snippet_by_path(dir.path().to_str().unwrap(), "../../etc/passwd");
+        assert!(result.is_err());
+        // Either "not found" (canonicalize fails) or "escapes the repository root"
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("not found") || msg.contains("escapes the repository root"));
+    }
+
+    #[test]
+    fn test_load_snippet_by_path_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = load_snippet_by_path(dir.path().to_str().unwrap(), "nonexistent/file.md");
+        assert!(result.is_err());
+    }
 }
