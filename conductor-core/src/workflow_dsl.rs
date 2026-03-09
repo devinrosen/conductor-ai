@@ -453,9 +453,20 @@ impl KvValue {
 
     /// Convert into an `AgentRef`.
     ///
-    /// A quoted value is treated as `Path` only when it contains a `/`,
-    /// making `on_fail = ".claude/agents/fix.md"` a path while
-    /// `on_fail = "diagnose"` (quoted bare name) is still a `Name`.
+    /// **Intentionally differs from `expect_agent_ref` (call position):**
+    ///
+    /// In a kv-value position (e.g. `on_fail = "..."`), quoting is common
+    /// style for any string value and does not carry the same semantic weight
+    /// as quoting in `call` position, where the user explicitly chose to write
+    /// `call "..."` to signal a file path.  To avoid treating
+    /// `on_fail = "diagnose"` as an explicit path, we only produce
+    /// `AgentRef::Path` for values that actually look like file paths (i.e.
+    /// contain a `/`).  A bare-quoted name like `"diagnose"` remains
+    /// `AgentRef::Name`.
+    ///
+    /// Compare with [`Parser::expect_agent_ref`], where any quoted string in
+    /// `call` position is unconditionally `AgentRef::Path` because the author
+    /// deliberately chose the quoted form.
     fn into_agent_ref(self) -> AgentRef {
         match self {
             Self::Bare(s) => AgentRef::Name(s),
@@ -535,6 +546,15 @@ impl Parser {
 
     /// Parse an agent reference: either a bare identifier (Name) or a quoted
     /// string (Path).
+    ///
+    /// **Intentionally differs from `KvValue::into_agent_ref` (kv-value position):**
+    ///
+    /// In `call` position the author deliberately chooses between bare
+    /// (`call plan`) and quoted (`call "..."`) syntax, so a quoted string is
+    /// *always* treated as an explicit file path — even when it contains no
+    /// `/`.  This is in contrast to kv values like `on_fail = "diagnose"`,
+    /// where quoting is commonly used for style and a slash-based heuristic
+    /// is used instead.
     fn expect_agent_ref(&mut self) -> std::result::Result<AgentRef, String> {
         match self.advance() {
             Token::Ident(s) => Ok(AgentRef::Name(s)),
