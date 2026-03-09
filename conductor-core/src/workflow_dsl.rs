@@ -410,9 +410,9 @@ impl Lexer {
 /// A value from a key-value pair in the DSL, remembering whether it was quoted.
 ///
 /// This preserves the syntactic distinction between bare identifiers/numbers
-/// (`Bare`) and quoted string literals (`Quoted`), so that `on_fail` values
-/// can be classified as `AgentRef::Name` vs `AgentRef::Path` without relying
-/// on content heuristics (e.g. checking for `/`).
+/// (`Bare`) and quoted string literals (`Quoted`). When converting to an
+/// `AgentRef`, a quoted value is treated as a `Path` only if it contains a
+/// `/` (i.e. looks like a file path); otherwise it is treated as a `Name`.
 #[derive(Debug, Clone)]
 enum KvValue {
     /// Came from a quoted string literal: `"some/path.md"`.
@@ -434,11 +434,16 @@ impl KvValue {
         }
     }
 
-    /// Convert into an `AgentRef`: quoted values become `Path`, bare values become `Name`.
+    /// Convert into an `AgentRef`.
+    ///
+    /// A quoted value is treated as `Path` only when it contains a `/`,
+    /// making `on_fail = ".claude/agents/fix.md"` a path while
+    /// `on_fail = "diagnose"` (quoted bare name) is still a `Name`.
     fn into_agent_ref(self) -> AgentRef {
         match self {
-            Self::Quoted(s) => AgentRef::Path(s),
             Self::Bare(s) => AgentRef::Name(s),
+            Self::Quoted(s) if s.contains('/') => AgentRef::Path(s),
+            Self::Quoted(s) => AgentRef::Name(s),
         }
     }
 }
@@ -1642,19 +1647,18 @@ workflow test {
         );
     }
 
-    /// A quoted bare name (no `/`) in `on_fail` should produce `AgentRef::Path`,
-    /// not `AgentRef::Name` — demonstrating that the KvValue distinction is
-    /// preserved instead of relying on a `/`-heuristic.
+    /// A quoted bare name (no `/`) in `on_fail` should produce `AgentRef::Name`,
+    /// not `AgentRef::Path` — quoting alone does not make a value a path.
     #[test]
-    fn test_on_fail_quoted_bare_name_is_path() {
+    fn test_on_fail_quoted_bare_name_is_name() {
         let input = r#"workflow test { call agent { on_fail = "diagnose" } }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
         match &def.body[0] {
             WorkflowNode::Call(c) => {
                 assert_eq!(
                     c.on_fail,
-                    Some(AgentRef::Path("diagnose".to_string())),
-                    "quoted on_fail value should be AgentRef::Path even without a slash"
+                    Some(AgentRef::Name("diagnose".to_string())),
+                    "quoted on_fail value without a slash should be AgentRef::Name"
                 );
             }
             _ => panic!("Expected Call node"),
