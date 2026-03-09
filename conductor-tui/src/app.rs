@@ -273,8 +273,14 @@ impl App {
 
             // Filter
             Action::EnterFilter => self.state.active_filter_mut().enter(),
-            Action::FilterChar(c) => self.state.active_filter_mut().push(c),
-            Action::FilterBackspace => self.state.active_filter_mut().backspace(),
+            Action::FilterChar(c) => {
+                self.state.active_filter_mut().push(c);
+                self.state.rebuild_filtered_tickets();
+            }
+            Action::FilterBackspace => {
+                self.state.active_filter_mut().backspace();
+                self.state.rebuild_filtered_tickets();
+            }
             Action::ExitFilter => self.state.active_filter_mut().exit(),
 
             // Modal
@@ -389,6 +395,7 @@ impl App {
             // Ticket closed visibility toggle
             Action::ToggleClosedTickets => {
                 self.state.show_closed_tickets = !self.state.show_closed_tickets;
+                self.state.rebuild_filtered_tickets();
                 // Reset selection indices so they don't point past the filtered list
                 self.state.ticket_index = 0;
                 self.state.detail_ticket_index = 0;
@@ -549,6 +556,7 @@ impl App {
                 self.refresh_pending_feedback();
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();
+                self.state.rebuild_filtered_tickets();
                 self.clamp_indices();
                 // Redraw when viewing worktree detail / workflows, or on the
                 // dashboard (which now has a live workflow panel).
@@ -621,10 +629,9 @@ impl App {
 
         self.state.data.rebuild_maps();
         self.reload_agent_events();
-        self.clamp_indices();
 
-        // If in repo detail, refresh scoped data
-        if let Some(ref repo_id) = self.state.selected_repo_id {
+        // If in repo detail, refresh scoped data before rebuilding filtered vecs
+        if let Some(ref repo_id) = self.state.selected_repo_id.clone() {
             self.state.detail_worktrees = self
                 .state
                 .data
@@ -642,6 +649,9 @@ impl App {
                 .cloned()
                 .collect();
         }
+
+        self.state.rebuild_filtered_tickets();
+        self.clamp_indices();
     }
 
     fn reload_agent_events(&mut self) {
@@ -770,9 +780,14 @@ impl App {
             self.state.worktree_index = wt_len - 1;
         }
 
-        let t_len = self.state.data.tickets.len();
+        let t_len = self.state.filtered_tickets.len();
         if t_len > 0 && self.state.ticket_index >= t_len {
             self.state.ticket_index = t_len - 1;
+        }
+
+        let dt_len = self.state.filtered_detail_tickets.len();
+        if dt_len > 0 && self.state.detail_ticket_index >= dt_len {
+            self.state.detail_ticket_index = dt_len - 1;
         }
     }
 
@@ -1015,7 +1030,10 @@ impl App {
                     );
                 }
                 DashboardFocus::Tickets => {
-                    clamp_increment(&mut self.state.ticket_index, self.state.data.tickets.len());
+                    clamp_increment(
+                        &mut self.state.ticket_index,
+                        self.state.filtered_tickets.len(),
+                    );
                 }
             },
             View::RepoDetail => match self.state.repo_detail_focus {
@@ -1028,12 +1046,15 @@ impl App {
                 RepoDetailFocus::Tickets => {
                     clamp_increment(
                         &mut self.state.detail_ticket_index,
-                        self.state.detail_tickets.len(),
+                        self.state.filtered_detail_tickets.len(),
                     );
                 }
             },
             View::Tickets => {
-                clamp_increment(&mut self.state.ticket_index, self.state.data.tickets.len());
+                clamp_increment(
+                    &mut self.state.ticket_index,
+                    self.state.filtered_tickets.len(),
+                );
             }
             View::Workflows => match self.state.workflows_focus {
                 WorkflowsFocus::Defs => {
@@ -1088,6 +1109,7 @@ impl App {
                             .collect();
                         self.state.detail_wt_index = 0;
                         self.state.detail_ticket_index = 0;
+                        self.state.rebuild_filtered_tickets();
                         self.state.repo_detail_focus = RepoDetailFocus::Worktrees;
                         self.state.view = View::RepoDetail;
                     }
@@ -1103,7 +1125,7 @@ impl App {
                     }
                 }
                 DashboardFocus::Tickets => {
-                    if let Some(ticket) = self.state.data.tickets.get(self.state.ticket_index) {
+                    if let Some(ticket) = self.state.filtered_tickets.get(self.state.ticket_index) {
                         self.state.modal = Modal::TicketInfo {
                             ticket: Box::new(ticket.clone()),
                         };
@@ -1123,7 +1145,7 @@ impl App {
                 RepoDetailFocus::Tickets => {
                     if let Some(ticket) = self
                         .state
-                        .detail_tickets
+                        .filtered_detail_tickets
                         .get(self.state.detail_ticket_index)
                     {
                         self.state.modal = Modal::TicketInfo {
@@ -1133,7 +1155,7 @@ impl App {
                 }
             },
             View::Tickets => {
-                if let Some(ticket) = self.state.data.tickets.get(self.state.ticket_index) {
+                if let Some(ticket) = self.state.filtered_tickets.get(self.state.ticket_index) {
                     self.state.modal = Modal::TicketInfo {
                         ticket: Box::new(ticket.clone()),
                     };
@@ -1853,19 +1875,17 @@ impl App {
         let ticket_context = match self.state.view {
             View::Dashboard if self.state.dashboard_focus == DashboardFocus::Tickets => self
                 .state
-                .data
-                .tickets
+                .filtered_tickets
                 .get(self.state.ticket_index)
                 .cloned(),
             View::RepoDetail if self.state.repo_detail_focus == RepoDetailFocus::Tickets => self
                 .state
-                .detail_tickets
+                .filtered_detail_tickets
                 .get(self.state.detail_ticket_index)
                 .cloned(),
             View::Tickets => self
                 .state
-                .data
-                .tickets
+                .filtered_tickets
                 .get(self.state.ticket_index)
                 .cloned(),
             _ => None,
