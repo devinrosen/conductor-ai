@@ -1677,4 +1677,24 @@ workflow test {
             _ => panic!("Expected Call node"),
         }
     }
+
+    /// A quoted string without a `/` in `call` position should produce
+    /// `AgentRef::Path`, not `AgentRef::Name`.  In `call` position, quoting is
+    /// always a deliberate signal that the value is an explicit path, so the
+    /// slash-heuristic used by `KvValue::into_agent_ref` does not apply.
+    #[test]
+    fn test_call_quoted_bare_name_is_path() {
+        let input = r#"workflow test { call "diagnose" }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(
+                    c.agent,
+                    AgentRef::Path("diagnose".to_string()),
+                    "quoted agent in call position should always be AgentRef::Path"
+                );
+            }
+            _ => panic!("Expected Call node"),
+        }
+    }
 }
