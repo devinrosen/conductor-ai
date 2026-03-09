@@ -1142,6 +1142,77 @@ fn record_step_failure(
     Ok(())
 }
 
+/// Record a successful step: accumulate stats, insert StepResult, push context.
+#[allow(clippy::too_many_arguments)]
+fn record_step_success(
+    state: &mut ExecutionState<'_>,
+    step_key: String,
+    step_name: &str,
+    result_text: Option<String>,
+    cost_usd: Option<f64>,
+    num_turns: Option<i64>,
+    duration_ms: Option<i64>,
+    markers: Vec<String>,
+    context: String,
+    child_run_id: Option<String>,
+    iteration: u32,
+) {
+    if let Some(cost) = cost_usd {
+        state.total_cost += cost;
+    }
+    if let Some(turns) = num_turns {
+        state.total_turns += turns;
+    }
+    if let Some(dur) = duration_ms {
+        state.total_duration_ms += dur;
+    }
+
+    let step_result = StepResult {
+        step_name: step_name.to_string(),
+        status: WorkflowStepStatus::Completed,
+        result_text,
+        cost_usd,
+        num_turns,
+        duration_ms,
+        markers,
+        context: context.clone(),
+        child_run_id,
+    };
+    state.step_results.insert(step_key, step_result);
+
+    state.contexts.push(ContextEntry {
+        step: step_name.to_string(),
+        iteration,
+        context,
+    });
+}
+
+/// Resolve child workflow inputs: substitute variables, apply defaults, and
+/// check for missing required inputs.
+///
+/// Returns `Ok(resolved_inputs)` or `Err(missing_input_name)`.
+fn resolve_child_inputs(
+    raw_inputs: &HashMap<String, String>,
+    vars: &HashMap<&str, String>,
+    input_decls: &[workflow_dsl::InputDecl],
+) -> std::result::Result<HashMap<String, String>, String> {
+    let mut child_inputs = HashMap::new();
+    for (k, v) in raw_inputs {
+        child_inputs.insert(k.clone(), substitute_variables(v, vars));
+    }
+    for decl in input_decls {
+        if !child_inputs.contains_key(&decl.name) {
+            if decl.required {
+                return Err(decl.name.clone());
+            }
+            if let Some(ref default) = decl.default {
+                child_inputs.insert(decl.name.clone(), default.clone());
+            }
+        }
+    }
+    Ok(child_inputs)
+}
+
 // ---------------------------------------------------------------------------
 // Node executors
 // ---------------------------------------------------------------------------
@@ -1271,35 +1342,19 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
                         Some(attempt as i64),
                     )?;
 
-                    // Update state
-                    if let Some(cost) = completed_run.cost_usd {
-                        state.total_cost += cost;
-                    }
-                    if let Some(turns) = completed_run.num_turns {
-                        state.total_turns += turns;
-                    }
-                    if let Some(dur) = completed_run.duration_ms {
-                        state.total_duration_ms += dur;
-                    }
-
-                    let step_result = StepResult {
-                        step_name: agent_label.to_string(),
-                        status: WorkflowStepStatus::Completed,
-                        result_text: completed_run.result_text,
-                        cost_usd: completed_run.cost_usd,
-                        num_turns: completed_run.num_turns,
-                        duration_ms: completed_run.duration_ms,
-                        markers: output.markers,
-                        context: output.context.clone(),
-                        child_run_id: Some(completed_run.id),
-                    };
-                    state.step_results.insert(step_key.clone(), step_result);
-
-                    state.contexts.push(ContextEntry {
-                        step: agent_label.to_string(),
+                    record_step_success(
+                        state,
+                        step_key.clone(),
+                        agent_label,
+                        completed_run.result_text,
+                        completed_run.cost_usd,
+                        completed_run.num_turns,
+                        completed_run.duration_ms,
+                        output.markers,
+                        output.context,
+                        Some(completed_run.id),
                         iteration,
-                        context: output.context,
-                    });
+                    );
 
                     return Ok(());
                 } else {
@@ -1389,6 +1444,16 @@ fn execute_call_workflow(
 
     let step_key = node.workflow.clone();
 
+    // Load the child workflow definition once (it won't change between retries)
+    let child_def =
+        workflow_dsl::load_workflow_by_name(&state.worktree_path, &state.repo_path, &node.workflow)
+            .map_err(|e| {
+                ConductorError::Workflow(format!(
+                    "Failed to load sub-workflow '{}': {e}",
+                    node.workflow
+                ))
+            })?;
+
     // Retry loop
     let max_attempts = 1 + node.retries;
     let mut last_error = String::new();
@@ -1414,21 +1479,21 @@ fn execute_call_workflow(
         )?;
 
         eprintln!(
-            "[workflow] Step 'workflow:{}' (attempt {}/{}): loading sub-workflow",
+            "[workflow] Step 'workflow:{}' (attempt {}/{}): executing sub-workflow",
             node.workflow,
             attempt + 1,
             max_attempts,
         );
 
-        // Load the child workflow definition
-        let child_def = match workflow_dsl::load_workflow_by_name(
-            &state.worktree_path,
-            &state.repo_path,
-            &node.workflow,
-        ) {
-            Ok(def) => def,
-            Err(e) => {
-                let msg = format!("Failed to load sub-workflow '{}': {e}", node.workflow);
+        // Resolve child inputs: substitute variables, apply defaults, check required
+        let vars = build_variable_map(state);
+        let child_inputs = match resolve_child_inputs(&node.inputs, &vars, &child_def.inputs) {
+            Ok(inputs) => inputs,
+            Err(missing) => {
+                let msg = format!(
+                    "Sub-workflow '{}' requires input '{}' but it was not provided",
+                    node.workflow, missing,
+                );
                 eprintln!("[workflow] {msg}");
                 state.wf_mgr.update_step_status(
                     &step_id,
@@ -1443,45 +1508,6 @@ fn execute_call_workflow(
                 continue;
             }
         };
-
-        // Build child inputs: substitute parent variables into child input values
-        let mut child_inputs = HashMap::new();
-        for (k, v) in &node.inputs {
-            let substituted = substitute_variables(v, &build_variable_map(state));
-            child_inputs.insert(k.clone(), substituted);
-        }
-
-        // Fill in defaults and check required inputs
-        let mut missing_input = None;
-        for decl in &child_def.inputs {
-            if !child_inputs.contains_key(&decl.name) {
-                if decl.required {
-                    missing_input = Some(decl.name.clone());
-                    break;
-                }
-                if let Some(ref default) = decl.default {
-                    child_inputs.insert(decl.name.clone(), default.clone());
-                }
-            }
-        }
-        if let Some(missing) = missing_input {
-            let msg = format!(
-                "Sub-workflow '{}' requires input '{}' but it was not provided",
-                node.workflow, missing,
-            );
-            eprintln!("[workflow] {msg}");
-            state.wf_mgr.update_step_status(
-                &step_id,
-                WorkflowStepStatus::Failed,
-                None,
-                Some(&msg),
-                None,
-                None,
-                Some(attempt as i64),
-            )?;
-            last_error = msg;
-            continue;
-        }
 
         // Execute the child workflow
         let child_input = WorkflowExecInput {
@@ -1521,31 +1547,22 @@ fn execute_call_workflow(
                         Some(attempt as i64),
                     )?;
 
-                    state.total_cost += result.total_cost;
-                    state.total_turns += result.total_turns;
-                    state.total_duration_ms += result.total_duration_ms;
-
-                    let step_result = StepResult {
-                        step_name: node.workflow.clone(),
-                        status: WorkflowStepStatus::Completed,
-                        result_text: Some(format!(
+                    record_step_success(
+                        state,
+                        step_key.clone(),
+                        &node.workflow,
+                        Some(format!(
                             "Sub-workflow '{}' completed successfully",
                             node.workflow
                         )),
-                        cost_usd: Some(result.total_cost),
-                        num_turns: Some(result.total_turns),
-                        duration_ms: Some(result.total_duration_ms),
+                        Some(result.total_cost),
+                        Some(result.total_turns),
+                        Some(result.total_duration_ms),
                         markers,
-                        context: context.clone(),
-                        child_run_id: Some(result.workflow_run_id),
-                    };
-                    state.step_results.insert(step_key.clone(), step_result);
-
-                    state.contexts.push(ContextEntry {
-                        step: node.workflow.clone(),
-                        iteration,
                         context,
-                    });
+                        Some(result.workflow_run_id),
+                        iteration,
+                    );
 
                     return Ok(());
                 } else {
@@ -3138,5 +3155,171 @@ And here is my actual output:
         let (markers, context) = fetch_child_final_output(&mgr, "nonexistent-run-id");
         assert!(markers.is_empty());
         assert!(context.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // build_variable_map tests
+    // -----------------------------------------------------------------------
+
+    /// Helper to create a minimal ExecutionState for testing build_variable_map.
+    fn make_test_state(conn: &Connection) -> ExecutionState<'_> {
+        let config = Config::default();
+        // We need a config that lives long enough — use a leaked Box for test simplicity.
+        let config: &'static Config = Box::leak(Box::new(config));
+        ExecutionState {
+            conn,
+            config,
+            workflow_run_id: String::new(),
+            workflow_name: String::new(),
+            worktree_id: String::new(),
+            worktree_path: String::new(),
+            worktree_slug: String::new(),
+            repo_path: String::new(),
+            model: None,
+            exec_config: WorkflowExecConfig::default(),
+            inputs: HashMap::new(),
+            agent_mgr: AgentManager::new(conn),
+            wf_mgr: WorkflowManager::new(conn),
+            parent_run_id: String::new(),
+            depth: 0,
+            step_results: HashMap::new(),
+            contexts: Vec::new(),
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            last_gate_feedback: None,
+        }
+    }
+
+    #[test]
+    fn test_build_variable_map_includes_inputs_and_prior_context() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+        state
+            .inputs
+            .insert("branch".to_string(), "main".to_string());
+        state.contexts.push(ContextEntry {
+            step: "step-a".to_string(),
+            iteration: 0,
+            context: "previous output".to_string(),
+        });
+
+        let vars = build_variable_map(&state);
+        assert_eq!(vars.get("branch").unwrap(), "main");
+        assert_eq!(vars.get("prior_context").unwrap(), "previous output");
+        assert!(vars.get("prior_contexts").unwrap().contains("step-a"));
+    }
+
+    #[test]
+    fn test_build_variable_map_includes_gate_feedback() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+        state.last_gate_feedback = Some("looks good".to_string());
+
+        let vars = build_variable_map(&state);
+        assert_eq!(vars.get("gate_feedback").unwrap(), "looks good");
+    }
+
+    #[test]
+    fn test_build_variable_map_no_gate_feedback() {
+        let conn = setup_db();
+        let state = make_test_state(&conn);
+        let vars = build_variable_map(&state);
+        assert!(!vars.contains_key("gate_feedback"));
+        // prior_context should be empty string when no contexts
+        assert_eq!(vars.get("prior_context").unwrap(), "");
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_child_inputs tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_child_inputs_substitutes_variables() {
+        use crate::workflow_dsl::InputDecl;
+
+        let mut raw = HashMap::new();
+        raw.insert("msg".to_string(), "Hello {{name}}!".to_string());
+
+        let mut vars: HashMap<&str, String> = HashMap::new();
+        vars.insert("name", "World".to_string());
+
+        let decls = vec![InputDecl {
+            name: "msg".to_string(),
+            required: true,
+            default: None,
+        }];
+
+        let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
+        assert_eq!(result.get("msg").unwrap(), "Hello World!");
+    }
+
+    #[test]
+    fn test_resolve_child_inputs_applies_defaults() {
+        use crate::workflow_dsl::InputDecl;
+
+        let raw = HashMap::new(); // no inputs provided
+
+        let vars: HashMap<&str, String> = HashMap::new();
+        let decls = vec![InputDecl {
+            name: "mode".to_string(),
+            required: false,
+            default: Some("fast".to_string()),
+        }];
+
+        let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
+        assert_eq!(result.get("mode").unwrap(), "fast");
+    }
+
+    #[test]
+    fn test_resolve_child_inputs_missing_required() {
+        use crate::workflow_dsl::InputDecl;
+
+        let raw = HashMap::new();
+        let vars: HashMap<&str, String> = HashMap::new();
+        let decls = vec![InputDecl {
+            name: "pr_url".to_string(),
+            required: true,
+            default: None,
+        }];
+
+        let err = resolve_child_inputs(&raw, &vars, &decls).unwrap_err();
+        assert_eq!(err, "pr_url");
+    }
+
+    #[test]
+    fn test_resolve_child_inputs_provided_overrides_default() {
+        use crate::workflow_dsl::InputDecl;
+
+        let mut raw = HashMap::new();
+        raw.insert("mode".to_string(), "slow".to_string());
+
+        let vars: HashMap<&str, String> = HashMap::new();
+        let decls = vec![InputDecl {
+            name: "mode".to_string(),
+            required: false,
+            default: Some("fast".to_string()),
+        }];
+
+        let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
+        assert_eq!(result.get("mode").unwrap(), "slow");
+    }
+
+    #[test]
+    fn test_resolve_child_inputs_optional_without_default_omitted() {
+        use crate::workflow_dsl::InputDecl;
+
+        let raw = HashMap::new();
+        let vars: HashMap<&str, String> = HashMap::new();
+        let decls = vec![InputDecl {
+            name: "optional_field".to_string(),
+            required: false,
+            default: None,
+        }];
+
+        let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
+        assert!(!result.contains_key("optional_field"));
     }
 }
