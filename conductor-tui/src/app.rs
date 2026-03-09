@@ -3241,18 +3241,9 @@ impl App {
             return;
         };
 
-        let result = Command::new("tmux")
-            .args(["select-window", "-t", &format!(":{window}")])
-            .output();
-
-        match result {
-            Ok(o) if o.status.success() => {}
-            Ok(_) => {
-                self.state.status_message = Some("Failed to attach to agent window".to_string());
-            }
-            Err(e) => {
-                self.state.status_message = Some(format!("Failed to attach: {e}"));
-            }
+        let mgr = AgentManager::new(&self.conn);
+        if let Err(e) = mgr.attach_agent_window(window) {
+            self.state.status_message = Some(format!("Failed to attach: {e}"));
         }
     }
 

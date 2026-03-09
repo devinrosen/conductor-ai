@@ -8,7 +8,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::db::query_collect;
-use crate::error::Result;
+use crate::error::{ConductorError, Result};
 
 /// Prefix used for the parent run prompt when launching a PR review swarm.
 /// Lives here (data layer) so that `pr_review.rs` (orchestration layer) can
@@ -858,6 +858,33 @@ impl<'a> AgentManager<'a> {
             Err(e) => {
                 tracing::warn!("could not execute tmux capture-pane for run {run_id}: {e}");
             }
+        }
+    }
+
+    /// Switch the current tmux client to the given agent window.
+    ///
+    /// Runs `tmux select-window -t :{window}` and returns an error (including
+    /// tmux's stderr) if the command fails or tmux is unavailable.
+    pub fn attach_agent_window(&self, window: &str) -> Result<()> {
+        let output = Command::new("tmux")
+            .args(["select-window", "-t", &format!(":{window}")])
+            .output()
+            .map_err(|e| ConductorError::Agent(format!("could not execute tmux: {e}")))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            Err(ConductorError::Agent(
+                "tmux select-window failed".to_string(),
+            ))
+        } else {
+            Err(ConductorError::Agent(format!(
+                "tmux select-window failed: {stderr}"
+            )))
         }
     }
 

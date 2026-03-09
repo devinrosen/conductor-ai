@@ -371,3 +371,74 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         _ => Action::None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conductor_core::agent::{AgentRun, AgentRunStatus};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::empty())
+    }
+
+    fn make_agent_run(worktree_id: &str, status: AgentRunStatus) -> AgentRun {
+        AgentRun {
+            id: "run-1".into(),
+            worktree_id: worktree_id.into(),
+            claude_session_id: None,
+            prompt: "do stuff".into(),
+            status,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
+            tmux_window: Some("feat-test".into()),
+            log_file: None,
+            model: None,
+            plan: None,
+            parent_run_id: None,
+        }
+    }
+
+    fn worktree_detail_state_with_run(status: AgentRunStatus) -> AppState {
+        let mut state = AppState::new();
+        state.view = View::WorktreeDetail;
+        state.selected_worktree_id = Some("wt1".into());
+        state
+            .data
+            .latest_agent_runs
+            .insert("wt1".into(), make_agent_run("wt1", status));
+        state
+    }
+
+    #[test]
+    fn attach_agent_key_when_active_maps_to_attach_agent() {
+        let state = worktree_detail_state_with_run(AgentRunStatus::Running);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('a')), &state),
+            Action::AttachAgent
+        ));
+    }
+
+    #[test]
+    fn attach_agent_key_when_inactive_does_not_map_to_attach_agent() {
+        let state = worktree_detail_state_with_run(AgentRunStatus::Completed);
+        // 'a' falls through to the global binding (AddRepo), not AttachAgent
+        assert!(!matches!(
+            map_key(key(KeyCode::Char('a')), &state),
+            Action::AttachAgent
+        ));
+    }
+
+    #[test]
+    fn attach_agent_key_when_waiting_for_feedback_maps_to_attach_agent() {
+        let state = worktree_detail_state_with_run(AgentRunStatus::WaitingForFeedback);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('a')), &state),
+            Action::AttachAgent
+        ));
+    }
+}
