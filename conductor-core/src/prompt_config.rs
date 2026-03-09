@@ -187,6 +187,58 @@ fn read_snippet_file(path: &Path) -> Result<String> {
     Ok(content.trim().to_string())
 }
 
+/// Check whether a single prompt snippet can be resolved (without reading its content).
+pub fn snippet_exists(
+    worktree_path: &str,
+    repo_path: &str,
+    snippet_ref: &PromptSnippetRef,
+    workflow_name: Option<&str>,
+) -> bool {
+    match snippet_ref {
+        PromptSnippetRef::Name(name) => {
+            if validate_name_segment(name, "Prompt snippet name").is_err() {
+                return false;
+            }
+            if let Some(wf) = workflow_name {
+                if validate_name_segment(wf, "Workflow name").is_err() {
+                    return false;
+                }
+            }
+
+            let filename = format!("{name}.md");
+            let bases = [worktree_path, repo_path];
+
+            // 1. Workflow-local override
+            if let Some(wf_name) = workflow_name {
+                let subdir = Path::new(".conductor")
+                    .join("workflows")
+                    .join(wf_name)
+                    .join("prompts");
+                if find_snippet_path(&bases, &subdir, &filename).is_some() {
+                    return true;
+                }
+            }
+
+            // 2. Shared conductor prompts
+            find_snippet_path(&bases, Path::new(".conductor/prompts"), &filename).is_some()
+        }
+        PromptSnippetRef::Path(rel_path) => {
+            if Path::new(rel_path).is_absolute() {
+                return false;
+            }
+            let repo_root = PathBuf::from(repo_path);
+            let joined = repo_root.join(rel_path);
+            let Ok(canonical) = joined.canonicalize() else {
+                return false;
+            };
+            let Ok(canonical_repo) = repo_root.canonicalize() else {
+                return false;
+            };
+            canonical.starts_with(&canonical_repo) && canonical.is_file()
+        }
+    }
+}
+
 /// Check whether all referenced prompt snippets exist (for validation).
 ///
 /// Returns a list of snippet names that could not be found.
@@ -200,7 +252,7 @@ pub fn find_missing_snippets(
         .iter()
         .filter(|name| {
             let snippet_ref = PromptSnippetRef::from_str_value(name);
-            load_prompt_snippet(worktree_path, repo_path, &snippet_ref, workflow_name).is_err()
+            !snippet_exists(worktree_path, repo_path, &snippet_ref, workflow_name)
         })
         .cloned()
         .collect()
@@ -404,5 +456,70 @@ mod tests {
     fn test_validate_name_rejects_backslash_and_null() {
         assert!(validate_name_segment("a\\b", "test").is_err());
         assert!(validate_name_segment("a\0b", "test").is_err());
+    }
+
+    #[test]
+    fn test_snippet_exists_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompts_dir = dir.path().join(".conductor/prompts");
+        fs::create_dir_all(&prompts_dir).unwrap();
+        fs::write(prompts_dir.join("exists.md"), "content").unwrap();
+
+        let yes = PromptSnippetRef::Name("exists".to_string());
+        let no = PromptSnippetRef::Name("nope".to_string());
+        assert!(snippet_exists(
+            dir.path().to_str().unwrap(),
+            "/nonexistent",
+            &yes,
+            None
+        ));
+        assert!(!snippet_exists(
+            dir.path().to_str().unwrap(),
+            "/nonexistent",
+            &no,
+            None
+        ));
+    }
+
+    #[test]
+    fn test_snippet_exists_by_path() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("docs")).unwrap();
+        fs::write(dir.path().join("docs/rules.md"), "content").unwrap();
+
+        let yes = PromptSnippetRef::Path("docs/rules.md".to_string());
+        let no = PromptSnippetRef::Path("docs/missing.md".to_string());
+        assert!(snippet_exists(
+            "/nonexistent",
+            dir.path().to_str().unwrap(),
+            &yes,
+            None
+        ));
+        assert!(!snippet_exists(
+            "/nonexistent",
+            dir.path().to_str().unwrap(),
+            &no,
+            None
+        ));
+    }
+
+    #[test]
+    fn test_snippet_exists_rejects_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad_name = PromptSnippetRef::Name("../escape".to_string());
+        assert!(!snippet_exists(
+            dir.path().to_str().unwrap(),
+            "/nonexistent",
+            &bad_name,
+            None
+        ));
+
+        let bad_path = PromptSnippetRef::Path("/etc/passwd".to_string());
+        assert!(!snippet_exists(
+            "/nonexistent",
+            dir.path().to_str().unwrap(),
+            &bad_path,
+            None
+        ));
     }
 }
