@@ -242,13 +242,14 @@ impl<'a> TicketSyncer<'a> {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
 
+        let now = Utc::now().to_rfc3339();
         let count = self.conn.execute(
-            "UPDATE worktrees SET status = 'merged'
+            "UPDATE worktrees SET status = 'merged', completed_at = ?2
              WHERE repo_id = ?1
              AND status != 'merged'
              AND ticket_id IS NOT NULL
              AND ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')",
-            params![repo_id],
+            params![repo_id, now],
         )?;
 
         for (repo_path, worktree_path, branch) in artifacts {
@@ -686,6 +687,48 @@ mod tests {
         let count = syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
+    }
+
+    #[test]
+    fn test_mark_worktrees_sets_completed_at() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![make_ticket("1", "Issue 1")];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
+
+        // Verify completed_at starts as NULL
+        let before: Option<String> = conn
+            .query_row(
+                "SELECT completed_at FROM worktrees WHERE id = 'wt1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(before.is_none());
+
+        syncer
+            .close_missing_tickets("r1", "github", &["999"])
+            .unwrap();
+        syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
+
+        let after: Option<String> = conn
+            .query_row(
+                "SELECT completed_at FROM worktrees WHERE id = 'wt1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            after.is_some(),
+            "completed_at must be set when marking as merged"
+        );
     }
 
     #[test]

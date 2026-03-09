@@ -472,6 +472,72 @@ impl<'a> WorktreeManager<'a> {
         Ok((repo, worktree))
     }
 
+    /// Reap stale worktrees whose status is `merged` or `abandoned` but whose
+    /// filesystem artifacts still exist. For each stale worktree:
+    /// 1. Remove git worktree directory and branch (best-effort)
+    /// 2. Run `git worktree prune` on the parent repo
+    /// 3. Backfill `completed_at` if NULL
+    ///
+    /// Returns the number of worktrees cleaned up.
+    pub fn reap_stale_worktrees(&self) -> Result<usize> {
+        let stale: Vec<(String, String, String, String, Option<String>)> = query_collect(
+            self.conn,
+            "SELECT w.id, r.local_path, w.path, w.branch, w.completed_at
+             FROM worktrees w
+             JOIN repos r ON r.id = w.repo_id
+             WHERE w.status IN ('merged', 'abandoned')",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )?;
+
+        let mut reaped = 0;
+        let mut pruned_repos = std::collections::HashSet::new();
+
+        for (wt_id, repo_path, wt_path, branch, completed_at) in &stale {
+            if !Path::new(wt_path).exists() {
+                // Backfill completed_at if missing even when path is already gone
+                if completed_at.is_none() {
+                    let now = Utc::now().to_rfc3339();
+                    self.conn.execute(
+                        "UPDATE worktrees SET completed_at = ?1 WHERE id = ?2 AND completed_at IS NULL",
+                        params![now, wt_id],
+                    )?;
+                    reaped += 1;
+                }
+                continue;
+            }
+
+            remove_git_artifacts(repo_path, wt_path, branch);
+            pruned_repos.insert(repo_path.clone());
+
+            // Backfill completed_at if NULL
+            if completed_at.is_none() {
+                let now = Utc::now().to_rfc3339();
+                self.conn.execute(
+                    "UPDATE worktrees SET completed_at = ?1 WHERE id = ?2 AND completed_at IS NULL",
+                    params![now, wt_id],
+                )?;
+            }
+
+            reaped += 1;
+        }
+
+        // Run git worktree prune on each affected repo
+        for repo_path in &pruned_repos {
+            let _ = git_in(repo_path).args(["worktree", "prune"]).output();
+        }
+
+        Ok(reaped)
+    }
+
     /// Permanently delete completed (merged/abandoned) worktree records from the database.
     pub fn purge(&self, repo_slug: &str, name: Option<&str>) -> Result<usize> {
         let repo_mgr = RepoManager::new(self.conn, self.config);
@@ -1174,5 +1240,135 @@ mod tests {
 
         assert!(logs_contain("git worktree remove failed"));
         assert!(logs_contain("git branch -D failed"));
+    }
+
+    #[test]
+    fn test_reap_stale_worktrees_backfills_completed_at() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        // Insert a merged worktree with no completed_at and a nonexistent path
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt-stale', 'r1', 'feat-stale', 'feat/stale', '/nonexistent/stale-wt', 'merged', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let reaped = mgr.reap_stale_worktrees().unwrap();
+        assert_eq!(reaped, 1);
+
+        // completed_at should now be set
+        let completed_at: Option<String> = conn
+            .query_row(
+                "SELECT completed_at FROM worktrees WHERE id = 'wt-stale'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(completed_at.is_some());
+    }
+
+    #[test]
+    fn test_reap_stale_worktrees_skips_active() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        // w1 from setup_db is active — should not be reaped
+        let mgr = WorktreeManager::new(&conn, &config);
+        let reaped = mgr.reap_stale_worktrees().unwrap();
+        assert_eq!(reaped, 0);
+    }
+
+    #[test]
+    fn test_reap_stale_worktrees_skips_already_completed() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        // Insert a merged worktree that already has completed_at and nonexistent path
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, completed_at) \
+             VALUES ('wt-done', 'r1', 'feat-done', 'feat/done', '/nonexistent/done-wt', 'merged', '2024-01-01T00:00:00Z', '2024-02-01T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let reaped = mgr.reap_stale_worktrees().unwrap();
+        // Path doesn't exist and completed_at is already set → not reaped
+        assert_eq!(reaped, 0);
+    }
+
+    #[test]
+    fn test_reap_stale_worktrees_removes_existing_path() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        let (_tmp, _, local) = setup_repo_with_remote();
+        let local_str = local.to_str().unwrap();
+
+        // Update repo to use real local path
+        conn.execute(
+            "UPDATE repos SET local_path = ?1 WHERE id = 'r1'",
+            params![local_str],
+        )
+        .unwrap();
+
+        // Create a real worktree
+        let wt_path = local.parent().unwrap().join("stale-wt");
+        git(&["branch", "feat/stale-wt"], &local);
+        git(
+            &[
+                "worktree",
+                "add",
+                &wt_path.to_string_lossy(),
+                "feat/stale-wt",
+            ],
+            &local,
+        );
+        assert!(wt_path.exists());
+
+        // Insert as merged with no completed_at
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt-real', 'r1', 'feat-stale-wt', 'feat/stale-wt', ?1, 'merged', '2024-01-01T00:00:00Z')",
+            params![wt_path.to_str().unwrap()],
+        ).unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let reaped = mgr.reap_stale_worktrees().unwrap();
+        assert_eq!(reaped, 1);
+
+        // Worktree directory should be removed
+        assert!(!wt_path.exists());
+
+        // completed_at should be backfilled
+        let completed_at: Option<String> = conn
+            .query_row(
+                "SELECT completed_at FROM worktrees WHERE id = 'wt-real'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(completed_at.is_some());
+    }
+
+    #[test]
+    fn test_reap_stale_worktrees_handles_abandoned() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt-aband', 'r1', 'feat-aband', 'feat/aband', '/nonexistent/aband-wt', 'abandoned', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let reaped = mgr.reap_stale_worktrees().unwrap();
+        assert_eq!(reaped, 1);
+
+        let completed_at: Option<String> = conn
+            .query_row(
+                "SELECT completed_at FROM worktrees WHERE id = 'wt-aband'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(completed_at.is_some());
     }
 }

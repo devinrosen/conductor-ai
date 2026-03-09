@@ -40,7 +40,8 @@ pub fn poll_data() -> Option<Action> {
     let ticket_syncer = TicketSyncer::new(&conn);
     let agent_mgr = AgentManager::new(&conn);
 
-    // Reap orphaned runs whose tmux windows have disappeared.
+    // Reap orphaned runs whose tmux windows have disappeared and clean up
+    // stale worktrees whose artifacts persist on disk after merge/abandon.
     // Throttle to at most once every 30 seconds to avoid spawning tmux
     // subprocesses on every poll tick.
     {
@@ -52,6 +53,7 @@ pub fn poll_data() -> Option<Action> {
         if now - LAST_REAP.load(Ordering::Relaxed) >= 30 {
             LAST_REAP.store(now, Ordering::Relaxed);
             let _ = agent_mgr.reap_orphaned_runs();
+            let _ = wt_mgr.reap_stale_worktrees();
         }
     }
 
