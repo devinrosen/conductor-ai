@@ -54,24 +54,33 @@ workflow ticket-to-pr {
   }
 
   call push-and-pr
-  call review
 
-  while review.has_review_issues {
-    max_iterations = 5
-    stuck_after    = 3
+  parallel {
+    with      = ["review-diff-scope"]
+    fail_fast = false
+    call review-architecture
+    call review-security
+    call review-performance
+  }
+
+  call review-triage
+
+  while review-triage.has_review_issues {
+    max_iterations = 3
+    stuck_after    = 2
     on_max_iter    = fail
 
     call address-reviews
-    call review
-  }
 
-  parallel {
-    with        = ["review-diff-scope"]
-    fail_fast   = false
-    min_success = 1
-    call reviewer-security
-    call reviewer-tests
-    call reviewer-style
+    parallel {
+      with      = ["review-diff-scope"]
+      fail_fast = false
+      call review-architecture
+      call review-security
+      call review-performance
+    }
+
+    call review-triage
   }
 
   gate human_review {
@@ -80,7 +89,7 @@ workflow ticket-to-pr {
     on_timeout = fail
   }
 
-  if review.has_critical_issues {
+  if review-triage.has_critical_issues {
     call escalate
   }
 

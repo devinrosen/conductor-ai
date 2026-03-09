@@ -1699,7 +1699,7 @@ workflow ticket-to-pr {
         let input = r#"
 workflow ticket-to-pr {
   meta {
-    description = "Full development cycle — plan from ticket, implement, push PR, then review and iterate until clean"
+    description = "Full development cycle — plan from ticket, implement, push PR, run review swarm, iterate until clean"
     trigger     = "manual"
   }
 
@@ -1715,15 +1715,40 @@ workflow ticket-to-pr {
 
   call push-and-pr
 
-  call review
+  parallel {
+    with      = ["review-diff-scope"]
+    fail_fast = false
+    call review-architecture
+    call review-security
+    call review-performance
+    call review-dry-abstraction
+    call review-error-handling
+    call review-test-coverage
+    call review-db-migrations
+  }
 
-  while review.has_review_issues {
-    max_iterations = 5
-    stuck_after    = 3
+  call review-triage
+
+  while review-triage.has_review_issues {
+    max_iterations = 3
+    stuck_after    = 2
     on_max_iter    = fail
 
     call address-reviews
-    call review
+
+    parallel {
+      with      = ["review-diff-scope"]
+      fail_fast = false
+      call review-architecture
+      call review-security
+      call review-performance
+      call review-dry-abstraction
+      call review-error-handling
+      call review-test-coverage
+      call review-db-migrations
+    }
+
+    call review-triage
   }
 }
 "#;
@@ -1732,8 +1757,8 @@ workflow ticket-to-pr {
         assert_eq!(def.trigger, WorkflowTrigger::Manual);
         assert_eq!(def.inputs.len(), 1);
         assert!(def.inputs[0].required);
-        // call plan, call implement, call push-and-pr, call review, while
-        assert_eq!(def.body.len(), 5);
+        // call plan, call implement, call push-and-pr, parallel, call review-triage, while
+        assert_eq!(def.body.len(), 6);
 
         match &def.body[1] {
             WorkflowNode::Call(c) => {
@@ -1743,13 +1768,23 @@ workflow ticket-to-pr {
             _ => panic!("Expected Call node"),
         }
 
-        match &def.body[4] {
+        match &def.body[3] {
+            WorkflowNode::Parallel(p) => {
+                assert_eq!(p.calls.len(), 7);
+                assert!(!p.fail_fast);
+                assert_eq!(p.with, vec!["review-diff-scope".to_string()]);
+            }
+            _ => panic!("Expected Parallel node"),
+        }
+
+        match &def.body[5] {
             WorkflowNode::While(w) => {
-                assert_eq!(w.step, "review");
+                assert_eq!(w.step, "review-triage");
                 assert_eq!(w.marker, "has_review_issues");
-                assert_eq!(w.max_iterations, 5);
-                assert_eq!(w.stuck_after, Some(3));
-                assert_eq!(w.body.len(), 2);
+                assert_eq!(w.max_iterations, 3);
+                assert_eq!(w.stuck_after, Some(2));
+                // address-reviews, parallel, review-triage
+                assert_eq!(w.body.len(), 3);
             }
             _ => panic!("Expected While node"),
         }

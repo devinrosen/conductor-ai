@@ -1,6 +1,6 @@
 workflow ticket-to-pr {
   meta {
-    description = "Full development cycle — plan from ticket, implement, push PR, then review and iterate until clean"
+    description = "Full development cycle — plan from ticket, implement, push PR, run review swarm, iterate until clean"
     trigger     = "manual"
   }
 
@@ -16,14 +16,39 @@ workflow ticket-to-pr {
 
   call push-and-pr
 
-  call review
+  parallel {
+    with      = ["review-diff-scope"]
+    fail_fast = false
+    call review-architecture
+    call review-security
+    call review-performance
+    call review-dry-abstraction
+    call review-error-handling
+    call review-test-coverage
+    call review-db-migrations
+  }
 
-  while review.has_review_issues {
-    max_iterations = 5
-    stuck_after    = 3
+  call review-triage
+
+  while review-triage.has_review_issues {
+    max_iterations = 3
+    stuck_after    = 2
     on_max_iter    = fail
 
     call address-reviews
-    call review
+
+    parallel {
+      with      = ["review-diff-scope"]
+      fail_fast = false
+      call review-architecture
+      call review-security
+      call review-performance
+      call review-dry-abstraction
+      call review-error-handling
+      call review-test-coverage
+      call review-db-migrations
+    }
+
+    call review-triage
   }
 }
