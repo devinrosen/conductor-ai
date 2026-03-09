@@ -43,6 +43,7 @@ pub mod post_run;
 pub mod pr_review;
 pub mod repo;
 pub mod review_config;
+pub mod schema_config;
 pub mod text_util;
 pub mod tickets;
 pub mod workflow;

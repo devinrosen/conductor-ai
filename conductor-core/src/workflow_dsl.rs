@@ -160,6 +160,8 @@ pub struct CallNode {
     #[serde(default)]
     pub retries: u32,
     pub on_fail: Option<AgentRef>,
+    /// Optional output schema reference for structured output.
+    pub output: Option<String>,
 }
 
 /// A sub-workflow invocation node.
@@ -210,6 +212,11 @@ pub struct ParallelNode {
     pub fail_fast: bool,
     pub min_success: Option<u32>,
     pub calls: Vec<AgentRef>,
+    /// Block-level output schema reference (applies to all calls unless overridden).
+    pub output: Option<String>,
+    /// Per-call output schema overrides, keyed by index in `calls`.
+    #[serde(default)]
+    pub call_outputs: HashMap<usize, String>,
 }
 
 fn default_true() -> bool {
@@ -743,6 +750,7 @@ impl Parser {
 
         let mut retries = 0u32;
         let mut on_fail = None;
+        let mut output = None;
 
         if self.peek() == &Token::LBrace {
             self.advance();
@@ -758,12 +766,16 @@ impl Parser {
             if let Some(f) = kvs.remove("on_fail") {
                 on_fail = Some(f.into_agent_ref());
             }
+            if let Some(o) = kvs.remove("output") {
+                output = Some(o.into_string());
+            }
         }
 
         Ok(CallNode {
             agent,
             retries,
             on_fail,
+            output,
         })
     }
 
@@ -913,10 +925,23 @@ impl Parser {
             .transpose()
             .map_err(|e| format!("Invalid min_success: {e}"))?;
 
+        let output = kvs.get("output").map(|v| v.as_str().to_string());
+
         let mut calls = Vec::new();
+        let mut call_outputs: HashMap<usize, String> = HashMap::new();
         while self.peek() == &Token::Call {
             self.advance(); // consume "call"
             let agent = self.expect_agent_ref()?;
+            let idx = calls.len();
+            // Check for per-call options block { output = "..." }
+            if self.peek() == &Token::LBrace {
+                self.advance();
+                let call_kvs = self.parse_kvs()?;
+                self.expect(&Token::RBrace)?;
+                if let Some(o) = call_kvs.get("output") {
+                    call_outputs.insert(idx, o.as_str().to_string());
+                }
+            }
             calls.push(agent);
         }
         self.expect(&Token::RBrace)?;
@@ -929,6 +954,8 @@ impl Parser {
             fail_fast,
             min_success,
             calls,
+            output,
+            call_outputs,
         })
     }
 
@@ -2303,6 +2330,93 @@ workflow parent {
                 );
             }
             _ => panic!("Expected Call node"),
+        }
+    }
+
+    #[test]
+    fn test_call_with_output_option() {
+        let input = r#"workflow test {
+            call review-security { output = "review-findings" }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(c.agent, AgentRef::Name("review-security".to_string()));
+                assert_eq!(c.output.as_deref(), Some("review-findings"));
+            }
+            _ => panic!("Expected Call node"),
+        }
+    }
+
+    #[test]
+    fn test_call_with_output_and_retries() {
+        let input = r#"workflow test {
+            call review { output = "review-findings" retries = 2 }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(c.output.as_deref(), Some("review-findings"));
+                assert_eq!(c.retries, 2);
+            }
+            _ => panic!("Expected Call node"),
+        }
+    }
+
+    #[test]
+    fn test_call_without_output() {
+        let input = r#"workflow test { call plan }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert!(c.output.is_none());
+            }
+            _ => panic!("Expected Call node"),
+        }
+    }
+
+    #[test]
+    fn test_parallel_with_block_level_output() {
+        let input = r#"workflow test {
+            parallel {
+                output = "review-findings"
+                fail_fast = false
+                call review-security
+                call review-style
+            }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Parallel(p) => {
+                assert_eq!(p.output.as_deref(), Some("review-findings"));
+                assert_eq!(p.calls.len(), 2);
+                assert!(!p.fail_fast);
+            }
+            _ => panic!("Expected Parallel node"),
+        }
+    }
+
+    #[test]
+    fn test_parallel_with_per_call_output_override() {
+        let input = r#"workflow test {
+            parallel {
+                output = "review-findings"
+                call review-security
+                call lint-check { output = "lint-results" }
+            }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Parallel(p) => {
+                assert_eq!(p.output.as_deref(), Some("review-findings"));
+                assert_eq!(p.calls.len(), 2);
+                assert!(p.call_outputs.is_empty() || !p.call_outputs.contains_key(&0));
+                assert_eq!(
+                    p.call_outputs.get(&1).map(|s| s.as_str()),
+                    Some("lint-results")
+                );
+            }
+            _ => panic!("Expected Parallel node"),
         }
     }
 }

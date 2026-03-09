@@ -371,5 +371,11 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 22)?;
     }
 
+    // Migration 023: add structured_output column to workflow_run_steps.
+    if version < 23 {
+        conn.execute_batch(include_str!("migrations/023_structured_output.sql"))?;
+        bump_version(conn, 23)?;
+    }
+
     Ok(())
 }

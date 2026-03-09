@@ -52,6 +52,9 @@ pub enum ConductorError {
 
     #[error("agent config error: {0}")]
     AgentConfig(String),
+
+    #[error("schema error: {0}")]
+    Schema(String),
 }
 
 pub type Result<T> = std::result::Result<T, ConductorError>;
