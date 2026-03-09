@@ -2694,4 +2694,25 @@ workflow parent {
         let refs = collect_snippet_refs(&def.always);
         assert_eq!(refs, vec!["always-context".to_string()]);
     }
+
+    #[test]
+    fn test_collect_all_snippet_refs_deduplicates_across_body_and_always() {
+        let input = r#"workflow test {
+            call plan { with = ["shared-context", "body-only"] }
+            always {
+                call cleanup { with = ["shared-context", "always-only"] }
+            }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let refs = def.collect_all_snippet_refs();
+        // Should be sorted and deduplicated: "shared-context" appears in both blocks
+        assert_eq!(
+            refs,
+            vec![
+                "always-only".to_string(),
+                "body-only".to_string(),
+                "shared-context".to_string(),
+            ]
+        );
+    }
 }

@@ -102,13 +102,16 @@ fn find_snippet_path(bases: &[&str], subdir: &Path, filename: &str) -> Option<Pa
     })
 }
 
-/// Resolve a snippet by short name using the search order.
-fn load_snippet_by_name(
+/// Resolve a snippet by short name to its file path, using the search order.
+///
+/// Returns `None` if the snippet cannot be found. Validates name segments
+/// and returns `Err` only for invalid names (path traversal, etc.).
+fn resolve_snippet_by_name(
     worktree_path: &str,
     repo_path: &str,
     name: &str,
     workflow_name: Option<&str>,
-) -> Result<String> {
+) -> Result<Option<PathBuf>> {
     validate_name_segment(name, "Prompt snippet name")?;
     if let Some(wf) = workflow_name {
         validate_name_segment(wf, "Workflow name")?;
@@ -124,15 +127,30 @@ fn load_snippet_by_name(
             .join(wf_name)
             .join("prompts");
         if let Some(path) = find_snippet_path(&bases, &subdir, &filename) {
-            return read_snippet_file(&path);
+            return Ok(Some(path));
         }
     }
 
     // 2. Shared conductor prompts (worktree, then repo)
     if let Some(path) = find_snippet_path(&bases, Path::new(".conductor/prompts"), &filename) {
+        return Ok(Some(path));
+    }
+
+    Ok(None)
+}
+
+/// Resolve a snippet by short name using the search order.
+fn load_snippet_by_name(
+    worktree_path: &str,
+    repo_path: &str,
+    name: &str,
+    workflow_name: Option<&str>,
+) -> Result<String> {
+    if let Some(path) = resolve_snippet_by_name(worktree_path, repo_path, name, workflow_name)? {
         return read_snippet_file(&path);
     }
 
+    let filename = format!("{name}.md");
     Err(ConductorError::Workflow(format!(
         "Prompt snippet '{name}' not found. Searched:\n\
          {}  .conductor/prompts/{filename}",
@@ -144,8 +162,11 @@ fn load_snippet_by_name(
     )))
 }
 
-/// Resolve a snippet from an explicit path relative to the repo root.
-fn load_snippet_by_path(repo_path: &str, rel_path: &str) -> Result<String> {
+/// Resolve an explicit path relative to the repo root, returning the canonical path.
+///
+/// Returns `None` if the file does not exist. Returns `Err` for absolute paths
+/// or paths that escape the repository root.
+fn resolve_snippet_by_path(repo_path: &str, rel_path: &str) -> Result<Option<PathBuf>> {
     if Path::new(rel_path).is_absolute() {
         return Err(ConductorError::Workflow(format!(
             "Explicit prompt snippet path '{rel_path}' must be relative, not absolute"
@@ -155,11 +176,9 @@ fn load_snippet_by_path(repo_path: &str, rel_path: &str) -> Result<String> {
     let repo_root = PathBuf::from(repo_path);
     let joined = repo_root.join(rel_path);
 
-    let canonical = joined.canonicalize().map_err(|_| {
-        ConductorError::Workflow(format!(
-            "Prompt snippet file not found: '{rel_path}' (resolved relative to repo root '{repo_path}')"
-        ))
-    })?;
+    let Ok(canonical) = joined.canonicalize() else {
+        return Ok(None);
+    };
 
     let canonical_repo = repo_root.canonicalize().map_err(|e| {
         ConductorError::Workflow(format!(
@@ -173,7 +192,22 @@ fn load_snippet_by_path(repo_path: &str, rel_path: &str) -> Result<String> {
         )));
     }
 
-    read_snippet_file(&canonical)
+    if canonical.is_file() {
+        Ok(Some(canonical))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Resolve a snippet from an explicit path relative to the repo root.
+fn load_snippet_by_path(repo_path: &str, rel_path: &str) -> Result<String> {
+    if let Some(path) = resolve_snippet_by_path(repo_path, rel_path)? {
+        return read_snippet_file(&path);
+    }
+
+    Err(ConductorError::Workflow(format!(
+        "Prompt snippet file not found: '{rel_path}' (resolved relative to repo root '{repo_path}')"
+    )))
 }
 
 /// Read a snippet file and return its trimmed content.
@@ -196,45 +230,13 @@ pub fn snippet_exists(
 ) -> bool {
     match snippet_ref {
         PromptSnippetRef::Name(name) => {
-            if validate_name_segment(name, "Prompt snippet name").is_err() {
-                return false;
-            }
-            if let Some(wf) = workflow_name {
-                if validate_name_segment(wf, "Workflow name").is_err() {
-                    return false;
-                }
-            }
-
-            let filename = format!("{name}.md");
-            let bases = [worktree_path, repo_path];
-
-            // 1. Workflow-local override
-            if let Some(wf_name) = workflow_name {
-                let subdir = Path::new(".conductor")
-                    .join("workflows")
-                    .join(wf_name)
-                    .join("prompts");
-                if find_snippet_path(&bases, &subdir, &filename).is_some() {
-                    return true;
-                }
-            }
-
-            // 2. Shared conductor prompts
-            find_snippet_path(&bases, Path::new(".conductor/prompts"), &filename).is_some()
+            matches!(
+                resolve_snippet_by_name(worktree_path, repo_path, name, workflow_name),
+                Ok(Some(_))
+            )
         }
         PromptSnippetRef::Path(rel_path) => {
-            if Path::new(rel_path).is_absolute() {
-                return false;
-            }
-            let repo_root = PathBuf::from(repo_path);
-            let joined = repo_root.join(rel_path);
-            let Ok(canonical) = joined.canonicalize() else {
-                return false;
-            };
-            let Ok(canonical_repo) = repo_root.canonicalize() else {
-                return false;
-            };
-            canonical.starts_with(&canonical_repo) && canonical.is_file()
+            matches!(resolve_snippet_by_path(repo_path, rel_path), Ok(Some(_)))
         }
     }
 }
@@ -499,6 +501,34 @@ mod tests {
             "/nonexistent",
             dir.path().to_str().unwrap(),
             &no,
+            None
+        ));
+    }
+
+    #[test]
+    fn test_snippet_exists_workflow_local_override() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Place snippet only in workflow-local directory
+        let wf_local = dir.path().join(".conductor/workflows/my-wf/prompts");
+        fs::create_dir_all(&wf_local).unwrap();
+        fs::write(wf_local.join("local-only.md"), "wf content").unwrap();
+
+        let snippet = PromptSnippetRef::Name("local-only".to_string());
+
+        // Found with workflow_name
+        assert!(snippet_exists(
+            dir.path().to_str().unwrap(),
+            "/nonexistent",
+            &snippet,
+            Some("my-wf")
+        ));
+
+        // Not found without workflow_name
+        assert!(!snippet_exists(
+            dir.path().to_str().unwrap(),
+            "/nonexistent",
+            &snippet,
             None
         ));
     }
