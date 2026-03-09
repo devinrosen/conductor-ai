@@ -384,7 +384,8 @@ pub fn run(conn: &Connection) -> Result<()> {
         conn.pragma_update(None, "foreign_keys", "off")?;
 
         conn.execute_batch(
-            "CREATE TABLE workflow_run_steps_new (
+            "BEGIN;
+            CREATE TABLE workflow_run_steps_new (
                 id                TEXT PRIMARY KEY,
                 workflow_run_id   TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
                 step_name         TEXT NOT NULL,
@@ -421,7 +422,8 @@ pub fn run(conn: &Connection) -> Result<()> {
                 FROM workflow_run_steps;
             DROP TABLE workflow_run_steps;
             ALTER TABLE workflow_run_steps_new RENAME TO workflow_run_steps;
-            CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run ON workflow_run_steps(workflow_run_id);",
+            CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run ON workflow_run_steps(workflow_run_id);
+            COMMIT;",
         )?;
 
         conn.pragma_update(None, "foreign_keys", "on")?;
