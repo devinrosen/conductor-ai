@@ -8,7 +8,7 @@ use ratatui::widgets::ListState;
 use ratatui::DefaultTerminal;
 use rusqlite::Connection;
 
-use conductor_core::agent::{AgentManager, FeedbackRequest};
+use conductor_core::agent::{AgentManager, AgentRun, FeedbackRequest};
 use conductor_core::config::{save_config, AutoStartAgent, Config, WorkTarget};
 use conductor_core::github;
 use conductor_core::issue_source::IssueSourceManager;
@@ -3096,6 +3096,13 @@ impl App {
 
     // ── Agent handlers (tmux-based) ────────────────────────────────────
 
+    fn selected_worktree_run(&self) -> Option<&AgentRun> {
+        self.state
+            .selected_worktree_id
+            .as_ref()
+            .and_then(|id| self.state.data.latest_agent_runs.get(id))
+    }
+
     fn refresh_pending_feedback(&mut self) {
         self.state.data.pending_feedback =
             self.state.selected_worktree_id.as_ref().and_then(|wt_id| {
@@ -3202,8 +3209,7 @@ impl App {
     }
 
     fn handle_stop_agent(&mut self) {
-        let wt_id = self.state.selected_worktree_id.as_ref();
-        let run = wt_id.and_then(|id| self.state.data.latest_agent_runs.get(id));
+        let run = self.selected_worktree_run();
 
         let Some(run) = run else {
             return;
@@ -3238,8 +3244,7 @@ impl App {
     }
 
     fn handle_attach_agent(&mut self) {
-        let wt_id = self.state.selected_worktree_id.as_ref();
-        let run = wt_id.and_then(|id| self.state.data.latest_agent_runs.get(id));
+        let run = self.selected_worktree_run();
 
         let tmux_window = run.and_then(|r| {
             if r.is_active() {
@@ -3592,8 +3597,7 @@ impl App {
     }
 
     fn handle_view_agent_log(&mut self) {
-        let wt_id = self.state.selected_worktree_id.as_ref();
-        let run = wt_id.and_then(|id| self.state.data.latest_agent_runs.get(id));
+        let run = self.selected_worktree_run();
 
         let log_path = run.and_then(|r| r.log_file.as_deref());
         let Some(log_path) = log_path else {
@@ -3621,8 +3625,7 @@ impl App {
     }
 
     fn handle_copy_last_code_block(&mut self) {
-        let wt_id = self.state.selected_worktree_id.as_ref();
-        let run = wt_id.and_then(|id| self.state.data.latest_agent_runs.get(id));
+        let run = self.selected_worktree_run();
 
         let log_path = run.and_then(|r| r.log_file.as_deref());
         let Some(log_path) = log_path else {
