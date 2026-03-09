@@ -222,6 +222,7 @@ pub enum WorkflowStepStatus {
     Failed,
     Skipped,
     Waiting,
+    TimedOut,
 }
 
 impl std::fmt::Display for WorkflowStepStatus {
@@ -233,6 +234,7 @@ impl std::fmt::Display for WorkflowStepStatus {
             Self::Failed => "failed",
             Self::Skipped => "skipped",
             Self::Waiting => "waiting",
+            Self::TimedOut => "timed_out",
         };
         write!(f, "{s}")
     }
@@ -248,6 +250,7 @@ impl std::str::FromStr for WorkflowStepStatus {
             "failed" => Ok(Self::Failed),
             "skipped" => Ok(Self::Skipped),
             "waiting" => Ok(Self::Waiting),
+            "timed_out" => Ok(Self::TimedOut),
             _ => Err(format!("unknown WorkflowStepStatus: {s}")),
         }
     }
@@ -594,6 +597,7 @@ impl<'a> WorkflowManager<'a> {
             WorkflowStepStatus::Completed
                 | WorkflowStepStatus::Failed
                 | WorkflowStepStatus::Skipped
+                | WorkflowStepStatus::TimedOut
         );
 
         if is_starting {
@@ -2552,7 +2556,7 @@ fn handle_gate_timeout(
         OnTimeout::Continue => {
             state.wf_mgr.update_step_status(
                 step_id,
-                WorkflowStepStatus::Completed,
+                WorkflowStepStatus::TimedOut,
                 None,
                 Some("gate timed out (continuing)"),
                 None,
@@ -2592,10 +2596,14 @@ fn build_workflow_summary(state: &ExecutionState<'_>) -> String {
         .iter()
         .filter(|s| s.status == WorkflowStepStatus::Skipped)
         .count();
+    let timed_out = steps
+        .iter()
+        .filter(|s| s.status == WorkflowStepStatus::TimedOut)
+        .count();
 
     let mut lines = Vec::new();
     lines.push(format!(
-        "Workflow '{}': {completed}/{total} steps completed{}{}",
+        "Workflow '{}': {completed}/{total} steps completed{}{}{}",
         state.workflow_name,
         if failed > 0 {
             format!(", {failed} failed")
@@ -2604,6 +2612,11 @@ fn build_workflow_summary(state: &ExecutionState<'_>) -> String {
         },
         if skipped > 0 {
             format!(", {skipped} skipped")
+        } else {
+            String::new()
+        },
+        if timed_out > 0 {
+            format!(", {timed_out} timed out")
         } else {
             String::new()
         },
@@ -2617,6 +2630,7 @@ fn build_workflow_summary(state: &ExecutionState<'_>) -> String {
             WorkflowStepStatus::Running => "...",
             WorkflowStepStatus::Pending => "-",
             WorkflowStepStatus::Waiting => "wait",
+            WorkflowStepStatus::TimedOut => "tout",
         };
         let iter_label = if step.iteration > 0 {
             format!(" (iter {})", step.iteration)
@@ -2891,6 +2905,125 @@ mod tests {
 
         let steps = mgr.get_workflow_steps(&run.id).unwrap();
         assert_eq!(steps[0].status, WorkflowStepStatus::Failed);
+    }
+
+    fn make_gate_node(gate_type: GateType, on_timeout: OnTimeout) -> GateNode {
+        GateNode {
+            name: "test_gate".to_string(),
+            gate_type,
+            prompt: None,
+            min_approvals: 1,
+            timeout_secs: 1,
+            on_timeout,
+        }
+    }
+
+    fn make_state_with_run<'a>(
+        conn: &'a Connection,
+        config: &'static Config,
+    ) -> (ExecutionState<'a>, String) {
+        let agent_mgr = AgentManager::new(conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+        let wf_mgr = WorkflowManager::new(conn);
+        let run = wf_mgr
+            .create_workflow_run("test", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+        wf_mgr
+            .update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None)
+            .unwrap();
+        let run_id = run.id.clone();
+        let state = ExecutionState {
+            conn,
+            config,
+            workflow_run_id: run_id.clone(),
+            workflow_name: "test".to_string(),
+            worktree_id: "w1".to_string(),
+            worktree_path: String::new(),
+            worktree_slug: String::new(),
+            repo_path: String::new(),
+            model: None,
+            exec_config: WorkflowExecConfig::default(),
+            inputs: HashMap::new(),
+            agent_mgr: AgentManager::new(conn),
+            wf_mgr: WorkflowManager::new(conn),
+            parent_run_id: parent.id,
+            depth: 0,
+            step_results: HashMap::new(),
+            contexts: Vec::new(),
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            last_gate_feedback: None,
+            last_structured_output: None,
+        };
+        (state, run_id)
+    }
+
+    #[test]
+    fn test_gate_timeout_fail() {
+        let conn = setup_db();
+        let config: &'static Config = Box::leak(Box::new(Config::default()));
+        let (mut state, run_id) = make_state_with_run(&conn, config);
+
+        let wf_mgr = WorkflowManager::new(&conn);
+        let step_id = wf_mgr
+            .insert_step(&run_id, "test_gate", "gate", false, 0, 0)
+            .unwrap();
+        wf_mgr
+            .update_step_status(
+                &step_id,
+                WorkflowStepStatus::Waiting,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let node = make_gate_node(GateType::HumanApproval, OnTimeout::Fail);
+        let result = handle_gate_timeout(&mut state, &step_id, &node);
+
+        assert!(result.is_err());
+        let steps = wf_mgr.get_workflow_steps(&run_id).unwrap();
+        assert_eq!(steps[0].status, WorkflowStepStatus::Failed);
+        assert!(!state.all_succeeded);
+    }
+
+    #[test]
+    fn test_gate_timeout_continue() {
+        let conn = setup_db();
+        let config: &'static Config = Box::leak(Box::new(Config::default()));
+        let (mut state, run_id) = make_state_with_run(&conn, config);
+
+        let wf_mgr = WorkflowManager::new(&conn);
+        let step_id = wf_mgr
+            .insert_step(&run_id, "test_gate", "gate", false, 0, 0)
+            .unwrap();
+        wf_mgr
+            .update_step_status(
+                &step_id,
+                WorkflowStepStatus::Waiting,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let node = make_gate_node(GateType::HumanApproval, OnTimeout::Continue);
+        let result = handle_gate_timeout(&mut state, &step_id, &node);
+
+        assert!(result.is_ok(), "on_timeout=continue should return Ok");
+        let steps = wf_mgr.get_workflow_steps(&run_id).unwrap();
+        assert_eq!(steps[0].status, WorkflowStepStatus::TimedOut);
+        assert!(
+            state.all_succeeded,
+            "on_timeout=continue should not set all_succeeded=false"
+        );
     }
 
     #[test]
