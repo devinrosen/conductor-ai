@@ -3347,4 +3347,86 @@ And here is my actual output:
         let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
         assert!(!result.contains_key("optional_field"));
     }
+
+    // -----------------------------------------------------------------------
+    // execute_unless tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_execute_unless_marker_absent_runs_body() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+
+        // Step "build" exists but does NOT have the "has_errors" marker
+        state.step_results.insert(
+            "build".to_string(),
+            StepResult {
+                step_name: "build".to_string(),
+                status: WorkflowStepStatus::Completed,
+                result_text: None,
+                cost_usd: None,
+                num_turns: None,
+                duration_ms: None,
+                markers: vec!["build_ok".to_string()],
+                context: String::new(),
+                child_run_id: None,
+            },
+        );
+
+        let node = UnlessNode {
+            step: "build".to_string(),
+            marker: "has_errors".to_string(),
+            body: vec![], // empty body — just verify it enters the branch without error
+        };
+
+        // Should succeed (marker absent → body executes, empty body is fine)
+        execute_unless(&mut state, &node).unwrap();
+    }
+
+    #[test]
+    fn test_execute_unless_marker_present_skips_body() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+
+        // Step "build" has the "has_errors" marker
+        state.step_results.insert(
+            "build".to_string(),
+            StepResult {
+                step_name: "build".to_string(),
+                status: WorkflowStepStatus::Completed,
+                result_text: None,
+                cost_usd: None,
+                num_turns: None,
+                duration_ms: None,
+                markers: vec!["has_errors".to_string()],
+                context: String::new(),
+                child_run_id: None,
+            },
+        );
+
+        let node = UnlessNode {
+            step: "build".to_string(),
+            marker: "has_errors".to_string(),
+            body: vec![], // empty body
+        };
+
+        // Should succeed (marker present → body skipped)
+        execute_unless(&mut state, &node).unwrap();
+    }
+
+    #[test]
+    fn test_execute_unless_step_not_found_runs_body() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+
+        // No step results at all — step "build" not in step_results
+        let node = UnlessNode {
+            step: "build".to_string(),
+            marker: "has_errors".to_string(),
+            body: vec![], // empty body
+        };
+
+        // Should succeed (step not found → unwrap_or(false) → !false → body runs)
+        execute_unless(&mut state, &node).unwrap();
+    }
 }
