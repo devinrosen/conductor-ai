@@ -20,13 +20,14 @@ use crate::config::Config;
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::{
-    self, CallNode, GateNode, GateType, IfNode, OnMaxIter, OnTimeout, ParallelNode, WhileNode,
-    WorkflowNode,
+    self, CallNode, CallWorkflowNode, GateNode, GateType, IfNode, OnMaxIter, OnTimeout,
+    ParallelNode, WhileNode, WorkflowNode,
 };
 
 // Re-export DSL types so consumers go through `workflow::` instead of `workflow_dsl::` directly.
 pub use crate::workflow_dsl::{
-    collect_agent_names, AgentRef, InputDecl, WorkflowDef, WorkflowTrigger,
+    collect_agent_names, collect_workflow_refs, detect_workflow_cycles, AgentRef, InputDecl,
+    WorkflowDef, WorkflowTrigger, MAX_WORKFLOW_DEPTH,
 };
 use crate::worktree::WorktreeManager;
 
@@ -767,30 +768,32 @@ fn substitute_variables(prompt: &str, vars: &HashMap<&str, String>) -> String {
     result
 }
 
-/// Build a fully-substituted agent prompt from the execution state and agent definition.
-///
-/// Handles: input variables, prior_context, prior_contexts, gate_feedback,
-/// dry-run prefix for committing agents, and CONDUCTOR_OUTPUT instruction.
-fn build_agent_prompt(state: &ExecutionState<'_>, agent_def: &agent_config::AgentDef) -> String {
+/// Build the variable map from execution state (used for substitution in sub-workflow inputs).
+fn build_variable_map<'a>(state: &'a ExecutionState<'_>) -> HashMap<&'a str, String> {
     let mut vars: HashMap<&str, String> = HashMap::new();
     for (k, v) in &state.inputs {
         vars.insert(k.as_str(), v.clone());
     }
-
     let prior_context = state
         .contexts
         .last()
         .map(|c| c.context.clone())
         .unwrap_or_default();
     vars.insert("prior_context", prior_context);
-
     let prior_contexts_json = serde_json::to_string(&state.contexts).unwrap_or_default();
     vars.insert("prior_contexts", prior_contexts_json);
-
     if let Some(ref feedback) = state.last_gate_feedback {
         vars.insert("gate_feedback", feedback.clone());
     }
+    vars
+}
 
+/// Build a fully-substituted agent prompt from the execution state and agent definition.
+///
+/// Handles: input variables, prior_context, prior_contexts, gate_feedback,
+/// dry-run prefix for committing agents, and CONDUCTOR_OUTPUT instruction.
+fn build_agent_prompt(state: &ExecutionState<'_>, agent_def: &agent_config::AgentDef) -> String {
+    let vars = build_variable_map(state);
     let mut prompt = substitute_variables(&agent_def.prompt, &vars);
 
     if agent_def.can_commit && state.exec_config.dry_run {
@@ -808,6 +811,7 @@ fn build_agent_prompt(state: &ExecutionState<'_>, agent_def: &agent_config::Agen
 /// Mutable runtime state for a workflow execution.
 struct ExecutionState<'a> {
     conn: &'a Connection,
+    config: &'a Config,
     workflow_run_id: String,
     workflow_name: String,
     worktree_id: String,
@@ -820,6 +824,8 @@ struct ExecutionState<'a> {
     agent_mgr: AgentManager<'a>,
     wf_mgr: WorkflowManager<'a>,
     parent_run_id: String,
+    /// Current nesting depth (0 = top-level workflow).
+    depth: u32,
     // Runtime
     step_results: HashMap<String, StepResult>,
     contexts: Vec<ContextEntry>,
@@ -846,6 +852,8 @@ pub struct WorkflowExecInput<'a> {
     pub model: Option<&'a str>,
     pub exec_config: &'a WorkflowExecConfig,
     pub inputs: HashMap<String, String>,
+    /// Current nesting depth for sub-workflow calls (0 = top-level).
+    pub depth: u32,
 }
 
 /// Execute a workflow definition against a worktree.
@@ -903,6 +911,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
 
     let mut state = ExecutionState {
         conn,
+        config,
         workflow_run_id: wf_run.id.clone(),
         workflow_name: workflow.name.clone(),
         worktree_id: input.worktree_id.to_string(),
@@ -915,6 +924,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         agent_mgr: AgentManager::new(conn),
         wf_mgr: WorkflowManager::new(conn),
         parent_run_id: parent_run.id.clone(),
+        depth: input.depth,
         step_results: HashMap::new(),
         contexts: Vec::new(),
         position: 0,
@@ -1024,6 +1034,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         model: params.model.as_deref(),
         exec_config: &params.exec_config,
         inputs: params.inputs.clone(),
+        depth: 0,
     };
 
     execute_workflow(&input)
@@ -1037,6 +1048,7 @@ fn execute_nodes(state: &mut ExecutionState<'_>, nodes: &[WorkflowNode]) -> Resu
         }
         match node {
             WorkflowNode::Call(n) => execute_call(state, n, 0)?,
+            WorkflowNode::CallWorkflow(n) => execute_call_workflow(state, n, 0)?,
             WorkflowNode::If(n) => execute_if(state, n)?,
             WorkflowNode::While(n) => execute_while(state, n)?,
             WorkflowNode::Parallel(n) => execute_parallel(state, n, 0)?,
@@ -1048,6 +1060,157 @@ fn execute_nodes(state: &mut ExecutionState<'_>, nodes: &[WorkflowNode]) -> Resu
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers for retry-exhaustion epilogue
+// ---------------------------------------------------------------------------
+
+/// Run the on_fail agent after all retries for a step are exhausted.
+///
+/// Injects `failed_step`, `failure_reason`, and `retry_count` into the
+/// workflow inputs for the duration of the on_fail call, then cleans up.
+fn run_on_fail_agent(
+    state: &mut ExecutionState<'_>,
+    step_label: &str,
+    on_fail_agent: &crate::workflow_dsl::AgentRef,
+    last_error: &str,
+    retries: u32,
+    iteration: u32,
+) {
+    eprintln!(
+        "[workflow] All retries exhausted for '{}', running on_fail agent '{}'",
+        step_label,
+        on_fail_agent.label(),
+    );
+    state
+        .inputs
+        .insert("failed_step".to_string(), step_label.to_string());
+    state
+        .inputs
+        .insert("failure_reason".to_string(), last_error.to_string());
+    state
+        .inputs
+        .insert("retry_count".to_string(), retries.to_string());
+
+    let on_fail_node = CallNode {
+        agent: on_fail_agent.clone(),
+        retries: 0,
+        on_fail: None,
+    };
+    if let Err(e) = execute_call(state, &on_fail_node, iteration) {
+        eprintln!(
+            "[workflow] on_fail agent '{}' also failed: {e}",
+            on_fail_agent.label(),
+        );
+    }
+
+    state.inputs.remove("failed_step");
+    state.inputs.remove("failure_reason");
+    state.inputs.remove("retry_count");
+}
+
+/// Record a failed step result and optionally return a fail-fast error.
+fn record_step_failure(
+    state: &mut ExecutionState<'_>,
+    step_key: String,
+    step_label: &str,
+    last_error: String,
+    max_attempts: u32,
+) -> Result<()> {
+    state.all_succeeded = false;
+    let step_result = StepResult {
+        step_name: step_label.to_string(),
+        status: WorkflowStepStatus::Failed,
+        result_text: Some(last_error),
+        cost_usd: None,
+        num_turns: None,
+        duration_ms: None,
+        markers: Vec::new(),
+        context: String::new(),
+        child_run_id: None,
+    };
+    state.step_results.insert(step_key, step_result);
+
+    if state.exec_config.fail_fast {
+        return Err(ConductorError::Workflow(format!(
+            "Step '{}' failed after {} attempts",
+            step_label, max_attempts
+        )));
+    }
+
+    Ok(())
+}
+
+/// Record a successful step: accumulate stats, insert StepResult, push context.
+#[allow(clippy::too_many_arguments)]
+fn record_step_success(
+    state: &mut ExecutionState<'_>,
+    step_key: String,
+    step_name: &str,
+    result_text: Option<String>,
+    cost_usd: Option<f64>,
+    num_turns: Option<i64>,
+    duration_ms: Option<i64>,
+    markers: Vec<String>,
+    context: String,
+    child_run_id: Option<String>,
+    iteration: u32,
+) {
+    if let Some(cost) = cost_usd {
+        state.total_cost += cost;
+    }
+    if let Some(turns) = num_turns {
+        state.total_turns += turns;
+    }
+    if let Some(dur) = duration_ms {
+        state.total_duration_ms += dur;
+    }
+
+    let step_result = StepResult {
+        step_name: step_name.to_string(),
+        status: WorkflowStepStatus::Completed,
+        result_text,
+        cost_usd,
+        num_turns,
+        duration_ms,
+        markers,
+        context: context.clone(),
+        child_run_id,
+    };
+    state.step_results.insert(step_key, step_result);
+
+    state.contexts.push(ContextEntry {
+        step: step_name.to_string(),
+        iteration,
+        context,
+    });
+}
+
+/// Resolve child workflow inputs: substitute variables, apply defaults, and
+/// check for missing required inputs.
+///
+/// Returns `Ok(resolved_inputs)` or `Err(missing_input_name)`.
+fn resolve_child_inputs(
+    raw_inputs: &HashMap<String, String>,
+    vars: &HashMap<&str, String>,
+    input_decls: &[workflow_dsl::InputDecl],
+) -> std::result::Result<HashMap<String, String>, String> {
+    let mut child_inputs = HashMap::new();
+    for (k, v) in raw_inputs {
+        child_inputs.insert(k.clone(), substitute_variables(v, vars));
+    }
+    for decl in input_decls {
+        if !child_inputs.contains_key(&decl.name) {
+            if decl.required {
+                return Err(decl.name.clone());
+            }
+            if let Some(ref default) = decl.default {
+                child_inputs.insert(decl.name.clone(), default.clone());
+            }
+        }
+    }
+    Ok(child_inputs)
 }
 
 // ---------------------------------------------------------------------------
@@ -1179,35 +1342,19 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
                         Some(attempt as i64),
                     )?;
 
-                    // Update state
-                    if let Some(cost) = completed_run.cost_usd {
-                        state.total_cost += cost;
-                    }
-                    if let Some(turns) = completed_run.num_turns {
-                        state.total_turns += turns;
-                    }
-                    if let Some(dur) = completed_run.duration_ms {
-                        state.total_duration_ms += dur;
-                    }
-
-                    let step_result = StepResult {
-                        step_name: agent_label.to_string(),
-                        status: WorkflowStepStatus::Completed,
-                        result_text: completed_run.result_text,
-                        cost_usd: completed_run.cost_usd,
-                        num_turns: completed_run.num_turns,
-                        duration_ms: completed_run.duration_ms,
-                        markers: output.markers,
-                        context: output.context.clone(),
-                        child_run_id: Some(completed_run.id),
-                    };
-                    state.step_results.insert(step_key.clone(), step_result);
-
-                    state.contexts.push(ContextEntry {
-                        step: agent_label.to_string(),
+                    record_step_success(
+                        state,
+                        step_key.clone(),
+                        agent_label,
+                        completed_run.result_text,
+                        completed_run.cost_usd,
+                        completed_run.num_turns,
+                        completed_run.duration_ms,
+                        output.markers,
+                        output.context,
+                        Some(completed_run.id),
                         iteration,
-                        context: output.context,
-                    });
+                    );
 
                     return Ok(());
                 } else {
@@ -1258,62 +1405,267 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
 
     // All retries exhausted — run on_fail agent if specified
     if let Some(ref on_fail_agent) = node.on_fail {
-        eprintln!(
-            "[workflow] All retries exhausted for '{}', running on_fail agent '{}'",
+        run_on_fail_agent(
+            state,
             agent_label,
-            on_fail_agent.label(),
+            on_fail_agent,
+            &last_error,
+            node.retries,
+            iteration,
         );
-        // Inject failure variables
-        state
-            .inputs
-            .insert("failed_step".to_string(), agent_label.to_string());
-        state
-            .inputs
-            .insert("failure_reason".to_string(), last_error.clone());
-        state
-            .inputs
-            .insert("retry_count".to_string(), node.retries.to_string());
+    }
 
-        let on_fail_node = CallNode {
-            agent: on_fail_agent.clone(),
-            retries: 0,
-            on_fail: None,
-        };
-        if let Err(e) = execute_call(state, &on_fail_node, iteration) {
-            eprintln!(
-                "[workflow] on_fail agent '{}' also failed: {e}",
-                on_fail_agent.label(),
-            );
+    record_step_failure(state, step_key, agent_label, last_error, max_attempts)
+}
+
+fn execute_call_workflow(
+    state: &mut ExecutionState<'_>,
+    node: &CallWorkflowNode,
+    iteration: u32,
+) -> Result<()> {
+    let pos = state.position;
+    state.position += 1;
+
+    let child_depth = state.depth + 1;
+    if child_depth > workflow_dsl::MAX_WORKFLOW_DEPTH {
+        let msg = format!(
+            "Workflow nesting depth exceeds maximum of {}: parent '{}' calling '{}'",
+            workflow_dsl::MAX_WORKFLOW_DEPTH,
+            state.workflow_name,
+            node.workflow,
+        );
+        state.all_succeeded = false;
+        if state.exec_config.fail_fast {
+            return Err(ConductorError::Workflow(msg));
         }
-
-        // Clean up injected vars
-        state.inputs.remove("failed_step");
-        state.inputs.remove("failure_reason");
-        state.inputs.remove("retry_count");
+        eprintln!("[workflow] {msg}");
+        return Ok(());
     }
 
-    state.all_succeeded = false;
-    let step_result = StepResult {
-        step_name: agent_label.to_string(),
-        status: WorkflowStepStatus::Failed,
-        result_text: Some(last_error),
-        cost_usd: None,
-        num_turns: None,
-        duration_ms: None,
-        markers: Vec::new(),
-        context: String::new(),
-        child_run_id: None,
+    let step_key = node.workflow.clone();
+
+    // Load the child workflow definition once (it won't change between retries)
+    let child_def =
+        workflow_dsl::load_workflow_by_name(&state.worktree_path, &state.repo_path, &node.workflow)
+            .map_err(|e| {
+                ConductorError::Workflow(format!(
+                    "Failed to load sub-workflow '{}': {e}",
+                    node.workflow
+                ))
+            })?;
+
+    // Retry loop
+    let max_attempts = 1 + node.retries;
+    let mut last_error = String::new();
+
+    for attempt in 0..max_attempts {
+        let step_id = state.wf_mgr.insert_step(
+            &state.workflow_run_id,
+            &format!("workflow:{}", node.workflow),
+            "workflow",
+            false,
+            pos,
+            iteration as i64,
+        )?;
+
+        state.wf_mgr.update_step_status(
+            &step_id,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            Some(attempt as i64),
+        )?;
+
+        eprintln!(
+            "[workflow] Step 'workflow:{}' (attempt {}/{}): executing sub-workflow",
+            node.workflow,
+            attempt + 1,
+            max_attempts,
+        );
+
+        // Resolve child inputs: substitute variables, apply defaults, check required
+        let vars = build_variable_map(state);
+        let child_inputs = match resolve_child_inputs(&node.inputs, &vars, &child_def.inputs) {
+            Ok(inputs) => inputs,
+            Err(missing) => {
+                let msg = format!(
+                    "Sub-workflow '{}' requires input '{}' but it was not provided",
+                    node.workflow, missing,
+                );
+                eprintln!("[workflow] {msg}");
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    None,
+                    Some(&msg),
+                    None,
+                    None,
+                    Some(attempt as i64),
+                )?;
+                last_error = msg;
+                continue;
+            }
+        };
+
+        // Execute the child workflow
+        let child_input = WorkflowExecInput {
+            conn: state.conn,
+            config: state.config,
+            workflow: &child_def,
+            worktree_id: &state.worktree_id,
+            worktree_path: &state.worktree_path,
+            repo_path: &state.repo_path,
+            model: state.model.as_deref(),
+            exec_config: &state.exec_config,
+            inputs: child_inputs,
+            depth: child_depth,
+        };
+
+        match execute_workflow(&child_input) {
+            Ok(result) => {
+                if result.all_succeeded {
+                    eprintln!(
+                        "[workflow] Sub-workflow '{}' completed: cost=${:.4}, {} turns",
+                        node.workflow, result.total_cost, result.total_turns,
+                    );
+
+                    // Bubble up the child's final step output (markers + context)
+                    let (markers, context) =
+                        fetch_child_final_output(&state.wf_mgr, &result.workflow_run_id);
+
+                    let markers_json = serde_json::to_string(&markers).unwrap_or_default();
+
+                    state.wf_mgr.update_step_status(
+                        &step_id,
+                        WorkflowStepStatus::Completed,
+                        None,
+                        Some(&format!("Sub-workflow '{}' completed", node.workflow)),
+                        Some(&context),
+                        Some(&markers_json),
+                        Some(attempt as i64),
+                    )?;
+
+                    record_step_success(
+                        state,
+                        step_key.clone(),
+                        &node.workflow,
+                        Some(format!(
+                            "Sub-workflow '{}' completed successfully",
+                            node.workflow
+                        )),
+                        Some(result.total_cost),
+                        Some(result.total_turns),
+                        Some(result.total_duration_ms),
+                        markers,
+                        context,
+                        Some(result.workflow_run_id),
+                        iteration,
+                    );
+
+                    return Ok(());
+                } else {
+                    let msg = format!("Sub-workflow '{}' failed", node.workflow);
+                    eprintln!(
+                        "[workflow] {} (attempt {}/{})",
+                        msg,
+                        attempt + 1,
+                        max_attempts,
+                    );
+                    state.wf_mgr.update_step_status(
+                        &step_id,
+                        WorkflowStepStatus::Failed,
+                        None,
+                        Some(&msg),
+                        None,
+                        None,
+                        Some(attempt as i64),
+                    )?;
+                    last_error = msg;
+                    continue;
+                }
+            }
+            Err(e) => {
+                let msg = format!("Sub-workflow '{}' error: {e}", node.workflow);
+                eprintln!(
+                    "[workflow] {} (attempt {}/{})",
+                    msg,
+                    attempt + 1,
+                    max_attempts,
+                );
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    None,
+                    Some(&msg),
+                    None,
+                    None,
+                    Some(attempt as i64),
+                )?;
+                last_error = msg;
+                continue;
+            }
+        }
+    }
+
+    // All retries exhausted — run on_fail agent if specified
+    if let Some(ref on_fail_agent) = node.on_fail {
+        run_on_fail_agent(
+            state,
+            &node.workflow,
+            on_fail_agent,
+            &last_error,
+            node.retries,
+            iteration,
+        );
+    }
+
+    record_step_failure(state, step_key, &node.workflow, last_error, max_attempts)
+}
+
+/// Fetch the final step's markers and context from a completed child workflow run.
+fn fetch_child_final_output(
+    wf_mgr: &WorkflowManager<'_>,
+    workflow_run_id: &str,
+) -> (Vec<String>, String) {
+    let steps = match wf_mgr.get_workflow_steps(workflow_run_id) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "[workflow] Failed to fetch steps for child workflow run '{}': {e}",
+                workflow_run_id,
+            );
+            return (Vec::new(), String::new());
+        }
     };
-    state.step_results.insert(step_key, step_result);
 
-    if state.exec_config.fail_fast {
-        return Err(ConductorError::Workflow(format!(
-            "Step '{}' failed after {} attempts",
-            agent_label, max_attempts
-        )));
+    // Find the last completed step (by position descending)
+    let last_completed = steps
+        .iter()
+        .filter(|s| s.status == WorkflowStepStatus::Completed)
+        .max_by_key(|s| s.position);
+
+    match last_completed {
+        Some(step) => {
+            let markers: Vec<String> = step
+                .markers_out
+                .as_deref()
+                .map(|m| {
+                    serde_json::from_str(m).unwrap_or_else(|e| {
+                        eprintln!(
+                            "[workflow] Malformed markers_out JSON in step '{}': {e}",
+                            step.step_name,
+                        );
+                        Vec::new()
+                    })
+                })
+                .unwrap_or_default();
+            let context = step.context_out.clone().unwrap_or_default();
+            (markers, context)
+        }
+        None => (Vec::new(), String::new()),
     }
-
-    Ok(())
 }
 
 fn execute_if(state: &mut ExecutionState<'_>, node: &IfNode) -> Result<()> {
@@ -1388,6 +1740,7 @@ fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) -> Result<()>
         for body_node in &node.body {
             match body_node {
                 WorkflowNode::Call(n) => execute_call(state, n, iteration)?,
+                WorkflowNode::CallWorkflow(n) => execute_call_workflow(state, n, iteration)?,
                 WorkflowNode::If(n) => execute_if(state, n)?,
                 WorkflowNode::While(n) => execute_while(state, n)?,
                 WorkflowNode::Parallel(n) => execute_parallel(state, n, iteration)?,
@@ -2683,5 +3036,290 @@ And here is my actual output:
             heading: "Markers Out",
             body: "marker1".into()
         }));
+    }
+
+    // -----------------------------------------------------------------------
+    // fetch_child_final_output tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_fetch_child_final_output_returns_last_completed_step() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("child-wf", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+
+        // Insert two completed steps; the second (position=1) should be returned
+        let step1_id = mgr
+            .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step1_id,
+            WorkflowStepStatus::Completed,
+            None,
+            Some("step-a done"),
+            Some("context-a"),
+            Some(r#"["marker_a"]"#),
+            Some(0),
+        )
+        .unwrap();
+
+        let step2_id = mgr
+            .insert_step(&run.id, "step-b", "actor", false, 1, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step2_id,
+            WorkflowStepStatus::Completed,
+            None,
+            Some("step-b done"),
+            Some("context-b"),
+            Some(r#"["marker_b1","marker_b2"]"#),
+            Some(0),
+        )
+        .unwrap();
+
+        let (markers, context) = fetch_child_final_output(&mgr, &run.id);
+        assert_eq!(markers, vec!["marker_b1", "marker_b2"]);
+        assert_eq!(context, "context-b");
+    }
+
+    #[test]
+    fn test_fetch_child_final_output_no_completed_steps() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("child-wf", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+
+        // Insert a failed step only
+        let step_id = mgr
+            .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step_id,
+            WorkflowStepStatus::Failed,
+            None,
+            Some("failed"),
+            None,
+            None,
+            Some(0),
+        )
+        .unwrap();
+
+        let (markers, context) = fetch_child_final_output(&mgr, &run.id);
+        assert!(markers.is_empty());
+        assert!(context.is_empty());
+    }
+
+    #[test]
+    fn test_fetch_child_final_output_malformed_markers_json() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("child-wf", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+
+        let step_id = mgr
+            .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step_id,
+            WorkflowStepStatus::Completed,
+            None,
+            Some("done"),
+            Some("some context"),
+            Some("not valid json {{{"),
+            Some(0),
+        )
+        .unwrap();
+
+        let (markers, context) = fetch_child_final_output(&mgr, &run.id);
+        assert!(markers.is_empty()); // malformed JSON falls back to empty
+        assert_eq!(context, "some context");
+    }
+
+    #[test]
+    fn test_fetch_child_final_output_nonexistent_run() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let (markers, context) = fetch_child_final_output(&mgr, "nonexistent-run-id");
+        assert!(markers.is_empty());
+        assert!(context.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // build_variable_map tests
+    // -----------------------------------------------------------------------
+
+    /// Helper to create a minimal ExecutionState for testing build_variable_map.
+    fn make_test_state(conn: &Connection) -> ExecutionState<'_> {
+        let config = Config::default();
+        // We need a config that lives long enough — use a leaked Box for test simplicity.
+        let config: &'static Config = Box::leak(Box::new(config));
+        ExecutionState {
+            conn,
+            config,
+            workflow_run_id: String::new(),
+            workflow_name: String::new(),
+            worktree_id: String::new(),
+            worktree_path: String::new(),
+            worktree_slug: String::new(),
+            repo_path: String::new(),
+            model: None,
+            exec_config: WorkflowExecConfig::default(),
+            inputs: HashMap::new(),
+            agent_mgr: AgentManager::new(conn),
+            wf_mgr: WorkflowManager::new(conn),
+            parent_run_id: String::new(),
+            depth: 0,
+            step_results: HashMap::new(),
+            contexts: Vec::new(),
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            last_gate_feedback: None,
+        }
+    }
+
+    #[test]
+    fn test_build_variable_map_includes_inputs_and_prior_context() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+        state
+            .inputs
+            .insert("branch".to_string(), "main".to_string());
+        state.contexts.push(ContextEntry {
+            step: "step-a".to_string(),
+            iteration: 0,
+            context: "previous output".to_string(),
+        });
+
+        let vars = build_variable_map(&state);
+        assert_eq!(vars.get("branch").unwrap(), "main");
+        assert_eq!(vars.get("prior_context").unwrap(), "previous output");
+        assert!(vars.get("prior_contexts").unwrap().contains("step-a"));
+    }
+
+    #[test]
+    fn test_build_variable_map_includes_gate_feedback() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+        state.last_gate_feedback = Some("looks good".to_string());
+
+        let vars = build_variable_map(&state);
+        assert_eq!(vars.get("gate_feedback").unwrap(), "looks good");
+    }
+
+    #[test]
+    fn test_build_variable_map_no_gate_feedback() {
+        let conn = setup_db();
+        let state = make_test_state(&conn);
+        let vars = build_variable_map(&state);
+        assert!(!vars.contains_key("gate_feedback"));
+        // prior_context should be empty string when no contexts
+        assert_eq!(vars.get("prior_context").unwrap(), "");
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_child_inputs tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_child_inputs_substitutes_variables() {
+        use crate::workflow_dsl::InputDecl;
+
+        let mut raw = HashMap::new();
+        raw.insert("msg".to_string(), "Hello {{name}}!".to_string());
+
+        let mut vars: HashMap<&str, String> = HashMap::new();
+        vars.insert("name", "World".to_string());
+
+        let decls = vec![InputDecl {
+            name: "msg".to_string(),
+            required: true,
+            default: None,
+        }];
+
+        let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
+        assert_eq!(result.get("msg").unwrap(), "Hello World!");
+    }
+
+    #[test]
+    fn test_resolve_child_inputs_applies_defaults() {
+        use crate::workflow_dsl::InputDecl;
+
+        let raw = HashMap::new(); // no inputs provided
+
+        let vars: HashMap<&str, String> = HashMap::new();
+        let decls = vec![InputDecl {
+            name: "mode".to_string(),
+            required: false,
+            default: Some("fast".to_string()),
+        }];
+
+        let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
+        assert_eq!(result.get("mode").unwrap(), "fast");
+    }
+
+    #[test]
+    fn test_resolve_child_inputs_missing_required() {
+        use crate::workflow_dsl::InputDecl;
+
+        let raw = HashMap::new();
+        let vars: HashMap<&str, String> = HashMap::new();
+        let decls = vec![InputDecl {
+            name: "pr_url".to_string(),
+            required: true,
+            default: None,
+        }];
+
+        let err = resolve_child_inputs(&raw, &vars, &decls).unwrap_err();
+        assert_eq!(err, "pr_url");
+    }
+
+    #[test]
+    fn test_resolve_child_inputs_provided_overrides_default() {
+        use crate::workflow_dsl::InputDecl;
+
+        let mut raw = HashMap::new();
+        raw.insert("mode".to_string(), "slow".to_string());
+
+        let vars: HashMap<&str, String> = HashMap::new();
+        let decls = vec![InputDecl {
+            name: "mode".to_string(),
+            required: false,
+            default: Some("fast".to_string()),
+        }];
+
+        let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
+        assert_eq!(result.get("mode").unwrap(), "slow");
+    }
+
+    #[test]
+    fn test_resolve_child_inputs_optional_without_default_omitted() {
+        use crate::workflow_dsl::InputDecl;
+
+        let raw = HashMap::new();
+        let vars: HashMap<&str, String> = HashMap::new();
+        let decls = vec![InputDecl {
+            name: "optional_field".to_string(),
+            required: false,
+            default: None,
+        }];
+
+        let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
+        assert!(!result.contains_key("optional_field"));
     }
 }
