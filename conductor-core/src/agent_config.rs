@@ -484,6 +484,63 @@ Implement the plan written in PLAN.md.
     }
 
     #[test]
+    fn test_load_agent_claude_fallback_worktree() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        // Put agent only in worktree's .claude/agents/
+        let claude_agents = worktree.path().join(".claude").join("agents");
+        fs::create_dir_all(&claude_agents).unwrap();
+        fs::write(
+            claude_agents.join("review.md"),
+            "---\nrole: reviewer\n---\nWorktree Claude Code review agent.",
+        )
+        .unwrap();
+
+        let def = load_agent(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            &AgentRef::Name("review".to_string()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(def.prompt, "Worktree Claude Code review agent.");
+    }
+
+    #[test]
+    fn test_load_agent_claude_worktree_takes_precedence_over_repo() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        // Both worktree and repo have .claude/agents/ with the same agent
+        let wt_claude_agents = worktree.path().join(".claude").join("agents");
+        fs::create_dir_all(&wt_claude_agents).unwrap();
+        fs::write(
+            wt_claude_agents.join("review.md"),
+            "---\nrole: reviewer\n---\nWorktree Claude agent.",
+        )
+        .unwrap();
+
+        let repo_claude_agents = repo.path().join(".claude").join("agents");
+        fs::create_dir_all(&repo_claude_agents).unwrap();
+        fs::write(
+            repo_claude_agents.join("review.md"),
+            "---\nrole: reviewer\n---\nRepo Claude agent.",
+        )
+        .unwrap();
+
+        let def = load_agent(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            &AgentRef::Name("review".to_string()),
+            None,
+        )
+        .unwrap();
+        // Worktree .claude/agents should win over repo .claude/agents
+        assert_eq!(def.prompt, "Worktree Claude agent.");
+    }
+
+    #[test]
     fn test_load_agent_conductor_takes_precedence_over_claude() {
         let worktree = TempDir::new().unwrap();
         let repo = TempDir::new().unwrap();
@@ -581,7 +638,7 @@ Implement the plan written in PLAN.md.
         .unwrap();
 
         // Try to escape repo root with ../
-        let evil_path = format!("../evil.md");
+        let evil_path = "../evil.md".to_string();
         let result = load_agent(
             repo.path().to_str().unwrap(),
             repo.path().to_str().unwrap(),
