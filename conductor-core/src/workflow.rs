@@ -1072,6 +1072,10 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
         Some(&state.workflow_name),
     )?;
     let agent_label = node.agent.label();
+    // step_key is the short name used as the step_results map key so that
+    // if/while conditions can reference this step by name regardless of whether
+    // the agent was referenced by name or by explicit path.
+    let step_key = node.agent.step_key();
 
     let prompt = build_agent_prompt(state, &agent_def);
     let step_model = agent_def.model.as_deref().or(state.model.as_deref());
@@ -1203,9 +1207,7 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
                         context: output.context.clone(),
                         child_run_id: Some(completed_run.id),
                     };
-                    state
-                        .step_results
-                        .insert(agent_label.to_string(), step_result);
+                    state.step_results.insert(step_key.clone(), step_result);
 
                     state.contexts.push(ContextEntry {
                         step: agent_label.to_string(),
@@ -1308,9 +1310,7 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
         context: String::new(),
         child_run_id: None,
     };
-    state
-        .step_results
-        .insert(agent_label.to_string(), step_result);
+    state.step_results.insert(step_key, step_result);
 
     if state.exec_config.fail_fast {
         return Err(ConductorError::Workflow(format!(

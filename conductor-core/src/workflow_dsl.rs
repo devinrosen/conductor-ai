@@ -126,6 +126,23 @@ impl AgentRef {
             Self::Name(s) | Self::Path(s) => s.as_str(),
         }
     }
+
+    /// Key used to store and look up results in `step_results`.
+    ///
+    /// - `Name` variants return the name as-is.
+    /// - `Path` variants return the file stem without extension
+    ///   (e.g. `"plan"` from `".claude/agents/plan.md"`), so that `if`/`while`
+    ///   conditions can reference path-based agents by their short name.
+    pub fn step_key(&self) -> String {
+        match self {
+            Self::Name(s) => s.clone(),
+            Self::Path(s) => Path::new(s)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or(s.as_str())
+                .to_string(),
+        }
+    }
 }
 
 impl std::fmt::Display for AgentRef {
@@ -1644,6 +1661,27 @@ workflow test {
         assert_eq!(
             AgentRef::Path(".claude/agents/plan.md".to_string()).label(),
             ".claude/agents/plan.md"
+        );
+    }
+
+    #[test]
+    fn test_agent_ref_step_key() {
+        // Name variants: step_key == label
+        assert_eq!(AgentRef::Name("plan".to_string()).step_key(), "plan");
+
+        // Path variants: step_key is the file stem (no extension)
+        assert_eq!(
+            AgentRef::Path(".claude/agents/plan.md".to_string()).step_key(),
+            "plan"
+        );
+        assert_eq!(
+            AgentRef::Path(".claude/agents/code-review.md".to_string()).step_key(),
+            "code-review"
+        );
+        // Nested subdir — still just the stem
+        assert_eq!(
+            AgentRef::Path("custom/dir/my-agent.md".to_string()).step_key(),
+            "my-agent"
         );
     }
 
