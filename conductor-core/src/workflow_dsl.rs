@@ -2145,6 +2145,57 @@ workflow parent {
         assert_eq!(refs, vec!["lint-fix"]);
     }
 
+    #[test]
+    fn test_collect_agent_names_call_workflow_on_fail() {
+        let input = r#"
+workflow parent {
+    call workflow lint-fix {
+        on_fail = recovery-agent
+    }
+    call workflow test-coverage
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let refs = collect_agent_names(&def.body);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], AgentRef::Name("recovery-agent".to_string()));
+    }
+
+    #[test]
+    fn test_parse_call_workflow_in_always_block() {
+        let input = r#"
+workflow parent {
+    call build
+    always {
+        call workflow notify
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.always.len(), 1);
+        match &def.always[0] {
+            WorkflowNode::CallWorkflow(n) => assert_eq!(n.workflow, "notify"),
+            _ => panic!("Expected CallWorkflow node inside always"),
+        }
+    }
+
+    #[test]
+    fn test_collect_workflow_refs_in_always() {
+        let input = r#"
+workflow parent {
+    call build
+    always {
+        call workflow notify
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let body_refs = collect_workflow_refs(&def.body);
+        let always_refs = collect_workflow_refs(&def.always);
+        assert!(body_refs.is_empty());
+        assert_eq!(always_refs, vec!["notify"]);
+    }
+
     /// A quoted string without a `/` in `call` position should produce
     /// `AgentRef::Path`, not `AgentRef::Name`.  In `call` position, quoting is
     /// always a deliberate signal that the value is an explicit path, so the
