@@ -85,7 +85,7 @@ GitHub Actions runs on PRs to `main` (`.github/workflows/ci.yml`):
 
 Branch ruleset on `main`: PRs required, linear history (squash/rebase only), `Clippy` + `Test` must pass. Tag ruleset: `v*` tags cannot be deleted or overwritten.
 
-## Project Status (per docs/SPEC.md)
+## Project Status (per docs/VISION.md)
 
 - Phase 1 (done): Core library + CLI
 - Phase 2 (done): TUI with ratatui
