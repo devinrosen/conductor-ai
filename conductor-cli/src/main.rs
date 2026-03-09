@@ -1494,6 +1494,18 @@ fn main() -> Result<()> {
                 println!("  Nodes: {node_count}");
                 println!("  Agents referenced: {}", all_refs.len());
 
+                // Collect and validate prompt snippets
+                let all_snippets = workflow.collect_all_snippet_refs();
+
+                let missing_snippets = conductor_core::prompt_config::find_missing_snippets(
+                    &wt.path,
+                    &r.local_path,
+                    &all_snippets,
+                    Some(&name),
+                );
+
+                let mut has_errors = false;
+
                 if missing.is_empty() {
                     println!("  All agents found.");
                 } else {
@@ -1501,6 +1513,27 @@ fn main() -> Result<()> {
                     for agent in &missing {
                         println!("    - {agent}");
                     }
+                    has_errors = true;
+                }
+
+                if !all_snippets.is_empty() {
+                    println!("  Prompt snippets referenced: {}", all_snippets.len());
+                    if missing_snippets.is_empty() {
+                        println!("  All prompt snippets found.");
+                    } else {
+                        println!(
+                            "\n  MISSING prompt snippets ({}/{}):",
+                            missing_snippets.len(),
+                            all_snippets.len()
+                        );
+                        for snippet in &missing_snippets {
+                            println!("    - {snippet}");
+                        }
+                        has_errors = true;
+                    }
+                }
+
+                if has_errors {
                     std::process::exit(1);
                 }
             }

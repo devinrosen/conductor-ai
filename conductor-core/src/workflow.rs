@@ -19,6 +19,7 @@ use crate::agent_runtime;
 use crate::config::Config;
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
+use crate::prompt_config;
 use crate::workflow_dsl::{
     self, CallNode, CallWorkflowNode, GateNode, GateType, IfNode, OnMaxIter, OnTimeout,
     ParallelNode, UnlessNode, WhileNode, WorkflowNode,
@@ -895,18 +896,31 @@ fn build_variable_map<'a>(state: &'a ExecutionState<'_>) -> HashMap<&'a str, Str
 /// Build a fully-substituted agent prompt from the execution state and agent definition.
 ///
 /// Handles: input variables, prior_context, prior_contexts, prior_output,
-/// gate_feedback, dry-run prefix for committing agents, and CONDUCTOR_OUTPUT
-/// instruction (generic or schema-specific).
+/// gate_feedback, dry-run prefix for committing agents, prompt snippets (via
+/// `with`), and CONDUCTOR_OUTPUT instruction (generic or schema-specific).
+///
+/// Prompt composition order:
+/// 1. Agent .md body (with variable substitution)
+/// 2. `with` prompt snippets (with variable substitution)
+/// 3. Schema output instructions / CONDUCTOR_OUTPUT
 fn build_agent_prompt(
     state: &ExecutionState<'_>,
     agent_def: &agent_config::AgentDef,
     schema: Option<&schema_config::OutputSchema>,
+    snippet_text: &str,
 ) -> String {
     let vars = build_variable_map(state);
     let mut prompt = substitute_variables(&agent_def.prompt, &vars);
 
     if agent_def.can_commit && state.exec_config.dry_run {
         prompt = format!("DO NOT commit or push any changes. This is a dry run.\n\n{prompt}");
+    }
+
+    // Append prompt snippets (already concatenated by caller)
+    if !snippet_text.is_empty() {
+        let substituted = substitute_variables(snippet_text, &vars);
+        prompt.push_str("\n\n");
+        prompt.push_str(&substituted);
     }
 
     // Append output instructions: schema-specific if a schema is provided,
@@ -1006,6 +1020,24 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
             "Missing agent definitions: {}. Run 'conductor workflow validate' for details.",
             missing_agents.join(", ")
         )));
+    }
+
+    // Validate all referenced prompt snippets exist before starting
+    let all_snippets = workflow.collect_all_snippet_refs();
+
+    if !all_snippets.is_empty() {
+        let missing_snippets = prompt_config::find_missing_snippets(
+            input.worktree_path,
+            input.repo_path,
+            &all_snippets,
+            Some(&workflow.name),
+        );
+        if !missing_snippets.is_empty() {
+            return Err(ConductorError::Workflow(format!(
+                "Missing prompt snippets: {}. Check .conductor/prompts/ directory.",
+                missing_snippets.join(", ")
+            )));
+        }
     }
 
     // Snapshot the definition
@@ -1230,6 +1262,7 @@ fn run_on_fail_agent(
         retries: 0,
         on_fail: None,
         output: None,
+        with: Vec::new(),
     };
     if let Err(e) = execute_call(state, &on_fail_node, iteration) {
         eprintln!(
@@ -1359,18 +1392,21 @@ fn resolve_child_inputs(
 // ---------------------------------------------------------------------------
 
 fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32) -> Result<()> {
-    execute_call_with_schema(state, node, iteration, node.output.as_deref())
+    execute_call_with_schema(state, node, iteration, node.output.as_deref(), &node.with)
 }
 
-/// Inner implementation of execute_call that accepts an optional schema override.
+/// Inner implementation of execute_call that accepts an optional schema override
+/// and prompt snippet references.
 ///
 /// The `schema_override` parameter allows parallel blocks to pass their block-level
-/// output schema to individual calls.
+/// output schema to individual calls. The `with_refs` parameter provides prompt
+/// snippet names to load and append to the agent prompt.
 fn execute_call_with_schema(
     state: &mut ExecutionState<'_>,
     node: &CallNode,
     iteration: u32,
     schema_name: Option<&str>,
+    with_refs: &[String],
 ) -> Result<()> {
     let pos = state.position;
     state.position += 1;
@@ -1390,7 +1426,15 @@ fn execute_call_with_schema(
         .map(|name| resolve_schema(state, name))
         .transpose()?;
 
-    let prompt = build_agent_prompt(state, &agent_def, schema.as_ref());
+    // Load and concatenate prompt snippets
+    let snippet_text = prompt_config::load_and_concat_snippets(
+        &state.worktree_path,
+        &state.repo_path,
+        with_refs,
+        Some(&state.workflow_name),
+    )?;
+
+    let prompt = build_agent_prompt(state, &agent_def, schema.as_ref(), &snippet_text);
     let step_model = agent_def.model.as_deref().or(state.model.as_deref());
 
     // Retry loop
@@ -2032,7 +2076,20 @@ fn execute_parallel(
             .transpose()?;
         let effective_schema = call_schema.as_ref().or(block_schema.as_ref());
 
-        let prompt = build_agent_prompt(state, &agent_def, effective_schema);
+        // Combine block-level `with` + per-call `with` additions
+        let mut effective_with = node.with.clone();
+        if let Some(extra) = node.call_with.get(&i) {
+            effective_with.extend(extra.iter().cloned());
+        }
+
+        let snippet_text = prompt_config::load_and_concat_snippets(
+            &state.worktree_path,
+            &state.repo_path,
+            &effective_with,
+            Some(&state.workflow_name),
+        )?;
+
+        let prompt = build_agent_prompt(state, &agent_def, effective_schema, &snippet_text);
         let step_model = agent_def.model.as_deref().or(state.model.as_deref());
         let step_id = state.wf_mgr.insert_step(
             &state.workflow_run_id,

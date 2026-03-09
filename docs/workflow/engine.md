@@ -66,6 +66,7 @@ workflow ticket-to-pr {
   }
 
   parallel {
+    with        = ["review-diff-scope"]
     fail_fast   = false
     min_success = 1
     call reviewer-security
@@ -106,7 +107,9 @@ gate           := "gate" gate_type "{" kv* "}"
 always         := "always" "{" node* "}"
 condition      := IDENT "." IDENT
 gate_type      := "human_approval" | "human_review" | "pr_approval" | "pr_checks"
-kv             := IDENT "=" (STRING | NUMBER | IDENT)
+kv             := IDENT "=" value
+value          := STRING | NUMBER | IDENT | array
+array          := "[" (STRING ("," STRING)*)? "]"
 ```
 
 Identifiers allow `[a-zA-Z0-9_-]`. This is intentional — agent names like
@@ -125,9 +128,14 @@ Runs a single agent to completion. The agent name is resolved to a `.md` file
 |---|---|
 | `retries = N` | Retry the step up to N times on failure |
 | `on_fail = <agent>` | Fallback agent if all retries are exhausted |
+| `with = [<snippet>, ...]` | Prompt snippets to append to the agent prompt |
 
 The `on_fail` agent receives additional template variables: `{{failed_step}}`,
 `{{failure_reason}}`, `{{retry_count}}`, and `{{prior_context}}`.
+
+`with` accepts a single string or an array of strings. Each value names a
+`.md` file loaded from `.conductor/prompts/` and appended to the agent prompt
+after variable substitution. See [Prompt snippets](#prompt-snippets) below.
 
 ### `if` / `unless` / `while`
 
@@ -174,6 +182,20 @@ same worktree, so they must be read-only or operate on non-overlapping files.
 |---|---|
 | `fail_fast` | If true (default), cancel remaining agents when one fails |
 | `min_success = N` | Minimum agents that must succeed; default is all |
+| `with = [<snippet>, ...]` | Prompt snippets applied to every call in the block |
+
+Individual calls within a `parallel` block can add their own snippets:
+
+```
+parallel {
+  with = ["review-diff-scope"]
+  call review-security
+  call review-migrations { with = ["migration-rules"] }
+}
+```
+
+Block-level `with` snippets are prepended; per-call `with` snippets are appended
+after them. See [Prompt snippets](#prompt-snippets) below.
 
 Markers from all completed agents are merged into a single set for downstream
 conditions.
@@ -532,6 +554,79 @@ This was rejected because:
 
 ---
 
+## Prompt snippets
+
+Prompt snippets are reusable `.md` instruction blocks that are loaded at
+execution time and appended to an agent's prompt. They let you extract
+common context (coding conventions, diff-scope instructions, project
+background) into shared files instead of duplicating text across agent
+definitions.
+
+### Syntax
+
+```
+# Single snippet
+call implement { with = "rust-conventions" }
+
+# Multiple snippets — array syntax
+call review {
+  with = ["review-diff-scope", "rust-conventions"]
+}
+
+# Block-level + per-call in parallel
+parallel {
+  with = ["review-diff-scope"]
+  call review-security
+  call review-migrations { with = ["migration-rules"] }
+}
+```
+
+### Prompt composition order
+
+For each agent invocation:
+
+1. Agent `.md` body (with `{{variable}}` substitution)
+2. `with` snippets (each snippet also goes through variable substitution)
+3. Schema output instructions / `CONDUCTOR_OUTPUT` block
+
+Snippets are separated from the main prompt and from each other with a blank
+line (`\n\n`).
+
+### Resolution order
+
+Short names (no `/` or `\` in the value) are resolved in this order. First
+match wins.
+
+| Priority | Path | Scope |
+|---|---|---|
+| 1 | `.conductor/workflows/<workflow>/prompts/<name>.md` | Workflow-local override |
+| 2 | `.conductor/prompts/<name>.md` | Shared conductor prompts |
+
+Each priority is checked in the **worktree path** first, then the **repo path**.
+
+### Explicit paths
+
+Values containing `/` or `\` are treated as paths relative to the repository
+root:
+
+```
+call implement { with = [".conductor/prompts/rust-conventions.md"] }
+```
+
+Absolute paths and paths that escape the repository root are rejected.
+
+### Validation
+
+`conductor workflow validate` checks that all `with` references can be resolved
+before execution begins. Missing snippets are listed with the paths that were
+searched.
+
+For the full specification — including path safety rules, variable substitution
+behavior, and design tradeoffs — see
+[prompt-snippets.md](./prompt-snippets.md).
+
+---
+
 ## DB schema
 
 ### `workflow_runs`
@@ -570,7 +665,7 @@ gate-blocked runs.
 ```
 conductor workflow list                              # name, trigger, step count
 conductor workflow show <name>                       # ASCII step graph
-conductor workflow validate <name>                   # check agents, inputs, cycles
+conductor workflow validate <name>                   # check agents, inputs, cycles, snippets
 conductor workflow run <name> [--input k=v] [--dry-run]
 conductor workflow cancel <run-id>
 conductor workflow runs [--worktree id]              # run history
@@ -597,7 +692,8 @@ show an inline approval form.
 ## AST representation
 
 ```rust
-WorkflowNode::Call     { agent: AgentRef, retries: u32, on_fail: Option<AgentRef> }
+WorkflowNode::Call     { agent: AgentRef, retries: u32, on_fail: Option<AgentRef>,
+                         with: Vec<String> }
 WorkflowNode::CallWf   { workflow: String, inputs: HashMap<String, String>,
                           retries: u32, on_fail: Option<AgentRef> }
 WorkflowNode::If       { step: String, marker: String, body: Vec<WorkflowNode> }
@@ -605,7 +701,8 @@ WorkflowNode::While    { step: String, marker: String, max_iter: u32,
                          stuck_after: Option<u32>, on_max_iter: OnMaxIter,
                          body: Vec<WorkflowNode> }
 WorkflowNode::Parallel { fail_fast: bool, min_success: Option<u32>,
-                         calls: Vec<WorkflowNode> }
+                         calls: Vec<AgentRef>, with: Vec<String>,
+                         call_with: HashMap<usize, Vec<String>> }
 WorkflowNode::Gate     { gate_type: GateType, prompt: Option<String>,
                          min_approvals: u32, timeout: Duration,
                          on_timeout: OnTimeout }
