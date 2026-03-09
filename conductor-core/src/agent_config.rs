@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::error::{ConductorError, Result};
-use crate::text_util::{parse_frontmatter, resolve_conductor_subdir};
+use crate::text_util::parse_frontmatter;
 
 /// How to locate an agent — either a short name resolved via search order, or
 /// an explicit path relative to the repository root.
@@ -285,26 +285,50 @@ pub fn find_missing_agents(
         .collect()
 }
 
-/// Load all agent definitions from `.conductor/agents/*.md`.
-pub fn load_all_agents(worktree_path: &str, repo_path: &str) -> Result<Vec<AgentDef>> {
-    let Some(agents_dir) = resolve_conductor_subdir(worktree_path, repo_path, "agents") else {
+/// Collect sorted `.md` entries from a directory, returning an empty vec if the
+/// directory does not exist.
+fn collect_md_entries(dir: &Path) -> Result<Vec<std::fs::DirEntry>> {
+    if !dir.is_dir() {
         return Ok(Vec::new());
-    };
-
-    let mut entries: Vec<_> = fs::read_dir(&agents_dir)
-        .map_err(|e| {
-            ConductorError::AgentConfig(format!("Failed to read {}: {e}", agents_dir.display()))
-        })?
+    }
+    let mut entries: Vec<_> = fs::read_dir(dir)
+        .map_err(|e| ConductorError::AgentConfig(format!("Failed to read {}: {e}", dir.display())))?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
         .collect();
-
     entries.sort_by_key(|e| e.file_name());
+    Ok(entries)
+}
 
+/// Load all agent definitions, scanning in priority order (first definition of a
+/// name wins, consistent with [`load_agent`] resolution):
+///
+/// 1. `.conductor/agents/` in the worktree
+/// 2. `.conductor/agents/` in the repo root
+/// 3. `.claude/agents/` in the worktree
+/// 4. `.claude/agents/` in the repo root
+pub fn load_all_agents(worktree_path: &str, repo_path: &str) -> Result<Vec<AgentDef>> {
+    let search_dirs: &[PathBuf] = &[
+        PathBuf::from(worktree_path)
+            .join(".conductor")
+            .join("agents"),
+        PathBuf::from(repo_path).join(".conductor").join("agents"),
+        PathBuf::from(worktree_path).join(".claude").join("agents"),
+        PathBuf::from(repo_path).join(".claude").join("agents"),
+    ];
+
+    let mut seen_names = std::collections::HashSet::new();
     let mut defs = Vec::new();
-    for entry in entries {
-        defs.push(parse_agent_file(&entry.path())?);
+
+    for dir in search_dirs {
+        for entry in collect_md_entries(dir)? {
+            let def = parse_agent_file(&entry.path())?;
+            if seen_names.insert(def.name.clone()) {
+                defs.push(def);
+            }
+        }
     }
+
     Ok(defs)
 }
 
@@ -699,6 +723,159 @@ Implement the plan written in PLAN.md.
         )
         .unwrap();
         assert!(defs.is_empty());
+    }
+
+    #[test]
+    fn test_load_all_agents_includes_claude_agents() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        // Only .claude/agents/ — no .conductor/agents/
+        let claude_agents = repo.path().join(".claude").join("agents");
+        fs::create_dir_all(&claude_agents).unwrap();
+        fs::write(
+            claude_agents.join("review.md"),
+            "---\nrole: reviewer\n---\nClaude review agent.",
+        )
+        .unwrap();
+
+        let defs = load_all_agents(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "review");
+        assert_eq!(defs[0].prompt, "Claude review agent.");
+    }
+
+    #[test]
+    fn test_load_all_agents_deduplicates_by_name() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        // .conductor/agents/ has "plan" — higher priority
+        let conductor_agents = repo.path().join(".conductor").join("agents");
+        fs::create_dir_all(&conductor_agents).unwrap();
+        fs::write(
+            conductor_agents.join("plan.md"),
+            "---\nrole: actor\n---\nConductor plan.",
+        )
+        .unwrap();
+
+        // .claude/agents/ also has "plan" and adds "review"
+        let claude_agents = repo.path().join(".claude").join("agents");
+        fs::create_dir_all(&claude_agents).unwrap();
+        fs::write(
+            claude_agents.join("plan.md"),
+            "---\nrole: actor\n---\nClaude plan.",
+        )
+        .unwrap();
+        fs::write(
+            claude_agents.join("review.md"),
+            "---\nrole: reviewer\n---\nClaude review.",
+        )
+        .unwrap();
+
+        let defs = load_all_agents(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        )
+        .unwrap();
+
+        // "plan" from .conductor wins; "review" from .claude is added
+        assert_eq!(defs.len(), 2);
+        let plan = defs.iter().find(|d| d.name == "plan").unwrap();
+        assert_eq!(plan.prompt, "Conductor plan.");
+        let review = defs.iter().find(|d| d.name == "review").unwrap();
+        assert_eq!(review.prompt, "Claude review.");
+    }
+
+    #[test]
+    fn test_load_all_agents_worktree_takes_precedence() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        // Both worktree and repo have .conductor/agents/ with the same name
+        let wt_agents = worktree.path().join(".conductor").join("agents");
+        fs::create_dir_all(&wt_agents).unwrap();
+        fs::write(
+            wt_agents.join("plan.md"),
+            "---\nrole: actor\n---\nWorktree conductor plan.",
+        )
+        .unwrap();
+
+        let repo_agents = repo.path().join(".conductor").join("agents");
+        fs::create_dir_all(&repo_agents).unwrap();
+        fs::write(
+            repo_agents.join("plan.md"),
+            "---\nrole: actor\n---\nRepo conductor plan.",
+        )
+        .unwrap();
+
+        let defs = load_all_agents(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].prompt, "Worktree conductor plan.");
+    }
+
+    #[test]
+    fn test_load_all_agents_merges_all_sources() {
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        // worktree .conductor/agents/: plan
+        let wt_conductor = worktree.path().join(".conductor").join("agents");
+        fs::create_dir_all(&wt_conductor).unwrap();
+        fs::write(
+            wt_conductor.join("plan.md"),
+            "---\nrole: actor\n---\nWorktree plan.",
+        )
+        .unwrap();
+
+        // repo .conductor/agents/: implement
+        let repo_conductor = repo.path().join(".conductor").join("agents");
+        fs::create_dir_all(&repo_conductor).unwrap();
+        fs::write(
+            repo_conductor.join("implement.md"),
+            "---\nrole: actor\n---\nRepo implement.",
+        )
+        .unwrap();
+
+        // worktree .claude/agents/: lint
+        let wt_claude = worktree.path().join(".claude").join("agents");
+        fs::create_dir_all(&wt_claude).unwrap();
+        fs::write(
+            wt_claude.join("lint.md"),
+            "---\nrole: reviewer\n---\nWorktree lint.",
+        )
+        .unwrap();
+
+        // repo .claude/agents/: review
+        let repo_claude = repo.path().join(".claude").join("agents");
+        fs::create_dir_all(&repo_claude).unwrap();
+        fs::write(
+            repo_claude.join("review.md"),
+            "---\nrole: reviewer\n---\nRepo review.",
+        )
+        .unwrap();
+
+        let defs = load_all_agents(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(defs.len(), 4);
+        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"plan"));
+        assert!(names.contains(&"implement"));
+        assert!(names.contains(&"lint"));
+        assert!(names.contains(&"review"));
     }
 
     #[test]
