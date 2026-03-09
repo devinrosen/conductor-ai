@@ -21,9 +21,7 @@ use conductor_core::post_run::{self, PostRunInput};
 use conductor_core::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketInput, TicketSyncer};
-use conductor_core::workflow::{
-    collect_agent_names, collect_snippet_refs, WorkflowExecConfig, WorkflowManager,
-};
+use conductor_core::workflow::{collect_agent_names, WorkflowExecConfig, WorkflowManager};
 use conductor_core::workflow_config;
 use conductor_core::worktree::WorktreeManager;
 
@@ -1497,10 +1495,7 @@ fn main() -> Result<()> {
                 println!("  Agents referenced: {}", all_refs.len());
 
                 // Collect and validate prompt snippets
-                let mut all_snippets = collect_snippet_refs(&workflow.body);
-                all_snippets.extend(collect_snippet_refs(&workflow.always));
-                all_snippets.sort();
-                all_snippets.dedup();
+                let all_snippets = workflow.collect_all_snippet_refs();
 
                 let missing_snippets = conductor_core::prompt_config::find_missing_snippets(
                     &wt.path,

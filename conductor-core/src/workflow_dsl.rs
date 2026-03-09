@@ -55,6 +55,15 @@ impl WorkflowDef {
     pub fn total_nodes(&self) -> usize {
         count_nodes(&self.body) + count_nodes(&self.always)
     }
+
+    /// Collect all prompt snippet references across body and always blocks, sorted and deduplicated.
+    pub fn collect_all_snippet_refs(&self) -> Vec<String> {
+        let mut refs = collect_snippet_refs(&self.body);
+        refs.extend(collect_snippet_refs(&self.always));
+        refs.sort();
+        refs.dedup();
+        refs
+    }
 }
 
 /// Trigger type for when a workflow should run.
@@ -2674,7 +2683,7 @@ workflow parent {
     #[test]
     fn test_collect_snippet_refs_inside_always() {
         // Top-level `always { }` block is parsed into `def.always`, not `def.body`.
-        // The calling code runs collect_snippet_refs on both fields independently.
+        // collect_all_snippet_refs() covers both; here we test the always slice directly.
         let input = r#"workflow test {
             call plan
             always {

@@ -28,8 +28,8 @@ use crate::workflow_dsl::{
 // Re-export DSL types so consumers go through `workflow::` instead of `workflow_dsl::` directly.
 use crate::schema_config::{self, OutputSchema};
 pub use crate::workflow_dsl::{
-    collect_agent_names, collect_snippet_refs, collect_workflow_refs, detect_workflow_cycles,
-    AgentRef, InputDecl, WorkflowDef, WorkflowTrigger, MAX_WORKFLOW_DEPTH,
+    collect_agent_names, collect_workflow_refs, detect_workflow_cycles, AgentRef, InputDecl,
+    WorkflowDef, WorkflowTrigger, MAX_WORKFLOW_DEPTH,
 };
 use crate::worktree::WorktreeManager;
 
@@ -1023,10 +1023,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     }
 
     // Validate all referenced prompt snippets exist before starting
-    let mut all_snippets = workflow_dsl::collect_snippet_refs(&workflow.body);
-    all_snippets.extend(workflow_dsl::collect_snippet_refs(&workflow.always));
-    all_snippets.sort();
-    all_snippets.dedup();
+    let all_snippets = workflow.collect_all_snippet_refs();
 
     if !all_snippets.is_empty() {
         let missing_snippets = prompt_config::find_missing_snippets(
