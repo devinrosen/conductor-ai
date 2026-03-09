@@ -498,14 +498,18 @@ impl KvValue {
     fn as_str(&self) -> &str {
         match self {
             Self::Quoted(s) | Self::Bare(s) => s.as_str(),
-            Self::Array(_) => "",
+            Self::Array(_) => unreachable!(
+                "BUG: as_str() called on KvValue::Array — arrays are only valid for `with` keys"
+            ),
         }
     }
 
     fn into_string(self) -> String {
         match self {
             Self::Quoted(s) | Self::Bare(s) => s,
-            Self::Array(_) => String::new(),
+            Self::Array(_) => unreachable!(
+                "BUG: into_string() called on KvValue::Array — arrays are only valid for `with` keys"
+            ),
         }
     }
 
@@ -537,7 +541,9 @@ impl KvValue {
             Self::Bare(s) => AgentRef::Name(s),
             Self::Quoted(s) if s.contains('/') => AgentRef::Path(s),
             Self::Quoted(s) => AgentRef::Name(s),
-            Self::Array(_) => AgentRef::Name(String::new()),
+            Self::Array(_) => unreachable!(
+                "BUG: into_agent_ref() called on KvValue::Array — arrays are only valid for `with` keys"
+            ),
         }
     }
 }
