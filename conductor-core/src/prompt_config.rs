@@ -380,4 +380,29 @@ mod tests {
         );
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_load_snippet_by_name_falls_back_to_repo_path() {
+        let worktree_dir = tempfile::tempdir().unwrap();
+        let repo_dir = tempfile::tempdir().unwrap();
+
+        // Only place the snippet in repo_path, not worktree_path
+        let prompts_dir = repo_dir.path().join(".conductor/prompts");
+        fs::create_dir_all(&prompts_dir).unwrap();
+        fs::write(prompts_dir.join("shared.md"), "repo-level content").unwrap();
+
+        let result = load_snippet_by_name(
+            worktree_dir.path().to_str().unwrap(),
+            repo_dir.path().to_str().unwrap(),
+            "shared",
+            None,
+        );
+        assert_eq!(result.unwrap(), "repo-level content");
+    }
+
+    #[test]
+    fn test_validate_name_rejects_backslash_and_null() {
+        assert!(validate_name_segment("a\\b", "test").is_err());
+        assert!(validate_name_segment("a\0b", "test").is_err());
+    }
 }
