@@ -1470,19 +1470,13 @@ fn main() -> Result<()> {
                 all_refs.sort();
                 all_refs.dedup();
 
-                let mut missing = Vec::new();
-                for agent_ref in &all_refs {
-                    if conductor_core::agent_config::load_agent(
-                        &wt.path,
-                        &r.local_path,
-                        &AgentSpec::from(agent_ref),
-                        Some(&name),
-                    )
-                    .is_err()
-                    {
-                        missing.push(agent_ref.label().to_string());
-                    }
-                }
+                let specs: Vec<AgentSpec> = all_refs.iter().map(AgentSpec::from).collect();
+                let missing = conductor_core::agent_config::find_missing_agents(
+                    &wt.path,
+                    &r.local_path,
+                    &specs,
+                    Some(&name),
+                );
 
                 println!("Workflow: {}", workflow.name);
                 println!("  Description: {}", workflow.description);

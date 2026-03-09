@@ -865,19 +865,13 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     all_agents.sort();
     all_agents.dedup();
 
-    let mut missing_agents = Vec::new();
-    for agent_ref in &all_agents {
-        if agent_config::load_agent(
-            input.worktree_path,
-            input.repo_path,
-            &AgentSpec::from(agent_ref),
-            Some(&workflow.name),
-        )
-        .is_err()
-        {
-            missing_agents.push(agent_ref.label().to_string());
-        }
-    }
+    let specs: Vec<AgentSpec> = all_agents.iter().map(AgentSpec::from).collect();
+    let missing_agents = agent_config::find_missing_agents(
+        input.worktree_path,
+        input.repo_path,
+        &specs,
+        Some(&workflow.name),
+    );
     if !missing_agents.is_empty() {
         return Err(ConductorError::Workflow(format!(
             "Missing agent definitions: {}. Run 'conductor workflow validate' for details.",

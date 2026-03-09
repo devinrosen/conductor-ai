@@ -33,6 +33,15 @@ pub enum AgentSpec {
     Path(String),
 }
 
+impl AgentSpec {
+    /// Human-readable label (the inner string value).
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Name(s) | Self::Path(s) => s.as_str(),
+        }
+    }
+}
+
 /// YAML frontmatter for an agent `.md` file.
 #[derive(Debug, Clone, Deserialize)]
 struct AgentFrontmatter {
@@ -256,6 +265,24 @@ fn load_agent_by_path(repo_path: &str, rel_path: &str) -> Result<AgentDef> {
     }
 
     parse_agent_file(&canonical)
+}
+
+/// Validate that all agents in `specs` can be resolved, returning the labels of
+/// any that are missing.
+///
+/// This is used by both the CLI `workflow validate` command and the workflow
+/// executor to check agent availability before starting a run.
+pub fn find_missing_agents(
+    worktree_path: &str,
+    repo_path: &str,
+    specs: &[AgentSpec],
+    workflow_name: Option<&str>,
+) -> Vec<String> {
+    specs
+        .iter()
+        .filter(|spec| load_agent(worktree_path, repo_path, spec, workflow_name).is_err())
+        .map(|spec| spec.label().to_string())
+        .collect()
 }
 
 /// Load all agent definitions from `.conductor/agents/*.md`.
