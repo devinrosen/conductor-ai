@@ -103,6 +103,7 @@ pub enum WorkflowNode {
     Call(CallNode),
     CallWorkflow(CallWorkflowNode),
     If(IfNode),
+    Unless(UnlessNode),
     While(WhileNode),
     Parallel(ParallelNode),
     Gate(GateNode),
@@ -174,6 +175,13 @@ pub struct CallWorkflowNode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IfNode {
+    pub step: String,
+    pub marker: String,
+    pub body: Vec<WorkflowNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnlessNode {
     pub step: String,
     pub marker: String,
     pub body: Vec<WorkflowNode>,
@@ -267,6 +275,7 @@ enum Token {
     Inputs,
     Call,
     If,
+    Unless,
     While,
     Parallel,
     Gate,
@@ -422,6 +431,7 @@ impl Lexer {
             "inputs" => Token::Inputs,
             "call" => Token::Call,
             "if" => Token::If,
+            "unless" => Token::Unless,
             "while" => Token::While,
             "parallel" => Token::Parallel,
             "gate" => Token::Gate,
@@ -547,6 +557,7 @@ impl Parser {
             Token::Default => Ok(KvValue::Bare("default".to_string())),
             Token::Call => Ok(KvValue::Bare("call".to_string())),
             Token::If => Ok(KvValue::Bare("if".to_string())),
+            Token::Unless => Ok(KvValue::Bare("unless".to_string())),
             Token::While => Ok(KvValue::Bare("while".to_string())),
             Token::Parallel => Ok(KvValue::Bare("parallel".to_string())),
             Token::Gate => Ok(KvValue::Bare("gate".to_string())),
@@ -715,12 +726,13 @@ impl Parser {
                 }
             }
             Token::If => self.parse_if().map(WorkflowNode::If),
+            Token::Unless => self.parse_unless().map(WorkflowNode::Unless),
             Token::While => self.parse_while().map(WorkflowNode::While),
             Token::Parallel => self.parse_parallel().map(WorkflowNode::Parallel),
             Token::Gate => self.parse_gate().map(WorkflowNode::Gate),
             Token::Always => self.parse_always().map(WorkflowNode::Always),
             other => Err(format!(
-                "Expected a workflow node (call, if, while, parallel, gate, always), got {other:?}"
+                "Expected a workflow node (call, if, unless, while, parallel, gate, always), got {other:?}"
             )),
         }
     }
@@ -823,6 +835,23 @@ impl Parser {
         self.expect(&Token::RBrace)?;
 
         Ok(IfNode { step, marker, body })
+    }
+
+    fn parse_unless(&mut self) -> std::result::Result<UnlessNode, String> {
+        self.expect(&Token::Unless)?;
+        let (step, marker) = self.parse_condition()?;
+        self.expect(&Token::LBrace)?;
+
+        // Parse optional kvs (not used for unless, but kept for grammar consistency)
+        let _kvs = self.parse_kvs()?;
+
+        let mut body = Vec::new();
+        while self.peek() != &Token::RBrace && self.peek() != &Token::Eof {
+            body.push(self.parse_node()?);
+        }
+        self.expect(&Token::RBrace)?;
+
+        Ok(UnlessNode { step, marker, body })
     }
 
     fn parse_while(&mut self) -> std::result::Result<WhileNode, String> {
@@ -1114,6 +1143,7 @@ fn count_nodes(nodes: &[WorkflowNode]) -> usize {
         match node {
             WorkflowNode::Call(_) | WorkflowNode::CallWorkflow(_) => {}
             WorkflowNode::If(n) => count += count_nodes(&n.body),
+            WorkflowNode::Unless(n) => count += count_nodes(&n.body),
             WorkflowNode::While(n) => count += count_nodes(&n.body),
             WorkflowNode::Parallel(n) => count += n.calls.len(),
             WorkflowNode::Gate(_) => {}
@@ -1141,6 +1171,7 @@ pub fn collect_agent_names(nodes: &[WorkflowNode]) -> Vec<AgentRef> {
                 }
             }
             WorkflowNode::If(n) => refs.extend(collect_agent_names(&n.body)),
+            WorkflowNode::Unless(n) => refs.extend(collect_agent_names(&n.body)),
             WorkflowNode::While(n) => refs.extend(collect_agent_names(&n.body)),
             WorkflowNode::Parallel(n) => refs.extend(n.calls.iter().cloned()),
             WorkflowNode::Gate(_) => {}
@@ -1158,6 +1189,7 @@ pub fn collect_workflow_refs(nodes: &[WorkflowNode]) -> Vec<String> {
             WorkflowNode::Call(_) | WorkflowNode::Gate(_) => {}
             WorkflowNode::CallWorkflow(n) => refs.push(n.workflow.clone()),
             WorkflowNode::If(n) => refs.extend(collect_workflow_refs(&n.body)),
+            WorkflowNode::Unless(n) => refs.extend(collect_workflow_refs(&n.body)),
             WorkflowNode::While(n) => refs.extend(collect_workflow_refs(&n.body)),
             WorkflowNode::Parallel(_) => {} // parallel only contains agent calls
             WorkflowNode::Always(n) => refs.extend(collect_workflow_refs(&n.body)),
@@ -1282,6 +1314,10 @@ workflow ticket-to-pr {
     call escalate
   }
 
+  unless review.has_critical_issues {
+    call fast-path
+  }
+
   always {
     call notify_result
   }
@@ -1304,8 +1340,8 @@ workflow ticket-to-pr {
         assert_eq!(def.inputs[1].default.as_deref(), Some("false"));
 
         // Body nodes: call plan, call implement, call push_and_pr, call review,
-        //             while, parallel, gate human_review, gate pr_checks, if
-        assert_eq!(def.body.len(), 9);
+        //             while, parallel, gate human_review, gate pr_checks, if, unless
+        assert_eq!(def.body.len(), 10);
 
         // call plan
         match &def.body[0] {
@@ -1385,6 +1421,16 @@ workflow ticket-to-pr {
                 assert_eq!(i.body.len(), 1);
             }
             _ => panic!("Expected If node"),
+        }
+
+        // unless block
+        match &def.body[9] {
+            WorkflowNode::Unless(u) => {
+                assert_eq!(u.step, "review");
+                assert_eq!(u.marker, "has_critical_issues");
+                assert_eq!(u.body.len(), 1);
+            }
+            _ => panic!("Expected Unless node"),
         }
 
         // always
@@ -1491,8 +1537,8 @@ workflow ticket-to-pr {
     fn test_count_nodes() {
         let def = parse_workflow_str(FULL_WORKFLOW, "test.wf").unwrap();
         let body_count = count_nodes(&def.body);
-        // 9 top-level + 3 in while + 3 in parallel + 1 in if = 16
-        assert_eq!(body_count, 16);
+        // 10 top-level + 3 in while + 3 in parallel + 1 in if + 1 in unless = 18
+        assert_eq!(body_count, 18);
         // total_nodes covers body + always
         assert_eq!(def.total_nodes(), body_count + count_nodes(&def.always));
     }
@@ -1980,6 +2026,50 @@ workflow parent {
                 assert!(matches!(&i.body[0], WorkflowNode::CallWorkflow(_)));
             }
             _ => panic!("Expected If node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_unless() {
+        let input = r#"
+workflow test {
+    call analyze
+    unless analyze.has_errors {
+        call deploy
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.body.len(), 2);
+        match &def.body[1] {
+            WorkflowNode::Unless(u) => {
+                assert_eq!(u.step, "analyze");
+                assert_eq!(u.marker, "has_errors");
+                assert_eq!(u.body.len(), 1);
+                assert!(matches!(&u.body[0], WorkflowNode::Call(_)));
+            }
+            _ => panic!("Expected Unless node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_call_workflow_in_unless_block() {
+        let input = r#"
+workflow parent {
+    call analyze
+    unless analyze.needs_lint {
+        call workflow lint-fix
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.body.len(), 2);
+        match &def.body[1] {
+            WorkflowNode::Unless(u) => {
+                assert_eq!(u.body.len(), 1);
+                assert!(matches!(&u.body[0], WorkflowNode::CallWorkflow(_)));
+            }
+            _ => panic!("Expected Unless node"),
         }
     }
 
