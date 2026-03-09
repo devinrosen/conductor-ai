@@ -3561,4 +3561,28 @@ mod tests {
             AgentRunStatus::Completed
         );
     }
+
+    #[test]
+    fn test_attach_agent_window_nonexistent_returns_error() {
+        // A clearly nonexistent window name should always produce an error:
+        //   - if tmux is not installed: spawn failure → ConductorError::Agent("could not execute tmux: …")
+        //   - if tmux is installed but the window is missing: non-zero exit with stderr
+        //     → ConductorError::Agent("tmux select-window failed: …")
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let result = mgr.attach_agent_window("nonexistent-window-xyz-999");
+        assert!(
+            result.is_err(),
+            "should return Err for a nonexistent window"
+        );
+        match result {
+            Err(ConductorError::Agent(msg)) => {
+                assert!(
+                    msg.contains("tmux"),
+                    "error message should mention tmux, got: {msg}"
+                );
+            }
+            other => panic!("expected ConductorError::Agent, got: {other:?}"),
+        }
+    }
 }
