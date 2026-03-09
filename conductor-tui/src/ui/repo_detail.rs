@@ -117,13 +117,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     };
     let detail_filter = state.detail_ticket_filter.as_query();
     let ticket_items: Vec<ListItem> = state
-        .detail_tickets
+        .filtered_detail_tickets
         .iter()
-        .filter(|t| state.show_closed_tickets || t.state != "closed")
-        .filter(|t| match detail_filter.as_deref() {
-            Some(f) if !f.is_empty() => t.matches_filter(f),
-            _ => true,
-        })
         .map(|t| {
             let state_color = match t.state.as_str() {
                 "open" => Color::Green,
@@ -181,7 +176,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         .highlight_symbol("> ");
 
     let mut ticket_state = ListState::default();
-    if ticket_focused && !state.detail_tickets.is_empty() {
+    if ticket_focused && !state.filtered_detail_tickets.is_empty() {
         ticket_state.select(Some(state.detail_ticket_index));
     }
     frame.render_stateful_widget(ticket_list, layout[2], &mut ticket_state);

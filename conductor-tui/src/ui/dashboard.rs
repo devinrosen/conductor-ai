@@ -137,14 +137,8 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
     };
 
     let items: Vec<ListItem> = state
-        .data
-        .tickets
+        .filtered_tickets
         .iter()
-        .filter(|t| state.show_closed_tickets || t.state != "closed")
-        .filter(|t| match state.filter.as_query().as_deref() {
-            Some(f) if !f.is_empty() => t.matches_filter(f),
-            _ => true,
-        })
         .map(|t| {
             let repo_slug = state
                 .data
@@ -199,7 +193,7 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
         .highlight_symbol("> ");
 
     let mut list_state = ListState::default();
-    if focused && !state.data.tickets.is_empty() {
+    if focused && !state.filtered_tickets.is_empty() {
         list_state.select(Some(state.ticket_index));
     }
 

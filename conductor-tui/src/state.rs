@@ -571,6 +571,10 @@ pub struct AppState {
     pub detail_wt_index: usize,
     pub detail_ticket_index: usize,
 
+    // Pre-filtered ticket lists (closed + text filter applied); index into these for nav/actions
+    pub filtered_tickets: Vec<Ticket>,
+    pub filtered_detail_tickets: Vec<Ticket>,
+
     // Agent activity list navigation (replaces the old Paragraph scroll offset)
     pub agent_list_state: RefCell<ListState>,
     /// Tracks pending `g` keypress for `gg` chord (go to top)
@@ -624,6 +628,8 @@ impl AppState {
             detail_tickets: Vec::new(),
             detail_wt_index: 0,
             detail_ticket_index: 0,
+            filtered_tickets: Vec::new(),
+            filtered_detail_tickets: Vec::new(),
             agent_list_state: RefCell::new(ListState::default()),
             pending_g: false,
             filter: FilterState::default(),
@@ -762,23 +768,55 @@ impl AppState {
         }
     }
 
+    /// Rebuild the pre-filtered ticket vecs from the current source data,
+    /// `show_closed_tickets`, and the active text filters.  Must be called
+    /// whenever any of those inputs change.
+    pub fn rebuild_filtered_tickets(&mut self) {
+        let filter_query = self.filter.as_query();
+        self.filtered_tickets = self
+            .data
+            .tickets
+            .iter()
+            .filter(|t| self.show_closed_tickets || t.state != "closed")
+            .filter(|t| match filter_query.as_deref() {
+                Some(f) if !f.is_empty() => t.matches_filter(f),
+                _ => true,
+            })
+            .cloned()
+            .collect();
+
+        let detail_filter_query = self.detail_ticket_filter.as_query();
+        self.filtered_detail_tickets = self
+            .detail_tickets
+            .iter()
+            .filter(|t| self.show_closed_tickets || t.state != "closed")
+            .filter(|t| match detail_filter_query.as_deref() {
+                Some(f) if !f.is_empty() => t.matches_filter(f),
+                _ => true,
+            })
+            .cloned()
+            .collect();
+    }
+
     /// Returns (current_index, list_length) for the currently focused pane.
     pub fn focused_index_and_len(&self) -> (usize, usize) {
         match self.view {
             View::Dashboard => match self.dashboard_focus {
                 DashboardFocus::Repos => (self.repo_index, self.data.repos.len()),
                 DashboardFocus::Worktrees => (self.worktree_index, self.data.worktrees.len()),
-                DashboardFocus::Tickets => (self.ticket_index, self.data.tickets.len()),
+                DashboardFocus::Tickets => (self.ticket_index, self.filtered_tickets.len()),
             },
             View::RepoDetail => match self.repo_detail_focus {
                 RepoDetailFocus::Worktrees => (self.detail_wt_index, self.detail_worktrees.len()),
-                RepoDetailFocus::Tickets => (self.detail_ticket_index, self.detail_tickets.len()),
+                RepoDetailFocus::Tickets => {
+                    (self.detail_ticket_index, self.filtered_detail_tickets.len())
+                }
             },
             View::WorktreeDetail => {
                 let idx = self.agent_list_state.borrow().selected().unwrap_or(0);
                 (idx, self.data.agent_activity_len())
             }
-            View::Tickets => (self.ticket_index, self.data.tickets.len()),
+            View::Tickets => (self.ticket_index, self.filtered_tickets.len()),
             View::Workflows => match self.workflows_focus {
                 WorkflowsFocus::Defs => (self.workflow_def_index, self.data.workflow_defs.len()),
                 WorkflowsFocus::Runs => (self.workflow_run_index, self.data.workflow_runs.len()),
@@ -1169,5 +1207,104 @@ mod tests {
             }
             _ => panic!("expected Agent item"),
         }
+    }
+
+    fn make_ticket(id: &str, state: &str) -> conductor_core::tickets::Ticket {
+        conductor_core::tickets::Ticket {
+            id: id.to_string(),
+            repo_id: "repo-1".to_string(),
+            source_type: "github".to_string(),
+            source_id: id.to_string(),
+            title: format!("Ticket {id}"),
+            body: String::new(),
+            state: state.to_string(),
+            labels: String::new(),
+            assignee: None,
+            priority: None,
+            url: String::new(),
+            synced_at: "2026-01-01T00:00:00Z".to_string(),
+            raw_json: String::new(),
+        }
+    }
+
+    #[test]
+    fn rebuild_filtered_tickets_hides_closed() {
+        let mut state = AppState::new();
+        state.data.tickets = vec![
+            make_ticket("1", "open"),
+            make_ticket("2", "closed"),
+            make_ticket("3", "open"),
+        ];
+        state.show_closed_tickets = false;
+        state.rebuild_filtered_tickets();
+        assert_eq!(state.filtered_tickets.len(), 2);
+        assert!(state.filtered_tickets.iter().all(|t| t.state != "closed"));
+    }
+
+    #[test]
+    fn rebuild_filtered_tickets_shows_closed_when_toggled() {
+        let mut state = AppState::new();
+        state.data.tickets = vec![
+            make_ticket("1", "open"),
+            make_ticket("2", "closed"),
+            make_ticket("3", "open"),
+        ];
+        state.show_closed_tickets = true;
+        state.rebuild_filtered_tickets();
+        assert_eq!(state.filtered_tickets.len(), 3);
+    }
+
+    #[test]
+    fn rebuild_filtered_tickets_applies_text_filter() {
+        let mut state = AppState::new();
+        state.data.tickets = vec![
+            make_ticket("1", "open"),
+            make_ticket("2", "open"),
+            make_ticket("3", "open"),
+        ];
+        state.show_closed_tickets = true;
+        state.filter.active = true;
+        state.filter.text = "Ticket 2".to_lowercase();
+        state.rebuild_filtered_tickets();
+        // Only ticket whose title contains "ticket 2"
+        assert_eq!(state.filtered_tickets.len(), 1);
+        assert_eq!(state.filtered_tickets[0].id, "2");
+    }
+
+    #[test]
+    fn rebuild_filtered_detail_tickets_independent_of_global() {
+        let mut state = AppState::new();
+        state.data.tickets = vec![make_ticket("1", "open"), make_ticket("2", "closed")];
+        // detail_tickets has different content
+        state.detail_tickets = vec![make_ticket("3", "open"), make_ticket("4", "closed")];
+        state.show_closed_tickets = false;
+        state.rebuild_filtered_tickets();
+        assert_eq!(state.filtered_tickets.len(), 1);
+        assert_eq!(state.filtered_detail_tickets.len(), 1);
+        assert_eq!(state.filtered_tickets[0].id, "1");
+        assert_eq!(state.filtered_detail_tickets[0].id, "3");
+    }
+
+    /// Regression: index into filtered list must match what's rendered.
+    /// Given [#1 open, #2 closed, #3 open] with closed hidden, ticket_index=1
+    /// should point to #3 (the 2nd visible item), not #2 (the 2nd raw item).
+    #[test]
+    fn filtered_tickets_index_matches_rendered_order() {
+        let mut state = AppState::new();
+        state.data.tickets = vec![
+            make_ticket("1", "open"),
+            make_ticket("2", "closed"),
+            make_ticket("3", "open"),
+            make_ticket("4", "open"),
+        ];
+        state.show_closed_tickets = false;
+        state.rebuild_filtered_tickets();
+        // filtered: [#1, #3, #4]
+        assert_eq!(state.filtered_tickets.len(), 3);
+        assert_eq!(state.filtered_tickets[0].id, "1");
+        assert_eq!(state.filtered_tickets[1].id, "3");
+        assert_eq!(state.filtered_tickets[2].id, "4");
+        // ticket_index=2 now correctly resolves to #4
+        assert_eq!(state.filtered_tickets[2].id, "4");
     }
 }
