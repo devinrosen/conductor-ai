@@ -499,20 +499,17 @@ pub struct StructuredOutput {
 
 /// Parse the `<<<CONDUCTOR_OUTPUT>>>` block as structured JSON, validate against
 /// the schema, and derive markers.
-pub fn parse_structured_output(
-    text: &str,
-    schema: &OutputSchema,
-) -> std::result::Result<StructuredOutput, String> {
+pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<StructuredOutput> {
     let start_marker = "<<<CONDUCTOR_OUTPUT>>>";
     let end_marker = "<<<END_CONDUCTOR_OUTPUT>>>";
 
-    let start = text
-        .rfind(start_marker)
-        .ok_or("No <<<CONDUCTOR_OUTPUT>>> block found in agent output")?;
+    let start = text.rfind(start_marker).ok_or_else(|| {
+        ConductorError::Schema("No <<<CONDUCTOR_OUTPUT>>> block found in agent output".to_string())
+    })?;
     let json_start = start + start_marker.len();
-    let end = text[json_start..]
-        .find(end_marker)
-        .ok_or("No <<<END_CONDUCTOR_OUTPUT>>> found after start marker")?;
+    let end = text[json_start..].find(end_marker).ok_or_else(|| {
+        ConductorError::Schema("No <<<END_CONDUCTOR_OUTPUT>>> found after start marker".to_string())
+    })?;
     let raw = text[json_start..json_start + end].trim();
 
     // Lenient parsing: strip markdown code fences
@@ -521,7 +518,7 @@ pub fn parse_structured_output(
     let cleaned = strip_trailing_commas(&cleaned);
 
     let value: serde_json::Value = serde_json::from_str(&cleaned)
-        .map_err(|e| format!("Invalid JSON in CONDUCTOR_OUTPUT: {e}"))?;
+        .map_err(|e| ConductorError::Schema(format!("Invalid JSON in CONDUCTOR_OUTPUT: {e}")))?;
 
     // Validate against schema
     validate_value(&value, &schema.fields)?;
@@ -594,18 +591,18 @@ fn strip_trailing_commas(s: &str) -> String {
 // Validation
 // ---------------------------------------------------------------------------
 
-fn validate_value(
-    value: &serde_json::Value,
-    fields: &[FieldDef],
-) -> std::result::Result<(), String> {
-    let obj = value
-        .as_object()
-        .ok_or("CONDUCTOR_OUTPUT must be a JSON object")?;
+fn validate_value(value: &serde_json::Value, fields: &[FieldDef]) -> Result<()> {
+    let obj = value.as_object().ok_or_else(|| {
+        ConductorError::Schema("CONDUCTOR_OUTPUT must be a JSON object".to_string())
+    })?;
 
     for field in fields {
         match obj.get(&field.name) {
             None if field.required => {
-                return Err(format!("Missing required field: '{}'", field.name));
+                return Err(ConductorError::Schema(format!(
+                    "Missing required field: '{}'",
+                    field.name
+                )));
             }
             None => continue,
             Some(val) => validate_field_value(val, field)?,
@@ -615,77 +612,75 @@ fn validate_value(
     Ok(())
 }
 
-fn validate_field_value(
-    value: &serde_json::Value,
-    field: &FieldDef,
-) -> std::result::Result<(), String> {
+fn validate_field_value(value: &serde_json::Value, field: &FieldDef) -> Result<()> {
     match &field.field_type {
         FieldType::String => {
             if !value.is_string() {
-                return Err(format!(
+                return Err(ConductorError::Schema(format!(
                     "Field '{}' expected string, got {}",
                     field.name,
                     json_type_name(value)
-                ));
+                )));
             }
         }
         FieldType::Number => {
             if !value.is_number() {
-                return Err(format!(
+                return Err(ConductorError::Schema(format!(
                     "Field '{}' expected number, got {}",
                     field.name,
                     json_type_name(value)
-                ));
+                )));
             }
         }
         FieldType::Boolean => {
             if !value.is_boolean() {
-                return Err(format!(
+                return Err(ConductorError::Schema(format!(
                     "Field '{}' expected boolean, got {}",
                     field.name,
                     json_type_name(value)
-                ));
+                )));
             }
         }
         FieldType::Enum(variants) => {
             let s = value.as_str().ok_or_else(|| {
-                format!(
+                ConductorError::Schema(format!(
                     "Field '{}' expected enum string, got {}",
                     field.name,
                     json_type_name(value)
-                )
+                ))
             })?;
             if !variants.contains(&s.to_string()) {
-                return Err(format!(
+                return Err(ConductorError::Schema(format!(
                     "Field '{}' value '{}' is not one of: {}",
                     field.name,
                     s,
                     variants.join(", ")
-                ));
+                )));
             }
         }
         FieldType::Array { items } => {
             let arr = value.as_array().ok_or_else(|| {
-                format!(
+                ConductorError::Schema(format!(
                     "Field '{}' expected array, got {}",
                     field.name,
                     json_type_name(value)
-                )
+                ))
             })?;
             if !items.is_empty() {
                 for (i, elem) in arr.iter().enumerate() {
-                    validate_value(elem, items)
-                        .map_err(|e| format!("In '{}[{}]': {e}", field.name, i))?;
+                    validate_value(elem, items).map_err(|e| {
+                        ConductorError::Schema(format!("In '{}[{}]': {e}", field.name, i))
+                    })?;
                 }
             }
         }
         FieldType::Object { fields } => {
             if !value.is_object() {
-                return Err(format!(
+                return Err(ConductorError::Schema(format!(
                     "Field '{}' expected object, got {}",
                     field.name,
                     json_type_name(value)
-                ));
+                )));
             }
             if !fields.is_empty() {
                 validate_value(value, fields)?;
@@ -1074,7 +1069,7 @@ fields:
 "#;
         let result = parse_structured_output(json, &schema);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("approved"));
+        assert!(result.unwrap_err().to_string().contains("approved"));
     }
 
     #[test]
@@ -1091,7 +1086,7 @@ fields:
 "#;
         let result = parse_structured_output(json, &schema);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("approved"));
+        assert!(result.unwrap_err().to_string().contains("approved"));
     }
 
     #[test]
@@ -1116,7 +1111,7 @@ fields:
 "#;
         let result = parse_structured_output(json, &schema);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("extreme"));
+        assert!(result.unwrap_err().to_string().contains("extreme"));
     }
 
     #[test]

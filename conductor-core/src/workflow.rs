@@ -1977,8 +1977,8 @@ fn execute_parallel(
         child_run_id: String,
         step_id: String,
         window_name: String,
-        /// Index into node.calls for looking up per-call schema overrides.
-        call_index: usize,
+        /// Resolved schema for this child (computed at spawn time).
+        schema: Option<schema_config::OutputSchema>,
     }
 
     let mut children = Vec::new();
@@ -2069,7 +2069,7 @@ fn execute_parallel(
             child_run_id: child_run.id,
             step_id,
             window_name,
-            call_index: i,
+            schema: call_schema.or_else(|| block_schema.clone()),
         });
     }
 
@@ -2131,26 +2131,8 @@ fn execute_parallel(
                         completed.insert(i);
                         let succeeded = run.status == AgentRunStatus::Completed;
 
-                        // Determine the effective schema for this child
-                        let child_schema = child
-                            .call_index
-                            .checked_sub(0) // always succeeds, just to use the variable
-                            .and_then(|_| {
-                                node.call_outputs.get(&child.call_index).and_then(|name| {
-                                    let sr = schema_config::SchemaRef::from_str_value(name);
-                                    schema_config::load_schema(
-                                        &state.worktree_path,
-                                        &state.repo_path,
-                                        &sr,
-                                        Some(&state.workflow_name),
-                                    )
-                                    .ok()
-                                })
-                            })
-                            .or_else(|| block_schema.clone());
-
                         let (markers, context, structured_json) =
-                            if let Some(ref schema) = child_schema {
+                            if let Some(ref schema) = child.schema {
                                 match run
                                     .result_text
                                     .as_deref()
@@ -2773,6 +2755,69 @@ mod tests {
             steps[0].markers_out.as_deref(),
             Some(r#"["has_review_issues"]"#)
         );
+    }
+
+    #[test]
+    fn test_update_step_status_full_with_structured_output() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("test", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+        let step_id = mgr
+            .insert_step(&run.id, "review", "reviewer", false, 0, 0)
+            .unwrap();
+
+        let structured_json = r#"{"approved":true,"summary":"All good"}"#;
+        mgr.update_step_status_full(
+            &step_id,
+            WorkflowStepStatus::Completed,
+            None,
+            Some("result text"),
+            Some("All good"),
+            Some(r#"[]"#),
+            Some(0),
+            Some(structured_json),
+        )
+        .unwrap();
+
+        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        assert_eq!(step.structured_output.as_deref(), Some(structured_json));
+        assert_eq!(step.context_out.as_deref(), Some("All good"));
+        assert_eq!(step.result_text.as_deref(), Some("result text"));
+    }
+
+    #[test]
+    fn test_update_step_status_full_without_structured_output() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("test", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+        let step_id = mgr
+            .insert_step(&run.id, "review", "reviewer", false, 0, 0)
+            .unwrap();
+
+        mgr.update_step_status_full(
+            &step_id,
+            WorkflowStepStatus::Completed,
+            None,
+            Some("result text"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+        assert!(step.structured_output.is_none());
     }
 
     #[test]
@@ -3461,6 +3506,19 @@ And here is my actual output:
         assert!(!vars.contains_key("gate_feedback"));
         // prior_context should be empty string when no contexts
         assert_eq!(vars.get("prior_context").unwrap(), "");
+        // prior_output should be absent when no structured output
+        assert!(!vars.contains_key("prior_output"));
+    }
+
+    #[test]
+    fn test_build_variable_map_includes_prior_output() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+        let json = r#"{"approved":true,"summary":"All clear"}"#.to_string();
+        state.last_structured_output = Some(json.clone());
+
+        let vars = build_variable_map(&state);
+        assert_eq!(vars.get("prior_output").unwrap(), &json);
     }
 
     // -----------------------------------------------------------------------
