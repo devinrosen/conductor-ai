@@ -117,6 +117,7 @@ pub enum Action {
     LaunchAgent,
     OrchestrateAgent,
     StopAgent,
+    AttachAgent,
     ViewAgentLog,
     CopyLastCodeBlock,
     ExpandAgentEvent,
