@@ -165,6 +165,15 @@ pub fn load_agent(
     }
 }
 
+/// Return the first path (formed by joining `base/subdir/filename`) that is a file,
+/// checking each base in order.
+fn find_agent_path(bases: &[&str], subdir: &Path, filename: &str) -> Option<PathBuf> {
+    bases.iter().find_map(|base| {
+        let path = PathBuf::from(base).join(subdir).join(filename);
+        path.is_file().then_some(path)
+    })
+}
+
 /// Resolve an agent by short name using the search order.
 fn load_agent_by_name(
     worktree_path: &str,
@@ -173,59 +182,27 @@ fn load_agent_by_name(
     workflow_name: Option<&str>,
 ) -> Result<AgentDef> {
     let filename = format!("{name}.md");
+    let bases = [worktree_path, repo_path];
 
     // 1. Workflow-local override (worktree, then repo)
     if let Some(wf_name) = workflow_name {
-        let wf_local = PathBuf::from(worktree_path)
-            .join(".conductor")
+        let subdir = Path::new(".conductor")
             .join("workflows")
             .join(wf_name)
-            .join("agents")
-            .join(&filename);
-        if wf_local.is_file() {
-            return parse_agent_file(&wf_local);
-        }
-        let wf_local_repo = PathBuf::from(repo_path)
-            .join(".conductor")
-            .join("workflows")
-            .join(wf_name)
-            .join("agents")
-            .join(&filename);
-        if wf_local_repo.is_file() {
-            return parse_agent_file(&wf_local_repo);
+            .join("agents");
+        if let Some(path) = find_agent_path(&bases, &subdir, &filename) {
+            return parse_agent_file(&path);
         }
     }
 
     // 2. Shared conductor agents (worktree, then repo)
-    let worktree_agent = PathBuf::from(worktree_path)
-        .join(".conductor")
-        .join("agents")
-        .join(&filename);
-    if worktree_agent.is_file() {
-        return parse_agent_file(&worktree_agent);
-    }
-    let repo_agent = PathBuf::from(repo_path)
-        .join(".conductor")
-        .join("agents")
-        .join(&filename);
-    if repo_agent.is_file() {
-        return parse_agent_file(&repo_agent);
+    if let Some(path) = find_agent_path(&bases, Path::new(".conductor/agents"), &filename) {
+        return parse_agent_file(&path);
     }
 
     // 3. Claude Code agents fallback (worktree, then repo)
-    let worktree_claude_agent = PathBuf::from(worktree_path)
-        .join(".claude")
-        .join("agents")
-        .join(&filename);
-    if worktree_claude_agent.is_file() {
-        return parse_agent_file(&worktree_claude_agent);
-    }
-    let repo_claude_agent = PathBuf::from(repo_path)
-        .join(".claude")
-        .join("agents")
-        .join(&filename);
-    if repo_claude_agent.is_file() {
-        return parse_agent_file(&repo_claude_agent);
+    if let Some(path) = find_agent_path(&bases, Path::new(".claude/agents"), &filename) {
+        return parse_agent_file(&path);
     }
 
     Err(ConductorError::AgentConfig(format!(
