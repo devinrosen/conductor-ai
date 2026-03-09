@@ -2584,22 +2584,12 @@ fn build_workflow_summary(state: &ExecutionState<'_>) -> String {
         .unwrap_or_default();
 
     let total = steps.len();
-    let completed = steps
-        .iter()
-        .filter(|s| s.status == WorkflowStepStatus::Completed)
-        .count();
-    let failed = steps
-        .iter()
-        .filter(|s| s.status == WorkflowStepStatus::Failed)
-        .count();
-    let skipped = steps
-        .iter()
-        .filter(|s| s.status == WorkflowStepStatus::Skipped)
-        .count();
-    let timed_out = steps
-        .iter()
-        .filter(|s| s.status == WorkflowStepStatus::TimedOut)
-        .count();
+    let count_status =
+        |status: WorkflowStepStatus| steps.iter().filter(|s| s.status == status).count();
+    let completed = count_status(WorkflowStepStatus::Completed);
+    let failed = count_status(WorkflowStepStatus::Failed);
+    let skipped = count_status(WorkflowStepStatus::Skipped);
+    let timed_out = count_status(WorkflowStepStatus::TimedOut);
 
     let mut lines = Vec::new();
     lines.push(format!(
