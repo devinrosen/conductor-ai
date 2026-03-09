@@ -8,7 +8,7 @@
 //! 2. `.conductor/agents/<name>.md` — shared conductor agents
 //! 3. `.claude/agents/<name>.md` — Claude Code agents (fallback)
 //!
-//! Explicit paths (`AgentRef::Path`) are resolved directly relative to the
+//! Explicit paths (`AgentSpec::Path`) are resolved directly relative to the
 //! repository root and bypass the search order.
 
 use std::fs;
@@ -18,7 +18,20 @@ use serde::Deserialize;
 
 use crate::error::{ConductorError, Result};
 use crate::text_util::{parse_frontmatter, resolve_conductor_subdir};
-use crate::workflow_dsl::AgentRef;
+
+/// How to locate an agent — either a short name resolved via search order, or
+/// an explicit path relative to the repository root.
+///
+/// This type belongs to `agent_config` and is independent of the workflow DSL.
+/// Callers in the workflow layer convert `AgentRef` (DSL type) to `AgentSpec`
+/// before calling [`load_agent`].
+#[derive(Debug, Clone)]
+pub enum AgentSpec {
+    /// Short name (e.g. `plan`) resolved via the search order.
+    Name(String),
+    /// Explicit path relative to the repository root (e.g. `.claude/agents/plan.md`).
+    Path(String),
+}
 
 /// YAML frontmatter for an agent `.md` file.
 #[derive(Debug, Clone, Deserialize)]
@@ -134,21 +147,21 @@ fn parse_agent_file(path: &Path) -> Result<AgentDef> {
     })
 }
 
-/// Load an agent definition from an `AgentRef`.
+/// Load an agent definition from an `AgentSpec`.
 ///
-/// - `AgentRef::Name` — resolved via the search order (workflow-local override,
+/// - `AgentSpec::Name` — resolved via the search order (workflow-local override,
 ///   shared conductor agents, Claude Code agents).
-/// - `AgentRef::Path` — resolved as an explicit path relative to the repository
+/// - `AgentSpec::Path` — resolved as an explicit path relative to the repository
 ///   root; bypasses the search order entirely.
 pub fn load_agent(
     worktree_path: &str,
     repo_path: &str,
-    agent_ref: &AgentRef,
+    agent_spec: &AgentSpec,
     workflow_name: Option<&str>,
 ) -> Result<AgentDef> {
-    match agent_ref {
-        AgentRef::Name(name) => load_agent_by_name(worktree_path, repo_path, name, workflow_name),
-        AgentRef::Path(rel_path) => load_agent_by_path(repo_path, rel_path),
+    match agent_spec {
+        AgentSpec::Name(name) => load_agent_by_name(worktree_path, repo_path, name, workflow_name),
+        AgentSpec::Path(rel_path) => load_agent_by_path(repo_path, rel_path),
     }
 }
 
@@ -381,7 +394,7 @@ Implement the plan written in PLAN.md.
         let def = load_agent(
             worktree.path().to_str().unwrap(),
             repo.path().to_str().unwrap(),
-            &AgentRef::Name("plan".to_string()),
+            &AgentSpec::Name("plan".to_string()),
             None,
         )
         .unwrap();
@@ -399,7 +412,7 @@ Implement the plan written in PLAN.md.
         let def = load_agent(
             worktree.path().to_str().unwrap(),
             repo.path().to_str().unwrap(),
-            &AgentRef::Name("plan".to_string()),
+            &AgentSpec::Name("plan".to_string()),
             None,
         )
         .unwrap();
@@ -437,7 +450,7 @@ Implement the plan written in PLAN.md.
         let def = load_agent(
             worktree.path().to_str().unwrap(),
             repo.path().to_str().unwrap(),
-            &AgentRef::Name("plan".to_string()),
+            &AgentSpec::Name("plan".to_string()),
             Some("ticket-to-pr"),
         )
         .unwrap();
@@ -451,7 +464,7 @@ Implement the plan written in PLAN.md.
         let result = load_agent(
             worktree.path().to_str().unwrap(),
             repo.path().to_str().unwrap(),
-            &AgentRef::Name("nonexistent".to_string()),
+            &AgentSpec::Name("nonexistent".to_string()),
             None,
         );
         assert!(result.is_err());
@@ -476,7 +489,7 @@ Implement the plan written in PLAN.md.
         let def = load_agent(
             worktree.path().to_str().unwrap(),
             repo.path().to_str().unwrap(),
-            &AgentRef::Name("review".to_string()),
+            &AgentSpec::Name("review".to_string()),
             None,
         )
         .unwrap();
@@ -500,7 +513,7 @@ Implement the plan written in PLAN.md.
         let def = load_agent(
             worktree.path().to_str().unwrap(),
             repo.path().to_str().unwrap(),
-            &AgentRef::Name("review".to_string()),
+            &AgentSpec::Name("review".to_string()),
             None,
         )
         .unwrap();
@@ -532,7 +545,7 @@ Implement the plan written in PLAN.md.
         let def = load_agent(
             worktree.path().to_str().unwrap(),
             repo.path().to_str().unwrap(),
-            &AgentRef::Name("review".to_string()),
+            &AgentSpec::Name("review".to_string()),
             None,
         )
         .unwrap();
@@ -565,7 +578,7 @@ Implement the plan written in PLAN.md.
         let def = load_agent(
             worktree.path().to_str().unwrap(),
             repo.path().to_str().unwrap(),
-            &AgentRef::Name("review".to_string()),
+            &AgentSpec::Name("review".to_string()),
             None,
         )
         .unwrap();
@@ -589,7 +602,7 @@ Implement the plan written in PLAN.md.
         let def = load_agent(
             repo.path().to_str().unwrap(),
             repo.path().to_str().unwrap(),
-            &AgentRef::Path(".claude/agents/code-review.md".to_string()),
+            &AgentSpec::Path(".claude/agents/code-review.md".to_string()),
             None,
         )
         .unwrap();
@@ -603,7 +616,7 @@ Implement the plan written in PLAN.md.
         let result = load_agent(
             repo.path().to_str().unwrap(),
             repo.path().to_str().unwrap(),
-            &AgentRef::Path(".claude/agents/nonexistent.md".to_string()),
+            &AgentSpec::Path(".claude/agents/nonexistent.md".to_string()),
             None,
         );
         assert!(result.is_err());
@@ -618,7 +631,7 @@ Implement the plan written in PLAN.md.
         let result = load_agent(
             repo.path().to_str().unwrap(),
             repo.path().to_str().unwrap(),
-            &AgentRef::Path("/etc/passwd".to_string()),
+            &AgentSpec::Path("/etc/passwd".to_string()),
             None,
         );
         assert!(result.is_err());
@@ -642,7 +655,7 @@ Implement the plan written in PLAN.md.
         let result = load_agent(
             repo.path().to_str().unwrap(),
             repo.path().to_str().unwrap(),
-            &AgentRef::Path(evil_path),
+            &AgentSpec::Path(evil_path),
             None,
         );
         // Either not found (file doesn't exist at that traversal path) or traversal rejected

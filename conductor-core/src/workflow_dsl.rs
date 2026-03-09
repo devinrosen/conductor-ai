@@ -404,6 +404,46 @@ impl Lexer {
 }
 
 // ---------------------------------------------------------------------------
+// Parser helpers
+// ---------------------------------------------------------------------------
+
+/// A value from a key-value pair in the DSL, remembering whether it was quoted.
+///
+/// This preserves the syntactic distinction between bare identifiers/numbers
+/// (`Bare`) and quoted string literals (`Quoted`), so that `on_fail` values
+/// can be classified as `AgentRef::Name` vs `AgentRef::Path` without relying
+/// on content heuristics (e.g. checking for `/`).
+#[derive(Debug, Clone)]
+enum KvValue {
+    /// Came from a quoted string literal: `"some/path.md"`.
+    Quoted(String),
+    /// Came from a bare identifier, keyword, or integer literal: `diagnose`, `3`.
+    Bare(String),
+}
+
+impl KvValue {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Quoted(s) | Self::Bare(s) => s.as_str(),
+        }
+    }
+
+    fn into_string(self) -> String {
+        match self {
+            Self::Quoted(s) | Self::Bare(s) => s,
+        }
+    }
+
+    /// Convert into an `AgentRef`: quoted values become `Path`, bare values become `Name`.
+    fn into_agent_ref(self) -> AgentRef {
+        match self {
+            Self::Quoted(s) => AgentRef::Path(s),
+            Self::Bare(s) => AgentRef::Name(s),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Parser
 // ---------------------------------------------------------------------------
 
@@ -451,20 +491,20 @@ impl Parser {
         }
     }
 
-    fn expect_value(&mut self) -> std::result::Result<String, String> {
+    fn expect_value(&mut self) -> std::result::Result<KvValue, String> {
         match self.advance() {
-            Token::StringLit(s) => Ok(s),
-            Token::Int(n) => Ok(n.to_string()),
-            Token::Ident(s) => Ok(s),
+            Token::StringLit(s) => Ok(KvValue::Quoted(s)),
+            Token::Int(n) => Ok(KvValue::Bare(n.to_string())),
+            Token::Ident(s) => Ok(KvValue::Bare(s)),
             // Allow keyword tokens as values
-            Token::Required => Ok("required".to_string()),
-            Token::Default => Ok("default".to_string()),
-            Token::Call => Ok("call".to_string()),
-            Token::If => Ok("if".to_string()),
-            Token::While => Ok("while".to_string()),
-            Token::Parallel => Ok("parallel".to_string()),
-            Token::Gate => Ok("gate".to_string()),
-            Token::Always => Ok("always".to_string()),
+            Token::Required => Ok(KvValue::Bare("required".to_string())),
+            Token::Default => Ok(KvValue::Bare("default".to_string())),
+            Token::Call => Ok(KvValue::Bare("call".to_string())),
+            Token::If => Ok(KvValue::Bare("if".to_string())),
+            Token::While => Ok(KvValue::Bare("while".to_string())),
+            Token::Parallel => Ok(KvValue::Bare("parallel".to_string())),
+            Token::Gate => Ok(KvValue::Bare("gate".to_string())),
+            Token::Always => Ok(KvValue::Bare("always".to_string())),
             other => Err(format!(
                 "Expected value (string, int, or ident), got {other:?}"
             )),
@@ -487,7 +527,7 @@ impl Parser {
 
     // Parse key-value pairs until we hit a non-kv token.
     // KV pairs look like: IDENT = VALUE
-    fn parse_kvs(&mut self) -> std::result::Result<HashMap<String, String>, String> {
+    fn parse_kvs(&mut self) -> std::result::Result<HashMap<String, KvValue>, String> {
         let mut kvs = HashMap::new();
         loop {
             // Peek ahead: if it's an ident/keyword followed by '=', it's a kv.
@@ -531,16 +571,17 @@ impl Parser {
                     self.expect(&Token::RBrace)?;
 
                     if let Some(desc) = kvs.get("description") {
-                        description = desc.clone();
+                        description = desc.as_str().to_string();
                     }
                     if let Some(trig) = kvs.get("trigger") {
-                        trigger = trig
+                        let trig_str = trig.as_str();
+                        trigger = trig_str
                             .parse::<WorkflowTrigger>()
                             .map_err(|e| format!("In meta block: {e}"))?;
                         if trigger != WorkflowTrigger::Manual {
                             self.warnings.push(format!(
                                 "trigger '{}' is not implemented in v1; only 'manual' is active",
-                                trig
+                                trig_str
                             ));
                         }
                     }
@@ -562,7 +603,7 @@ impl Parser {
                             Token::Default => {
                                 self.advance();
                                 self.expect(&Token::Equals)?;
-                                let value = self.expect_value()?;
+                                let value = self.expect_value()?.into_string();
                                 inputs.push(InputDecl {
                                     name: input_name,
                                     required: false,
@@ -631,14 +672,17 @@ impl Parser {
 
         if self.peek() == &Token::LBrace {
             self.advance();
-            let kvs = self.parse_kvs()?;
+            let mut kvs = self.parse_kvs()?;
             self.expect(&Token::RBrace)?;
 
             if let Some(r) = kvs.get("retries") {
-                retries = r.parse().map_err(|e| format!("Invalid retries: {e}"))?;
+                retries = r
+                    .as_str()
+                    .parse()
+                    .map_err(|e| format!("Invalid retries: {e}"))?;
             }
-            if let Some(f) = kvs.get("on_fail") {
-                on_fail = Some(agent_ref_from_str(f));
+            if let Some(f) = kvs.remove("on_fail") {
+                on_fail = Some(f.into_agent_ref());
             }
         }
 
@@ -683,12 +727,13 @@ impl Parser {
         let max_iterations = kvs
             .get("max_iterations")
             .ok_or("while loop requires max_iterations")?
+            .as_str()
             .parse::<u32>()
             .map_err(|e| format!("Invalid max_iterations: {e}"))?;
 
         let stuck_after = kvs
             .get("stuck_after")
-            .map(|v| v.parse::<u32>())
+            .map(|v| v.as_str().parse::<u32>())
             .transpose()
             .map_err(|e| format!("Invalid stuck_after: {e}"))?;
 
@@ -720,11 +765,14 @@ impl Parser {
 
         let kvs = self.parse_kvs()?;
 
-        let fail_fast = kvs.get("fail_fast").map(|v| v == "true").unwrap_or(true);
+        let fail_fast = kvs
+            .get("fail_fast")
+            .map(|v| v.as_str() == "true")
+            .unwrap_or(true);
 
         let min_success = kvs
             .get("min_success")
-            .map(|v| v.parse::<u32>())
+            .map(|v| v.as_str().parse::<u32>())
             .transpose()
             .map_err(|e| format!("Invalid min_success: {e}"))?;
 
@@ -766,17 +814,17 @@ impl Parser {
         let kvs = self.parse_kvs()?;
         self.expect(&Token::RBrace)?;
 
-        let prompt = kvs.get("prompt").cloned();
+        let prompt = kvs.get("prompt").map(|v| v.as_str().to_string());
         let min_approvals = kvs
             .get("min_approvals")
-            .map(|v| v.parse::<u32>())
+            .map(|v| v.as_str().parse::<u32>())
             .transpose()
             .map_err(|e| format!("Invalid min_approvals: {e}"))?
             .unwrap_or(1);
 
         let timeout_secs = kvs
             .get("timeout")
-            .map(|v| parse_duration_str(v))
+            .map(|v| parse_duration_str(v.as_str()))
             .transpose()?
             .unwrap_or(24 * 3600); // default 24h
 
@@ -986,19 +1034,6 @@ pub fn collect_agent_names(nodes: &[WorkflowNode]) -> Vec<AgentRef> {
         }
     }
     refs
-}
-
-/// Convert a kv-map string value into an `AgentRef`.
-///
-/// Bare agent names (e.g. `diagnose`) are identifiers with no `/`. Paths
-/// contain at least one `/` (e.g. `.claude/agents/diagnose.md`), which is not
-/// a valid identifier character, so this heuristic is unambiguous.
-fn agent_ref_from_str(s: &str) -> AgentRef {
-    if s.contains('/') {
-        AgentRef::Path(s.to_string())
-    } else {
-        AgentRef::Name(s.to_string())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1607,19 +1642,35 @@ workflow test {
         );
     }
 
+    /// A quoted bare name (no `/`) in `on_fail` should produce `AgentRef::Path`,
+    /// not `AgentRef::Name` — demonstrating that the KvValue distinction is
+    /// preserved instead of relying on a `/`-heuristic.
     #[test]
-    fn test_agent_ref_from_str() {
-        assert_eq!(
-            agent_ref_from_str("plan"),
-            AgentRef::Name("plan".to_string())
-        );
-        assert_eq!(
-            agent_ref_from_str(".claude/agents/plan.md"),
-            AgentRef::Path(".claude/agents/plan.md".to_string())
-        );
-        assert_eq!(
-            agent_ref_from_str("custom/agents/review.md"),
-            AgentRef::Path("custom/agents/review.md".to_string())
-        );
+    fn test_on_fail_quoted_bare_name_is_path() {
+        let input = r#"workflow test { call agent { on_fail = "diagnose" } }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(
+                    c.on_fail,
+                    Some(AgentRef::Path("diagnose".to_string())),
+                    "quoted on_fail value should be AgentRef::Path even without a slash"
+                );
+            }
+            _ => panic!("Expected Call node"),
+        }
+    }
+
+    /// A bare (unquoted) name in `on_fail` should produce `AgentRef::Name`.
+    #[test]
+    fn test_on_fail_bare_name_is_name() {
+        let input = r#"workflow test { call agent { on_fail = diagnose } }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(c.on_fail, Some(AgentRef::Name("diagnose".to_string())));
+            }
+            _ => panic!("Expected Call node"),
+        }
     }
 }

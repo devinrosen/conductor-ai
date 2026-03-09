@@ -14,7 +14,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::agent::{AgentManager, AgentRunStatus};
-use crate::agent_config;
+use crate::agent_config::{self, AgentSpec};
 use crate::agent_runtime;
 use crate::config::Config;
 use crate::db::query_collect;
@@ -29,6 +29,19 @@ pub use crate::workflow_dsl::{
     collect_agent_names, AgentRef, InputDecl, WorkflowDef, WorkflowTrigger,
 };
 use crate::worktree::WorktreeManager;
+
+/// Convert a DSL `AgentRef` to the `agent_config` layer's `AgentSpec`.
+///
+/// This is the boundary where the workflow DSL concern (`AgentRef`) maps to
+/// the resolution concern (`AgentSpec`).
+impl From<&AgentRef> for AgentSpec {
+    fn from(r: &AgentRef) -> Self {
+        match r {
+            AgentRef::Name(s) => AgentSpec::Name(s.clone()),
+            AgentRef::Path(s) => AgentSpec::Path(s.clone()),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -857,7 +870,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         if agent_config::load_agent(
             input.worktree_path,
             input.repo_path,
-            agent_ref,
+            &AgentSpec::from(agent_ref),
             Some(&workflow.name),
         )
         .is_err()
@@ -1055,7 +1068,7 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
     let agent_def = agent_config::load_agent(
         &state.worktree_path,
         &state.repo_path,
-        &node.agent,
+        &AgentSpec::from(&node.agent),
         Some(&state.workflow_name),
     )?;
     let agent_label = node.agent.label();
@@ -1458,7 +1471,7 @@ fn execute_parallel(
         let agent_def = agent_config::load_agent(
             &state.worktree_path,
             &state.repo_path,
-            agent_ref,
+            &AgentSpec::from(agent_ref),
             Some(&state.workflow_name),
         )?;
 

@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 use conductor_core::agent::{
     build_startup_context, parse_events_from_line, AgentManager, PlanStep,
 };
+use conductor_core::agent_config::AgentSpec;
 use conductor_core::config::{ensure_dirs, load_config};
 use conductor_core::db::open_database;
 use conductor_core::error::ConductorError;
@@ -1474,7 +1475,7 @@ fn main() -> Result<()> {
                     if conductor_core::agent_config::load_agent(
                         &wt.path,
                         &r.local_path,
-                        agent_ref,
+                        &AgentSpec::from(agent_ref),
                         Some(&name),
                     )
                     .is_err()
