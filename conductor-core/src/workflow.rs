@@ -1041,23 +1041,32 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
 }
 
 /// Walk a list of workflow nodes, dispatching to the appropriate handler.
+fn execute_single_node(
+    state: &mut ExecutionState<'_>,
+    node: &WorkflowNode,
+    iteration: u32,
+) -> Result<()> {
+    match node {
+        WorkflowNode::Call(n) => execute_call(state, n, iteration)?,
+        WorkflowNode::CallWorkflow(n) => execute_call_workflow(state, n, iteration)?,
+        WorkflowNode::If(n) => execute_if(state, n)?,
+        WorkflowNode::While(n) => execute_while(state, n)?,
+        WorkflowNode::Parallel(n) => execute_parallel(state, n, iteration)?,
+        WorkflowNode::Gate(n) => execute_gate(state, n, iteration)?,
+        WorkflowNode::Always(n) => {
+            // Nested always — just execute body
+            execute_nodes(state, &n.body)?;
+        }
+    }
+    Ok(())
+}
+
 fn execute_nodes(state: &mut ExecutionState<'_>, nodes: &[WorkflowNode]) -> Result<()> {
     for node in nodes {
         if !state.all_succeeded && state.exec_config.fail_fast {
             break;
         }
-        match node {
-            WorkflowNode::Call(n) => execute_call(state, n, 0)?,
-            WorkflowNode::CallWorkflow(n) => execute_call_workflow(state, n, 0)?,
-            WorkflowNode::If(n) => execute_if(state, n)?,
-            WorkflowNode::While(n) => execute_while(state, n)?,
-            WorkflowNode::Parallel(n) => execute_parallel(state, n, 0)?,
-            WorkflowNode::Gate(n) => execute_gate(state, n, 0)?,
-            WorkflowNode::Always(n) => {
-                // Nested always — just execute body
-                execute_nodes(state, &n.body)?;
-            }
-        }
+        execute_single_node(state, node, 0)?;
     }
     Ok(())
 }
@@ -1738,15 +1747,7 @@ fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) -> Result<()>
 
         // Execute body
         for body_node in &node.body {
-            match body_node {
-                WorkflowNode::Call(n) => execute_call(state, n, iteration)?,
-                WorkflowNode::CallWorkflow(n) => execute_call_workflow(state, n, iteration)?,
-                WorkflowNode::If(n) => execute_if(state, n)?,
-                WorkflowNode::While(n) => execute_while(state, n)?,
-                WorkflowNode::Parallel(n) => execute_parallel(state, n, iteration)?,
-                WorkflowNode::Gate(n) => execute_gate(state, n, iteration)?,
-                WorkflowNode::Always(n) => execute_nodes(state, &n.body)?,
-            }
+            execute_single_node(state, body_node, iteration)?;
 
             if !state.all_succeeded && state.exec_config.fail_fast {
                 return Ok(());
