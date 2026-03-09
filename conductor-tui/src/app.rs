@@ -203,11 +203,7 @@ impl App {
     fn update(&mut self, action: Action) -> bool {
         let had_message = self.state.status_message.is_some();
         let dirty = self.handle_action(action);
-        match (had_message, self.state.status_message.is_some()) {
-            (false, true) => self.state.status_message_at = Some(std::time::Instant::now()),
-            (_, false) => self.state.status_message_at = None,
-            _ => {}
-        }
+        self.state.track_status_message_change(had_message);
         dirty
     }
 
@@ -235,12 +231,7 @@ impl App {
                 self.poll_workflow_data_async();
                 // Auto-clear status messages after 4 seconds so the context hint
                 // bar is restored without requiring user navigation.
-                if let Some(at) = self.state.status_message_at {
-                    if at.elapsed() > Duration::from_secs(4) {
-                        self.state.status_message = None;
-                        self.state.status_message_at = None;
-                    }
-                }
+                self.state.tick_status_message(Duration::from_secs(4));
                 // Always redraw on tick so elapsed times, spinners, and other
                 // time-sensitive indicators update smoothly (ratatui diffs cells,
                 // so this is cheap).
