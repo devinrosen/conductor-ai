@@ -1412,6 +1412,9 @@ fn main() -> Result<()> {
                                     conductor_core::workflow::WorkflowStepStatus::Running => "...",
                                     conductor_core::workflow::WorkflowStepStatus::Pending => "-",
                                     conductor_core::workflow::WorkflowStepStatus::Waiting => "wait",
+                                    conductor_core::workflow::WorkflowStepStatus::TimedOut => {
+                                        "tout"
+                                    }
                                 };
                                 let commit_flag = if step.can_commit { " [commit]" } else { "" };
                                 let iter_label = if step.iteration > 0 {
