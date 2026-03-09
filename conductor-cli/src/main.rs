@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 use conductor_core::agent::{
     build_startup_context, parse_events_from_line, AgentManager, PlanStep,
 };
+use conductor_core::agent_config::AgentSpec;
 use conductor_core::config::{ensure_dirs, load_config};
 use conductor_core::db::open_database;
 use conductor_core::error::ConductorError;
@@ -1462,44 +1463,34 @@ fn main() -> Result<()> {
 
                 let workflow = WorkflowManager::load_def_by_name(&wt.path, &r.local_path, &name)?;
 
-                let mut all_names = collect_agent_names(&workflow.body);
-                all_names.extend(collect_agent_names(&workflow.always));
+                let mut all_refs = collect_agent_names(&workflow.body);
+                all_refs.extend(collect_agent_names(&workflow.always));
 
                 // Deduplicate
-                all_names.sort();
-                all_names.dedup();
+                all_refs.sort();
+                all_refs.dedup();
 
-                let mut missing = Vec::new();
-                for agent_name in &all_names {
-                    if conductor_core::agent_config::load_agent(
-                        &wt.path,
-                        &r.local_path,
-                        agent_name,
-                        Some(&name),
-                    )
-                    .is_err()
-                    {
-                        missing.push(agent_name.as_str());
-                    }
-                }
+                let specs: Vec<AgentSpec> = all_refs.iter().map(AgentSpec::from).collect();
+                let missing = conductor_core::agent_config::find_missing_agents(
+                    &wt.path,
+                    &r.local_path,
+                    &specs,
+                    Some(&name),
+                );
 
                 println!("Workflow: {}", workflow.name);
                 println!("  Description: {}", workflow.description);
                 println!("  Trigger: {}", workflow.trigger);
                 let node_count = workflow.total_nodes();
                 println!("  Nodes: {node_count}");
-                println!("  Agents referenced: {}", all_names.len());
+                println!("  Agents referenced: {}", all_refs.len());
 
                 if missing.is_empty() {
                     println!("  All agents found.");
                 } else {
-                    println!(
-                        "\n  MISSING agents ({}/{}):",
-                        missing.len(),
-                        all_names.len()
-                    );
-                    for name in &missing {
-                        println!("    - {name}");
+                    println!("\n  MISSING agents ({}/{}):", missing.len(), all_refs.len());
+                    for agent in &missing {
+                        println!("    - {agent}");
                     }
                     std::process::exit(1);
                 }

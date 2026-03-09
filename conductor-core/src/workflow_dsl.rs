@@ -10,15 +10,19 @@
 //! inputs        := "inputs" "{" input_decl* "}"
 //! input_decl    := IDENT ("required" | "default" "=" STRING)
 //! node          := call | if_node | while_node | parallel | gate | always
-//! call          := "call" IDENT ("{" kv* "}")?
+//! call          := "call" agent_ref ("{" kv* "}")?
 //! if_node       := "if" condition "{" kv* node* "}"
 //! while_node    := "while" condition "{" kv* node* "}"
-//! parallel      := "parallel" "{" kv* call* "}"
+//! parallel      := "parallel" "{" kv* ("call" agent_ref)* "}"
 //! gate          := "gate" IDENT "{" kv* "}"
 //! always        := "always" "{" node* "}"
 //! condition     := IDENT "." IDENT
 //! kv            := IDENT "=" (STRING | NUMBER | IDENT)
+//! agent_ref     := IDENT | STRING
 //! ```
+//!
+//! `agent_ref` is a bare identifier (short name resolved via search order) or a
+//! quoted string (explicit path relative to the repo root).
 
 use std::collections::HashMap;
 use std::fs;
@@ -103,12 +107,56 @@ pub enum WorkflowNode {
     Always(AlwaysNode),
 }
 
+/// Reference to an agent — either a short name or an explicit file path.
+///
+/// - `Name`: bare identifier (e.g. `plan`) resolved via the search order.
+/// - `Path`: quoted string (e.g. `".claude/agents/plan.md"`) resolved directly
+///   relative to the repository root.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum AgentRef {
+    Name(String),
+    Path(String),
+}
+
+impl AgentRef {
+    /// Human-readable label for display and logging (the inner string value).
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Name(s) | Self::Path(s) => s.as_str(),
+        }
+    }
+
+    /// Key used to store and look up results in `step_results`.
+    ///
+    /// - `Name` variants return the name as-is.
+    /// - `Path` variants return the file stem without extension
+    ///   (e.g. `"plan"` from `".claude/agents/plan.md"`), so that `if`/`while`
+    ///   conditions can reference path-based agents by their short name.
+    pub fn step_key(&self) -> String {
+        match self {
+            Self::Name(s) => s.clone(),
+            Self::Path(s) => Path::new(s)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or(s.as_str())
+                .to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for AgentRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallNode {
-    pub agent: String,
+    pub agent: AgentRef,
     #[serde(default)]
     pub retries: u32,
-    pub on_fail: Option<String>,
+    pub on_fail: Option<AgentRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,7 +188,7 @@ pub struct ParallelNode {
     #[serde(default = "default_true")]
     pub fail_fast: bool,
     pub min_success: Option<u32>,
-    pub calls: Vec<String>,
+    pub calls: Vec<AgentRef>,
 }
 
 fn default_true() -> bool {
@@ -373,6 +421,62 @@ impl Lexer {
 }
 
 // ---------------------------------------------------------------------------
+// Parser helpers
+// ---------------------------------------------------------------------------
+
+/// A value from a key-value pair in the DSL, remembering whether it was quoted.
+///
+/// This preserves the syntactic distinction between bare identifiers/numbers
+/// (`Bare`) and quoted string literals (`Quoted`). When converting to an
+/// `AgentRef`, a quoted value is treated as a `Path` only if it contains a
+/// `/` (i.e. looks like a file path); otherwise it is treated as a `Name`.
+#[derive(Debug, Clone)]
+enum KvValue {
+    /// Came from a quoted string literal: `"some/path.md"`.
+    Quoted(String),
+    /// Came from a bare identifier, keyword, or integer literal: `diagnose`, `3`.
+    Bare(String),
+}
+
+impl KvValue {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Quoted(s) | Self::Bare(s) => s.as_str(),
+        }
+    }
+
+    fn into_string(self) -> String {
+        match self {
+            Self::Quoted(s) | Self::Bare(s) => s,
+        }
+    }
+
+    /// Convert into an `AgentRef`.
+    ///
+    /// **Intentionally differs from `expect_agent_ref` (call position):**
+    ///
+    /// In a kv-value position (e.g. `on_fail = "..."`), quoting is common
+    /// style for any string value and does not carry the same semantic weight
+    /// as quoting in `call` position, where the user explicitly chose to write
+    /// `call "..."` to signal a file path.  To avoid treating
+    /// `on_fail = "diagnose"` as an explicit path, we only produce
+    /// `AgentRef::Path` for values that actually look like file paths (i.e.
+    /// contain a `/`).  A bare-quoted name like `"diagnose"` remains
+    /// `AgentRef::Name`.
+    ///
+    /// Compare with [`Parser::expect_agent_ref`], where any quoted string in
+    /// `call` position is unconditionally `AgentRef::Path` because the author
+    /// deliberately chose the quoted form.
+    fn into_agent_ref(self) -> AgentRef {
+        match self {
+            Self::Bare(s) => AgentRef::Name(s),
+            Self::Quoted(s) if s.contains('/') => AgentRef::Path(s),
+            Self::Quoted(s) => AgentRef::Name(s),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Parser
 // ---------------------------------------------------------------------------
 
@@ -420,29 +524,52 @@ impl Parser {
         }
     }
 
-    fn expect_value(&mut self) -> std::result::Result<String, String> {
+    fn expect_value(&mut self) -> std::result::Result<KvValue, String> {
         match self.advance() {
-            Token::StringLit(s) => Ok(s),
-            Token::Int(n) => Ok(n.to_string()),
-            Token::Ident(s) => Ok(s),
+            Token::StringLit(s) => Ok(KvValue::Quoted(s)),
+            Token::Int(n) => Ok(KvValue::Bare(n.to_string())),
+            Token::Ident(s) => Ok(KvValue::Bare(s)),
             // Allow keyword tokens as values
-            Token::Required => Ok("required".to_string()),
-            Token::Default => Ok("default".to_string()),
-            Token::Call => Ok("call".to_string()),
-            Token::If => Ok("if".to_string()),
-            Token::While => Ok("while".to_string()),
-            Token::Parallel => Ok("parallel".to_string()),
-            Token::Gate => Ok("gate".to_string()),
-            Token::Always => Ok("always".to_string()),
+            Token::Required => Ok(KvValue::Bare("required".to_string())),
+            Token::Default => Ok(KvValue::Bare("default".to_string())),
+            Token::Call => Ok(KvValue::Bare("call".to_string())),
+            Token::If => Ok(KvValue::Bare("if".to_string())),
+            Token::While => Ok(KvValue::Bare("while".to_string())),
+            Token::Parallel => Ok(KvValue::Bare("parallel".to_string())),
+            Token::Gate => Ok(KvValue::Bare("gate".to_string())),
+            Token::Always => Ok(KvValue::Bare("always".to_string())),
             other => Err(format!(
                 "Expected value (string, int, or ident), got {other:?}"
             )),
         }
     }
 
+    /// Parse an agent reference: either a bare identifier (Name) or a quoted
+    /// string (Path).
+    ///
+    /// **Intentionally differs from `KvValue::into_agent_ref` (kv-value position):**
+    ///
+    /// In `call` position the author deliberately chooses between bare
+    /// (`call plan`) and quoted (`call "..."`) syntax, so a quoted string is
+    /// *always* treated as an explicit file path — even when it contains no
+    /// `/`.  This is in contrast to kv values like `on_fail = "diagnose"`,
+    /// where quoting is commonly used for style and a slash-based heuristic
+    /// is used instead.
+    fn expect_agent_ref(&mut self) -> std::result::Result<AgentRef, String> {
+        match self.advance() {
+            Token::Ident(s) => Ok(AgentRef::Name(s)),
+            Token::Required => Ok(AgentRef::Name("required".to_string())),
+            Token::Default => Ok(AgentRef::Name("default".to_string())),
+            Token::StringLit(s) => Ok(AgentRef::Path(s)),
+            other => Err(format!(
+                "Expected agent name (identifier) or path (quoted string), got {other:?}"
+            )),
+        }
+    }
+
     // Parse key-value pairs until we hit a non-kv token.
     // KV pairs look like: IDENT = VALUE
-    fn parse_kvs(&mut self) -> std::result::Result<HashMap<String, String>, String> {
+    fn parse_kvs(&mut self) -> std::result::Result<HashMap<String, KvValue>, String> {
         let mut kvs = HashMap::new();
         loop {
             // Peek ahead: if it's an ident/keyword followed by '=', it's a kv.
@@ -486,16 +613,17 @@ impl Parser {
                     self.expect(&Token::RBrace)?;
 
                     if let Some(desc) = kvs.get("description") {
-                        description = desc.clone();
+                        description = desc.as_str().to_string();
                     }
                     if let Some(trig) = kvs.get("trigger") {
-                        trigger = trig
+                        let trig_str = trig.as_str();
+                        trigger = trig_str
                             .parse::<WorkflowTrigger>()
                             .map_err(|e| format!("In meta block: {e}"))?;
                         if trigger != WorkflowTrigger::Manual {
                             self.warnings.push(format!(
                                 "trigger '{}' is not implemented in v1; only 'manual' is active",
-                                trig
+                                trig_str
                             ));
                         }
                     }
@@ -517,7 +645,7 @@ impl Parser {
                             Token::Default => {
                                 self.advance();
                                 self.expect(&Token::Equals)?;
-                                let value = self.expect_value()?;
+                                let value = self.expect_value()?.into_string();
                                 inputs.push(InputDecl {
                                     name: input_name,
                                     required: false,
@@ -579,21 +707,24 @@ impl Parser {
 
     fn parse_call(&mut self) -> std::result::Result<CallNode, String> {
         self.expect(&Token::Call)?;
-        let agent = self.expect_ident()?;
+        let agent = self.expect_agent_ref()?;
 
         let mut retries = 0u32;
         let mut on_fail = None;
 
         if self.peek() == &Token::LBrace {
             self.advance();
-            let kvs = self.parse_kvs()?;
+            let mut kvs = self.parse_kvs()?;
             self.expect(&Token::RBrace)?;
 
             if let Some(r) = kvs.get("retries") {
-                retries = r.parse().map_err(|e| format!("Invalid retries: {e}"))?;
+                retries = r
+                    .as_str()
+                    .parse()
+                    .map_err(|e| format!("Invalid retries: {e}"))?;
             }
-            if let Some(f) = kvs.get("on_fail") {
-                on_fail = Some(f.clone());
+            if let Some(f) = kvs.remove("on_fail") {
+                on_fail = Some(f.into_agent_ref());
             }
         }
 
@@ -638,12 +769,13 @@ impl Parser {
         let max_iterations = kvs
             .get("max_iterations")
             .ok_or("while loop requires max_iterations")?
+            .as_str()
             .parse::<u32>()
             .map_err(|e| format!("Invalid max_iterations: {e}"))?;
 
         let stuck_after = kvs
             .get("stuck_after")
-            .map(|v| v.parse::<u32>())
+            .map(|v| v.as_str().parse::<u32>())
             .transpose()
             .map_err(|e| format!("Invalid stuck_after: {e}"))?;
 
@@ -675,18 +807,21 @@ impl Parser {
 
         let kvs = self.parse_kvs()?;
 
-        let fail_fast = kvs.get("fail_fast").map(|v| v == "true").unwrap_or(true);
+        let fail_fast = kvs
+            .get("fail_fast")
+            .map(|v| v.as_str() == "true")
+            .unwrap_or(true);
 
         let min_success = kvs
             .get("min_success")
-            .map(|v| v.parse::<u32>())
+            .map(|v| v.as_str().parse::<u32>())
             .transpose()
             .map_err(|e| format!("Invalid min_success: {e}"))?;
 
         let mut calls = Vec::new();
         while self.peek() == &Token::Call {
             self.advance(); // consume "call"
-            let agent = self.expect_ident()?;
+            let agent = self.expect_agent_ref()?;
             calls.push(agent);
         }
         self.expect(&Token::RBrace)?;
@@ -721,17 +856,17 @@ impl Parser {
         let kvs = self.parse_kvs()?;
         self.expect(&Token::RBrace)?;
 
-        let prompt = kvs.get("prompt").cloned();
+        let prompt = kvs.get("prompt").map(|v| v.as_str().to_string());
         let min_approvals = kvs
             .get("min_approvals")
-            .map(|v| v.parse::<u32>())
+            .map(|v| v.as_str().parse::<u32>())
             .transpose()
             .map_err(|e| format!("Invalid min_approvals: {e}"))?
             .unwrap_or(1);
 
         let timeout_secs = kvs
             .get("timeout")
-            .map(|v| parse_duration_str(v))
+            .map(|v| parse_duration_str(v.as_str()))
             .transpose()?
             .unwrap_or(24 * 3600); // default 24h
 
@@ -922,25 +1057,25 @@ fn count_nodes(nodes: &[WorkflowNode]) -> usize {
     count
 }
 
-/// Collect all agent names referenced in a node tree (for validation).
-pub fn collect_agent_names(nodes: &[WorkflowNode]) -> Vec<String> {
-    let mut names = Vec::new();
+/// Collect all agent references in a node tree (for validation before execution).
+pub fn collect_agent_names(nodes: &[WorkflowNode]) -> Vec<AgentRef> {
+    let mut refs = Vec::new();
     for node in nodes {
         match node {
             WorkflowNode::Call(n) => {
-                names.push(n.agent.clone());
+                refs.push(n.agent.clone());
                 if let Some(ref f) = n.on_fail {
-                    names.push(f.clone());
+                    refs.push(f.clone());
                 }
             }
-            WorkflowNode::If(n) => names.extend(collect_agent_names(&n.body)),
-            WorkflowNode::While(n) => names.extend(collect_agent_names(&n.body)),
-            WorkflowNode::Parallel(n) => names.extend(n.calls.iter().cloned()),
+            WorkflowNode::If(n) => refs.extend(collect_agent_names(&n.body)),
+            WorkflowNode::While(n) => refs.extend(collect_agent_names(&n.body)),
+            WorkflowNode::Parallel(n) => refs.extend(n.calls.iter().cloned()),
             WorkflowNode::Gate(_) => {}
-            WorkflowNode::Always(n) => names.extend(collect_agent_names(&n.body)),
+            WorkflowNode::Always(n) => refs.extend(collect_agent_names(&n.body)),
         }
     }
-    names
+    refs
 }
 
 // ---------------------------------------------------------------------------
@@ -1034,7 +1169,7 @@ workflow ticket-to-pr {
         // call plan
         match &def.body[0] {
             WorkflowNode::Call(c) => {
-                assert_eq!(c.agent, "plan");
+                assert_eq!(c.agent, AgentRef::Name("plan".to_string()));
                 assert_eq!(c.retries, 0);
                 assert!(c.on_fail.is_none());
             }
@@ -1044,9 +1179,9 @@ workflow ticket-to-pr {
         // call implement with retries
         match &def.body[1] {
             WorkflowNode::Call(c) => {
-                assert_eq!(c.agent, "implement");
+                assert_eq!(c.agent, AgentRef::Name("implement".to_string()));
                 assert_eq!(c.retries, 2);
-                assert_eq!(c.on_fail.as_deref(), Some("diagnose"));
+                assert_eq!(c.on_fail, Some(AgentRef::Name("diagnose".to_string())));
             }
             _ => panic!("Expected Call node"),
         }
@@ -1071,7 +1206,11 @@ workflow ticket-to-pr {
                 assert_eq!(p.min_success, Some(1));
                 assert_eq!(
                     p.calls,
-                    vec!["reviewer_security", "reviewer_tests", "reviewer_style"]
+                    vec![
+                        AgentRef::Name("reviewer_security".to_string()),
+                        AgentRef::Name("reviewer_tests".to_string()),
+                        AgentRef::Name("reviewer_style".to_string()),
+                    ]
                 );
             }
             _ => panic!("Expected Parallel node"),
@@ -1110,7 +1249,9 @@ workflow ticket-to-pr {
         // always
         assert_eq!(def.always.len(), 1);
         match &def.always[0] {
-            WorkflowNode::Call(c) => assert_eq!(c.agent, "notify_result"),
+            WorkflowNode::Call(c) => {
+                assert_eq!(c.agent, AgentRef::Name("notify_result".to_string()))
+            }
             _ => panic!("Expected Call node in always"),
         }
     }
@@ -1196,13 +1337,13 @@ workflow ticket-to-pr {
     #[test]
     fn test_collect_agent_names() {
         let def = parse_workflow_str(FULL_WORKFLOW, "test.wf").unwrap();
-        let mut names = collect_agent_names(&def.body);
-        names.extend(collect_agent_names(&def.always));
-        assert!(names.contains(&"plan".to_string()));
-        assert!(names.contains(&"implement".to_string()));
-        assert!(names.contains(&"diagnose".to_string())); // on_fail
-        assert!(names.contains(&"reviewer_security".to_string()));
-        assert!(names.contains(&"notify_result".to_string()));
+        let mut refs = collect_agent_names(&def.body);
+        refs.extend(collect_agent_names(&def.always));
+        assert!(refs.contains(&AgentRef::Name("plan".to_string())));
+        assert!(refs.contains(&AgentRef::Name("implement".to_string())));
+        assert!(refs.contains(&AgentRef::Name("diagnose".to_string()))); // on_fail
+        assert!(refs.contains(&AgentRef::Name("reviewer_security".to_string())));
+        assert!(refs.contains(&AgentRef::Name("notify_result".to_string())));
     }
 
     #[test]
@@ -1279,7 +1420,7 @@ workflow ticket-to-pr {
 
         match &def.body[1] {
             WorkflowNode::Call(c) => {
-                assert_eq!(c.agent, "implement");
+                assert_eq!(c.agent, AgentRef::Name("implement".to_string()));
                 assert_eq!(c.retries, 2);
             }
             _ => panic!("Expected Call node"),
@@ -1348,7 +1489,9 @@ workflow lint-fix {
         assert_eq!(def.body.len(), 2);
 
         match &def.body[0] {
-            WorkflowNode::Call(c) => assert_eq!(c.agent, "analyze-lint"),
+            WorkflowNode::Call(c) => {
+                assert_eq!(c.agent, AgentRef::Name("analyze-lint".to_string()))
+            }
             _ => panic!("Expected Call node"),
         }
     }
@@ -1450,5 +1593,166 @@ workflow lint-fix {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("not found"));
+    }
+
+    #[test]
+    fn test_parse_call_explicit_path() {
+        let input = r#"workflow test { call ".claude/agents/review.md" }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.body.len(), 1);
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(
+                    c.agent,
+                    AgentRef::Path(".claude/agents/review.md".to_string())
+                );
+            }
+            _ => panic!("Expected Call node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_call_mixed_name_and_path() {
+        let input = r#"
+workflow test {
+    call plan
+    call ".claude/agents/code-review.md"
+    call implement { retries = 1  on_fail = ".claude/agents/diagnose.md" }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.body.len(), 3);
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(c.agent, AgentRef::Name("plan".to_string()));
+            }
+            _ => panic!("Expected Call node"),
+        }
+        match &def.body[1] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(
+                    c.agent,
+                    AgentRef::Path(".claude/agents/code-review.md".to_string())
+                );
+            }
+            _ => panic!("Expected Call node"),
+        }
+        match &def.body[2] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(c.agent, AgentRef::Name("implement".to_string()));
+                assert_eq!(c.retries, 1);
+                assert_eq!(
+                    c.on_fail,
+                    Some(AgentRef::Path(".claude/agents/diagnose.md".to_string()))
+                );
+            }
+            _ => panic!("Expected Call node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_parallel_explicit_paths() {
+        let input = r#"
+workflow test {
+    parallel {
+        call reviewer-security
+        call ".claude/agents/code-review.md"
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Parallel(p) => {
+                assert_eq!(
+                    p.calls,
+                    vec![
+                        AgentRef::Name("reviewer-security".to_string()),
+                        AgentRef::Path(".claude/agents/code-review.md".to_string()),
+                    ]
+                );
+            }
+            _ => panic!("Expected Parallel node"),
+        }
+    }
+
+    #[test]
+    fn test_agent_ref_label() {
+        assert_eq!(AgentRef::Name("plan".to_string()).label(), "plan");
+        assert_eq!(
+            AgentRef::Path(".claude/agents/plan.md".to_string()).label(),
+            ".claude/agents/plan.md"
+        );
+    }
+
+    #[test]
+    fn test_agent_ref_step_key() {
+        // Name variants: step_key == label
+        assert_eq!(AgentRef::Name("plan".to_string()).step_key(), "plan");
+
+        // Path variants: step_key is the file stem (no extension)
+        assert_eq!(
+            AgentRef::Path(".claude/agents/plan.md".to_string()).step_key(),
+            "plan"
+        );
+        assert_eq!(
+            AgentRef::Path(".claude/agents/code-review.md".to_string()).step_key(),
+            "code-review"
+        );
+        // Nested subdir — still just the stem
+        assert_eq!(
+            AgentRef::Path("custom/dir/my-agent.md".to_string()).step_key(),
+            "my-agent"
+        );
+    }
+
+    /// A quoted bare name (no `/`) in `on_fail` should produce `AgentRef::Name`,
+    /// not `AgentRef::Path` — quoting alone does not make a value a path.
+    #[test]
+    fn test_on_fail_quoted_bare_name_is_name() {
+        let input = r#"workflow test { call agent { on_fail = "diagnose" } }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(
+                    c.on_fail,
+                    Some(AgentRef::Name("diagnose".to_string())),
+                    "quoted on_fail value without a slash should be AgentRef::Name"
+                );
+            }
+            _ => panic!("Expected Call node"),
+        }
+    }
+
+    /// A bare (unquoted) name in `on_fail` should produce `AgentRef::Name`.
+    #[test]
+    fn test_on_fail_bare_name_is_name() {
+        let input = r#"workflow test { call agent { on_fail = diagnose } }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(c.on_fail, Some(AgentRef::Name("diagnose".to_string())));
+            }
+            _ => panic!("Expected Call node"),
+        }
+    }
+
+    /// A quoted string without a `/` in `call` position should produce
+    /// `AgentRef::Path`, not `AgentRef::Name`.  In `call` position, quoting is
+    /// always a deliberate signal that the value is an explicit path, so the
+    /// slash-heuristic used by `KvValue::into_agent_ref` does not apply.
+    #[test]
+    fn test_call_quoted_bare_name_is_path() {
+        let input = r#"workflow test { call "diagnose" }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(
+                    c.agent,
+                    AgentRef::Path("diagnose".to_string()),
+                    "quoted agent in call position should always be AgentRef::Path"
+                );
+            }
+            _ => panic!("Expected Call node"),
+        }
     }
 }

@@ -14,7 +14,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::agent::{AgentManager, AgentRunStatus};
-use crate::agent_config;
+use crate::agent_config::{self, AgentSpec};
 use crate::agent_runtime;
 use crate::config::Config;
 use crate::db::query_collect;
@@ -25,8 +25,23 @@ use crate::workflow_dsl::{
 };
 
 // Re-export DSL types so consumers go through `workflow::` instead of `workflow_dsl::` directly.
-pub use crate::workflow_dsl::{collect_agent_names, InputDecl, WorkflowDef, WorkflowTrigger};
+pub use crate::workflow_dsl::{
+    collect_agent_names, AgentRef, InputDecl, WorkflowDef, WorkflowTrigger,
+};
 use crate::worktree::WorktreeManager;
+
+/// Convert a DSL `AgentRef` to the `agent_config` layer's `AgentSpec`.
+///
+/// This is the boundary where the workflow DSL concern (`AgentRef`) maps to
+/// the resolution concern (`AgentSpec`).
+impl From<&AgentRef> for AgentSpec {
+    fn from(r: &AgentRef) -> Self {
+        match r {
+            AgentRef::Name(s) => AgentSpec::Name(s.clone()),
+            AgentRef::Path(s) => AgentSpec::Path(s.clone()),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -850,19 +865,13 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     all_agents.sort();
     all_agents.dedup();
 
-    let mut missing_agents = Vec::new();
-    for agent_name in &all_agents {
-        if agent_config::load_agent(
-            input.worktree_path,
-            input.repo_path,
-            agent_name,
-            Some(&workflow.name),
-        )
-        .is_err()
-        {
-            missing_agents.push(agent_name.as_str());
-        }
-    }
+    let specs: Vec<AgentSpec> = all_agents.iter().map(AgentSpec::from).collect();
+    let missing_agents = agent_config::find_missing_agents(
+        input.worktree_path,
+        input.repo_path,
+        &specs,
+        Some(&workflow.name),
+    );
     if !missing_agents.is_empty() {
         return Err(ConductorError::Workflow(format!(
             "Missing agent definitions: {}. Run 'conductor workflow validate' for details.",
@@ -1053,9 +1062,14 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
     let agent_def = agent_config::load_agent(
         &state.worktree_path,
         &state.repo_path,
-        &node.agent,
+        &AgentSpec::from(&node.agent),
         Some(&state.workflow_name),
     )?;
+    let agent_label = node.agent.label();
+    // step_key is the short name used as the step_results map key so that
+    // if/while conditions can reference this step by name regardless of whether
+    // the agent was referenced by name or by explicit path.
+    let step_key = node.agent.step_key();
 
     let prompt = build_agent_prompt(state, &agent_def);
     let step_model = agent_def.model.as_deref().or(state.model.as_deref());
@@ -1067,7 +1081,7 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
     for attempt in 0..max_attempts {
         let step_id = state.wf_mgr.insert_step(
             &state.workflow_run_id,
-            &node.agent,
+            agent_label,
             &agent_def.role.to_string(),
             agent_def.can_commit,
             pos,
@@ -1075,7 +1089,7 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
         )?;
 
         let child_window =
-            sanitize_tmux_name(&format!("{}-wf-{}", state.worktree_slug, node.agent));
+            sanitize_tmux_name(&format!("{}-wf-{}", state.worktree_slug, agent_label));
         let child_run = state.agent_mgr.create_child_run(
             &state.worktree_id,
             &prompt,
@@ -1096,7 +1110,7 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
 
         eprintln!(
             "[workflow] Step '{}' (attempt {}/{}): spawning in '{}'",
-            node.agent,
+            agent_label,
             attempt + 1,
             max_attempts,
             child_window,
@@ -1149,7 +1163,7 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
                 if succeeded {
                     eprintln!(
                         "[workflow] Step '{}' completed: cost=${:.4}, {} turns, markers={:?}",
-                        node.agent,
+                        agent_label,
                         completed_run.cost_usd.unwrap_or(0.0),
                         completed_run.num_turns.unwrap_or(0),
                         output.markers,
@@ -1177,7 +1191,7 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
                     }
 
                     let step_result = StepResult {
-                        step_name: node.agent.clone(),
+                        step_name: agent_label.to_string(),
                         status: WorkflowStepStatus::Completed,
                         result_text: completed_run.result_text,
                         cost_usd: completed_run.cost_usd,
@@ -1187,10 +1201,10 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
                         context: output.context.clone(),
                         child_run_id: Some(completed_run.id),
                     };
-                    state.step_results.insert(node.agent.clone(), step_result);
+                    state.step_results.insert(step_key.clone(), step_result);
 
                     state.contexts.push(ContextEntry {
-                        step: node.agent.clone(),
+                        step: agent_label.to_string(),
                         iteration,
                         context: output.context,
                     });
@@ -1199,7 +1213,7 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
                 } else {
                     eprintln!(
                         "[workflow] Step '{}' failed (attempt {}/{}): {}",
-                        node.agent,
+                        agent_label,
                         attempt + 1,
                         max_attempts,
                         completed_run
@@ -1225,7 +1239,7 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
                 }
             }
             Err(e) => {
-                eprintln!("[workflow] Step '{}' poll error: {e}", node.agent);
+                eprintln!("[workflow] Step '{}' poll error: {e}", agent_label);
                 let _ = state.agent_mgr.update_run_cancelled(&child_run.id);
                 state.wf_mgr.update_step_status(
                     &step_id,
@@ -1246,12 +1260,13 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
     if let Some(ref on_fail_agent) = node.on_fail {
         eprintln!(
             "[workflow] All retries exhausted for '{}', running on_fail agent '{}'",
-            node.agent, on_fail_agent
+            agent_label,
+            on_fail_agent.label(),
         );
         // Inject failure variables
         state
             .inputs
-            .insert("failed_step".to_string(), node.agent.clone());
+            .insert("failed_step".to_string(), agent_label.to_string());
         state
             .inputs
             .insert("failure_reason".to_string(), last_error.clone());
@@ -1267,7 +1282,7 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
         if let Err(e) = execute_call(state, &on_fail_node, iteration) {
             eprintln!(
                 "[workflow] on_fail agent '{}' also failed: {e}",
-                on_fail_agent
+                on_fail_agent.label(),
             );
         }
 
@@ -1279,7 +1294,7 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
 
     state.all_succeeded = false;
     let step_result = StepResult {
-        step_name: node.agent.clone(),
+        step_name: agent_label.to_string(),
         status: WorkflowStepStatus::Failed,
         result_text: Some(last_error),
         cost_usd: None,
@@ -1289,12 +1304,12 @@ fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32)
         context: String::new(),
         child_run_id: None,
     };
-    state.step_results.insert(node.agent.clone(), step_result);
+    state.step_results.insert(step_key, step_result);
 
     if state.exec_config.fail_fast {
         return Err(ConductorError::Workflow(format!(
             "Step '{}' failed after {} attempts",
-            node.agent, max_attempts
+            agent_label, max_attempts
         )));
     }
 
@@ -1442,14 +1457,15 @@ fn execute_parallel(
 
     let mut children = Vec::new();
 
-    for (i, agent_name) in node.calls.iter().enumerate() {
+    for (i, agent_ref) in node.calls.iter().enumerate() {
         let pos = pos_base + i as i64;
         state.position = pos + 1;
+        let agent_label = agent_ref.label();
 
         let agent_def = agent_config::load_agent(
             &state.worktree_path,
             &state.repo_path,
-            agent_name,
+            &AgentSpec::from(agent_ref),
             Some(&state.workflow_name),
         )?;
 
@@ -1457,7 +1473,7 @@ fn execute_parallel(
         let step_model = agent_def.model.as_deref().or(state.model.as_deref());
         let step_id = state.wf_mgr.insert_step(
             &state.workflow_run_id,
-            agent_name,
+            agent_label,
             &agent_def.role.to_string(),
             agent_def.can_commit,
             pos,
@@ -1466,7 +1482,7 @@ fn execute_parallel(
         state.wf_mgr.set_step_parallel_group(&step_id, &group_id)?;
 
         let window_name =
-            sanitize_tmux_name(&format!("{}-wf-{}-{}", state.worktree_slug, agent_name, i));
+            sanitize_tmux_name(&format!("{}-wf-{}-{}", state.worktree_slug, agent_label, i));
         let child_run = state.agent_mgr.create_child_run(
             &state.worktree_id,
             &prompt,
@@ -1492,7 +1508,7 @@ fn execute_parallel(
             step_model,
             &window_name,
         ) {
-            eprintln!("[workflow] Failed to spawn parallel agent '{agent_name}': {e}");
+            eprintln!("[workflow] Failed to spawn parallel agent '{agent_label}': {e}");
             let _ = state
                 .agent_mgr
                 .update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
@@ -1509,7 +1525,7 @@ fn execute_parallel(
         }
 
         children.push(ParallelChild {
-            agent_name: agent_name.clone(),
+            agent_name: agent_label.to_string(),
             child_run_id: child_run.id,
             step_id,
             window_name,
