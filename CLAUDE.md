@@ -85,14 +85,11 @@ GitHub Actions runs on PRs to `main` (`.github/workflows/ci.yml`):
 
 Branch ruleset on `main`: PRs required, linear history (squash/rebase only), `Clippy` + `Test` must pass. Tag ruleset: `v*` tags cannot be deleted or overwritten.
 
-## Project Status (per docs/VISION.md)
+## Project Context
 
-- Phase 1 (done): Core library + CLI
-- Phase 2 (done): TUI with ratatui
-- Phase 3: Jira integration
-- Phase 4 (in progress): AI agent orchestration (agent launch/stop, runs, events)
-- Phase 5: Daemon extraction (v2, async with tokio)
-- Phase 6: Web UI (in progress — basic CRUD done, agent features missing)
+- **Vision & motivation:** [docs/VISION.md](docs/VISION.md)
+- **Current priorities:** [docs/ROADMAP.md](docs/ROADMAP.md)
+- **Workflow engine design:** [docs/workflow/engine.md](docs/workflow/engine.md)
 
 ## Key Conventions
 
