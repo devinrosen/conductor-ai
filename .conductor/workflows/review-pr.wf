@@ -7,7 +7,7 @@ workflow review-pr {
 
   parallel {
     output    = "review-findings"
-    with      = ["review-diff-scope"]
+    with      = ["review-diff-scope", "off-diff-findings"]
     fail_fast = false
     call review-architecture    { retries = 1 }
     call review-security        { retries = 1 }
