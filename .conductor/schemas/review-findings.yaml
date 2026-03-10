@@ -1,0 +1,17 @@
+fields:
+  findings:
+    type: array
+    items:
+      file: string
+      line: number
+      severity: enum(critical, warning, suggestion)
+      message: string
+      suggestion?:
+        type: string
+        desc: "Suggested fix or remediation"
+  approved: boolean
+  summary: string
+
+markers:
+  has_review_issues: "approved == false"
+  has_critical_findings: "findings[severity == critical].length > 0"

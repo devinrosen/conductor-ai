@@ -46,7 +46,7 @@ workflow ticket-to-pr {
     skip_tests default = "false"
   }
 
-  call plan
+  call plan { output = "task-plan" }
 
   call implement {
     retries = 2
@@ -56,6 +56,7 @@ workflow ticket-to-pr {
   call push-and-pr
 
   parallel {
+    output    = "review-findings"
     with      = ["review-diff-scope"]
     fail_fast = false
     call review-architecture
@@ -63,7 +64,7 @@ workflow ticket-to-pr {
     call review-performance
   }
 
-  call review-triage
+  call review-triage { output = "review-triage" }
 
   while review-triage.has_review_issues {
     max_iterations = 3
@@ -73,6 +74,7 @@ workflow ticket-to-pr {
     call address-reviews
 
     parallel {
+      output    = "review-findings"
       with      = ["review-diff-scope"]
       fail_fast = false
       call review-architecture
@@ -80,7 +82,7 @@ workflow ticket-to-pr {
       call review-performance
     }
 
-    call review-triage
+    call review-triage { output = "review-triage" }
   }
 
   gate human_review {

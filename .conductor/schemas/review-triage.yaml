@@ -1,0 +1,22 @@
+fields:
+  reviewers:
+    type: array
+    items:
+      name: string
+      approved: boolean
+      finding_count: number
+      summary: string
+  blocking_findings:
+    type: array
+    items:
+      reviewer: string
+      file: string
+      line: number
+      severity: enum(critical, warning)
+      message: string
+  suggestion_count: number
+  overall_approved: boolean
+  summary: string
+
+markers:
+  has_review_issues: "overall_approved == false"

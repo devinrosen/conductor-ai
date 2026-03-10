@@ -1707,7 +1707,7 @@ workflow ticket-to-pr {
     ticket_id required
   }
 
-  call plan
+  call plan { output = "task-plan" }
 
   call implement {
     retries = 2
@@ -1716,6 +1716,7 @@ workflow ticket-to-pr {
   call push-and-pr
 
   parallel {
+    output    = "review-findings"
     with      = ["review-diff-scope"]
     fail_fast = false
     call review-architecture
@@ -1727,7 +1728,7 @@ workflow ticket-to-pr {
     call review-db-migrations
   }
 
-  call review-triage
+  call review-triage { output = "review-triage" }
 
   while review-triage.has_review_issues {
     max_iterations = 3
@@ -1737,6 +1738,7 @@ workflow ticket-to-pr {
     call address-reviews
 
     parallel {
+      output    = "review-findings"
       with      = ["review-diff-scope"]
       fail_fast = false
       call review-architecture
@@ -1748,7 +1750,7 @@ workflow ticket-to-pr {
       call review-db-migrations
     }
 
-    call review-triage
+    call review-triage { output = "review-triage" }
   }
 }
 "#;
@@ -1759,6 +1761,14 @@ workflow ticket-to-pr {
         assert!(def.inputs[0].required);
         // call plan, call implement, call push-and-pr, parallel, call review-triage, while
         assert_eq!(def.body.len(), 6);
+
+        match &def.body[0] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(c.agent, AgentRef::Name("plan".to_string()));
+                assert_eq!(c.output.as_deref(), Some("task-plan"));
+            }
+            _ => panic!("Expected Call node for plan"),
+        }
 
         match &def.body[1] {
             WorkflowNode::Call(c) => {
@@ -1773,8 +1783,17 @@ workflow ticket-to-pr {
                 assert_eq!(p.calls.len(), 7);
                 assert!(!p.fail_fast);
                 assert_eq!(p.with, vec!["review-diff-scope".to_string()]);
+                assert_eq!(p.output.as_deref(), Some("review-findings"));
             }
             _ => panic!("Expected Parallel node"),
+        }
+
+        match &def.body[4] {
+            WorkflowNode::Call(c) => {
+                assert_eq!(c.agent, AgentRef::Name("review-triage".to_string()));
+                assert_eq!(c.output.as_deref(), Some("review-triage"));
+            }
+            _ => panic!("Expected Call node for review-triage"),
         }
 
         match &def.body[5] {
