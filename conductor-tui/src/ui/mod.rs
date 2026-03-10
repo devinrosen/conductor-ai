@@ -1,6 +1,7 @@
 mod common;
 mod dashboard;
 mod help;
+pub(crate) mod helpers;
 mod modal;
 mod repo_detail;
 mod tickets;

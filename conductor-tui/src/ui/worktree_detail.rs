@@ -6,6 +6,7 @@ use ratatui::Frame;
 
 use conductor_core::worktree::WorktreeStatus;
 
+use super::helpers::shorten_paths;
 use crate::state::{AppState, VisualRow};
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -319,19 +320,6 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
     frame.render_stateful_widget(list, area, &mut state.agent_list_state.borrow_mut());
-}
-
-fn shorten_paths(summary: &str, worktree_path: &str) -> String {
-    // Replace worktree path first (more specific), then home dir (less specific)
-    let s = if !worktree_path.is_empty() {
-        summary.replacen(worktree_path, "{worktree}", 1)
-    } else {
-        summary.to_string()
-    };
-    match dirs::home_dir() {
-        Some(home) => s.replacen(home.to_string_lossy().as_ref(), "~", 1),
-        None => s,
-    }
 }
 
 /// Extract a clean display label from an orchestrator child prompt.

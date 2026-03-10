@@ -7,6 +7,7 @@ use ratatui::Frame;
 use conductor_core::worktree::Worktree;
 
 use super::common::truncate;
+use super::helpers::shorten_paths;
 use crate::state::AppState;
 use crate::state::WorkflowsFocus;
 
@@ -395,6 +396,22 @@ fn render_step_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
 
+    let worktree_path = state
+        .selected_worktree_id
+        .as_ref()
+        .and_then(|id| state.data.worktrees.iter().find(|w| &w.id == id))
+        .or_else(|| {
+            state.data.step_agent_run.as_ref().and_then(|run| {
+                state
+                    .data
+                    .worktrees
+                    .iter()
+                    .find(|w| w.id == run.worktree_id)
+            })
+        })
+        .map(|wt| wt.path.as_str())
+        .unwrap_or("");
+
     let items: Vec<ListItem> = events
         .iter()
         .map(|ev| {
@@ -404,7 +421,7 @@ fn render_step_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
                 .map(|ms| format!(" ({:.1}s)", ms as f64 / 1000.0))
                 .unwrap_or_default();
             let ts = ev.started_at.get(11..19).unwrap_or(&ev.started_at);
-            let summary = truncate(&ev.summary, 80);
+            let summary = truncate(&shorten_paths(&ev.summary, worktree_path), 80);
             let spans = vec![
                 Span::styled(format!("{ts} "), Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{:<10}", ev.kind), style),
