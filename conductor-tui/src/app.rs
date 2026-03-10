@@ -4437,13 +4437,10 @@ impl App {
             }
         };
 
-        use conductor_core::workflow::WorkflowRunStatus;
-        if matches!(run.status, WorkflowRunStatus::Completed) {
-            self.state.status_message = Some("Cannot resume a completed workflow run".to_string());
-            return;
-        }
-        if matches!(run.status, WorkflowRunStatus::Cancelled) {
-            self.state.status_message = Some("Cannot resume a cancelled workflow run".to_string());
+        if let Err(e) =
+            conductor_core::workflow::validate_resume_preconditions(&run.status, false, None)
+        {
+            self.state.status_message = Some(e.to_string());
             return;
         }
 

@@ -747,13 +747,20 @@ impl<'a> AgentManager<'a> {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
+        // Build "?1, ?2, …" in a single allocation sized up-front.
+        let mut placeholders = String::with_capacity(ids.len() * 4);
+        for i in 1..=ids.len() {
+            if i > 1 {
+                placeholders.push_str(", ");
+            }
+            placeholders.push('?');
+            placeholders.push_str(&i.to_string());
+        }
         let sql = format!(
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
              model, plan, parent_run_id \
-             FROM agent_runs WHERE id IN ({})",
-            placeholders.join(", ")
+             FROM agent_runs WHERE id IN ({placeholders})"
         );
         let params: Vec<&dyn rusqlite::types::ToSql> = ids
             .iter()

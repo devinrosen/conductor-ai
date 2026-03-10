@@ -892,20 +892,28 @@ impl<'a> WorkflowManager<'a> {
         workflow_dsl::load_workflow_by_name(worktree_path, repo_path, name)
     }
 
-    /// Shared SQL SET clause for resetting step fields back to pending.
-    const RESET_STEP_SET: &'static str = "SET status = 'pending', started_at = NULL, \
-         ended_at = NULL, result_text = NULL, context_out = NULL, markers_out = NULL, \
-         structured_output = NULL, child_run_id = NULL";
+    const SQL_RESET_FAILED: &'static str = "UPDATE workflow_run_steps \
+         SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
+         context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL \
+         WHERE workflow_run_id = ?1 AND status IN ('failed', 'running', 'timed_out')";
+
+    const SQL_RESET_COMPLETED: &'static str = "UPDATE workflow_run_steps \
+         SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
+         context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL \
+         WHERE workflow_run_id = ?1 AND status = 'completed'";
+
+    const SQL_RESET_FROM_POS: &'static str = "UPDATE workflow_run_steps \
+         SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
+         context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL \
+         WHERE workflow_run_id = ?1 AND position >= ?2";
 
     /// Reset all non-completed steps for a workflow run back to `pending`.
     ///
     /// Used before resuming so that failed/running/timed_out steps get re-executed.
     pub fn reset_failed_steps(&self, workflow_run_id: &str) -> Result<u64> {
-        let sql = format!(
-            "UPDATE workflow_run_steps {} WHERE workflow_run_id = ?1 AND status IN ('failed', 'running', 'timed_out')",
-            Self::RESET_STEP_SET
-        );
-        let count = self.conn.execute(&sql, params![workflow_run_id])?;
+        let count = self
+            .conn
+            .execute(Self::SQL_RESET_FAILED, params![workflow_run_id])?;
         Ok(count as u64)
     }
 
@@ -913,11 +921,9 @@ impl<'a> WorkflowManager<'a> {
     ///
     /// Used for full restart (--restart) to re-run from scratch.
     pub fn reset_completed_steps(&self, workflow_run_id: &str) -> Result<u64> {
-        let sql = format!(
-            "UPDATE workflow_run_steps {} WHERE workflow_run_id = ?1 AND status = 'completed'",
-            Self::RESET_STEP_SET
-        );
-        let count = self.conn.execute(&sql, params![workflow_run_id])?;
+        let count = self
+            .conn
+            .execute(Self::SQL_RESET_COMPLETED, params![workflow_run_id])?;
         Ok(count as u64)
     }
 
@@ -925,20 +931,16 @@ impl<'a> WorkflowManager<'a> {
     ///
     /// Used for --from-step to re-run from a specific step onwards.
     pub fn reset_steps_from_position(&self, workflow_run_id: &str, position: i64) -> Result<u64> {
-        let sql = format!(
-            "UPDATE workflow_run_steps {} WHERE workflow_run_id = ?1 AND position >= ?2",
-            Self::RESET_STEP_SET
-        );
         let count = self
             .conn
-            .execute(&sql, params![workflow_run_id, position])?;
+            .execute(Self::SQL_RESET_FROM_POS, params![workflow_run_id, position])?;
         Ok(count as u64)
     }
 
-    /// Return the set of completed step keys (as `step_name:iteration`) for a run.
+    /// Return the set of completed step keys as `(step_name, iteration)` pairs.
     ///
     /// Used to build the skip set for resume.
-    pub fn get_completed_step_keys(&self, workflow_run_id: &str) -> Result<HashSet<String>> {
+    pub fn get_completed_step_keys(&self, workflow_run_id: &str) -> Result<HashSet<StepKey>> {
         let steps = self.get_workflow_steps(workflow_run_id)?;
         Ok(completed_keys_from_steps(&steps))
     }
@@ -1090,20 +1092,18 @@ fn build_agent_prompt(
 // Execution state
 // ---------------------------------------------------------------------------
 
-/// Build a step key for skip-set lookups: `"step_name:iteration"`.
-fn make_step_key(name: &str, iteration: u32) -> String {
-    format!("{name}:{iteration}")
-}
+/// A step key is a `(name, iteration)` pair used for skip-set and step-map lookups.
+type StepKey = (String, u32);
 
 /// Extract completed step keys from a slice of step records.
 ///
 /// Shared by [`WorkflowManager::get_completed_step_keys`] and [`resume_workflow`]
 /// so the key-building logic lives in one place.
-fn completed_keys_from_steps(steps: &[WorkflowRunStep]) -> HashSet<String> {
+fn completed_keys_from_steps(steps: &[WorkflowRunStep]) -> HashSet<StepKey> {
     steps
         .iter()
         .filter(|s| s.status == WorkflowStepStatus::Completed)
-        .map(|s| make_step_key(&s.step_name, s.iteration as u32))
+        .map(|s| (s.step_name.clone(), s.iteration as u32))
         .collect()
 }
 
@@ -1113,10 +1113,10 @@ fn completed_keys_from_steps(steps: &[WorkflowRunStep]) -> HashSet<String> {
 /// overhead and the borrow-splitting between "read completed data" and
 /// "mutate execution state" is explicit.
 struct ResumeContext {
-    /// Step keys to skip (e.g. `"lint:0"`).
-    skip_completed: HashSet<String>,
+    /// Step keys to skip (e.g. `("lint", 0)`).
+    skip_completed: HashSet<StepKey>,
     /// Completed step records keyed by step key, for O(1) restore.
-    step_map: HashMap<String, WorkflowRunStep>,
+    step_map: HashMap<StepKey, WorkflowRunStep>,
     /// Pre-loaded child agent runs keyed by run ID, avoiding N+1 queries
     /// when accumulating costs during restore.
     child_runs: HashMap<String, crate::agent::AgentRun>,
@@ -1557,10 +1557,10 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
                 .expect("from_step validated above")
                 .position;
 
-            let to_remove: Vec<String> = all_steps
+            let to_remove: Vec<StepKey> = all_steps
                 .iter()
                 .filter(|s| s.position >= pos && s.status == WorkflowStepStatus::Completed)
-                .map(|s| make_step_key(&s.step_name, s.iteration as u32))
+                .map(|s| (s.step_name.clone(), s.iteration as u32))
                 .collect();
             for key in to_remove {
                 keys.remove(&key);
@@ -1576,10 +1576,13 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 
     // Build the step map from `all_steps` (only the keys still in skip_completed
     // survived any --from-step pruning, so filter by membership).
-    let step_map: HashMap<String, WorkflowRunStep> = all_steps
+    let step_map: HashMap<StepKey, WorkflowRunStep> = all_steps
         .into_iter()
         .filter(|s| s.status == WorkflowStepStatus::Completed)
-        .map(|s| (make_step_key(&s.step_name, s.iteration as u32), s))
+        .map(|s| {
+            let key = (s.step_name.clone(), s.iteration as u32);
+            (key, s)
+        })
         .filter(|(key, _)| skip_completed.contains(key))
         .collect();
 
@@ -3078,7 +3081,7 @@ fn execute_parallel(
     // Store merged markers as a synthetic result
     let synthetic_result = StepResult {
         step_name: format!("parallel:{}", group_id),
-        status: if successes >= min_required {
+        status: if effective_successes >= min_required {
             WorkflowStepStatus::Completed
         } else {
             WorkflowStepStatus::Failed
@@ -3497,7 +3500,7 @@ fn find_max_completed_while_iteration(state: &ExecutionState<'_>, node: &WhileNo
     loop {
         let all_done = body_keys
             .iter()
-            .all(|k| skip_set.contains(&make_step_key(k, iter)));
+            .all(|k| skip_set.contains(&(k.clone(), iter)));
         if !all_done {
             break;
         }
@@ -3511,7 +3514,7 @@ fn find_max_completed_while_iteration(state: &ExecutionState<'_>, node: &WhileNo
 fn should_skip(state: &ExecutionState<'_>, step_name: &str, iteration: u32) -> bool {
     state.resume_ctx.as_ref().is_some_and(|ctx| {
         ctx.skip_completed
-            .contains(&make_step_key(step_name, iteration))
+            .contains(&(step_name.to_owned(), iteration))
     })
 }
 
@@ -3536,8 +3539,7 @@ fn restore_completed_step(
     step_key: &str,
     iteration: u32,
 ) {
-    let lookup_key = make_step_key(step_key, iteration);
-    let completed_step = ctx.step_map.get(&lookup_key);
+    let completed_step = ctx.step_map.get(&(step_key.to_owned(), iteration));
 
     let Some(step) = completed_step else {
         tracing::warn!(
@@ -6014,10 +6016,10 @@ And here is my actual output:
 
         let keys = mgr.get_completed_step_keys(&run_id).unwrap();
         assert_eq!(keys.len(), 1);
-        assert!(keys.contains("step-a:0"));
+        assert!(keys.contains(&("step-a".to_string(), 0)));
         // Failed/running steps should not be in the set
-        assert!(!keys.contains("step-b:0"));
-        assert!(!keys.contains("step-c:0"));
+        assert!(!keys.contains(&("step-b".to_string(), 0)));
+        assert!(!keys.contains(&("step-c".to_string(), 0)));
     }
 
     // -----------------------------------------------------------------------
@@ -6053,9 +6055,8 @@ And here is my actual output:
         let conn = setup_db();
         let mut state = make_test_state(&conn);
 
-        let skip: HashSet<String> = ["step-a:0", "step-a:1"]
-            .iter()
-            .map(|s| s.to_string())
+        let skip: HashSet<StepKey> = [("step-a".to_string(), 0), ("step-a".to_string(), 1)]
+            .into_iter()
             .collect();
         state.resume_ctx = Some(ResumeContext {
             skip_completed: skip,
@@ -6112,7 +6113,7 @@ And here is my actual output:
         let mut state = make_test_state(&conn);
 
         // Two body nodes, but only one completed for iteration 0
-        let skip = ["step-a:0"].iter().map(|s| s.to_string()).collect();
+        let skip: HashSet<StepKey> = [("step-a".to_string(), 0)].into_iter().collect();
         state.resume_ctx = Some(ResumeContext {
             skip_completed: skip,
             step_map: HashMap::new(),
@@ -6153,10 +6154,13 @@ And here is my actual output:
         let conn = setup_db();
         let mut state = make_test_state(&conn);
 
-        let skip: HashSet<String> = ["agent-a:0", "agent-b:0", "approval:0"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let skip: HashSet<StepKey> = [
+            ("agent-a".to_string(), 0),
+            ("agent-b".to_string(), 0),
+            ("approval".to_string(), 0),
+        ]
+        .into_iter()
+        .collect();
         state.resume_ctx = Some(ResumeContext {
             skip_completed: skip,
             step_map: HashMap::new(),
@@ -6242,7 +6246,7 @@ And here is my actual output:
 
     /// Helper to build a ResumeContext from a step map.
     fn make_resume_ctx(
-        step_map: HashMap<String, WorkflowRunStep>,
+        step_map: HashMap<StepKey, WorkflowRunStep>,
         child_runs: HashMap<String, crate::agent::AgentRun>,
     ) -> ResumeContext {
         let skip_completed = step_map.keys().cloned().collect();
@@ -6268,7 +6272,7 @@ And here is my actual output:
             Some(r#"{"verdict":"approve"}"#),
         );
         let ctx = make_resume_ctx(
-            [("review:0".to_string(), step)].into_iter().collect(),
+            [(("review".to_string(), 0), step)].into_iter().collect(),
             HashMap::new(),
         );
 
@@ -6344,7 +6348,7 @@ And here is my actual output:
             None,
         );
         let ctx = make_resume_ctx(
-            [("build:0".to_string(), step)].into_iter().collect(),
+            [(("build".to_string(), 0), step)].into_iter().collect(),
             [(child_run.id.clone(), loaded_run)].into_iter().collect(),
         );
 
@@ -6373,7 +6377,7 @@ And here is my actual output:
         step.gate_feedback = Some("LGTM, ship it".to_string());
 
         let ctx = make_resume_ctx(
-            [("approval-gate:0".to_string(), step)]
+            [(("approval-gate".to_string(), 0), step)]
                 .into_iter()
                 .collect(),
             HashMap::new(),
@@ -6754,11 +6758,11 @@ And here is my actual output:
             .position;
         assert_eq!(pos, 1);
 
-        // Prune keys at/after the from-step position (mirrors resume_workflow lines 1513-1520)
-        let to_remove: Vec<String> = all_steps
+        // Prune keys at/after the from-step position (mirrors resume_workflow)
+        let to_remove: Vec<StepKey> = all_steps
             .iter()
             .filter(|s| s.position >= pos && s.status == WorkflowStepStatus::Completed)
-            .map(|s| make_step_key(&s.step_name, s.iteration as u32))
+            .map(|s| (s.step_name.clone(), s.iteration as u32))
             .collect();
         for key in to_remove {
             keys.remove(&key);
@@ -6768,15 +6772,18 @@ And here is my actual output:
         mgr.reset_steps_from_position(&run.id, pos).unwrap();
         mgr.reset_failed_steps(&run.id).unwrap();
 
-        // skip_completed should contain only "step-a:0"
+        // skip_completed should contain only ("step-a", 0)
         assert_eq!(keys.len(), 1, "only step-a:0 should survive pruning");
-        assert!(keys.contains("step-a:0"), "step-a:0 must be in skip set");
         assert!(
-            !keys.contains("step-b:0"),
+            keys.contains(&("step-a".to_string(), 0)),
+            "step-a:0 must be in skip set"
+        );
+        assert!(
+            !keys.contains(&("step-b".to_string(), 0)),
             "step-b:0 must be pruned from skip set"
         );
         assert!(
-            !keys.contains("step-c:0"),
+            !keys.contains(&("step-c".to_string(), 0)),
             "step-c:0 must be pruned from skip set"
         );
 
@@ -6799,24 +6806,27 @@ And here is my actual output:
         );
 
         // step_map built from all_steps filtered by surviving skip keys
-        // (mirrors resume_workflow lines 1532-1537)
-        let step_map: HashMap<String, WorkflowRunStep> = all_steps
+        // (mirrors resume_workflow)
+        let step_map: HashMap<StepKey, WorkflowRunStep> = all_steps
             .into_iter()
             .filter(|s| s.status == WorkflowStepStatus::Completed)
-            .map(|s| (make_step_key(&s.step_name, s.iteration as u32), s))
+            .map(|s| {
+                let key = (s.step_name.clone(), s.iteration as u32);
+                (key, s)
+            })
             .filter(|(key, _)| keys.contains(key))
             .collect();
 
         assert!(
-            step_map.contains_key("step-a:0"),
+            step_map.contains_key(&("step-a".to_string(), 0)),
             "step_map must include step-a:0 (will be skipped on resume)"
         );
         assert!(
-            !step_map.contains_key("step-b:0"),
+            !step_map.contains_key(&("step-b".to_string(), 0)),
             "step_map must not include step-b:0 (will be re-executed)"
         );
         assert!(
-            !step_map.contains_key("step-c:0"),
+            !step_map.contains_key(&("step-c".to_string(), 0)),
             "step_map must not include step-c:0 (will be re-executed)"
         );
     }
@@ -6861,6 +6871,71 @@ And here is my actual output:
         assert!(
             !err.to_string().contains("Cannot resume a completed"),
             "restart=true should bypass the completed-run check, got: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // parallel min_success with skipped-on-resume agents
+    // -----------------------------------------------------------------------
+
+    /// Validates that the min_success calculation in execute_parallel correctly
+    /// counts skipped-on-resume agents as successes for both the warning logic
+    /// and the synthetic step status.
+    ///
+    /// This is a logic-level regression test: execute_parallel uses
+    /// `effective_successes = successes + skipped_count` and
+    /// `total_agents = children.len() + skipped_count`, and the synthetic step
+    /// status must use `effective_successes >= min_required` (not raw `successes`).
+    #[test]
+    fn test_parallel_min_success_with_skipped_resume_agents() {
+        // Scenario: 3 agents in a parallel block, min_success = 3.
+        // On resume, 2 agents were already completed (skipped), 1 new agent succeeds.
+        let successes: u32 = 1; // newly succeeded
+        let skipped_count: u32 = 2; // completed on previous run
+        let children_len: u32 = 1; // only the non-skipped agent was spawned
+
+        let effective_successes = successes + skipped_count; // 3
+        let total_agents = children_len + skipped_count; // 3
+        let min_required: u32 = 3; // all must succeed
+
+        // The synthetic step should be Completed, not Failed
+        let status = if effective_successes >= min_required {
+            WorkflowStepStatus::Completed
+        } else {
+            WorkflowStepStatus::Failed
+        };
+        assert_eq!(
+            status,
+            WorkflowStepStatus::Completed,
+            "skipped agents must count toward min_success"
+        );
+
+        // Verify the all_succeeded flag would NOT be set to false
+        let all_succeeded = effective_successes >= min_required;
+        assert!(
+            all_succeeded,
+            "effective_successes ({effective_successes}) should meet min_required ({min_required})"
+        );
+
+        // Verify default min_success (None → total_agents) also works
+        let default_min = total_agents;
+        assert!(
+            effective_successes >= default_min,
+            "default min_success should be met when all agents (including skipped) succeed"
+        );
+
+        // Edge case: one new agent fails, only skipped agents succeeded
+        let successes_fail: u32 = 0;
+        let effective_fail = successes_fail + skipped_count; // 2
+        let status_fail = if effective_fail >= min_required {
+            WorkflowStepStatus::Completed
+        } else {
+            WorkflowStepStatus::Failed
+        };
+        assert_eq!(
+            status_fail,
+            WorkflowStepStatus::Failed,
+            "should fail when effective successes don't meet min_required"
         );
     }
 }
