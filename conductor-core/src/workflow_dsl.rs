@@ -27,7 +27,7 @@
 //! `agent_ref` is a bare identifier (short name resolved via search order) or a
 //! quoted string (explicit path relative to the repo root).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -1477,6 +1477,162 @@ where
 
     stack.pop();
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Semantic validation
+// ---------------------------------------------------------------------------
+
+/// A single semantic validation error found during static analysis of a workflow.
+#[derive(Debug, Clone)]
+pub struct ValidationError {
+    pub message: String,
+    /// Optional hint to help the user fix the error.
+    pub hint: Option<String>,
+}
+
+/// The result of running `validate_workflow_semantics`.
+#[derive(Debug, Default)]
+pub struct ValidationReport {
+    pub errors: Vec<ValidationError>,
+}
+
+impl ValidationReport {
+    pub fn is_ok(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
+/// Validate a `WorkflowDef` semantically:
+///
+/// 1. Forward-pass dataflow analysis: every condition reference (`step.marker`)
+///    must name a step key that has been "produced" before that point.
+/// 2. Sub-workflow required-input satisfaction: every `required` input declared
+///    by a called sub-workflow must be supplied at the call site.
+/// 3. Sub-workflow existence: if the loader returns an error the missing workflow
+///    is reported as a validation error.
+///
+/// The `loader` callback receives a workflow name and returns its parsed
+/// `WorkflowDef`, allowing this function to be tested without touching the
+/// filesystem.
+pub fn validate_workflow_semantics<F>(def: &WorkflowDef, loader: &F) -> ValidationReport
+where
+    F: Fn(&str) -> std::result::Result<WorkflowDef, String>,
+{
+    let mut errors = Vec::new();
+    let mut produced: HashSet<String> = HashSet::new();
+
+    validate_nodes(&def.body, &mut produced, &mut errors, loader);
+
+    // The `always` block sees every step key produced anywhere in the main body.
+    let mut always_produced = produced.clone();
+    validate_nodes(&def.always, &mut always_produced, &mut errors, loader);
+
+    ValidationReport { errors }
+}
+
+fn validate_nodes<F>(
+    nodes: &[WorkflowNode],
+    produced: &mut HashSet<String>,
+    errors: &mut Vec<ValidationError>,
+    loader: &F,
+) where
+    F: Fn(&str) -> std::result::Result<WorkflowDef, String>,
+{
+    for node in nodes {
+        match node {
+            WorkflowNode::Call(n) => {
+                produced.insert(n.agent.step_key());
+            }
+            WorkflowNode::CallWorkflow(n) => {
+                // Check that required inputs are satisfied.
+                match loader(&n.workflow) {
+                    Ok(sub_def) => {
+                        for input_decl in &sub_def.inputs {
+                            if input_decl.required && !n.inputs.contains_key(&input_decl.name) {
+                                errors.push(ValidationError {
+                                    message: format!(
+                                        "Sub-workflow '{}' requires input '{}' but it was not provided at the call site",
+                                        n.workflow, input_decl.name
+                                    ),
+                                    hint: None,
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        errors.push(ValidationError {
+                            message: format!(
+                                "Sub-workflow '{}' could not be loaded: {}",
+                                n.workflow, e
+                            ),
+                            hint: None,
+                        });
+                    }
+                }
+                produced.insert(n.workflow.clone());
+            }
+            WorkflowNode::Parallel(n) => {
+                for call in &n.calls {
+                    produced.insert(call.step_key());
+                }
+            }
+            WorkflowNode::If(n) => {
+                check_condition_reachable(&n.step, produced, errors);
+                let mut branch_produced = produced.clone();
+                validate_nodes(&n.body, &mut branch_produced, errors, loader);
+                // Conservative union: optimistically assume branch steps are available downstream.
+                produced.extend(branch_produced);
+            }
+            WorkflowNode::Unless(n) => {
+                check_condition_reachable(&n.step, produced, errors);
+                let mut branch_produced = produced.clone();
+                validate_nodes(&n.body, &mut branch_produced, errors, loader);
+                produced.extend(branch_produced);
+            }
+            WorkflowNode::While(n) => {
+                // Condition is checked before the first iteration.
+                check_condition_reachable(&n.step, produced, errors);
+                let mut body_produced = produced.clone();
+                validate_nodes(&n.body, &mut body_produced, errors, loader);
+                produced.extend(body_produced);
+            }
+            WorkflowNode::DoWhile(n) => {
+                // Body always executes at least once before the condition is checked.
+                validate_nodes(&n.body, produced, errors, loader);
+                check_condition_reachable(&n.step, produced, errors);
+            }
+            WorkflowNode::Do(n) => {
+                validate_nodes(&n.body, produced, errors, loader);
+            }
+            WorkflowNode::Gate(_) => {}
+            WorkflowNode::Always(n) => {
+                // An Always node nested inside a body block sees the current produced set.
+                validate_nodes(&n.body, produced, errors, loader);
+            }
+        }
+    }
+}
+
+/// Emit a validation error if `step` has not yet been produced.
+fn check_condition_reachable(
+    step: &str,
+    produced: &HashSet<String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if !produced.contains(step) {
+        errors.push(ValidationError {
+            message: format!(
+                "Condition references step '{}' which has not been produced at this point in the workflow",
+                step
+            ),
+            hint: Some(
+                "Note: inner steps of called sub-workflows are not available in this context. \
+                 Use the sub-workflow's own name (the key produced by `call workflow`) as the condition step."
+                    .to_string(),
+            ),
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3072,6 +3228,238 @@ workflow test {
                 "body-only".to_string(),
                 "shared-context".to_string(),
             ]
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Semantic validation tests
+    // -----------------------------------------------------------------------
+
+    fn no_loader(name: &str) -> std::result::Result<WorkflowDef, String> {
+        Err(format!("no loader: {name}"))
+    }
+
+    #[test]
+    fn test_semantics_valid_simple() {
+        let input = r#"
+workflow test {
+    call plan
+    call implement
+    while plan.has_issues {
+        max_iterations = 3
+        call fix
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            report.is_ok(),
+            "Expected no errors, got: {:?}",
+            report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_semantics_condition_unreachable() {
+        // `review-aggregator` was never produced — only `review-pr` was
+        let input = r#"
+workflow test {
+    call workflow review-pr
+    if review-aggregator.has_review_issues {
+        call fix
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &|name| {
+            if name == "review-pr" {
+                parse_workflow_str(
+                    "workflow review-pr { meta { description = \"r\" trigger = \"manual\" } call review-aggregator }",
+                    "review-pr.wf",
+                )
+                .map_err(|e| e.to_string())
+            } else {
+                Err(format!("unknown: {name}"))
+            }
+        });
+        assert!(!report.is_ok());
+        assert_eq!(report.errors.len(), 1);
+        assert!(report.errors[0].message.contains("review-aggregator"));
+        assert!(report.errors[0].hint.is_some());
+    }
+
+    #[test]
+    fn test_semantics_condition_ok_from_do_while() {
+        // check is produced inside do-while body; condition references it after body runs
+        let input = r#"
+workflow test {
+    do {
+        max_iterations = 3
+        call check
+        call fix
+    } while check.needs_retry
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            report.is_ok(),
+            "Expected no errors, got: {:?}",
+            report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_semantics_condition_inner_step_hint() {
+        // The step referenced in the condition is an inner step of a sub-workflow —
+        // the error must mention the step name and include a hint.
+        let input = r#"
+workflow parent {
+    call workflow review-pr
+    while review-aggregator.has_review_issues {
+        max_iterations = 3
+        call fix
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &|name| {
+            if name == "review-pr" {
+                parse_workflow_str(
+                    "workflow review-pr { meta { description = \"r\" trigger = \"manual\" } call review-aggregator }",
+                    "review-pr.wf",
+                )
+                .map_err(|e| e.to_string())
+            } else {
+                Err(format!("unknown: {name}"))
+            }
+        });
+        assert!(!report.is_ok());
+        let err = &report.errors[0];
+        assert!(err.message.contains("review-aggregator"));
+        assert!(err.hint.is_some());
+        let hint = err.hint.as_ref().unwrap();
+        assert!(hint.contains("sub-workflow"));
+    }
+
+    #[test]
+    fn test_semantics_missing_required_input() {
+        let input = r#"
+workflow parent {
+    call workflow child
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &|name| {
+            if name == "child" {
+                parse_workflow_str(
+                    r#"workflow child {
+                        meta { description = "c" trigger = "manual" }
+                        inputs { ticket_id required }
+                        call do-work
+                    }"#,
+                    "child.wf",
+                )
+                .map_err(|e| e.to_string())
+            } else {
+                Err(format!("unknown: {name}"))
+            }
+        });
+        assert!(!report.is_ok());
+        assert_eq!(report.errors.len(), 1);
+        assert!(report.errors[0].message.contains("ticket_id"));
+        assert!(report.errors[0].message.contains("child"));
+    }
+
+    #[test]
+    fn test_semantics_provided_required_input_ok() {
+        let input = r#"
+workflow parent {
+    call workflow child {
+        inputs { ticket_id = "{{ticket_id}}" }
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &|name| {
+            if name == "child" {
+                parse_workflow_str(
+                    r#"workflow child {
+                        meta { description = "c" trigger = "manual" }
+                        inputs { ticket_id required }
+                        call do-work
+                    }"#,
+                    "child.wf",
+                )
+                .map_err(|e| e.to_string())
+            } else {
+                Err(format!("unknown: {name}"))
+            }
+        });
+        assert!(
+            report.is_ok(),
+            "Expected no errors, got: {:?}",
+            report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_semantics_sub_workflow_not_found() {
+        let input = r#"
+workflow parent {
+    call workflow missing-workflow
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(!report.is_ok());
+        assert_eq!(report.errors.len(), 1);
+        assert!(report.errors[0].message.contains("missing-workflow"));
+    }
+
+    #[test]
+    fn test_semantics_always_block_sees_full_produced() {
+        // `plan` and `implement` are produced in the body; `always` can reference `plan`
+        let input = r#"
+workflow test {
+    call plan
+    call implement
+    always {
+        if plan.has_issues {
+            call notify
+        }
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            report.is_ok(),
+            "Expected no errors, got: {:?}",
+            report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_semantics_parallel_produces_step_keys() {
+        let input = r#"
+workflow test {
+    parallel {
+        call reviewer-security
+        call reviewer-style
+    }
+    if reviewer-security.has_issues {
+        call fix
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            report.is_ok(),
+            "Expected no errors, got: {:?}",
+            report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
         );
     }
 }

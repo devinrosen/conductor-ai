@@ -28,7 +28,8 @@ use crate::workflow_dsl::{
 // Re-export DSL types so consumers go through `workflow::` instead of `workflow_dsl::` directly.
 use crate::schema_config::{self, OutputSchema};
 pub use crate::workflow_dsl::{
-    collect_agent_names, collect_workflow_refs, detect_workflow_cycles, AgentRef, InputDecl,
+    collect_agent_names, collect_workflow_refs, detect_workflow_cycles,
+    validate_workflow_semantics, AgentRef, InputDecl, ValidationError, ValidationReport,
     WorkflowDef, WorkflowTrigger, MAX_WORKFLOW_DEPTH,
 };
 use crate::worktree::WorktreeManager;

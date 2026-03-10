@@ -21,7 +21,10 @@ use conductor_core::post_run::{self, PostRunInput};
 use conductor_core::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketInput, TicketSyncer};
-use conductor_core::workflow::{collect_agent_names, WorkflowExecConfig, WorkflowManager};
+use conductor_core::workflow::{
+    collect_agent_names, detect_workflow_cycles, validate_workflow_semantics, WorkflowExecConfig,
+    WorkflowManager,
+};
 use conductor_core::workflow_config;
 use conductor_core::worktree::WorktreeManager;
 
@@ -1541,6 +1544,33 @@ fn main() -> Result<()> {
                         }
                         has_errors = true;
                     }
+                }
+
+                // Build a loader closure for cycle detection and semantic validation.
+                let wt_path = wt.path.clone();
+                let repo_path = r.local_path.clone();
+                let loader = |wf_name: &str| {
+                    WorkflowManager::load_def_by_name(&wt_path, &repo_path, wf_name)
+                        .map_err(|e| e.to_string())
+                };
+
+                // Cycle detection.
+                if let Err(cycle_msg) = detect_workflow_cycles(&workflow.name, &loader) {
+                    println!("\n  CYCLE DETECTED: {cycle_msg}");
+                    has_errors = true;
+                }
+
+                // Semantic validation (dataflow + required inputs).
+                let report = validate_workflow_semantics(&workflow, &loader);
+                if !report.is_ok() {
+                    println!("\n  SEMANTIC ERRORS ({}):", report.errors.len());
+                    for err in &report.errors {
+                        println!("    \u{2717} {}", err.message);
+                        if let Some(hint) = &err.hint {
+                            println!("      hint: {hint}");
+                        }
+                    }
+                    has_errors = true;
                 }
 
                 if has_errors {
