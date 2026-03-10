@@ -7,7 +7,7 @@ use ratatui::Frame;
 use conductor_core::worktree::WorktreeStatus;
 
 use super::helpers::shorten_paths;
-use crate::state::{AppState, VisualRow};
+use crate::state::{AppState, VisualRow, WorktreeDetailFocus};
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let wt = state
@@ -202,14 +202,14 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             .get(&wt.id)
             .is_some_and(|run| run.log_file.is_some());
         if has_waiting {
-            "Actions: f=respond  F=dismiss  x=stop  r=agent  e=expand  m=model  j/k=scroll  w=work  p=push  P=PR  l=link  d=del  Esc=back"
+            "Tab=switch panel  y=copy  o=act  r=agent  f=respond  F=dismiss  x=stop  a=attach  m=model  d=del  Esc=back"
         } else if has_log {
-            "Actions: r=agent  x=stop  L=log  y=copy  e=expand  m=model  j/k=scroll  w=work  p=push  P=PR  l=link  d=del  Esc=back"
+            "Tab=switch panel  y=copy  o=act  r=agent  x=stop  a=attach  l=log  m=model  d=del  Esc=back"
         } else {
-            "Actions: r=agent  x=stop  e=expand  m=model  j/k=scroll  w=work  p=push  P=PR  l=link  d=del  Esc=back"
+            "Tab=switch panel  y=copy  o=act  r=agent  x=stop  a=attach  m=model  d=del  Esc=back"
         }
     } else {
-        "Actions: o=open ticket  Esc=back  (archived)"
+        "Tab=switch panel  y=copy  o=act  Esc=back  (archived)"
     };
     lines.push(Line::from(Span::styled(
         actions_text,
@@ -224,9 +224,15 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         Layout::vertical([Constraint::Length(info_height), Constraint::Min(3)]).split(area);
 
     // Top pane: worktree info
+    let info_focus = state.worktree_detail_focus == WorktreeDetailFocus::InfoPanel;
+    let info_border_color = if info_focus {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
     let info_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(info_border_color))
         .title(" Worktree Detail ");
     let info = Paragraph::new(lines).block(info_block);
     frame.render_widget(info, chunks[0]);
@@ -238,9 +244,15 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
     let events = &state.data.agent_events;
 
+    let log_focus = state.worktree_detail_focus == WorktreeDetailFocus::LogPanel;
+    let log_border_color = if log_focus {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
     let activity_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(log_border_color))
         .title(" Agent Activity ");
 
     if events.is_empty() {

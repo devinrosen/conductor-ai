@@ -168,6 +168,22 @@ impl WorkflowRunDetailFocus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorktreeDetailFocus {
+    #[default]
+    InfoPanel,
+    LogPanel,
+}
+
+impl WorktreeDetailFocus {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::InfoPanel => Self::LogPanel,
+            Self::LogPanel => Self::InfoPanel,
+        }
+    }
+}
+
 /// Choice offered in the post-worktree-creation picker.
 #[derive(Clone, Debug)]
 pub enum PostCreateChoice {
@@ -648,6 +664,11 @@ pub struct AppState {
     /// Tracks pending `g` keypress for `gg` chord (go to top)
     pub pending_g: bool,
 
+    // WorktreeDetail two-panel focus model
+    pub worktree_detail_focus: WorktreeDetailFocus,
+    /// Selected row index in the WorktreeDetail info panel (for j/k navigation and y/o actions).
+    pub worktree_detail_selected_row: usize,
+
     // Filters
     pub filter: FilterState,
     pub detail_ticket_filter: FilterState,
@@ -710,6 +731,8 @@ impl AppState {
             filtered_detail_tickets: Vec::new(),
             agent_list_state: RefCell::new(ListState::default()),
             pending_g: false,
+            worktree_detail_focus: WorktreeDetailFocus::InfoPanel,
+            worktree_detail_selected_row: 0,
             filter: FilterState::default(),
             detail_ticket_filter: FilterState::default(),
             status_message: None,

@@ -24,6 +24,7 @@ use crate::input;
 use crate::state::{
     AppState, ConfirmAction, DashboardFocus, FormAction, FormField, InputAction, Modal,
     PostCreateChoice, RepoDetailFocus, View, WorkflowRunDetailFocus, WorkflowsFocus,
+    WorktreeDetailFocus,
 };
 use crate::ui;
 
@@ -483,6 +484,10 @@ impl App {
                 self.state.status_bar_expanded = !self.state.status_bar_expanded;
             }
 
+            // WorktreeDetail panel actions
+            Action::WorktreeDetailCopy => self.handle_worktree_detail_copy(),
+            Action::WorktreeDetailOpen => self.handle_worktree_detail_open(),
+
             // Agent (tmux-based)
             Action::LaunchAgent => self.handle_launch_agent(),
             Action::OrchestrateAgent => self.handle_orchestrate_agent(),
@@ -934,6 +939,9 @@ impl App {
             View::WorkflowRunDetail => {
                 self.toggle_workflow_run_detail_focus();
             }
+            View::WorktreeDetail => {
+                self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
+            }
             _ => {}
         }
     }
@@ -951,6 +959,9 @@ impl App {
             }
             View::WorkflowRunDetail => {
                 self.toggle_workflow_run_detail_focus();
+            }
+            View::WorktreeDetail => {
+                self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
             }
             _ => {}
         }
@@ -1088,6 +1099,12 @@ impl App {
                         self.state.step_agent_event_index.saturating_sub(1);
                 }
             },
+            View::WorktreeDetail
+                if self.state.worktree_detail_focus == WorktreeDetailFocus::InfoPanel =>
+            {
+                self.state.worktree_detail_selected_row =
+                    self.state.worktree_detail_selected_row.saturating_sub(1);
+            }
             _ => {}
         }
     }
@@ -1242,6 +1259,12 @@ impl App {
                     );
                 }
             },
+            View::WorktreeDetail
+                if self.state.worktree_detail_focus == WorktreeDetailFocus::InfoPanel =>
+            {
+                // 8 fixed rows: Worktree, Repo, Branch, Base, Path, Status, Model, Created
+                clamp_increment(&mut self.state.worktree_detail_selected_row, 8);
+            }
             _ => {}
         }
     }
@@ -4025,6 +4048,123 @@ impl App {
             scroll_offset: 0,
             horizontal_offset: 0,
         };
+    }
+
+    // ── WorktreeDetail panel copy/open ───────────────────────────────────────
+
+    fn handle_worktree_detail_copy(&mut self) {
+        match self.state.worktree_detail_focus {
+            WorktreeDetailFocus::LogPanel => {
+                self.handle_copy_last_code_block();
+            }
+            WorktreeDetailFocus::InfoPanel => {
+                let wt = self
+                    .state
+                    .selected_worktree_id
+                    .as_ref()
+                    .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id));
+                let Some(wt) = wt else {
+                    return;
+                };
+                let row = self.state.worktree_detail_selected_row;
+                let repo_slug = self
+                    .state
+                    .data
+                    .repo_slug_map
+                    .get(&wt.repo_id)
+                    .cloned()
+                    .unwrap_or_else(|| "?".to_string());
+                let value = match row {
+                    0 => wt.slug.clone(),
+                    1 => repo_slug,
+                    2 => wt.branch.clone(),
+                    3 => wt
+                        .base_branch
+                        .clone()
+                        .unwrap_or_else(|| "(repo default)".to_string()),
+                    4 => wt.path.clone(),
+                    5 => wt.status.to_string(),
+                    6 => wt.model.clone().unwrap_or_else(|| "(not set)".to_string()),
+                    7 => wt.created_at.clone(),
+                    _ => {
+                        self.state.status_message = Some("Nothing to copy on this row".to_string());
+                        return;
+                    }
+                };
+                self.copy_text_to_clipboard(value);
+            }
+        }
+    }
+
+    fn handle_worktree_detail_open(&mut self) {
+        if self.state.worktree_detail_focus != WorktreeDetailFocus::InfoPanel {
+            return;
+        }
+        let wt = self
+            .state
+            .selected_worktree_id
+            .as_ref()
+            .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
+            .cloned();
+        let Some(wt) = wt else {
+            return;
+        };
+        let row = self.state.worktree_detail_selected_row;
+        match row {
+            4 => {
+                // Path row: open a new tmux window in the worktree directory
+                let path = wt.path.clone();
+                let _ = Command::new("tmux")
+                    .args(["new-window", "-c", &path])
+                    .spawn();
+                self.state.status_message = Some(format!("Opened tmux window at {path}"));
+            }
+            _ => {
+                self.state.status_message =
+                    Some("No action for this row (try Path row 4)".to_string());
+            }
+        }
+    }
+
+    /// Copy arbitrary text to the system clipboard via pbcopy/xclip/xsel.
+    fn copy_text_to_clipboard(&mut self, text: String) {
+        let copy_result = Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .or_else(|_| {
+                Command::new("xclip")
+                    .args(["-selection", "clipboard"])
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+            })
+            .or_else(|_| {
+                Command::new("xsel")
+                    .arg("--clipboard")
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+            });
+
+        match copy_result {
+            Ok(mut child) => {
+                use std::io::Write;
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(text.as_bytes());
+                    drop(stdin);
+                }
+                match child.wait() {
+                    Ok(status) if status.success() => {
+                        self.state.status_message = Some("Copied to clipboard".to_string());
+                    }
+                    _ => {
+                        self.state.status_message = Some("Clipboard command failed".to_string());
+                    }
+                }
+            }
+            Err(_) => {
+                self.state.status_message =
+                    Some("No clipboard tool found (pbcopy/xclip/xsel)".to_string());
+            }
+        }
     }
 
     // ── GitHub repo discovery ────────────────────────────────────────────────

@@ -62,10 +62,14 @@ pub enum Action {
     AddRepo,
     Create,
     Delete,
+    #[allow(dead_code)]
     Push,
+    #[allow(dead_code)]
     CreatePr,
     SyncTickets,
+    #[allow(dead_code)]
     LinkTicket,
+    #[allow(dead_code)]
     StartWork,
     SelectWorkTarget(usize),
     ManageWorkTargets,
@@ -78,6 +82,7 @@ pub enum Action {
     IssueSourceDelete,
 
     // GitHub repo discovery — org level
+    #[allow(dead_code)]
     DiscoverGithubOrgs,
     GithubOrgsLoaded {
         orgs: Vec<String>,
@@ -119,12 +124,17 @@ pub enum Action {
     StopAgent,
     AttachAgent,
     ViewAgentLog,
+    #[allow(dead_code)]
     CopyLastCodeBlock,
     ExpandAgentEvent,
     AgentActivityDown,
     AgentActivityUp,
     SubmitFeedback,
     DismissFeedback,
+    /// Copy context-dependent value: in InfoPanel copies selected row value; in LogPanel copies last code block.
+    WorktreeDetailCopy,
+    /// Act on the selected info panel row: Path → open tmux window, Ticket → show ticket modal, PR → open browser.
+    WorktreeDetailOpen,
     ScrollLeft,
     ScrollRight,
 

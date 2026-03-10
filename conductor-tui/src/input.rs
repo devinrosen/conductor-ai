@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::action::Action;
-use crate::state::{AppState, Modal, View};
+use crate::state::{AppState, Modal, View, WorktreeDetailFocus};
 
 /// Map a key event to an action based on the current app state.
 /// Priority: Modal > Filter > Normal keybindings.
@@ -279,18 +279,31 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         let is_waiting_for_feedback = agent_run.is_some_and(|run| run.is_waiting_for_feedback());
         let has_log = agent_run.is_some_and(|run| run.log_file.is_some());
 
+        let focus = state.worktree_detail_focus;
+
         match key.code {
             KeyCode::Char('r') => return Action::LaunchAgent,
-            KeyCode::Char('o') if !is_active => return Action::OrchestrateAgent,
+            KeyCode::Char('O') if !is_active => return Action::OrchestrateAgent,
             KeyCode::Char('x') if is_active => return Action::StopAgent,
             KeyCode::Char('a') if is_active => return Action::AttachAgent,
             KeyCode::Char('f') if is_waiting_for_feedback => return Action::SubmitFeedback,
             KeyCode::Char('F') if is_waiting_for_feedback => return Action::DismissFeedback,
-            KeyCode::Char('L') if has_log => return Action::ViewAgentLog,
-            KeyCode::Char('y') if has_log => return Action::CopyLastCodeBlock,
-            KeyCode::Char('e') => return Action::ExpandAgentEvent,
-            KeyCode::Char('j') => return Action::AgentActivityDown,
-            KeyCode::Char('k') => return Action::AgentActivityUp,
+            KeyCode::Char('l') if has_log => return Action::ViewAgentLog,
+            KeyCode::Char('y') => return Action::WorktreeDetailCopy,
+            KeyCode::Char('o') => return Action::WorktreeDetailOpen,
+            KeyCode::Char('j') if focus == WorktreeDetailFocus::InfoPanel => {
+                return Action::MoveDown
+            }
+            KeyCode::Char('k') if focus == WorktreeDetailFocus::InfoPanel => return Action::MoveUp,
+            KeyCode::Char('j') if focus == WorktreeDetailFocus::LogPanel => {
+                return Action::AgentActivityDown
+            }
+            KeyCode::Char('k') if focus == WorktreeDetailFocus::LogPanel => {
+                return Action::AgentActivityUp
+            }
+            KeyCode::Enter if focus == WorktreeDetailFocus::LogPanel => {
+                return Action::ExpandAgentEvent
+            }
             KeyCode::Char('m') => return Action::SetModel,
             _ => {}
         }
@@ -315,8 +328,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         match key.code {
             KeyCode::Char('x') => return Action::CancelWorkflow,
             KeyCode::Char('r') => return Action::ResumeWorkflow,
-            KeyCode::Char('g') if !state.pending_g => {
-                // Check for waiting gate
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                // Approve a waiting gate step if one exists
                 let has_gate = state
                     .data
                     .workflow_steps
@@ -384,18 +397,12 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('a') => Action::AddRepo,
         KeyCode::Char('c') => Action::Create,
         KeyCode::Char('d') => Action::Delete,
-        KeyCode::Char('D') => Action::DiscoverGithubOrgs,
-        KeyCode::Char('p') => Action::Push,
-        KeyCode::Char('P') => Action::CreatePr,
         KeyCode::Char('s') => Action::SyncTickets,
-        KeyCode::Char('l') => Action::LinkTicket,
-        KeyCode::Char('w') => Action::StartWork,
         KeyCode::Char('W') => Action::ManageWorkTargets,
         KeyCode::Char('S') => Action::ManageIssueSources,
         KeyCode::Char('o') => Action::OpenTicketUrl,
 
         // Direct view navigation
-        KeyCode::Char('t') => Action::GoToTickets,
         KeyCode::Char('1') => Action::GoToDashboard,
         KeyCode::Char('2') => Action::GoToTickets,
         KeyCode::Char('3') => Action::GoToWorkflows,
