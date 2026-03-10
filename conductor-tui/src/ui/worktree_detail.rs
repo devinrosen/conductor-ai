@@ -230,6 +230,15 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     } else {
         Color::DarkGray
     };
+    // Highlight the selected row when the info panel has focus
+    if info_focus {
+        let sel = state.worktree_detail_selected_row;
+        if sel < lines.len() {
+            let line = std::mem::take(&mut lines[sel]);
+            lines[sel] = line.patch_style(Style::default().add_modifier(Modifier::REVERSED));
+        }
+    }
+
     let info_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(info_border_color))
