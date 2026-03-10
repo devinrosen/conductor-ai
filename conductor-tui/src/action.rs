@@ -159,6 +159,10 @@ pub enum Action {
     FormSubmit,
 
     // Background results
+    PrsRefreshed {
+        repo_id: String,
+        prs: Vec<conductor_core::github::GithubPr>,
+    },
     DataRefreshed(Box<DataRefreshedPayload>),
     TicketSyncComplete {
         repo_slug: String,

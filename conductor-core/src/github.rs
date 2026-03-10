@@ -54,6 +54,71 @@ pub struct IssueRef {
     pub url: String,
 }
 
+/// An open GitHub pull request returned by `gh pr list`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GithubPr {
+    pub number: i64,
+    pub title: String,
+    pub author: String,
+    pub state: String,
+    pub head_ref_name: String,
+}
+
+/// List open pull requests for a repository identified by its remote URL.
+///
+/// Returns `Ok(vec![])` for non-GitHub remotes or when `gh` is unavailable /
+/// not authenticated — the caller should degrade gracefully rather than error.
+pub fn list_open_prs(remote_url: &str) -> Result<Vec<GithubPr>> {
+    let Some((owner, repo)) = parse_github_remote(remote_url) else {
+        return Ok(vec![]);
+    };
+    let slug = repo_slug(&owner, &repo);
+
+    let output = match run_gh(&[
+        "pr",
+        "list",
+        "--repo",
+        &slug,
+        "--state",
+        "open",
+        "--json",
+        "number,title,author,state,headRefName",
+        "--limit",
+        "50",
+    ]) {
+        Ok(o) => o,
+        Err(_) => return Ok(vec![]),
+    };
+
+    #[derive(Deserialize)]
+    struct PrAuthor {
+        login: String,
+    }
+    #[derive(Deserialize)]
+    struct RawPr {
+        number: i64,
+        title: String,
+        author: PrAuthor,
+        state: String,
+        #[serde(rename = "headRefName")]
+        head_ref_name: String,
+    }
+
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let raw_prs: Vec<RawPr> = serde_json::from_str(&json_str).unwrap_or_default();
+    let prs = raw_prs
+        .into_iter()
+        .map(|r| GithubPr {
+            number: r.number,
+            title: r.title,
+            author: r.author.login,
+            state: r.state,
+            head_ref_name: r.head_ref_name,
+        })
+        .collect();
+    Ok(prs)
+}
+
 /// A GitHub repository discovered via the `gh` CLI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredRepo {

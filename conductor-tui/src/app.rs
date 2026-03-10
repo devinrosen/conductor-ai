@@ -253,6 +253,27 @@ impl App {
                 // status bar (and workflow views) stay current regardless of which
                 // view is active.
                 self.poll_workflow_data_async();
+                // Periodically refresh the PR list when the RepoDetail view is active.
+                if self.state.view == View::RepoDetail {
+                    let needs_refresh = self
+                        .state
+                        .pr_last_fetched_at
+                        .map(|t| t.elapsed() >= Duration::from_secs(30))
+                        .unwrap_or(false);
+                    if needs_refresh {
+                        if let Some(ref repo_id) = self.state.selected_repo_id.clone() {
+                            if let Some(repo) =
+                                self.state.data.repos.iter().find(|r| &r.id == repo_id)
+                            {
+                                let remote_url = repo.remote_url.clone();
+                                let rid = repo_id.clone();
+                                if let Some(ref tx) = self.bg_tx {
+                                    background::spawn_pr_fetch_once(tx.clone(), remote_url, rid);
+                                }
+                            }
+                        }
+                    }
+                }
                 // Auto-clear status messages after 4 seconds so the context hint
                 // bar is restored without requiring user navigation.
                 self.state.tick_status_message(Duration::from_secs(4));
@@ -603,6 +624,13 @@ impl App {
             Action::PendingG => unreachable!(),
 
             // Background results
+            Action::PrsRefreshed { repo_id, prs } => {
+                if self.state.selected_repo_id.as_deref() == Some(&repo_id) {
+                    self.state.detail_prs = prs;
+                    self.state.detail_pr_index = 0;
+                    self.state.pr_last_fetched_at = Some(std::time::Instant::now());
+                }
+            }
             Action::DataRefreshed(payload) => {
                 self.state.data.repos = payload.repos;
                 self.state.data.worktrees = payload.worktrees;
@@ -847,6 +875,11 @@ impl App {
         if dt_len > 0 && self.state.detail_ticket_index >= dt_len {
             self.state.detail_ticket_index = dt_len - 1;
         }
+
+        let pr_len = self.state.detail_prs.len();
+        if pr_len > 0 && self.state.detail_pr_index >= pr_len {
+            self.state.detail_pr_index = pr_len - 1;
+        }
     }
 
     fn go_back(&mut self) {
@@ -890,7 +923,7 @@ impl App {
                 self.state.dashboard_focus = self.state.dashboard_focus.next();
             }
             View::RepoDetail => {
-                self.state.repo_detail_focus = self.state.repo_detail_focus.toggle();
+                self.state.repo_detail_focus = self.state.repo_detail_focus.next();
             }
             View::Workflows => {
                 self.state.workflows_focus = self.state.workflows_focus.toggle();
@@ -908,7 +941,7 @@ impl App {
                 self.state.dashboard_focus = self.state.dashboard_focus.prev();
             }
             View::RepoDetail => {
-                self.state.repo_detail_focus = self.state.repo_detail_focus.toggle();
+                self.state.repo_detail_focus = self.state.repo_detail_focus.prev();
             }
             View::Workflows => {
                 self.state.workflows_focus = self.state.workflows_focus.toggle();
@@ -1014,6 +1047,9 @@ impl App {
                 RepoDetailFocus::Tickets => {
                     self.state.detail_ticket_index =
                         self.state.detail_ticket_index.saturating_sub(1);
+                }
+                RepoDetailFocus::Prs => {
+                    self.state.detail_pr_index = self.state.detail_pr_index.saturating_sub(1);
                 }
             },
             View::Tickets => {
@@ -1144,6 +1180,9 @@ impl App {
                         self.state.filtered_detail_tickets.len(),
                     );
                 }
+                RepoDetailFocus::Prs => {
+                    clamp_increment(&mut self.state.detail_pr_index, self.state.detail_prs.len());
+                }
             },
             View::Tickets => {
                 clamp_increment(
@@ -1194,6 +1233,7 @@ impl App {
                 DashboardFocus::Repos => {
                     if let Some(repo) = self.state.selected_repo() {
                         let repo_id = repo.id.clone();
+                        let remote_url = repo.remote_url.clone();
                         self.state.selected_repo_id = Some(repo_id.clone());
                         self.state.detail_worktrees = self
                             .state
@@ -1213,6 +1253,17 @@ impl App {
                             .collect();
                         self.state.detail_wt_index = 0;
                         self.state.detail_ticket_index = 0;
+                        // Clear stale PR data and kick off a fresh fetch.
+                        self.state.detail_prs = Vec::new();
+                        self.state.detail_pr_index = 0;
+                        self.state.pr_last_fetched_at = None;
+                        if let Some(ref tx) = self.bg_tx {
+                            background::spawn_pr_fetch_once(
+                                tx.clone(),
+                                remote_url,
+                                repo_id.clone(),
+                            );
+                        }
                         self.state.rebuild_filtered_tickets();
                         self.state.repo_detail_focus = RepoDetailFocus::Worktrees;
                         self.state.view = View::RepoDetail;
@@ -1256,6 +1307,9 @@ impl App {
                             ticket: Box::new(ticket.clone()),
                         };
                     }
+                }
+                RepoDetailFocus::Prs => {
+                    // No-op: PR selection deferred to a future ticket.
                 }
             },
             View::Tickets => {

@@ -370,6 +370,15 @@ pub fn spawn_workflow_poll_once_guarded(
     });
 }
 
+/// Spawn a one-shot PR fetch for a single repo. Sends `Action::PrsRefreshed`
+/// with the results (or an empty list if `gh` is unavailable).
+pub fn spawn_pr_fetch_once(tx: BackgroundSender, remote_url: String, repo_id: String) {
+    thread::spawn(move || {
+        let prs = conductor_core::github::list_open_prs(&remote_url).unwrap_or_default();
+        let _ = tx.send(Action::PrsRefreshed { repo_id, prs });
+    });
+}
+
 /// Spawn a one-shot background operation for blocking tasks.
 #[allow(dead_code)]
 pub fn spawn_blocking(tx: BackgroundSender, f: impl FnOnce() -> Action + Send + 'static) {
