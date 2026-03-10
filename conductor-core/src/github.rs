@@ -64,6 +64,46 @@ pub struct GithubPr {
     pub head_ref_name: String,
 }
 
+/// Intermediate deserialization shape for a single PR entry from `gh pr list --json`.
+/// The `author` field from `gh` is a nested object; we flatten it into a plain
+/// `String` when constructing [`GithubPr`].
+#[derive(Deserialize)]
+struct PrAuthor {
+    login: String,
+}
+
+#[derive(Deserialize)]
+struct RawPr {
+    number: i64,
+    title: String,
+    author: PrAuthor,
+    state: String,
+    #[serde(rename = "headRefName")]
+    head_ref_name: String,
+}
+
+/// Parse `gh pr list --json` output into [`GithubPr`] values.
+/// Returns an empty vec (with a warning) on malformed JSON.
+fn parse_prs_json(json: &str) -> Vec<GithubPr> {
+    let raw_prs: Vec<RawPr> = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("list_open_prs: failed to parse gh JSON: {e}");
+            return vec![];
+        }
+    };
+    raw_prs
+        .into_iter()
+        .map(|r| GithubPr {
+            number: r.number,
+            title: r.title,
+            author: r.author.login,
+            state: r.state,
+            head_ref_name: r.head_ref_name,
+        })
+        .collect()
+}
+
 /// List open pull requests for a repository identified by its remote URL.
 ///
 /// Returns `Ok(vec![])` for non-GitHub remotes or when `gh` is unavailable /
@@ -90,39 +130,8 @@ pub fn list_open_prs(remote_url: &str) -> Result<Vec<GithubPr>> {
         Err(_) => return Ok(vec![]),
     };
 
-    #[derive(Deserialize)]
-    struct PrAuthor {
-        login: String,
-    }
-    #[derive(Deserialize)]
-    struct RawPr {
-        number: i64,
-        title: String,
-        author: PrAuthor,
-        state: String,
-        #[serde(rename = "headRefName")]
-        head_ref_name: String,
-    }
-
     let json_str = String::from_utf8_lossy(&output.stdout);
-    let raw_prs: Vec<RawPr> = match serde_json::from_str(&json_str) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("list_open_prs: failed to parse gh JSON: {e}");
-            vec![]
-        }
-    };
-    let prs = raw_prs
-        .into_iter()
-        .map(|r| GithubPr {
-            number: r.number,
-            title: r.title,
-            author: r.author.login,
-            state: r.state,
-            head_ref_name: r.head_ref_name,
-        })
-        .collect();
-    Ok(prs)
+    Ok(parse_prs_json(&json_str))
 }
 
 /// A GitHub repository discovered via the `gh` CLI.
@@ -742,21 +751,7 @@ mod tests {
 
     #[test]
     fn test_parse_list_open_prs_json() {
-        // Simulate the JSON shape returned by `gh pr list --json number,title,author,state,headRefName`
-        #[derive(serde::Deserialize)]
-        struct PrAuthor {
-            login: String,
-        }
-        #[derive(serde::Deserialize)]
-        struct RawPr {
-            number: i64,
-            title: String,
-            author: PrAuthor,
-            state: String,
-            #[serde(rename = "headRefName")]
-            head_ref_name: String,
-        }
-
+        // Exercises the full RawPr -> GithubPr mapping via the real parse_prs_json helper.
         let json = r#"[
             {
                 "number": 42,
@@ -774,21 +769,21 @@ mod tests {
             }
         ]"#;
 
-        let raw: Vec<RawPr> = serde_json::from_str(json).expect("parse failed");
-        assert_eq!(raw.len(), 2);
-        assert_eq!(raw[0].number, 42);
-        assert_eq!(raw[0].title, "feat: add PR pane");
-        assert_eq!(raw[0].author.login, "alice");
-        assert_eq!(raw[0].state, "OPEN");
-        assert_eq!(raw[0].head_ref_name, "feat/42-add-pr-pane");
-        assert_eq!(raw[1].number, 7);
-        assert_eq!(raw[1].author.login, "bob");
+        let prs = parse_prs_json(json);
+        assert_eq!(prs.len(), 2);
+        assert_eq!(prs[0].number, 42);
+        assert_eq!(prs[0].title, "feat: add PR pane");
+        assert_eq!(prs[0].author, "alice");
+        assert_eq!(prs[0].state, "OPEN");
+        assert_eq!(prs[0].head_ref_name, "feat/42-add-pr-pane");
+        assert_eq!(prs[1].number, 7);
+        assert_eq!(prs[1].author, "bob");
     }
 
     #[test]
     fn test_parse_list_open_prs_invalid_json_returns_empty() {
         // Malformed JSON should silently yield an empty list (no panic).
-        let result: Vec<serde_json::Value> = serde_json::from_str("not json").unwrap_or_default();
-        assert!(result.is_empty());
+        let prs = parse_prs_json("not json");
+        assert!(prs.is_empty());
     }
 }
