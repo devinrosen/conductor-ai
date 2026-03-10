@@ -62,7 +62,7 @@ const STEP_COLUMNS: &str =
 /// Column list for `workflow_runs` SELECT queries (used by `row_to_workflow_run`).
 const RUN_COLUMNS: &str =
     "id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
-     started_at, ended_at, result_summary, definition_snapshot";
+     started_at, ended_at, result_summary, definition_snapshot, inputs";
 
 /// Instruction appended to every agent prompt for structured output.
 pub const CONDUCTOR_OUTPUT_INSTRUCTION: &str = r#"
@@ -293,6 +293,7 @@ pub struct WorkflowRun {
     pub ended_at: Option<String>,
     pub result_summary: Option<String>,
     pub definition_snapshot: Option<String>,
+    pub inputs: HashMap<String, String>,
 }
 
 /// A workflow step execution record from the database.
@@ -519,7 +520,24 @@ impl<'a> WorkflowManager<'a> {
             ended_at: None,
             result_summary: None,
             definition_snapshot: definition_snapshot.map(String::from),
+            inputs: HashMap::new(),
         })
+    }
+
+    /// Persist the input variables for a workflow run.
+    pub fn set_workflow_run_inputs(
+        &self,
+        run_id: &str,
+        inputs: &HashMap<String, String>,
+    ) -> Result<()> {
+        let inputs_json = serde_json::to_string(inputs).map_err(|e| {
+            ConductorError::Workflow(format!("Failed to serialize workflow inputs: {e}"))
+        })?;
+        self.conn.execute(
+            "UPDATE workflow_runs SET inputs = ?1 WHERE id = ?2",
+            params![inputs_json, run_id],
+        )?;
+        Ok(())
     }
 
     pub fn update_workflow_status(
@@ -928,6 +946,11 @@ impl<'a> WorkflowManager<'a> {
 
 fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
     let dry_run_int: i64 = row.get(5)?;
+    let inputs_json: Option<String> = row.get(11)?;
+    let inputs: HashMap<String, String> = inputs_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
     Ok(WorkflowRun {
         id: row.get(0)?,
         workflow_name: row.get(1)?,
@@ -940,6 +963,7 @@ fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
         ended_at: row.get(8)?,
         result_summary: row.get(9)?,
         definition_snapshot: row.get(10)?,
+        inputs,
     })
 }
 
@@ -1225,6 +1249,11 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         &workflow.trigger.to_string(),
         Some(&snapshot_json),
     )?;
+
+    // Persist inputs so they can be restored on resume
+    if !input.inputs.is_empty() {
+        wf_mgr.set_workflow_run_inputs(&wf_run.id, &input.inputs)?;
+    }
 
     // Mark as running
     wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Running, None)?;
@@ -1577,7 +1606,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         repo_path: repo.local_path.clone(),
         model: input.model.map(String::from),
         exec_config: WorkflowExecConfig::default(),
-        inputs: HashMap::new(),
+        inputs: wf_run.inputs.clone(),
         agent_mgr: AgentManager::new(conn),
         wf_mgr: WorkflowManager::new(conn),
         parent_run_id: wf_run.parent_run_id.clone(),
@@ -6569,6 +6598,149 @@ And here is my actual output:
         assert!(
             keys.is_empty(),
             "no completed steps should remain after restart"
+        );
+    }
+
+    /// Exercises the full --from-step DB orchestration path:
+    /// - skip-set pruning (keys at/after pos removed)
+    /// - step_map filtered to only surviving skip keys
+    /// - DB reset: steps at/after the target step become Pending
+    /// - steps before the target step remain Completed
+    #[test]
+    fn test_from_step_skip_set_and_step_map() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+
+        // Insert 3 completed steps at positions 0, 1, 2
+        let s0 = mgr
+            .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &s0,
+            WorkflowStepStatus::Completed,
+            None,
+            Some("result-a"),
+            Some("ctx-a"),
+            None,
+            Some(0),
+        )
+        .unwrap();
+
+        let s1 = mgr
+            .insert_step(&run.id, "step-b", "actor", false, 1, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &s1,
+            WorkflowStepStatus::Completed,
+            None,
+            Some("result-b"),
+            Some("ctx-b"),
+            None,
+            Some(0),
+        )
+        .unwrap();
+
+        let s2 = mgr
+            .insert_step(&run.id, "step-c", "actor", false, 2, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &s2,
+            WorkflowStepStatus::Completed,
+            None,
+            Some("result-c"),
+            Some("ctx-c"),
+            None,
+            Some(0),
+        )
+        .unwrap();
+
+        // Snapshot all_steps before any resets (mirrors resume_workflow: load once upfront)
+        let all_steps = mgr.get_workflow_steps(&run.id).unwrap();
+
+        // Simulate the --from-step "step-b" (position 1) branch of resume_workflow
+        let mut keys = completed_keys_from_steps(&all_steps);
+        assert_eq!(
+            keys.len(),
+            3,
+            "all three steps should be in completed keys initially"
+        );
+
+        let pos = all_steps
+            .iter()
+            .find(|s| s.step_name == "step-b")
+            .unwrap()
+            .position;
+        assert_eq!(pos, 1);
+
+        // Prune keys at/after the from-step position (mirrors resume_workflow lines 1513-1520)
+        let to_remove: Vec<String> = all_steps
+            .iter()
+            .filter(|s| s.position >= pos && s.status == WorkflowStepStatus::Completed)
+            .map(|s| make_step_key(&s.step_name, s.iteration as u32))
+            .collect();
+        for key in to_remove {
+            keys.remove(&key);
+        }
+
+        // Reset DB state for steps at/after pos, then reset any failed/running steps
+        mgr.reset_steps_from_position(&run.id, pos).unwrap();
+        mgr.reset_failed_steps(&run.id).unwrap();
+
+        // skip_completed should contain only "step-a:0"
+        assert_eq!(keys.len(), 1, "only step-a:0 should survive pruning");
+        assert!(keys.contains("step-a:0"), "step-a:0 must be in skip set");
+        assert!(
+            !keys.contains("step-b:0"),
+            "step-b:0 must be pruned from skip set"
+        );
+        assert!(
+            !keys.contains("step-c:0"),
+            "step-c:0 must be pruned from skip set"
+        );
+
+        // DB state: step-a stays Completed, step-b and step-c are reset to Pending
+        let updated = mgr.get_workflow_steps(&run.id).unwrap();
+        assert_eq!(
+            updated[0].status,
+            WorkflowStepStatus::Completed,
+            "step-a (pos 0) must remain Completed"
+        );
+        assert_eq!(
+            updated[1].status,
+            WorkflowStepStatus::Pending,
+            "step-b (pos 1, the from-step) must be reset to Pending"
+        );
+        assert_eq!(
+            updated[2].status,
+            WorkflowStepStatus::Pending,
+            "step-c (pos 2) must be reset to Pending"
+        );
+
+        // step_map built from all_steps filtered by surviving skip keys
+        // (mirrors resume_workflow lines 1532-1537)
+        let step_map: HashMap<String, WorkflowRunStep> = all_steps
+            .into_iter()
+            .filter(|s| s.status == WorkflowStepStatus::Completed)
+            .map(|s| (make_step_key(&s.step_name, s.iteration as u32), s))
+            .filter(|(key, _)| keys.contains(key))
+            .collect();
+
+        assert!(
+            step_map.contains_key("step-a:0"),
+            "step_map must include step-a:0 (will be skipped on resume)"
+        );
+        assert!(
+            !step_map.contains_key("step-b:0"),
+            "step_map must not include step-b:0 (will be re-executed)"
+        );
+        assert!(
+            !step_map.contains_key("step-c:0"),
+            "step_map must not include step-c:0 (will be re-executed)"
         );
     }
 

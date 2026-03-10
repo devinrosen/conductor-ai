@@ -1072,6 +1072,7 @@ mod tests {
             ended_at: None,
             result_summary: None,
             definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
         }
     }
 

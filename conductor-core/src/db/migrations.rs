@@ -481,5 +481,16 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 25)?;
     }
 
+    // Migration 026: add inputs column to workflow_runs for resume support.
+    let has_workflow_run_inputs: bool = conn
+        .prepare("SELECT inputs FROM workflow_runs LIMIT 0")
+        .is_ok();
+    if !has_workflow_run_inputs {
+        conn.execute_batch(include_str!("migrations/026_workflow_run_inputs.sql"))?;
+    }
+    if version < 26 {
+        bump_version(conn, 26)?;
+    }
+
     Ok(())
 }

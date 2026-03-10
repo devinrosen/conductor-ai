@@ -281,6 +281,34 @@ pub async fn resume_workflow_endpoint(
     let from_step = req.from_step.clone();
     let restart = req.restart.unwrap_or(false);
 
+    // Validate the run exists and is in a resumable state before spawning
+    {
+        let db = state.db.lock().await;
+        let mgr = WorkflowManager::new(&db);
+        let run = mgr.get_workflow_run(&id)?.ok_or_else(|| {
+            ApiError(ConductorError::Workflow(format!(
+                "Workflow run not found: {id}"
+            )))
+        })?;
+        if matches!(run.status, WorkflowRunStatus::Completed) && !restart {
+            return Err(ApiError(ConductorError::Workflow(
+                "Cannot resume a completed workflow run. Use --restart to re-run from the beginning.".to_string(),
+            )));
+        }
+        if matches!(run.status, WorkflowRunStatus::Cancelled) {
+            return Err(ApiError(ConductorError::Workflow(
+                "Cannot resume a cancelled workflow run.".to_string(),
+            )));
+        }
+        if restart && from_step.is_some() {
+            return Err(ApiError(ConductorError::Workflow(
+                "Cannot use --restart and --from-step together: --restart re-runs all steps, \
+                 --from-step resumes from a specific step."
+                    .to_string(),
+            )));
+        }
+    } // DB lock released here
+
     // Spawn blocking task with its own DB connection (same pattern as run_workflow)
     let state_clone = state.clone();
     let run_id = id.clone();
