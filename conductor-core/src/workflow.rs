@@ -2229,6 +2229,12 @@ fn execute_parallel(
                         let step_status = if succeeded {
                             successes += 1;
                             merged_markers.extend(markers.iter().cloned());
+                            // Push parallel agent context so downstream {{prior_contexts}} can see it
+                            state.contexts.push(ContextEntry {
+                                step: child.agent_name.clone(),
+                                iteration,
+                                context: context.clone(),
+                            });
                             WorkflowStepStatus::Completed
                         } else {
                             failures += 1;
@@ -3660,6 +3666,40 @@ And here is my actual output:
         assert_eq!(vars.get("branch").unwrap(), "main");
         assert_eq!(vars.get("prior_context").unwrap(), "previous output");
         assert!(vars.get("prior_contexts").unwrap().contains("step-a"));
+    }
+
+    #[test]
+    fn test_parallel_contexts_included_in_prior_contexts() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+
+        // Simulate multiple parallel agents completing and pushing contexts
+        // (this is the pattern now used in execute_parallel's success branch)
+        state.contexts.push(ContextEntry {
+            step: "reviewer-a".to_string(),
+            iteration: 0,
+            context: "LGTM from reviewer A".to_string(),
+        });
+        state.contexts.push(ContextEntry {
+            step: "reviewer-b".to_string(),
+            iteration: 0,
+            context: "Needs changes from reviewer B".to_string(),
+        });
+
+        let vars = build_variable_map(&state);
+
+        // prior_context should be the last context pushed
+        assert_eq!(
+            vars.get("prior_context").unwrap(),
+            "Needs changes from reviewer B"
+        );
+
+        // prior_contexts should contain both parallel agent entries
+        let prior_contexts = vars.get("prior_contexts").unwrap();
+        assert!(prior_contexts.contains("reviewer-a"));
+        assert!(prior_contexts.contains("reviewer-b"));
+        assert!(prior_contexts.contains("LGTM from reviewer A"));
+        assert!(prior_contexts.contains("Needs changes from reviewer B"));
     }
 
     #[test]
