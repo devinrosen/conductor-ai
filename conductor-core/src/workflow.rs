@@ -949,7 +949,12 @@ fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
     let inputs_json: Option<String> = row.get(11)?;
     let inputs: HashMap<String, String> = inputs_json
         .as_deref()
-        .and_then(|s| serde_json::from_str(s).ok())
+        .map(|s| {
+            serde_json::from_str(s).unwrap_or_else(|e| {
+                tracing::warn!("Malformed inputs JSON in workflow run: {e}");
+                HashMap::new()
+            })
+        })
         .unwrap_or_default();
     Ok(WorkflowRun {
         id: row.get(0)?,
@@ -1425,6 +1430,36 @@ pub struct WorkflowResumeStandalone {
     pub restart: bool,
 }
 
+/// Validate resume preconditions that can be checked from status alone.
+///
+/// Shared by the core `resume_workflow` function and the web endpoint so that
+/// validation rules and error strings stay in a single place.
+pub fn validate_resume_preconditions(
+    status: &WorkflowRunStatus,
+    restart: bool,
+    from_step: Option<&str>,
+) -> Result<()> {
+    if matches!(status, WorkflowRunStatus::Completed) && !restart {
+        return Err(ConductorError::Workflow(
+            "Cannot resume a completed workflow run. Use --restart to re-run from the beginning."
+                .to_string(),
+        ));
+    }
+    if matches!(status, WorkflowRunStatus::Cancelled) {
+        return Err(ConductorError::Workflow(
+            "Cannot resume a cancelled workflow run.".to_string(),
+        ));
+    }
+    if restart && from_step.is_some() {
+        return Err(ConductorError::Workflow(
+            "Cannot use --restart and --from-step together: --restart re-runs all steps, \
+             --from-step resumes from a specific step."
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Resume a workflow in a self-contained manner: opens its own database
 /// connection. Designed for use in background threads.
 pub fn resume_workflow_standalone(params: &WorkflowResumeStandalone) -> Result<WorkflowResult> {
@@ -1474,24 +1509,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             ConductorError::Workflow(format!("Workflow run not found: {}", input.workflow_run_id))
         })?;
 
-    if matches!(wf_run.status, WorkflowRunStatus::Completed) && !input.restart {
-        return Err(ConductorError::Workflow(
-            "Cannot resume a completed workflow run. Use --restart to re-run from the beginning."
-                .to_string(),
-        ));
-    }
-    if matches!(wf_run.status, WorkflowRunStatus::Cancelled) {
-        return Err(ConductorError::Workflow(
-            "Cannot resume a cancelled workflow run.".to_string(),
-        ));
-    }
-    if input.restart && input.from_step.is_some() {
-        return Err(ConductorError::Workflow(
-            "Cannot use --restart and --from-step together: --restart re-runs all steps, \
-             --from-step resumes from a specific step."
-                .to_string(),
-        ));
-    }
+    validate_resume_preconditions(&wf_run.status, input.restart, input.from_step)?;
 
     // Load all steps once (avoids N+1 queries later)
     let all_steps = wf_mgr.get_workflow_steps(&wf_run.id)?;
@@ -6555,6 +6573,65 @@ And here is my actual output:
         assert!(
             err.to_string().contains("not found in workflow run"),
             "Expected step-not-found error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_set_workflow_run_inputs_round_trip() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", Some("{}"))
+            .unwrap();
+
+        // Initially inputs should be empty (no inputs set yet)
+        let fetched = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert!(fetched.inputs.is_empty(), "Expected no inputs initially");
+
+        // Write inputs and read back
+        let mut inputs = HashMap::new();
+        inputs.insert("key1".to_string(), "value1".to_string());
+        inputs.insert("key2".to_string(), "value2".to_string());
+        wf_mgr.set_workflow_run_inputs(&run.id, &inputs).unwrap();
+
+        let fetched = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.inputs.get("key1").map(String::as_str),
+            Some("value1")
+        );
+        assert_eq!(
+            fetched.inputs.get("key2").map(String::as_str),
+            Some("value2")
+        );
+        assert_eq!(fetched.inputs.len(), 2);
+    }
+
+    #[test]
+    fn test_row_to_workflow_run_malformed_inputs_json_returns_empty() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", Some("{}"))
+            .unwrap();
+
+        // Directly write invalid JSON into the inputs column to simulate corruption
+        conn.execute(
+            "UPDATE workflow_runs SET inputs = ?1 WHERE id = ?2",
+            rusqlite::params!["not-valid-json", &run.id],
+        )
+        .unwrap();
+
+        // Reading back should return an empty HashMap (not panic), matching the
+        // unwrap_or_else + warn fallback in row_to_workflow_run.
+        let fetched = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert!(
+            fetched.inputs.is_empty(),
+            "Expected empty inputs on malformed JSON, got: {:?}",
+            fetched.inputs
         );
     }
 

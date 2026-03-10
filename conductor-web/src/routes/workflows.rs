@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 use conductor_core::error::ConductorError;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
-    execute_workflow, InputDecl, WorkflowDef, WorkflowExecConfig, WorkflowExecInput,
-    WorkflowManager, WorkflowResumeStandalone, WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
+    execute_workflow, validate_resume_preconditions, InputDecl, WorkflowDef, WorkflowExecConfig,
+    WorkflowExecInput, WorkflowManager, WorkflowResumeStandalone, WorkflowRun, WorkflowRunStatus,
+    WorkflowRunStep,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -290,23 +291,8 @@ pub async fn resume_workflow_endpoint(
                 "Workflow run not found: {id}"
             )))
         })?;
-        if matches!(run.status, WorkflowRunStatus::Completed) && !restart {
-            return Err(ApiError(ConductorError::Workflow(
-                "Cannot resume a completed workflow run. Use --restart to re-run from the beginning.".to_string(),
-            )));
-        }
-        if matches!(run.status, WorkflowRunStatus::Cancelled) {
-            return Err(ApiError(ConductorError::Workflow(
-                "Cannot resume a cancelled workflow run.".to_string(),
-            )));
-        }
-        if restart && from_step.is_some() {
-            return Err(ApiError(ConductorError::Workflow(
-                "Cannot use --restart and --from-step together: --restart re-runs all steps, \
-                 --from-step resumes from a specific step."
-                    .to_string(),
-            )));
-        }
+        validate_resume_preconditions(&run.status, restart, from_step.as_deref())
+            .map_err(ApiError)?;
     } // DB lock released here
 
     // Spawn blocking task with its own DB connection (same pattern as run_workflow)
