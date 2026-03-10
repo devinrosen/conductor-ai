@@ -181,6 +181,7 @@ pub fn orchestrate_run(
             &child_run.id,
             orch_config.poll_interval,
             orch_config.child_timeout,
+            None,
         );
 
         match result {
@@ -557,6 +558,7 @@ mod tests {
             &run.id,
             Duration::from_millis(10),
             Duration::from_secs(1),
+            None,
         );
         assert!(result.is_ok());
         let completed = result.unwrap();
@@ -577,6 +579,7 @@ mod tests {
             &run.id,
             Duration::from_millis(10),
             Duration::from_secs(1),
+            None,
         );
         assert!(result.is_ok());
         let failed = result.unwrap();
@@ -596,6 +599,7 @@ mod tests {
             &run.id,
             Duration::from_millis(10),
             Duration::from_secs(1),
+            None,
         );
         assert!(result.is_ok());
         let cancelled = result.unwrap();
@@ -611,6 +615,7 @@ mod tests {
             "nonexistent-id",
             Duration::from_millis(10),
             Duration::from_secs(1),
+            None,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not found"));
@@ -630,6 +635,7 @@ mod tests {
             &run.id,
             Duration::from_millis(10),
             Duration::from_millis(50), // very short timeout
+            None,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("timed out"));

@@ -76,15 +76,25 @@ fn verify_tmux_window(window_name: &str) -> std::result::Result<(), String> {
 }
 
 /// Poll the database for a child run to reach a terminal status.
+///
+/// If `shutdown` is provided and the flag is set to `true` during polling,
+/// returns `Err("shutdown: workflow cancelled: TUI was closed")` immediately.
 pub fn poll_child_completion(
     conn: &Connection,
     child_run_id: &str,
     poll_interval: Duration,
     timeout: Duration,
+    shutdown: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> std::result::Result<AgentRun, String> {
     let start = std::time::Instant::now();
 
     loop {
+        if let Some(flag) = shutdown {
+            if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("shutdown: workflow cancelled: TUI was closed".to_string());
+            }
+        }
+
         if start.elapsed() > timeout {
             return Err(format!(
                 "Child run {} timed out after {:.0}s",

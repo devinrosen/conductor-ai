@@ -419,6 +419,9 @@ pub struct WorkflowExecConfig {
     pub step_timeout: Duration,
     pub fail_fast: bool,
     pub dry_run: bool,
+    /// Optional shutdown flag. When set to `true`, in-flight steps are
+    /// cancelled with "workflow cancelled: TUI was closed".
+    pub shutdown: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for WorkflowExecConfig {
@@ -428,6 +431,7 @@ impl Default for WorkflowExecConfig {
             step_timeout: Duration::from_secs(30 * 60),
             fail_fast: true,
             dry_run: false,
+            shutdown: None,
         }
     }
 }
@@ -787,6 +791,52 @@ impl<'a> WorkflowManager<'a> {
             Some(wt_id) => self.list_workflow_runs(wt_id),
             None => self.list_all_workflow_runs(global_limit),
         }
+    }
+
+    /// Recover steps stuck in `running` status whose child agent run has
+    /// already reached a terminal state (completed, failed, or cancelled).
+    ///
+    /// This handles the case where the TUI (or any executor) was killed before
+    /// the workflow thread could write the step's final status back to the DB.
+    /// Returns the number of steps recovered.
+    pub fn recover_stuck_steps(&self) -> Result<usize> {
+        let stuck: Vec<(String, String)> = query_collect(
+            self.conn,
+            "SELECT id, child_run_id FROM workflow_run_steps \
+             WHERE status = 'running' AND child_run_id IS NOT NULL",
+            params![],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+
+        let agent_mgr = AgentManager::new(self.conn);
+        let mut recovered = 0usize;
+
+        for (step_id, child_run_id) in stuck {
+            let run = match agent_mgr.get_run(&child_run_id) {
+                Ok(Some(r)) => r,
+                _ => continue,
+            };
+
+            let step_status = match run.status {
+                AgentRunStatus::Completed => WorkflowStepStatus::Completed,
+                AgentRunStatus::Failed | AgentRunStatus::Cancelled => WorkflowStepStatus::Failed,
+                AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback => continue,
+            };
+
+            let _ = self.update_step_status_full(
+                &step_id,
+                step_status,
+                Some(&child_run_id),
+                run.result_text.as_deref(),
+                None,
+                None,
+                None,
+                None,
+            );
+            recovered += 1;
+        }
+
+        Ok(recovered)
     }
 
     /// Find the waiting gate step for a workflow run.
@@ -1573,6 +1623,7 @@ fn execute_call_with_schema(
             &child_run.id,
             state.exec_config.poll_interval,
             state.exec_config.step_timeout,
+            state.exec_config.shutdown.as_ref(),
         ) {
             Ok(completed_run) => {
                 let succeeded = completed_run.status == AgentRunStatus::Completed;
@@ -1672,15 +1723,24 @@ fn execute_call_with_schema(
             Err(e) => {
                 tracing::warn!("Step '{}' poll error: {e}", agent_label);
                 let _ = state.agent_mgr.update_run_cancelled(&child_run.id);
+                let is_shutdown = e.starts_with("shutdown:");
+                let cancel_msg = if is_shutdown {
+                    "workflow cancelled: TUI was closed".to_string()
+                } else {
+                    e.clone()
+                };
                 state.wf_mgr.update_step_status(
                     &step_id,
                     WorkflowStepStatus::Failed,
                     Some(&child_run.id),
-                    Some(&e),
+                    Some(&cancel_msg),
                     None,
                     None,
                     Some(attempt as i64),
                 )?;
+                if is_shutdown {
+                    return Err(ConductorError::Workflow(cancel_msg));
+                }
                 last_error = e;
                 continue;
             }
@@ -3465,6 +3525,7 @@ And here is my actual output:
             &run.id,
             Duration::from_millis(10),
             Duration::from_secs(1),
+            None,
         );
         assert!(result.is_ok());
         assert_eq!(result.unwrap().status, AgentRunStatus::Completed);
@@ -3482,6 +3543,7 @@ And here is my actual output:
             &run.id,
             Duration::from_millis(10),
             Duration::from_millis(50),
+            None,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("timed out"));

@@ -137,6 +137,10 @@ pub struct App {
     bg_tx: Option<BackgroundSender>,
     /// Guard to prevent multiple concurrent workflow poll threads.
     workflow_poll_in_flight: Arc<AtomicBool>,
+    /// Background workflow execution thread handles.
+    workflow_threads: Vec<std::thread::JoinHandle<()>>,
+    /// Shutdown signal sent to workflow executor threads on TUI exit.
+    workflow_shutdown: Arc<AtomicBool>,
 }
 
 impl App {
@@ -147,6 +151,8 @@ impl App {
             config,
             bg_tx: None,
             workflow_poll_in_flight: Arc::new(AtomicBool::new(false)),
+            workflow_threads: Vec::new(),
+            workflow_shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -190,6 +196,24 @@ impl App {
 
             if self.state.should_quit {
                 break;
+            }
+        }
+
+        // Signal all workflow executor threads to stop, then join them with a
+        // 10-second bounded timeout. Threads that don't finish in time are
+        // abandoned; the startup recovery path will reconcile their steps.
+        self.workflow_shutdown.store(true, Ordering::SeqCst);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        for handle in self.workflow_threads.drain(..) {
+            loop {
+                if handle.is_finished() {
+                    let _ = handle.join();
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
             }
         }
 
@@ -4319,8 +4343,9 @@ impl App {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
         let workflow_name = def.name.clone();
+        let shutdown = Arc::clone(&self.workflow_shutdown);
 
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             use conductor_core::workflow::{
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
             };
@@ -4332,7 +4357,10 @@ impl App {
                 worktree_path,
                 repo_path,
                 model: None,
-                exec_config: WorkflowExecConfig::default(),
+                exec_config: WorkflowExecConfig {
+                    shutdown: Some(shutdown),
+                    ..WorkflowExecConfig::default()
+                },
                 inputs,
             };
 
@@ -4353,6 +4381,7 @@ impl App {
             }
         });
 
+        self.workflow_threads.push(handle);
         self.state.status_message = Some(format!("Starting workflow '{workflow_name}'…"));
     }
 
