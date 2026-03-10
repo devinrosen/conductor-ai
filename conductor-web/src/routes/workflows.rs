@@ -107,6 +107,14 @@ pub async fn run_workflow(
         // Validate workflow exists
         let _def = WorkflowManager::load_def_by_name(&wt.path, &repo.local_path, &req.name)?;
 
+        // Reject if a top-level workflow run is already active on this worktree
+        let wf_mgr = WorkflowManager::new(&db);
+        if let Some(active) = wf_mgr.get_active_run_for_worktree(&worktree_id)? {
+            return Err(ApiError(ConductorError::WorkflowRunAlreadyActive {
+                name: active.workflow_name,
+            }));
+        }
+
         // Resolve model: request → per-worktree → per-repo → global config
         let model = req
             .model
