@@ -1,114 +1,92 @@
-# Plan: Claude Code Skill for Workflow Authoring (#499)
+# Plan: Remove pr_review.rs and post_run.rs (#504)
 
 ## Summary
 
-Add three Claude Code skills to lower the barrier for workflow authoring. Skills live in `.claude/skills/` as `SKILL.md` files and appear in Claude Code's `/` command menu. No Rust changes are needed — this is purely new skill definition files.
+Remove ~3400 lines of pre-workflow orchestration code (`pr_review.rs`, `post_run.rs`, `review_config.rs`) that have been fully superseded by the workflow engine (`review-pr.wf`, `ticket-to-pr.wf`, `ticket-to-pr-auto-merge.wf`). Both prerequisites (#502, #503) are already merged.
 
-The three skills are:
-- **`/conductor-workflow-create`** — Guided workflow authoring from a plain-English description
-- **`/conductor-workflow-update`** — Plain-English change requests against an existing workflow
-- **`/conductor-workflow-validate`** — Interpret `conductor workflow validate` output and surface actionable fixes
+`merge_queue.rs` is **kept** — it is still actively used by the web API routes (`conductor-web/src/routes/merge_queue.rs`) and the CLI's `MergeQueue` subcommands. Only `pr_review.rs` imported it from core; once that is gone, `merge_queue.rs` has no obsolete consumers.
+
+`review_config.rs` is **removed** — the audit confirms it is exclusively imported by `pr_review.rs` (no other consumers outside the module itself). The comment in `workflow_config.rs` referencing it is a doc comment only and does not constitute a runtime dependency.
 
 ---
 
-## Files to Create
+## Files to Delete
 
-### `.claude/skills/conductor-workflow-create/SKILL.md`
+| File | Lines | Reason |
+|------|-------|--------|
+| `conductor-core/src/pr_review.rs` | ~2528 | Superseded by `review-pr.wf` |
+| `conductor-core/src/post_run.rs` | ~843 | Superseded by `ticket-to-pr.wf` + `ticket-to-pr-auto-merge.wf` |
+| `conductor-core/src/review_config.rs` | ~390 | Only consumed by `pr_review.rs` |
 
-Guides Claude through creating a new workflow from scratch:
+---
 
-1. Ask the user what the workflow should do and what it operates on (`targets`)
-2. Introspect existing repo state:
-   - `ls .conductor/agents/` — available agents to `call`
-   - `ls .conductor/workflows/` — existing workflows for `call workflow` composition (and cycle-avoidance)
-   - `ls .conductor/prompts/` — available prompt snippets for `with =`
-3. Draft a `.wf` structure using the appropriate DSL constructs
-4. Identify any new agent `.md` files that need to be created (with frontmatter stubs)
-5. Write the `.wf` file to `.conductor/workflows/<name>.wf`
-6. Write any new agent stub files to `.conductor/agents/<name>.md`
-7. Run `conductor workflow validate <name>` to confirm clean
-8. Report what was created and any remaining TODOs (e.g., flesh out agent prompts)
+## Files to Modify
 
-**DSL knowledge to embed:** Full grammar, all constructs (`call`, `parallel`, `if`/`unless`/`while`/`do {} while`, `do`, `gate`, `always`), loop options (`max_iterations` required, `stuck_after` optional, `on_max_iter`), gate types (`human_approval`, `human_review`, `pr_approval`, `pr_checks`), agent frontmatter schema, context threading (`{{prior_context}}`, `{{prior_contexts}}`), `CONDUCTOR_OUTPUT` block format, composition via `call workflow`, agent/snippet resolution order.
+### `conductor-core/src/lib.rs`
+Remove three `pub mod` declarations:
+```rust
+pub mod post_run;
+pub mod pr_review;
+pub mod review_config;
+```
 
-The skill instructs Claude to read `docs/workflow/engine.md` at the start for the canonical DSL reference.
+### `conductor-cli/src/main.rs`
 
-### `.claude/skills/conductor-workflow-update/SKILL.md`
+1. **Remove imports** (lines 20–21):
+   ```rust
+   use conductor_core::post_run::{self, PostRunInput};
+   use conductor_core::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
+   ```
 
-Applies a plain-English change to an existing workflow:
+2. **Remove `Commands::Approve` variant** (lines 74–80) — superseded by `conductor workflow gate-approve <run-id>`
 
-1. Identify which workflow to update: list `.conductor/workflows/*.wf` and ask the user if not obvious from context
-2. Read the existing `.wf` file
-3. Introspect existing agents and prompts to ensure suggested additions actually exist
-4. Apply the change — explain what DSL construct is being modified and why
-5. Rewrite the `.wf` file (prefer minimal diffs — only change what's needed)
-6. Create any new agent stubs if the change requires a new `call` target
-7. Run `conductor workflow validate <name>`
-8. Summarize what changed and why, referencing DSL semantics (e.g., "Changed `while` to `do {} while` so the review step always runs at least once")
+3. **Remove `AgentCommands::PostRun` variant** (lines 188–194) — superseded by `conductor workflow run ticket-to-pr`
 
-**Example changes to handle:**
-- "Add a human review gate before merging" → insert `gate human_review { ... }` at correct position
-- "Increase the review loop iteration cap" → update `max_iterations` on the loop
-- "Add a performance reviewer to the parallel block" → add `call review-performance` inside `parallel { ... }`, warn if `review-performance.md` doesn't exist
+4. **Remove `AgentCommands::Review` variant** (lines 195–211) — superseded by `conductor workflow run review-pr`
 
-### `.claude/skills/conductor-workflow-validate/SKILL.md`
+5. **Remove three match arms** for the above variants:
+   - `AgentCommands::PostRun { ... }` (~lines 929–947)
+   - `AgentCommands::Review { ... }` (~lines 948–999)
+   - `Commands::Approve { ... }` (~lines 1753–1765)
 
-Interprets `conductor workflow validate` output and surfaces actionable fixes:
+---
 
-1. Determine which workflow(s) to validate: validate all if no name given, or specific workflow if named
-2. Run `conductor workflow validate <name>` (or for all: iterate over `.conductor/workflows/*.wf`)
-3. Parse output and categorize each error:
-   - **Missing agent `.md` files** — show the resolution order that was searched, suggest the correct file path, offer to create a stub
-   - **Unresolved `with` snippets** — show the search paths, suggest `.conductor/prompts/<name>.md`, offer to create a stub
-   - **Cycle errors** — explain the full reference chain (e.g., `a → b → c → a`), explain which workflow to refactor to break the cycle
-   - **Missing `targets` declaration** — explain what `targets` means, show valid values (`worktree`, `repo`)
-   - **`stuck_after` / `max_iterations` misconfiguration** — explain that `max_iterations` is required on `while`/`do {} while`, `stuck_after` must be less than `max_iterations`
-4. For each error, offer to apply the fix directly
-5. Re-run validation after fixes and confirm clean
+## What Is NOT Changed
+
+- `conductor-core/src/merge_queue.rs` — kept; used by web API and CLI `merge-queue` subcommands
+- `conductor-cli/src/main.rs` `MergeQueue` subcommand block — kept
+- TUI and web routes — no direct imports of the removed modules; no changes needed
+- Review swarm agent `.md` files in `.conductor/agents/` — used by `review-pr.wf`
 
 ---
 
 ## Design Decisions
 
-### Three separate skills vs one multi-command skill
+- **`merge_queue.rs` stays**: The web API exposes merge queue CRUD endpoints and the CLI has a full `merge-queue` subcommand. The `ticket-to-pr-auto-merge.wf` workflow's `merge-and-close` agent interacts with the merge queue via these surfaces.
 
-The ticket proposes a single `conductor-workflow` skill with three sub-commands. Claude Code's `/` menu works best with discrete skills, so this plan uses three separate skills (`conductor-workflow-create`, `conductor-workflow-update`, `conductor-workflow-validate`). Each maps 1:1 to a command, is independently readable, and avoids branching logic in a single large SKILL.md.
+- **No deprecation warnings**: The issue calls for a clean removal. These commands are entirely internal orchestration surfaces (not user-facing APIs with external consumers).
 
-### DSL knowledge in skills vs referencing docs
-
-Skills instruct Claude to **read `docs/workflow/engine.md` at the start of each session**. This keeps the SKILL.md files focused on procedure, not DSL documentation, and ensures they stay accurate as the DSL evolves. Key DSL constructs are also summarized inline as a quick reference for the most common patterns.
-
-### Introspection approach
-
-Skills use shell commands (`ls`, `cat`, `conductor workflow validate`) to inspect actual repo state before suggesting anything. This is what the ticket calls "contextually correct suggestions" — the skill won't suggest `call review-security` if that agent doesn't exist.
-
-### No Rust changes
-
-This feature is entirely skill authoring. The `conductor workflow validate` command already exists and surfaces the right error messages. The skills layer intent and explanation on top of existing tooling.
-
----
-
-## Risks and Unknowns
-
-- **Skill naming convention**: Claude Code's skill menu currently shows `rebase-and-fix-review`. There's no established precedent for multi-word skill groups. Using `conductor-workflow-create` etc. is the safest bet.
-- **`conductor` binary availability**: The validate skill runs `conductor workflow validate`. If the binary isn't built or on PATH, the skill should fall back to `cargo run --bin conductor -- workflow validate` or explain the issue.
-- **Skill args support**: Claude Code's Skill tool accepts `args`, so `/conductor-workflow-create` with no args works, but users may try `/conductor-workflow create` (space-separated). Document the correct invocation in each SKILL.md.
+- **TUI unaffected**: `conductor-tui` does not directly import `pr_review`, `post_run`, or `review_config`. Zero changes needed there.
 
 ---
 
 ## Task List
 
-### task-1: Create conductor-workflow-create skill
-**Files:** `.claude/skills/conductor-workflow-create/SKILL.md`
+### task-1: Delete pr_review.rs, post_run.rs, review_config.rs
+**Files:**
+- `conductor-core/src/pr_review.rs` (delete)
+- `conductor-core/src/post_run.rs` (delete)
+- `conductor-core/src/review_config.rs` (delete)
 
-Full step-by-step skill for guided workflow creation: gather intent, introspect repo, draft DSL, write files, validate.
+### task-2: Remove module declarations from lib.rs
+**Files:** `conductor-core/src/lib.rs`
 
-### task-2: Create conductor-workflow-update skill
-**Files:** `.claude/skills/conductor-workflow-update/SKILL.md`
+Remove the three `pub mod` lines for `post_run`, `pr_review`, `review_config`.
 
-Step-by-step skill for applying plain-English changes to an existing workflow: read current state, apply change, rewrite, validate.
+### task-3: Remove CLI commands and imports
+**Files:** `conductor-cli/src/main.rs`
 
-### task-3: Create conductor-workflow-validate skill
-**Files:** `.claude/skills/conductor-workflow-validate/SKILL.md`
+Remove imports, `Commands::Approve`, `AgentCommands::PostRun`, `AgentCommands::Review`, and their match arms.
 
-Step-by-step skill for interpreting validate output: categorize errors, explain causes, offer fixes, re-validate.
+### task-4: Verify build and tests pass
+Run `cargo build --workspace` and `cargo test --workspace` to confirm no hidden consumers remain.
