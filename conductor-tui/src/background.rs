@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -367,6 +367,38 @@ pub fn spawn_workflow_poll_once_guarded(
         if let Some(action) = result {
             let _ = tx.send(action);
         }
+    });
+}
+
+/// Module-level flag: true while a PR fetch thread is running.
+/// Declared at module level so `PrFetchGuard` can reset it on drop (panic-safe).
+static PR_FETCH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// RAII guard that clears `PR_FETCH_IN_FLIGHT` on drop, even if the thread panics.
+struct PrFetchGuard;
+
+impl Drop for PrFetchGuard {
+    fn drop(&mut self) {
+        PR_FETCH_IN_FLIGHT.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Spawn a one-shot PR fetch for a single repo. Sends `Action::PrsRefreshed`
+/// with the results (or an empty list if `gh` is unavailable).
+///
+/// A static in-flight guard prevents concurrent `gh` subprocesses when the
+/// user navigates quickly between repos (same pattern as the `LAST_REAP` guard
+/// used for orphan reaping above). The guard is RAII so a thread panic cannot
+/// leave the flag stuck `true`.
+pub fn spawn_pr_fetch_once(tx: BackgroundSender, remote_url: String, repo_id: String) {
+    if PR_FETCH_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+        // A fetch is already running; skip to avoid redundant `gh` subprocesses.
+        return;
+    }
+    thread::spawn(move || {
+        let _guard = PrFetchGuard;
+        let prs = conductor_core::github::list_open_prs(&remote_url).unwrap_or_default();
+        let _ = tx.send(Action::PrsRefreshed { repo_id, prs });
     });
 }
 

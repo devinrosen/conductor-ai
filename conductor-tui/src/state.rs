@@ -36,7 +36,7 @@ use conductor_core::agent::{
     AgentCreatedIssue, AgentRun, AgentRunEvent, AgentRunStatus, FeedbackRequest, TicketAgentTotals,
 };
 use conductor_core::config::WorkTarget;
-use conductor_core::github::DiscoveredRepo;
+use conductor_core::github::{DiscoveredRepo, GithubPr};
 use conductor_core::issue_source::IssueSource;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::Ticket;
@@ -117,13 +117,23 @@ impl DashboardFocus {
 pub enum RepoDetailFocus {
     Worktrees,
     Tickets,
+    Prs,
 }
 
 impl RepoDetailFocus {
-    pub fn toggle(self) -> Self {
+    pub fn next(self) -> Self {
         match self {
             Self::Worktrees => Self::Tickets,
+            Self::Tickets => Self::Prs,
+            Self::Prs => Self::Worktrees,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Worktrees => Self::Prs,
             Self::Tickets => Self::Worktrees,
+            Self::Prs => Self::Tickets,
         }
     }
 }
@@ -610,8 +620,12 @@ pub struct AppState {
     // Scoped lists for detail views
     pub detail_worktrees: Vec<Worktree>,
     pub detail_tickets: Vec<Ticket>,
+    pub detail_prs: Vec<GithubPr>,
     pub detail_wt_index: usize,
     pub detail_ticket_index: usize,
+    pub detail_pr_index: usize,
+    /// When the PR list was last successfully fetched (None = never).
+    pub pr_last_fetched_at: Option<std::time::Instant>,
 
     // Pre-filtered ticket lists (closed + text filter applied); index into these for nav/actions
     pub filtered_tickets: Vec<Ticket>,
@@ -675,8 +689,11 @@ impl AppState {
             selected_worktree_id: None,
             detail_worktrees: Vec::new(),
             detail_tickets: Vec::new(),
+            detail_prs: Vec::new(),
             detail_wt_index: 0,
             detail_ticket_index: 0,
+            detail_pr_index: 0,
+            pr_last_fetched_at: None,
             filtered_tickets: Vec::new(),
             filtered_detail_tickets: Vec::new(),
             agent_list_state: RefCell::new(ListState::default()),
@@ -872,6 +889,7 @@ impl AppState {
                 RepoDetailFocus::Tickets => {
                     (self.detail_ticket_index, self.filtered_detail_tickets.len())
                 }
+                RepoDetailFocus::Prs => (self.detail_pr_index, self.detail_prs.len()),
             },
             View::WorktreeDetail => {
                 let idx = self.agent_list_state.borrow().selected().unwrap_or(0);
@@ -905,6 +923,7 @@ impl AppState {
             View::RepoDetail => match self.repo_detail_focus {
                 RepoDetailFocus::Worktrees => self.detail_wt_index = index,
                 RepoDetailFocus::Tickets => self.detail_ticket_index = index,
+                RepoDetailFocus::Prs => self.detail_pr_index = index,
             },
             View::WorktreeDetail => {
                 self.agent_list_state.borrow_mut().select(Some(index));
@@ -982,6 +1001,32 @@ mod tests {
             started_at: "2026-01-01T00:00:00Z".to_string(),
             ended_at: None,
             metadata: None,
+        }
+    }
+
+    #[test]
+    fn repo_detail_focus_next_cycles_forward() {
+        assert_eq!(RepoDetailFocus::Worktrees.next(), RepoDetailFocus::Tickets);
+        assert_eq!(RepoDetailFocus::Tickets.next(), RepoDetailFocus::Prs);
+        assert_eq!(RepoDetailFocus::Prs.next(), RepoDetailFocus::Worktrees);
+    }
+
+    #[test]
+    fn repo_detail_focus_prev_cycles_backward() {
+        assert_eq!(RepoDetailFocus::Worktrees.prev(), RepoDetailFocus::Prs);
+        assert_eq!(RepoDetailFocus::Prs.prev(), RepoDetailFocus::Tickets);
+        assert_eq!(RepoDetailFocus::Tickets.prev(), RepoDetailFocus::Worktrees);
+    }
+
+    #[test]
+    fn repo_detail_focus_next_prev_are_inverses() {
+        for focus in [
+            RepoDetailFocus::Worktrees,
+            RepoDetailFocus::Tickets,
+            RepoDetailFocus::Prs,
+        ] {
+            assert_eq!(focus.next().prev(), focus);
+            assert_eq!(focus.prev().next(), focus);
         }
     }
 

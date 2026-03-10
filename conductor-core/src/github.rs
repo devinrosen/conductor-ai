@@ -54,6 +54,86 @@ pub struct IssueRef {
     pub url: String,
 }
 
+/// An open GitHub pull request returned by `gh pr list`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GithubPr {
+    pub number: i64,
+    pub title: String,
+    pub author: String,
+    pub state: String,
+    pub head_ref_name: String,
+}
+
+/// Intermediate deserialization shape for a single PR entry from `gh pr list --json`.
+/// The `author` field from `gh` is a nested object; we flatten it into a plain
+/// `String` when constructing [`GithubPr`].
+#[derive(Deserialize)]
+struct PrAuthor {
+    login: String,
+}
+
+#[derive(Deserialize)]
+struct RawPr {
+    number: i64,
+    title: String,
+    author: PrAuthor,
+    state: String,
+    #[serde(rename = "headRefName")]
+    head_ref_name: String,
+}
+
+/// Parse `gh pr list --json` output into [`GithubPr`] values.
+/// Returns an empty vec (with a warning) on malformed JSON.
+fn parse_prs_json(json: &str) -> Vec<GithubPr> {
+    let raw_prs: Vec<RawPr> = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("list_open_prs: failed to parse gh JSON: {e}");
+            return vec![];
+        }
+    };
+    raw_prs
+        .into_iter()
+        .map(|r| GithubPr {
+            number: r.number,
+            title: r.title,
+            author: r.author.login,
+            state: r.state,
+            head_ref_name: r.head_ref_name,
+        })
+        .collect()
+}
+
+/// List open pull requests for a repository identified by its remote URL.
+///
+/// Returns `Ok(vec![])` for non-GitHub remotes or when `gh` is unavailable /
+/// not authenticated — the caller should degrade gracefully rather than error.
+pub fn list_open_prs(remote_url: &str) -> Result<Vec<GithubPr>> {
+    let Some((owner, repo)) = parse_github_remote(remote_url) else {
+        return Ok(vec![]);
+    };
+    let slug = repo_slug(&owner, &repo);
+
+    let output = match run_gh(&[
+        "pr",
+        "list",
+        "--repo",
+        &slug,
+        "--state",
+        "open",
+        "--json",
+        "number,title,author,state,headRefName",
+        "--limit",
+        "50",
+    ]) {
+        Ok(o) => o,
+        Err(_) => return Ok(vec![]),
+    };
+
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_prs_json(&json_str))
+}
+
 /// A GitHub repository discovered via the `gh` CLI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredRepo {
@@ -667,5 +747,43 @@ mod tests {
             None
         );
         assert_eq!(parse_pr_number_from_url("not-a-url"), None);
+    }
+
+    #[test]
+    fn test_parse_list_open_prs_json() {
+        // Exercises the full RawPr -> GithubPr mapping via the real parse_prs_json helper.
+        let json = r#"[
+            {
+                "number": 42,
+                "title": "feat: add PR pane",
+                "author": {"login": "alice"},
+                "state": "OPEN",
+                "headRefName": "feat/42-add-pr-pane"
+            },
+            {
+                "number": 7,
+                "title": "fix: correct typo",
+                "author": {"login": "bob"},
+                "state": "OPEN",
+                "headRefName": "fix/7-typo"
+            }
+        ]"#;
+
+        let prs = parse_prs_json(json);
+        assert_eq!(prs.len(), 2);
+        assert_eq!(prs[0].number, 42);
+        assert_eq!(prs[0].title, "feat: add PR pane");
+        assert_eq!(prs[0].author, "alice");
+        assert_eq!(prs[0].state, "OPEN");
+        assert_eq!(prs[0].head_ref_name, "feat/42-add-pr-pane");
+        assert_eq!(prs[1].number, 7);
+        assert_eq!(prs[1].author, "bob");
+    }
+
+    #[test]
+    fn test_parse_list_open_prs_invalid_json_returns_empty() {
+        // Malformed JSON should silently yield an empty list (no panic).
+        let prs = parse_prs_json("not json");
+        assert!(prs.is_empty());
     }
 }
