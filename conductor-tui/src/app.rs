@@ -611,7 +611,9 @@ impl App {
                 }
             }
             Action::WorkflowDataRefreshed(payload) => {
-                self.state.data.workflow_defs = payload.workflow_defs;
+                if let Some(defs) = payload.workflow_defs {
+                    self.state.data.workflow_defs = defs;
+                }
                 self.state.data.workflow_runs = payload.workflow_runs;
                 self.state.data.workflow_steps = payload.workflow_steps;
                 self.state.data.step_agent_events = payload.step_agent_events;

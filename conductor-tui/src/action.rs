@@ -21,7 +21,7 @@ pub struct GithubDiscoverPayload {
 /// Payload for workflow data refresh (workflow runs + steps for current context).
 #[derive(Debug)]
 pub struct WorkflowDataPayload {
-    pub workflow_defs: Vec<WorkflowDef>,
+    pub workflow_defs: Option<Vec<WorkflowDef>>, // None = defs not re-scanned, keep existing
     pub workflow_runs: Vec<WorkflowRun>,
     pub workflow_steps: Vec<WorkflowRunStep>,
     /// Agent events for the selected step's child_run_id (live activity)
