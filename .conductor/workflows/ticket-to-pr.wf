@@ -25,8 +25,8 @@ workflow ticket-to-pr {
 
     call workflow review-pr
 
-    if review-pr.has_review_issues {
+    if review-aggregator.has_review_issues {
       call address-reviews
     }
-  } while review-pr.has_review_issues
+  } while review-aggregator.has_review_issues
 }

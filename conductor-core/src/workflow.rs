@@ -1845,10 +1845,18 @@ fn execute_call_workflow(
                         Some(result.total_duration_ms),
                         markers,
                         context,
-                        Some(result.workflow_run_id),
+                        Some(result.workflow_run_id.clone()),
                         iteration,
                         None,
                     );
+
+                    // Bubble up child step results so parent can reference internal
+                    // sub-workflow markers (e.g. review-aggregator.has_review_issues).
+                    let child_steps =
+                        bubble_up_child_step_results(&state.wf_mgr, &result.workflow_run_id);
+                    for (key, value) in child_steps {
+                        state.step_results.entry(key).or_insert(value);
+                    }
 
                     return Ok(());
                 } else {
@@ -1942,6 +1950,58 @@ fn fetch_child_final_output(
         }
         None => (Vec::new(), String::new()),
     }
+}
+
+/// Fetch all completed child steps and build minimal `StepResult` objects for
+/// merging into the parent's `step_results` map.
+fn bubble_up_child_step_results(
+    wf_mgr: &WorkflowManager<'_>,
+    workflow_run_id: &str,
+) -> HashMap<String, StepResult> {
+    let steps = match wf_mgr.get_workflow_steps(workflow_run_id) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to fetch steps for child workflow run '{}' during bubble-up: {e}",
+                workflow_run_id,
+            );
+            return HashMap::new();
+        }
+    };
+
+    steps
+        .into_iter()
+        .filter(|s| s.status == WorkflowStepStatus::Completed)
+        .map(|s| {
+            let markers: Vec<String> = s
+                .markers_out
+                .as_deref()
+                .map(|m| {
+                    serde_json::from_str(m).unwrap_or_else(|e| {
+                        tracing::warn!(
+                            "Malformed markers_out JSON in child step '{}': {e}",
+                            s.step_name,
+                        );
+                        Vec::new()
+                    })
+                })
+                .unwrap_or_default();
+            let context = s.context_out.clone().unwrap_or_default();
+            let result = StepResult {
+                step_name: s.step_name.clone(),
+                status: WorkflowStepStatus::Completed,
+                result_text: s.result_text.clone(),
+                cost_usd: None,
+                num_turns: None,
+                duration_ms: None,
+                markers,
+                context,
+                child_run_id: s.child_run_id.clone(),
+                structured_output: s.structured_output.clone(),
+            };
+            (s.step_name, result)
+        })
+        .collect()
 }
 
 fn execute_if(state: &mut ExecutionState<'_>, node: &IfNode) -> Result<()> {
@@ -4924,5 +4984,140 @@ And here is my actual output:
             err.contains("agent") || err.contains("nonexistent"),
             "expected agent load error, got: {err}"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // bubble_up_child_step_results tests
+    // ---------------------------------------------------------------------------
+
+    fn create_child_run(conn: &Connection) -> (WorkflowManager<'_>, String) {
+        let agent_mgr = AgentManager::new(conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+        let wf_mgr = WorkflowManager::new(conn);
+        let run = wf_mgr
+            .create_workflow_run("child-wf", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+        (wf_mgr, run.id)
+    }
+
+    #[test]
+    fn test_bubble_up_child_step_results_basic() {
+        let conn = setup_db();
+        let (wf_mgr, run_id) = create_child_run(&conn);
+
+        // Insert two completed steps with markers
+        let step1 = wf_mgr
+            .insert_step(&run_id, "review-aggregator", "reviewer", false, 0, 0)
+            .unwrap();
+        wf_mgr
+            .update_step_status(
+                &step1,
+                WorkflowStepStatus::Completed,
+                None,
+                Some("done"),
+                Some("some context"),
+                Some(r#"["has_review_issues"]"#),
+                None,
+            )
+            .unwrap();
+
+        let step2 = wf_mgr
+            .insert_step(&run_id, "lint-checker", "reviewer", false, 1, 0)
+            .unwrap();
+        wf_mgr
+            .update_step_status(
+                &step2,
+                WorkflowStepStatus::Completed,
+                None,
+                Some("done"),
+                Some("lint ok"),
+                Some(r#"["lint_passed"]"#),
+                None,
+            )
+            .unwrap();
+
+        let result = bubble_up_child_step_results(&wf_mgr, &run_id);
+
+        assert_eq!(result.len(), 2);
+        let agg = result.get("review-aggregator").unwrap();
+        assert!(agg.markers.contains(&"has_review_issues".to_string()));
+        let lint = result.get("lint-checker").unwrap();
+        assert!(lint.markers.contains(&"lint_passed".to_string()));
+    }
+
+    #[test]
+    fn test_bubble_up_child_step_results_parent_wins() {
+        let conn = setup_db();
+        let config: &'static Config = Box::leak(Box::new(Config::default()));
+        let (mut state, _run_id) = make_state_with_run(&conn, config);
+
+        // Parent already has a step result for "review-aggregator"
+        state.step_results.insert(
+            "review-aggregator".to_string(),
+            StepResult {
+                step_name: "review-aggregator".to_string(),
+                status: WorkflowStepStatus::Completed,
+                result_text: None,
+                cost_usd: None,
+                num_turns: None,
+                duration_ms: None,
+                markers: vec!["parent_marker".to_string()],
+                context: "parent context".to_string(),
+                child_run_id: None,
+                structured_output: None,
+            },
+        );
+
+        // Child run with same step name but different marker
+        let (child_wf_mgr, child_run_id) = create_child_run(&conn);
+        let step1 = child_wf_mgr
+            .insert_step(&child_run_id, "review-aggregator", "reviewer", false, 0, 0)
+            .unwrap();
+        child_wf_mgr
+            .update_step_status(
+                &step1,
+                WorkflowStepStatus::Completed,
+                None,
+                Some("done"),
+                Some("child context"),
+                Some(r#"["child_marker"]"#),
+                None,
+            )
+            .unwrap();
+
+        let child_steps = bubble_up_child_step_results(&child_wf_mgr, &child_run_id);
+        for (key, value) in child_steps {
+            state.step_results.entry(key).or_insert(value);
+        }
+
+        // Parent's value should win
+        let result = state.step_results.get("review-aggregator").unwrap();
+        assert!(result.markers.contains(&"parent_marker".to_string()));
+        assert!(!result.markers.contains(&"child_marker".to_string()));
+    }
+
+    #[test]
+    fn test_bubble_up_child_step_results_no_completed_steps() {
+        let conn = setup_db();
+        let (wf_mgr, run_id) = create_child_run(&conn);
+
+        // Insert a failed step — should not be bubbled up
+        let step1 = wf_mgr
+            .insert_step(&run_id, "some-step", "reviewer", false, 0, 0)
+            .unwrap();
+        wf_mgr
+            .update_step_status(
+                &step1,
+                WorkflowStepStatus::Failed,
+                None,
+                Some("failed"),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let result = bubble_up_child_step_results(&wf_mgr, &run_id);
+        assert!(result.is_empty());
     }
 }
