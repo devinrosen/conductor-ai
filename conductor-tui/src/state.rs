@@ -159,7 +159,7 @@ impl WorkflowRunDetailFocus {
 }
 
 /// Choice offered in the post-worktree-creation picker.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum PostCreateChoice {
     StartAgent,
     RunWorkflow { name: String, def: WorkflowDef },

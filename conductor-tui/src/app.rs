@@ -381,6 +381,24 @@ impl App {
             Action::StartWork => self.handle_start_work(),
             Action::SelectWorkTarget(index) => self.handle_select_work_target(index),
             Action::SelectPostCreateChoice(index) => self.handle_post_create_pick(index),
+            Action::PostCreatePickerReady {
+                items,
+                worktree_id,
+                worktree_path,
+                worktree_slug,
+                ticket_id,
+                repo_path,
+            } => {
+                self.state.modal = Modal::PostCreatePicker {
+                    items,
+                    selected: 0,
+                    worktree_id,
+                    worktree_path,
+                    worktree_slug,
+                    ticket_id,
+                    repo_path,
+                };
+            }
             Action::ManageWorkTargets => self.handle_manage_work_targets(),
             Action::ManageIssueSources => self.handle_manage_issue_sources(),
             Action::IssueSourceAdd => self.handle_issue_source_add(),
@@ -2783,38 +2801,51 @@ impl App {
     }
 
     fn handle_post_create_pick(&mut self, index: usize) {
-        let (items, selected, worktree_id, worktree_path, worktree_slug, ticket_id, repo_path) =
+        // Resolve the selected index while borrowing the modal immutably
+        let actual_index = if let Modal::PostCreatePicker {
+            ref items,
+            selected,
+            ..
+        } = self.state.modal
+        {
+            let idx = if index == usize::MAX { selected } else { index };
+            if idx >= items.len() {
+                return;
+            }
+            idx
+        } else {
+            return;
+        };
+
+        // Take ownership of the modal to avoid cloning the entire items Vec
+        let modal = std::mem::replace(&mut self.state.modal, Modal::None);
+        let (items, worktree_id, worktree_path, worktree_slug, ticket_id, repo_path) =
             if let Modal::PostCreatePicker {
-                ref items,
-                selected,
-                ref worktree_id,
-                ref worktree_path,
-                ref worktree_slug,
-                ref ticket_id,
-                ref repo_path,
-            } = self.state.modal
+                items,
+                worktree_id,
+                worktree_path,
+                worktree_slug,
+                ticket_id,
+                repo_path,
+                ..
+            } = modal
             {
                 (
-                    items.clone(),
-                    selected,
-                    worktree_id.clone(),
-                    worktree_path.clone(),
-                    worktree_slug.clone(),
-                    ticket_id.clone(),
-                    repo_path.clone(),
+                    items,
+                    worktree_id,
+                    worktree_path,
+                    worktree_slug,
+                    ticket_id,
+                    repo_path,
                 )
             } else {
-                return;
+                unreachable!()
             };
 
-        let actual_index = if index == usize::MAX { selected } else { index };
-        if actual_index >= items.len() {
-            return;
-        }
+        // Use into_iter to take ownership of the selected item without cloning
+        let choice = items.into_iter().nth(actual_index).unwrap();
 
-        self.state.modal = Modal::None;
-
-        match &items[actual_index] {
+        match choice {
             PostCreateChoice::StartAgent => {
                 self.show_agent_prompt_for_ticket(
                     worktree_id,
@@ -2824,48 +2855,15 @@ impl App {
                 );
             }
             PostCreateChoice::RunWorkflow { def, .. } => {
-                use conductor_core::workflow::{
-                    execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
-                };
-
-                let config = self.config.clone();
-                let bg_tx = self.bg_tx.clone();
-                let def = def.clone();
-                let workflow_name = def.name.clone();
-
                 let mut inputs = std::collections::HashMap::new();
                 inputs.insert("ticket_id".to_string(), ticket_id);
-
-                std::thread::spawn(move || {
-                    let params = WorkflowExecStandalone {
-                        config,
-                        workflow: def.clone(),
-                        worktree_id,
-                        worktree_path,
-                        repo_path,
-                        model: None,
-                        exec_config: WorkflowExecConfig::default(),
-                        inputs,
-                    };
-
-                    let result = execute_workflow_standalone(&params);
-
-                    if let Some(ref tx) = bg_tx {
-                        let msg = match result {
-                            Ok(res) => {
-                                if res.all_succeeded {
-                                    format!("Workflow '{}' completed successfully", def.name)
-                                } else {
-                                    format!("Workflow '{}' completed with failures", def.name)
-                                }
-                            }
-                            Err(e) => format!("Workflow '{}' failed: {e}", def.name),
-                        };
-                        let _ = tx.send(Action::BackgroundSuccess { message: msg });
-                    }
-                });
-
-                self.state.status_message = Some(format!("Starting workflow '{workflow_name}'…"));
+                self.spawn_workflow_in_background(
+                    def,
+                    worktree_id,
+                    worktree_path,
+                    repo_path,
+                    inputs,
+                );
             }
             PostCreateChoice::Skip => {
                 // No-op — modal already dismissed
@@ -3577,46 +3575,77 @@ impl App {
         ticket_id: String,
         repo_id: String,
     ) {
-        if matches!(self.config.general.auto_start_agent, AutoStartAgent::Never) {
-            return;
+        match self.config.general.auto_start_agent {
+            AutoStartAgent::Never => return,
+            AutoStartAgent::Always => {
+                // Skip the picker and go straight to the agent prompt
+                self.show_agent_prompt_for_ticket(
+                    worktree_id,
+                    worktree_path,
+                    worktree_slug,
+                    ticket_id,
+                );
+                return;
+            }
+            AutoStartAgent::Ask => {}
         }
 
         // Look up the repo path for workflow discovery
-        let repo_path = self
+        let repo_path = match self
             .state
             .data
             .repos
             .iter()
             .find(|r| r.id == repo_id)
             .map(|r| r.local_path.clone())
-            .unwrap_or_default();
-
-        // Discover manual workflows
-        use conductor_core::workflow::{WorkflowManager, WorkflowTrigger};
-        let manual_defs: Vec<_> = WorkflowManager::list_defs(&worktree_path, &repo_path)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|d| d.trigger == WorkflowTrigger::Manual)
-            .collect();
-
-        let mut items = vec![PostCreateChoice::StartAgent];
-        for def in manual_defs {
-            items.push(PostCreateChoice::RunWorkflow {
-                name: def.name.clone(),
-                def,
-            });
-        }
-        items.push(PostCreateChoice::Skip);
-
-        self.state.modal = Modal::PostCreatePicker {
-            items,
-            selected: 0,
-            worktree_id,
-            worktree_path,
-            worktree_slug,
-            ticket_id,
-            repo_path,
+        {
+            Some(path) => path,
+            None => {
+                eprintln!(
+                    "Warning: could not find repo with id {repo_id}; \
+                     falling back to empty repo_path for workflow discovery"
+                );
+                String::new()
+            }
         };
+
+        // Discover manual workflows in a background thread to avoid blocking the UI
+        let bg_tx = self.bg_tx.clone();
+        let wt_path = worktree_path.clone();
+        let rp = repo_path.clone();
+        std::thread::spawn(move || {
+            use conductor_core::workflow::{WorkflowManager, WorkflowTrigger};
+            let manual_defs: Vec<_> = match WorkflowManager::list_defs(&wt_path, &rp) {
+                Ok(defs) => defs
+                    .into_iter()
+                    .filter(|d| d.trigger == WorkflowTrigger::Manual)
+                    .collect(),
+                Err(e) => {
+                    eprintln!("Warning: failed to list workflow defs: {e}");
+                    Vec::new()
+                }
+            };
+
+            let mut items = vec![PostCreateChoice::StartAgent];
+            for def in manual_defs {
+                items.push(PostCreateChoice::RunWorkflow {
+                    name: def.name.clone(),
+                    def,
+                });
+            }
+            items.push(PostCreateChoice::Skip);
+
+            if let Some(ref tx) = bg_tx {
+                let _ = tx.send(Action::PostCreatePickerReady {
+                    items,
+                    worktree_id,
+                    worktree_path,
+                    worktree_slug,
+                    ticket_id,
+                    repo_path,
+                });
+            }
+        });
     }
 
     fn show_agent_prompt_for_ticket(
@@ -4248,11 +4277,28 @@ impl App {
             .map(|r| r.local_path.clone())
             .unwrap_or_default();
 
+        self.spawn_workflow_in_background(
+            def,
+            wt.id,
+            wt.path,
+            repo_path,
+            std::collections::HashMap::new(),
+        );
+    }
+
+    /// Spawn a workflow execution in a background thread, reporting result via bg_tx.
+    fn spawn_workflow_in_background(
+        &mut self,
+        def: conductor_core::workflow::WorkflowDef,
+        worktree_id: String,
+        worktree_path: String,
+        repo_path: String,
+        inputs: std::collections::HashMap<String, String>,
+    ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
         let workflow_name = def.name.clone();
 
-        // Spawn workflow execution in a background thread
         std::thread::spawn(move || {
             use conductor_core::workflow::{
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
@@ -4261,12 +4307,12 @@ impl App {
             let params = WorkflowExecStandalone {
                 config,
                 workflow: def.clone(),
-                worktree_id: wt.id.clone(),
-                worktree_path: wt.path.clone(),
+                worktree_id,
+                worktree_path,
                 repo_path,
                 model: None,
                 exec_config: WorkflowExecConfig::default(),
-                inputs: std::collections::HashMap::new(),
+                inputs,
             };
 
             let result = execute_workflow_standalone(&params);

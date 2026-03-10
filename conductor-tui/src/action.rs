@@ -190,6 +190,15 @@ pub enum Action {
 
     // Post-create picker (after worktree creation)
     SelectPostCreateChoice(usize),
+    /// Background result: workflow defs loaded, ready to show post-create picker.
+    PostCreatePickerReady {
+        items: Vec<crate::state::PostCreateChoice>,
+        worktree_id: String,
+        worktree_path: String,
+        worktree_slug: String,
+        ticket_id: String,
+        repo_path: String,
+    },
 
     // Workflow actions
     RunWorkflow,
