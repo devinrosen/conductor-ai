@@ -1958,6 +1958,33 @@ fn check_stuck(
     Ok(())
 }
 
+/// Check whether the loop has exceeded `max_iterations`. Returns `Ok(true)` if the caller
+/// should break out of the loop (`on_max_iter = continue`), `Ok(false)` to keep going,
+/// or `Err` if `on_max_iter = fail`.
+fn check_max_iterations(
+    state: &mut ExecutionState<'_>,
+    iteration: u32,
+    max_iterations: u32,
+    on_max_iter: &OnMaxIter,
+    step: &str,
+    marker: &str,
+    loop_kind: &str,
+) -> Result<bool> {
+    if iteration >= max_iterations {
+        tracing::warn!("{loop_kind} {step}.{marker} — reached max_iterations ({max_iterations})",);
+        match on_max_iter {
+            OnMaxIter::Fail => {
+                state.all_succeeded = false;
+                return Err(ConductorError::Workflow(format!(
+                    "{loop_kind} {step}.{marker} reached max_iterations ({max_iterations})",
+                )));
+            }
+            OnMaxIter::Continue => return Ok(true),
+        }
+    }
+    Ok(false)
+}
+
 fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) -> Result<()> {
     let mut iteration = 0u32;
     let mut prev_marker_sets: Vec<HashSet<String>> = Vec::new();
@@ -1980,23 +2007,16 @@ fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) -> Result<()>
             break;
         }
 
-        if iteration >= node.max_iterations {
-            tracing::warn!(
-                "while {}.{} — reached max_iterations ({})",
-                node.step,
-                node.marker,
-                node.max_iterations
-            );
-            match node.on_max_iter {
-                OnMaxIter::Fail => {
-                    state.all_succeeded = false;
-                    return Err(ConductorError::Workflow(format!(
-                        "while {}.{} reached max_iterations ({})",
-                        node.step, node.marker, node.max_iterations
-                    )));
-                }
-                OnMaxIter::Continue => break,
-            }
+        if check_max_iterations(
+            state,
+            iteration,
+            node.max_iterations,
+            &node.on_max_iter,
+            &node.step,
+            &node.marker,
+            "while",
+        )? {
+            break;
         }
 
         tracing::info!(
@@ -2039,23 +2059,16 @@ fn execute_do_while(state: &mut ExecutionState<'_>, node: &DoWhileNode) -> Resul
     let mut prev_marker_sets: Vec<HashSet<String>> = Vec::new();
 
     loop {
-        if iteration >= node.max_iterations {
-            tracing::warn!(
-                "do {}.{} — reached max_iterations ({})",
-                node.step,
-                node.marker,
-                node.max_iterations
-            );
-            match node.on_max_iter {
-                OnMaxIter::Fail => {
-                    state.all_succeeded = false;
-                    return Err(ConductorError::Workflow(format!(
-                        "do {}.{} reached max_iterations ({})",
-                        node.step, node.marker, node.max_iterations
-                    )));
-                }
-                OnMaxIter::Continue => break,
-            }
+        if check_max_iterations(
+            state,
+            iteration,
+            node.max_iterations,
+            &node.on_max_iter,
+            &node.step,
+            &node.marker,
+            "do",
+        )? {
+            break;
         }
 
         tracing::info!(
