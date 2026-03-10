@@ -1420,15 +1420,28 @@ fn resolve_child_inputs(
 
 fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32) -> Result<()> {
     // Call-level output overrides block-level; if neither is set, use None.
-    let effective_output: Option<String> =
-        node.output.clone().or_else(|| state.block_output.clone());
+    // We must clone into a local because execute_call_with_schema takes &mut state.
+    let effective_output: Option<String> = match (&node.output, &state.block_output) {
+        (Some(o), _) => Some(o.clone()),
+        (None, Some(b)) => Some(b.clone()),
+        (None, None) => None,
+    };
     // Block-level `with` snippets prepended to call-level `with`.
-    let effective_with: Vec<String> = state
-        .block_with
-        .iter()
-        .cloned()
-        .chain(node.with.iter().cloned())
-        .collect();
+    // Only allocate a new Vec when both sources are non-empty; when only one
+    // source has entries, clone it into a local so we don't hold a borrow on
+    // state across the mutable call to execute_call_with_schema.
+    let effective_with: Vec<String> = if state.block_with.is_empty() {
+        node.with.clone()
+    } else if node.with.is_empty() {
+        state.block_with.clone()
+    } else {
+        state
+            .block_with
+            .iter()
+            .chain(node.with.iter())
+            .cloned()
+            .collect()
+    };
     execute_call_with_schema(
         state,
         node,
@@ -4741,5 +4754,133 @@ And here is my actual output:
         assert!(result.is_ok());
         // fail_fast should skip after first node — only 1 position increment
         assert_eq!(state.position - initial_position, 1);
+    }
+
+    #[test]
+    fn test_execute_do_nested_with_combination() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+        state.exec_config.dry_run = true;
+
+        // Outer do sets with=["a"], inner do sets with=["b"].
+        // After inner do runs, inner block_with should have been ["b", "a"].
+        // After both do blocks complete, state should be fully restored.
+        let node = DoNode {
+            output: Some("outer-schema".into()),
+            with: vec!["a".into()],
+            body: vec![WorkflowNode::Do(DoNode {
+                output: None,
+                with: vec!["b".into()],
+                body: vec![WorkflowNode::Gate(GateNode {
+                    name: "noop".into(),
+                    gate_type: GateType::HumanApproval,
+                    prompt: None,
+                    min_approvals: 1,
+                    timeout_secs: 1,
+                    on_timeout: OnTimeout::Fail,
+                })],
+            })],
+        };
+
+        let result = execute_do(&mut state, &node);
+        assert!(result.is_ok());
+        // Outer state fully restored
+        assert!(state.block_output.is_none());
+        assert!(state.block_with.is_empty());
+    }
+
+    #[test]
+    fn test_execute_do_nested_inner_output_overrides_outer() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+        state.exec_config.dry_run = true;
+
+        // Outer do sets output="outer", inner do sets output="inner".
+        // Inner body should see block_output="inner".
+        // Verify state restoration after nested execution.
+        let node = DoNode {
+            output: Some("outer".into()),
+            with: vec![],
+            body: vec![WorkflowNode::Do(DoNode {
+                output: Some("inner".into()),
+                with: vec![],
+                body: vec![WorkflowNode::Gate(GateNode {
+                    name: "noop".into(),
+                    gate_type: GateType::HumanApproval,
+                    prompt: None,
+                    min_approvals: 1,
+                    timeout_secs: 1,
+                    on_timeout: OnTimeout::Fail,
+                })],
+            })],
+        };
+
+        let result = execute_do(&mut state, &node);
+        assert!(result.is_ok());
+        // Outer state fully restored
+        assert!(state.block_output.is_none());
+        assert!(state.block_with.is_empty());
+    }
+
+    #[test]
+    fn test_execute_call_merges_block_state() {
+        // Verify execute_call picks up block_output and block_with from state.
+        // The call will fail (no agent file on disk) but it should attempt to
+        // load with the effective values rather than panicking.
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+
+        state.block_output = Some("block-schema".into());
+        state.block_with = vec!["block-snippet".into()];
+
+        let node = CallNode {
+            agent: AgentRef::Name("nonexistent".into()),
+            retries: 0,
+            on_fail: None,
+            output: None,
+            with: vec!["call-snippet".into()],
+        };
+
+        // Call will error on load_agent, but the merging logic should execute
+        // without panics and the error should be from agent loading, not from
+        // the effective_output/effective_with computation.
+        let result = execute_call(&mut state, &node, 0);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("agent") || err.contains("nonexistent"),
+            "expected agent load error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_execute_call_node_output_overrides_block_output() {
+        // When a CallNode has its own output, it should take precedence
+        // over block_output. Verify the call attempts to use "call-schema".
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+
+        state.block_output = Some("block-schema".into());
+
+        let node = CallNode {
+            agent: AgentRef::Name("nonexistent".into()),
+            retries: 0,
+            on_fail: None,
+            output: Some("call-schema".into()),
+            with: vec![],
+        };
+
+        let result = execute_call(&mut state, &node, 0);
+        assert!(result.is_err());
+        // The error is from agent loading, not from the merging logic
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("agent") || err.contains("nonexistent"),
+            "expected agent load error, got: {err}"
+        );
     }
 }

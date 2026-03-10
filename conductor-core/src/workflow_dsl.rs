@@ -1051,11 +1051,16 @@ impl Parser {
             }))
         } else {
             // Plain sequential block — only output/with allowed as options
-            let output = kvs.get("output").map(|v| v.as_str().to_string());
+            let output = kvs.remove("output").map(|v| v.as_str().to_string());
             let with = kvs
                 .remove("with")
                 .map(|v| v.into_string_array())
                 .unwrap_or_default();
+            if let Some(key) = kvs.keys().next() {
+                return Err(format!(
+                    "unknown option `{key}` in plain `do` block (only `output` and `with` are allowed)"
+                ));
+            }
             Ok(WorkflowNode::Do(DoNode { output, with, body }))
         }
     }
@@ -3019,6 +3024,18 @@ workflow test {
             }
             _ => panic!("Expected Do node"),
         }
+    }
+
+    #[test]
+    fn test_parse_plain_do_block_rejects_unknown_keys() {
+        let input = r#"workflow test { do { max_iterations = 5 call build } }"#;
+        let err_msg = parse_workflow_str(input, "test.wf")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err_msg.contains("unknown option"),
+            "expected unknown option error, got: {err_msg}"
+        );
     }
 
     #[test]
