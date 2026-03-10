@@ -76,7 +76,7 @@ pub fn poll_data() -> Option<Action> {
     let mut latest_workflow_runs_by_worktree = std::collections::HashMap::new();
     for run in wf_mgr.list_all_workflow_runs(100).unwrap_or_default() {
         latest_workflow_runs_by_worktree
-            .entry(run.worktree_id.clone())
+            .entry(run.worktree_id.clone().unwrap_or_default())
             .or_insert(run);
     }
 

@@ -777,7 +777,7 @@ impl AppState {
                 run.status,
                 WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
             ) {
-                let worktree_slug = resolve_slug(run.worktree_id.as_str());
+                let worktree_slug = resolve_slug(run.worktree_id.as_deref().unwrap_or(""));
                 gs.active_items.push(GlobalStatusItem::Workflow {
                     worktree_slug,
                     workflow_name: run.workflow_name.clone(),
@@ -1063,7 +1063,7 @@ mod tests {
         conductor_core::workflow::WorkflowRun {
             id: "wfrun-1".into(),
             workflow_name: "test-workflow".into(),
-            worktree_id: worktree_id.into(),
+            worktree_id: Some(worktree_id.into()),
             parent_run_id: "run-1".into(),
             status,
             dry_run: false,

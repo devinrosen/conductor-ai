@@ -228,12 +228,17 @@ enum WorkflowCommands {
     },
     /// Run a workflow
     Run {
-        /// Repo slug
-        repo: String,
-        /// Worktree slug
-        worktree: String,
+        /// Repo slug (required unless --pr is used)
+        #[arg(required_unless_present = "pr")]
+        repo: Option<String>,
+        /// Worktree slug (required unless --pr is used)
+        #[arg(required_unless_present = "pr")]
+        worktree: Option<String>,
         /// Workflow name (must match a .conductor/workflows/<name>.wf file)
         name: String,
+        /// Run the workflow against a GitHub PR URL or reference (e.g. https://github.com/owner/repo/pull/123)
+        #[arg(long, conflicts_with_all = &["repo", "worktree"])]
+        pr: Option<String>,
         /// Model to use for agent steps
         #[arg(long)]
         model: Option<String>,
@@ -1335,48 +1340,21 @@ fn main() -> Result<()> {
                 repo,
                 worktree,
                 name,
+                pr,
                 model,
                 dry_run,
                 no_fail_fast,
                 step_timeout_secs,
                 inputs,
             } => {
-                let repo_mgr = RepoManager::new(&conn, &config);
-                let r = repo_mgr.get_by_slug(&repo)?;
-                let wt_mgr = WorktreeManager::new(&conn, &config);
-                let wt = wt_mgr.get_by_slug(&r.id, &worktree)?;
-
-                let workflow = WorkflowManager::load_def_by_name(&wt.path, &r.local_path, &name)?;
-
-                // Parse input key=value pairs
+                // Parse input key=value pairs (shared by both paths)
                 let mut input_map = std::collections::HashMap::new();
-                for input in &inputs {
-                    if let Some((key, value)) = input.split_once('=') {
+                for input_str in &inputs {
+                    if let Some((key, value)) = input_str.split_once('=') {
                         input_map.insert(key.to_string(), value.to_string());
                     } else {
-                        anyhow::bail!("Invalid input format: '{}'. Use key=value.", input);
+                        anyhow::bail!("Invalid input format: '{}'. Use key=value.", input_str);
                     }
-                }
-
-                // Validate required inputs
-                for input_decl in &workflow.inputs {
-                    if input_decl.required && !input_map.contains_key(&input_decl.name) {
-                        anyhow::bail!(
-                            "Missing required input: '{}'. Use --input {}=<value>.",
-                            input_decl.name,
-                            input_decl.name
-                        );
-                    }
-                    // Set defaults for missing optional inputs
-                    if let Some(ref default) = input_decl.default {
-                        input_map
-                            .entry(input_decl.name.clone())
-                            .or_insert_with(|| default.clone());
-                    }
-                }
-
-                if dry_run {
-                    println!("DRY RUN: Actor steps will show intended changes without committing.");
                 }
 
                 let exec_config = WorkflowExecConfig {
@@ -1386,43 +1364,114 @@ fn main() -> Result<()> {
                     ..Default::default()
                 };
 
-                let node_count = workflow.total_nodes();
-                println!(
-                    "Running workflow '{}' ({} nodes) on {}/{}...",
-                    workflow.name, node_count, repo, worktree
-                );
+                if dry_run {
+                    println!("DRY RUN: Actor steps will show intended changes without committing.");
+                }
 
-                match conductor_core::workflow::execute_workflow(
-                    &conductor_core::workflow::WorkflowExecInput {
-                        conn: &conn,
-                        config: &config,
-                        workflow: &workflow,
-                        worktree_id: &wt.id,
-                        worktree_path: &wt.path,
-                        repo_path: &r.local_path,
-                        model: model.as_deref(),
-                        exec_config: &exec_config,
-                        inputs: input_map,
-                        depth: 0,
-                    },
-                ) {
-                    Ok(result) => {
-                        println!(
-                            "\nTotal: ${:.4}, {} turns, {:.1}s",
-                            result.total_cost,
-                            result.total_turns,
-                            result.total_duration_ms as f64 / 1000.0
-                        );
-                        if result.all_succeeded {
-                            println!("Workflow completed successfully.");
-                        } else {
-                            eprintln!("Workflow finished with failures.");
+                if let Some(pr_url) = pr {
+                    // Ephemeral PR run
+                    let pr_ref = conductor_core::workflow_ephemeral::parse_pr_ref(&pr_url)?;
+
+                    println!(
+                        "Running workflow '{}' against PR #{} ({})...",
+                        name,
+                        pr_ref.number,
+                        pr_ref.repo_slug()
+                    );
+
+                    match conductor_core::workflow_ephemeral::run_workflow_on_pr(
+                        &conn,
+                        &config,
+                        &pr_ref,
+                        &name,
+                        model.as_deref(),
+                        exec_config,
+                        input_map,
+                        dry_run,
+                    ) {
+                        Ok(wf_run) => {
+                            println!("Workflow run {} finished: {}", wf_run.id, wf_run.status);
+                            if !matches!(
+                                wf_run.status,
+                                conductor_core::workflow::WorkflowRunStatus::Completed
+                            ) {
+                                std::process::exit(1);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Workflow execution failed: {e}");
                             std::process::exit(1);
                         }
                     }
-                    Err(e) => {
-                        eprintln!("Workflow execution failed: {e}");
-                        std::process::exit(1);
+                } else {
+                    // Normal registered repo/worktree run
+                    let repo_slug = repo.expect("repo is required when --pr is not used");
+                    let worktree_slug =
+                        worktree.expect("worktree is required when --pr is not used");
+
+                    let repo_mgr = RepoManager::new(&conn, &config);
+                    let r = repo_mgr.get_by_slug(&repo_slug)?;
+                    let wt_mgr = WorktreeManager::new(&conn, &config);
+                    let wt = wt_mgr.get_by_slug(&r.id, &worktree_slug)?;
+
+                    let workflow =
+                        WorkflowManager::load_def_by_name(&wt.path, &r.local_path, &name)?;
+
+                    // Validate required inputs
+                    for input_decl in &workflow.inputs {
+                        if input_decl.required && !input_map.contains_key(&input_decl.name) {
+                            anyhow::bail!(
+                                "Missing required input: '{}'. Use --input {}=<value>.",
+                                input_decl.name,
+                                input_decl.name
+                            );
+                        }
+                        // Set defaults for missing optional inputs
+                        if let Some(ref default) = input_decl.default {
+                            input_map
+                                .entry(input_decl.name.clone())
+                                .or_insert_with(|| default.clone());
+                        }
+                    }
+
+                    let node_count = workflow.total_nodes();
+                    println!(
+                        "Running workflow '{}' ({} nodes) on {}/{}...",
+                        workflow.name, node_count, repo_slug, worktree_slug
+                    );
+
+                    match conductor_core::workflow::execute_workflow(
+                        &conductor_core::workflow::WorkflowExecInput {
+                            conn: &conn,
+                            config: &config,
+                            workflow: &workflow,
+                            worktree_id: Some(&wt.id),
+                            worktree_path: &wt.path,
+                            repo_path: &r.local_path,
+                            model: model.as_deref(),
+                            exec_config: &exec_config,
+                            inputs: input_map,
+                            depth: 0,
+                        },
+                    ) {
+                        Ok(result) => {
+                            println!(
+                                "\nTotal: ${:.4}, {} turns, {:.1}s",
+                                result.total_cost,
+                                result.total_turns,
+                                result.total_duration_ms as f64 / 1000.0
+                            );
+                            if result.all_succeeded {
+                                println!("Workflow completed successfully.");
+                            } else {
+                                eprintln!("Workflow finished with failures.");
+                                std::process::exit(1);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Workflow execution failed: {e}");
+                            std::process::exit(1);
+                        }
                     }
                 }
             }

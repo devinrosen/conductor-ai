@@ -1,0 +1,301 @@
+//! Ephemeral workflow execution against a GitHub PR without a registered repo or worktree.
+//!
+//! Provides [`run_workflow_on_pr`] which:
+//! 1. Parses a PR reference (full URL, `owner/repo#123`, or `owner/repo/123`)
+//! 2. Shallow-clones the PR branch to a temporary directory via `gh`
+//! 3. Loads the named workflow from the cloned repo's `.conductor/workflows/` directory
+//! 4. Executes the workflow with `worktree_id = None`
+//! 5. Auto-cleans up the temp directory on drop
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::process::Command;
+
+use rusqlite::Connection;
+use tempfile::TempDir;
+
+use crate::config::Config;
+use crate::error::{ConductorError, Result};
+use crate::workflow::{
+    execute_workflow, WorkflowExecConfig, WorkflowExecInput, WorkflowManager, WorkflowRun,
+};
+
+/// A parsed GitHub PR reference.
+#[derive(Debug, Clone)]
+pub struct PrRef {
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+}
+
+impl PrRef {
+    /// Return the `owner/repo` string.
+    pub fn repo_slug(&self) -> String {
+        format!("{}/{}", self.owner, self.repo)
+    }
+}
+
+/// Parse a PR reference into a [`PrRef`].
+///
+/// Accepted formats:
+/// - `https://github.com/owner/repo/pull/123`
+/// - `owner/repo/123`
+/// - `owner/repo#123`
+///
+/// Bare numbers (e.g. `"123"`) are not supported; a full reference is required.
+pub fn parse_pr_ref(s: &str) -> Result<PrRef> {
+    let s = s.trim();
+
+    // Full URL: https://github.com/owner/repo/pull/123
+    if let Some(rest) = s.strip_prefix("https://github.com/") {
+        let parts: Vec<&str> = rest.splitn(5, '/').collect();
+        if parts.len() >= 4 && parts[2] == "pull" {
+            let owner = parts[0].to_string();
+            let repo = parts[1].to_string();
+            let number: u64 = parts[3]
+                .parse()
+                .map_err(|_| ConductorError::Workflow(format!("Invalid PR number in URL: {s}")))?;
+            return Ok(PrRef {
+                owner,
+                repo,
+                number,
+            });
+        }
+        return Err(ConductorError::Workflow(format!(
+            "Could not parse GitHub PR URL: {s}"
+        )));
+    }
+
+    // owner/repo#123
+    if let Some(hash_pos) = s.rfind('#') {
+        let left = &s[..hash_pos];
+        let right = &s[hash_pos + 1..];
+        let parts: Vec<&str> = left.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            let number: u64 = right.parse().map_err(|_| {
+                ConductorError::Workflow(format!("Invalid PR number in reference: {s}"))
+            })?;
+            return Ok(PrRef {
+                owner: parts[0].to_string(),
+                repo: parts[1].to_string(),
+                number,
+            });
+        }
+    }
+
+    // owner/repo/123
+    let parts: Vec<&str> = s.splitn(3, '/').collect();
+    if parts.len() == 3 {
+        let number: u64 = parts[2].parse().map_err(|_| {
+            ConductorError::Workflow(format!("Invalid PR number in reference: {s}"))
+        })?;
+        return Ok(PrRef {
+            owner: parts[0].to_string(),
+            repo: parts[1].to_string(),
+            number: number,
+        });
+    }
+
+    Err(ConductorError::Workflow(format!(
+        "Cannot parse PR reference '{}'. \
+         Use a full GitHub URL (https://github.com/owner/repo/pull/123), \
+         'owner/repo#123', or 'owner/repo/123'.",
+        s
+    )))
+}
+
+/// Clone the PR branch into `dir` using `gh`.
+///
+/// Steps:
+/// 1. `gh repo clone owner/repo <dir> -- --depth=1` to create a shallow clone
+/// 2. `gh pr checkout <number> --repo owner/repo` inside the cloned directory to
+///    switch to the PR branch (also shallow)
+///
+/// Returns the name of the branch that was checked out.
+pub fn checkout_pr(pr: &PrRef, dir: &Path) -> Result<String> {
+    let repo_slug = pr.repo_slug();
+
+    // Step 1: clone the repo (shallow)
+    let status = Command::new("gh")
+        .args([
+            "repo",
+            "clone",
+            &repo_slug,
+            dir.to_str().unwrap_or("."),
+            "--",
+            "--depth=1",
+        ])
+        .status()
+        .map_err(|e| ConductorError::Workflow(format!("Failed to run 'gh repo clone': {e}")))?;
+
+    if !status.success() {
+        return Err(ConductorError::Workflow(format!(
+            "gh repo clone failed for {repo_slug}"
+        )));
+    }
+
+    // Step 2: checkout the PR branch
+    let status = Command::new("gh")
+        .args([
+            "pr",
+            "checkout",
+            &pr.number.to_string(),
+            "--repo",
+            &repo_slug,
+            "--force",
+        ])
+        .current_dir(dir)
+        .status()
+        .map_err(|e| ConductorError::Workflow(format!("Failed to run 'gh pr checkout': {e}")))?;
+
+    if !status.success() {
+        return Err(ConductorError::Workflow(format!(
+            "gh pr checkout {} failed for {repo_slug}",
+            pr.number
+        )));
+    }
+
+    // Read the current branch name
+    let output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| ConductorError::Workflow(format!("Failed to get branch name: {e}")))?;
+
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(branch)
+}
+
+/// Run a named workflow against a GitHub PR without a registered repo or worktree.
+///
+/// Orchestration:
+/// 1. Create a temp directory (auto-deleted on drop)
+/// 2. Shallow-clone the PR branch via `gh`
+/// 3. Load the workflow from the cloned repo's `.conductor/workflows/` directory
+/// 4. Warn if the workflow's `targets` does not include `"pr"`
+/// 5. Execute the workflow with `worktree_id = None`
+/// 6. Return the final `WorkflowRun` record
+#[allow(clippy::too_many_arguments)]
+pub fn run_workflow_on_pr(
+    conn: &Connection,
+    config: &Config,
+    pr_ref: &PrRef,
+    workflow_name: &str,
+    model: Option<&str>,
+    exec_config: WorkflowExecConfig,
+    inputs: HashMap<String, String>,
+    dry_run: bool,
+) -> Result<WorkflowRun> {
+    // Create a temp directory; it will be cleaned up when `_temp_dir` is dropped.
+    let temp_dir = TempDir::new()
+        .map_err(|e| ConductorError::Workflow(format!("Failed to create temp directory: {e}")))?;
+    let clone_path = temp_dir.path();
+
+    eprintln!(
+        "Cloning PR #{} from {} into temp directory...",
+        pr_ref.number,
+        pr_ref.repo_slug()
+    );
+
+    checkout_pr(pr_ref, clone_path)?;
+
+    let clone_path_str = clone_path.to_str().ok_or_else(|| {
+        ConductorError::Workflow("Temp directory path is not valid UTF-8".to_string())
+    })?;
+
+    // Load the workflow definition from the cloned repo
+    let workflow = WorkflowManager::load_def_by_name(clone_path_str, clone_path_str, workflow_name)
+        .map_err(|e| {
+            ConductorError::Workflow(format!(
+                "Workflow '{}' not found in cloned PR repo: {e}",
+                workflow_name
+            ))
+        })?;
+
+    // Warn if the workflow doesn't list "pr" as a target
+    if !workflow.targets.iter().any(|t| t == "pr") {
+        eprintln!(
+            "Warning: workflow '{}' does not list 'pr' in its targets field. \
+             It may not be designed for PR runs.",
+            workflow_name
+        );
+    }
+
+    let exec_config = WorkflowExecConfig {
+        dry_run,
+        ..exec_config
+    };
+
+    let input = WorkflowExecInput {
+        conn,
+        config,
+        workflow: &workflow,
+        worktree_id: None,
+        worktree_path: clone_path_str,
+        repo_path: clone_path_str,
+        model,
+        exec_config: &exec_config,
+        inputs,
+        depth: 0,
+    };
+
+    let result = execute_workflow(&input)?;
+
+    // Retrieve the final WorkflowRun record from the database
+    let wf_mgr = WorkflowManager::new(conn);
+    let wf_run = wf_mgr
+        .get_workflow_run(&result.workflow_run_id)?
+        .ok_or_else(|| {
+            ConductorError::Workflow(format!(
+                "Workflow run record not found after execution: {}",
+                result.workflow_run_id
+            ))
+        })?;
+
+    // `temp_dir` is dropped here, cleaning up the cloned repo.
+    Ok(wf_run)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_pr_ref_full_url() {
+        let pr = parse_pr_ref("https://github.com/acme/my-repo/pull/42").unwrap();
+        assert_eq!(pr.owner, "acme");
+        assert_eq!(pr.repo, "my-repo");
+        assert_eq!(pr.number, 42);
+    }
+
+    #[test]
+    fn test_parse_pr_ref_owner_repo_slash_number() {
+        let pr = parse_pr_ref("acme/my-repo/42").unwrap();
+        assert_eq!(pr.owner, "acme");
+        assert_eq!(pr.repo, "my-repo");
+        assert_eq!(pr.number, 42);
+    }
+
+    #[test]
+    fn test_parse_pr_ref_owner_repo_hash_number() {
+        let pr = parse_pr_ref("acme/my-repo#42").unwrap();
+        assert_eq!(pr.owner, "acme");
+        assert_eq!(pr.repo, "my-repo");
+        assert_eq!(pr.number, 42);
+    }
+
+    #[test]
+    fn test_parse_pr_ref_invalid() {
+        assert!(parse_pr_ref("not-a-pr").is_err());
+        assert!(parse_pr_ref("123").is_err());
+        assert!(parse_pr_ref("https://github.com/owner/repo").is_err());
+    }
+
+    #[test]
+    fn test_parse_pr_ref_url_with_trailing_slash() {
+        let pr = parse_pr_ref("https://github.com/acme/my-repo/pull/99/files").unwrap();
+        assert_eq!(pr.owner, "acme");
+        assert_eq!(pr.repo, "my-repo");
+        assert_eq!(pr.number, 99);
+    }
+}

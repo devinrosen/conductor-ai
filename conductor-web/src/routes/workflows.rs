@@ -164,7 +164,7 @@ pub async fn run_workflow(
                 conn: &db,
                 config: &config,
                 workflow: &def,
-                worktree_id: &wt_id,
+                worktree_id: Some(&wt_id),
                 worktree_path: &wt_path,
                 repo_path: &repo_path,
                 model: model.as_deref(),
@@ -187,7 +187,7 @@ pub async fn run_workflow(
                     .events
                     .emit(ConductorEvent::WorkflowRunStatusChanged {
                         run_id: res.workflow_run_id,
-                        worktree_id: res.worktree_id,
+                        worktree_id: res.worktree_id.unwrap_or_default(),
                         status: status.to_string(),
                     });
             }
@@ -262,7 +262,7 @@ pub async fn cancel_workflow(
 
     state.events.emit(ConductorEvent::WorkflowRunStatusChanged {
         run_id: id.clone(),
-        worktree_id: run.worktree_id.clone(),
+        worktree_id: run.worktree_id.clone().unwrap_or_default(),
         status: "cancelled".to_string(),
     });
 
@@ -320,7 +320,7 @@ pub async fn resume_workflow_endpoint(
                     .events
                     .emit(ConductorEvent::WorkflowRunStatusChanged {
                         run_id: res.workflow_run_id,
-                        worktree_id: res.worktree_id,
+                        worktree_id: res.worktree_id.unwrap_or_default(),
                         status: status.to_string(),
                     });
             }

@@ -284,7 +284,8 @@ crate::impl_sql_enum!(WorkflowStepStatus);
 pub struct WorkflowRun {
     pub id: String,
     pub workflow_name: String,
-    pub worktree_id: String,
+    /// `None` for ephemeral PR runs that have no registered worktree.
+    pub worktree_id: Option<String>,
     pub parent_run_id: String,
     pub status: WorkflowRunStatus,
     pub dry_run: bool,
@@ -441,7 +442,8 @@ impl Default for WorkflowExecConfig {
 #[derive(Debug, Clone)]
 pub struct WorkflowResult {
     pub workflow_run_id: String,
-    pub worktree_id: String,
+    /// `None` for ephemeral PR runs with no registered worktree.
+    pub worktree_id: Option<String>,
     pub workflow_name: String,
     pub all_succeeded: bool,
     pub total_cost: f64,
@@ -482,7 +484,7 @@ impl<'a> WorkflowManager<'a> {
     pub fn create_workflow_run(
         &self,
         workflow_name: &str,
-        worktree_id: &str,
+        worktree_id: Option<&str>,
         parent_run_id: &str,
         dry_run: bool,
         trigger: &str,
@@ -511,7 +513,7 @@ impl<'a> WorkflowManager<'a> {
         Ok(WorkflowRun {
             id,
             workflow_name: workflow_name.to_string(),
-            worktree_id: worktree_id.to_string(),
+            worktree_id: worktree_id.map(String::from),
             parent_run_id: parent_run_id.to_string(),
             status: WorkflowRunStatus::Pending,
             dry_run,
@@ -961,7 +963,7 @@ fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
     Ok(WorkflowRun {
         id: row.get(0)?,
         workflow_name: row.get(1)?,
-        worktree_id: row.get(2)?,
+        worktree_id: row.get::<_, Option<String>>(2)?,
         parent_run_id: row.get(3)?,
         status: row.get(4)?,
         dry_run: dry_run_int != 0,
@@ -1168,7 +1170,8 @@ pub struct WorkflowExecInput<'a> {
     pub conn: &'a Connection,
     pub config: &'a Config,
     pub workflow: &'a WorkflowDef,
-    pub worktree_id: &'a str,
+    /// `None` for ephemeral PR runs with no registered worktree.
+    pub worktree_id: Option<&'a str>,
     pub worktree_path: &'a str,
     pub repo_path: &'a str,
     pub model: Option<&'a str>,
@@ -1184,10 +1187,16 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     let config = input.config;
     let workflow = input.workflow;
 
+    // Resolve worktree slug for tmux window naming (empty for ephemeral PR runs).
+    let effective_worktree_id = input.worktree_id.unwrap_or("");
     let agent_mgr = AgentManager::new(conn);
     let wf_mgr = WorkflowManager::new(conn);
-    let wt_mgr = WorktreeManager::new(conn, config);
-    let worktree = wt_mgr.get_by_id(input.worktree_id)?;
+    let worktree_slug = if let Some(wt_id) = input.worktree_id {
+        let wt_mgr = WorktreeManager::new(conn, config);
+        wt_mgr.get_by_id(wt_id)?.slug
+    } else {
+        String::new()
+    };
 
     // Validate all referenced agents exist before starting
     let mut all_agents = workflow_dsl::collect_agent_names(&workflow.body);
@@ -1233,17 +1242,21 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     })?;
 
     // Guard: prevent multiple concurrent top-level runs on the same worktree
+    // (skipped for ephemeral PR runs which have no registered worktree).
     if input.depth == 0 {
-        if let Some(active) = wf_mgr.get_active_run_for_worktree(input.worktree_id)? {
-            return Err(ConductorError::WorkflowRunAlreadyActive {
-                name: active.workflow_name,
-            });
+        if let Some(wt_id) = input.worktree_id {
+            if let Some(active) = wf_mgr.get_active_run_for_worktree(wt_id)? {
+                return Err(ConductorError::WorkflowRunAlreadyActive {
+                    name: active.workflow_name,
+                });
+            }
         }
     }
 
-    // Create parent agent run
+    // Create parent agent run (uses empty worktree_id for ephemeral runs).
     let parent_prompt = format!("Workflow: {} — {}", workflow.name, workflow.description);
-    let parent_run = agent_mgr.create_run(input.worktree_id, &parent_prompt, None, input.model)?;
+    let parent_run =
+        agent_mgr.create_run(effective_worktree_id, &parent_prompt, None, input.model)?;
 
     // Create workflow run record with snapshot
     let wf_run = wf_mgr.create_workflow_run(
@@ -1268,9 +1281,9 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         config,
         workflow_run_id: wf_run.id.clone(),
         workflow_name: workflow.name.clone(),
-        worktree_id: input.worktree_id.to_string(),
+        worktree_id: effective_worktree_id.to_string(),
         worktree_path: input.worktree_path.to_string(),
-        worktree_slug: worktree.slug.clone(),
+        worktree_slug,
         repo_path: input.repo_path.to_string(),
         model: input.model.map(String::from),
         exec_config: input.exec_config.clone(),
@@ -1375,7 +1388,11 @@ fn run_workflow_engine(
 
     Ok(WorkflowResult {
         workflow_run_id: wf_run_id,
-        worktree_id: state.worktree_id.clone(),
+        worktree_id: if state.worktree_id.is_empty() {
+            None
+        } else {
+            Some(state.worktree_id.clone())
+        },
         workflow_name: workflow.name.clone(),
         all_succeeded: state.all_succeeded,
         total_cost: state.total_cost,
@@ -1389,7 +1406,8 @@ fn run_workflow_engine(
 pub struct WorkflowExecStandalone {
     pub config: Config,
     pub workflow: WorkflowDef,
-    pub worktree_id: String,
+    /// `None` for ephemeral PR runs with no registered worktree.
+    pub worktree_id: Option<String>,
     pub worktree_path: String,
     pub repo_path: String,
     pub model: Option<String>,
@@ -1408,7 +1426,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         conn: &conn,
         config: &params.config,
         workflow: &params.workflow,
-        worktree_id: &params.worktree_id,
+        worktree_id: params.worktree_id.as_deref(),
         worktree_path: &params.worktree_path,
         repo_path: &params.repo_path,
         model: params.model.as_deref(),
@@ -1540,8 +1558,14 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         ConductorError::Workflow(format!("Failed to deserialize workflow snapshot: {e}"))
     })?;
 
-    // Resolve worktree info
-    let worktree = wt_mgr.get_by_id(&wf_run.worktree_id)?;
+    // Resolve worktree info — ephemeral PR runs have no registered worktree and cannot be resumed.
+    let wt_id = wf_run.worktree_id.as_deref().ok_or_else(|| {
+        ConductorError::Workflow(format!(
+            "Workflow run '{}' was an ephemeral PR run with no registered worktree — cannot resume.",
+            wf_run.id
+        ))
+    })?;
+    let worktree = wt_mgr.get_by_id(wt_id)?;
     let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&worktree.repo_id)?;
 
     // Build the skip set
@@ -1626,7 +1650,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         config,
         workflow_run_id: wf_run.id.clone(),
         workflow_name: workflow.name.clone(),
-        worktree_id: wf_run.worktree_id.clone(),
+        worktree_id: wf_run.worktree_id.clone().unwrap_or_default(),
         worktree_path: worktree.path.clone(),
         worktree_slug: worktree.slug.clone(),
         repo_path: repo.local_path.clone(),
@@ -2247,7 +2271,11 @@ fn execute_call_workflow(
             conn: state.conn,
             config: state.config,
             workflow: &child_def,
-            worktree_id: &state.worktree_id,
+            worktree_id: if state.worktree_id.is_empty() {
+                None
+            } else {
+                Some(state.worktree_id.as_str())
+            },
             worktree_path: &state.worktree_path,
             repo_path: &state.repo_path,
             model: state.model.as_deref(),
@@ -3641,7 +3669,14 @@ mod tests {
 
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
-            .create_workflow_run("test-coverage", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run(
+                "test-coverage",
+                Some("w1"),
+                &parent.id,
+                false,
+                "manual",
+                None,
+            )
             .unwrap();
 
         assert_eq!(run.workflow_name, "test-coverage");
@@ -3659,7 +3694,7 @@ mod tests {
         let run = mgr
             .create_workflow_run(
                 "test",
-                "w1",
+                Some("w1"),
                 &parent.id,
                 false,
                 "manual",
@@ -3682,7 +3717,7 @@ mod tests {
 
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
-            .create_workflow_run("test", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
 
         let step_id = mgr
@@ -3704,7 +3739,7 @@ mod tests {
 
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
-            .create_workflow_run("test", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
         let step_id = mgr
             .insert_step(&run.id, "review", "reviewer", false, 0, 0)
@@ -3737,7 +3772,7 @@ mod tests {
 
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
-            .create_workflow_run("test", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
         let step_id = mgr
             .insert_step(&run.id, "review", "reviewer", false, 0, 0)
@@ -3770,7 +3805,7 @@ mod tests {
 
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
-            .create_workflow_run("test", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
         let step_id = mgr
             .insert_step(&run.id, "review", "reviewer", false, 0, 0)
@@ -3800,7 +3835,7 @@ mod tests {
 
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
-            .create_workflow_run("test", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
         let step_id = mgr
             .insert_step(&run.id, "human_review", "reviewer", false, 0, 0)
@@ -3843,7 +3878,7 @@ mod tests {
 
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
-            .create_workflow_run("test", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
         let step_id = mgr
             .insert_step(&run.id, "human_approval", "reviewer", false, 0, 0)
@@ -3886,7 +3921,7 @@ mod tests {
         let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
         let wf_mgr = WorkflowManager::new(conn);
         let run = wf_mgr
-            .create_workflow_run("test", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
         wf_mgr
             .update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None)
@@ -4159,7 +4194,7 @@ And here is my actual output:
         // Create a parent agent run and a workflow run
         let parent = agent_mgr.create_run("w1", "wf", None, None).unwrap();
         let wf_run = wf_mgr
-            .create_workflow_run("flow", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("flow", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
 
         // Insert a step stuck in 'running' with a child_run_id
@@ -4202,7 +4237,7 @@ And here is my actual output:
 
         let parent = agent_mgr.create_run("w1", "wf", None, None).unwrap();
         let wf_run = wf_mgr
-            .create_workflow_run("flow", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("flow", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
 
         let step_id = wf_mgr
@@ -4239,7 +4274,7 @@ And here is my actual output:
 
         let parent = agent_mgr.create_run("w1", "wf", None, None).unwrap();
         let wf_run = wf_mgr
-            .create_workflow_run("flow", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("flow", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
 
         let step_id = wf_mgr
@@ -4279,9 +4314,9 @@ And here is my actual output:
         let p2 = agent_mgr.create_run("w1", "wf2", None, None).unwrap();
 
         let mgr = WorkflowManager::new(&conn);
-        mgr.create_workflow_run("test-a", "w1", &p1.id, false, "manual", None)
+        mgr.create_workflow_run("test-a", Some("w1"), &p1.id, false, "manual", None)
             .unwrap();
-        mgr.create_workflow_run("test-b", "w1", &p2.id, true, "pr", None)
+        mgr.create_workflow_run("test-b", Some("w1"), &p2.id, true, "pr", None)
             .unwrap();
 
         let runs = mgr.list_workflow_runs("w1").unwrap();
@@ -4304,9 +4339,9 @@ And here is my actual output:
         let p2 = agent_mgr.create_run("w2", "wf2", None, None).unwrap();
 
         let mgr = WorkflowManager::new(&conn);
-        mgr.create_workflow_run("flow-a", "w1", &p1.id, false, "manual", None)
+        mgr.create_workflow_run("flow-a", Some("w1"), &p1.id, false, "manual", None)
             .unwrap();
-        mgr.create_workflow_run("flow-b", "w2", &p2.id, false, "manual", None)
+        mgr.create_workflow_run("flow-b", Some("w2"), &p2.id, false, "manual", None)
             .unwrap();
 
         // list_all returns both runs regardless of worktree
@@ -4327,8 +4362,15 @@ And here is my actual output:
             let p = agent_mgr
                 .create_run("w1", &format!("wf{i}"), None, None)
                 .unwrap();
-            mgr.create_workflow_run(&format!("flow-{i}"), "w1", &p.id, false, "manual", None)
-                .unwrap();
+            mgr.create_workflow_run(
+                &format!("flow-{i}"),
+                Some("w1"),
+                &p.id,
+                false,
+                "manual",
+                None,
+            )
+            .unwrap();
         }
 
         let limited = mgr.list_all_workflow_runs(3).unwrap();
@@ -4358,9 +4400,9 @@ And here is my actual output:
         let p2 = agent_mgr.create_run("w2", "wf2", None, None).unwrap();
 
         let mgr = WorkflowManager::new(&conn);
-        mgr.create_workflow_run("only-w1", "w1", &p1.id, false, "manual", None)
+        mgr.create_workflow_run("only-w1", Some("w1"), &p1.id, false, "manual", None)
             .unwrap();
-        mgr.create_workflow_run("only-w2", "w2", &p2.id, false, "manual", None)
+        mgr.create_workflow_run("only-w2", Some("w2"), &p2.id, false, "manual", None)
             .unwrap();
 
         // Scoped: only w1's run
@@ -4382,8 +4424,15 @@ And here is my actual output:
             let p = agent_mgr
                 .create_run("w1", &format!("wf{i}"), None, None)
                 .unwrap();
-            mgr.create_workflow_run(&format!("flow-{i}"), "w1", &p.id, false, "manual", None)
-                .unwrap();
+            mgr.create_workflow_run(
+                &format!("flow-{i}"),
+                Some("w1"),
+                &p.id,
+                false,
+                "manual",
+                None,
+            )
+            .unwrap();
         }
         let limited = mgr.list_workflow_runs_for_scope(None, 2).unwrap();
         assert_eq!(limited.len(), 2);
@@ -4405,7 +4454,7 @@ And here is my actual output:
 
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
-            .create_workflow_run("test", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
 
         let step_id = mgr
@@ -4570,7 +4619,7 @@ And here is my actual output:
 
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
-            .create_workflow_run("child-wf", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("child-wf", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
 
         // Insert two completed steps; the second (position=1) should be returned
@@ -4615,7 +4664,7 @@ And here is my actual output:
 
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
-            .create_workflow_run("child-wf", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("child-wf", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
 
         // Insert a failed step only
@@ -4646,7 +4695,7 @@ And here is my actual output:
 
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
-            .create_workflow_run("child-wf", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("child-wf", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
 
         let step_id = mgr
@@ -5070,7 +5119,7 @@ And here is my actual output:
         let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
         let wf_mgr = WorkflowManager::new(conn);
         let run = wf_mgr
-            .create_workflow_run("test", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
 
         ExecutionState {
@@ -5343,7 +5392,7 @@ And here is my actual output:
 
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
-            .create_workflow_run("my-flow", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("my-flow", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
         // Set status to running
         mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
@@ -5362,7 +5411,7 @@ And here is my actual output:
 
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
-            .create_workflow_run("my-flow", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("my-flow", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
         mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"))
             .unwrap();
@@ -5386,7 +5435,7 @@ And here is my actual output:
 
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
-            .create_workflow_run("other-flow", "w2", &parent.id, false, "manual", None)
+            .create_workflow_run("other-flow", Some("w2"), &parent.id, false, "manual", None)
             .unwrap();
         mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
             .unwrap();
@@ -5424,7 +5473,7 @@ And here is my actual output:
         let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
         let wf_mgr = WorkflowManager::new(&conn);
         let run = wf_mgr
-            .create_workflow_run("running-wf", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("running-wf", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
         wf_mgr
             .update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
@@ -5435,7 +5484,7 @@ And here is my actual output:
             conn: &conn,
             config: &config,
             workflow: &workflow,
-            worktree_id: "w1",
+            worktree_id: Some("w1"),
             worktree_path: "/tmp/ws/feat-test",
             repo_path: "/tmp/repo",
             model: None,
@@ -5459,7 +5508,7 @@ And here is my actual output:
         let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
         let wf_mgr = WorkflowManager::new(&conn);
         let run = wf_mgr
-            .create_workflow_run("done-wf", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("done-wf", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
         wf_mgr
             .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"))
@@ -5470,7 +5519,7 @@ And here is my actual output:
             conn: &conn,
             config: &config,
             workflow: &workflow,
-            worktree_id: "w1",
+            worktree_id: Some("w1"),
             worktree_path: "/tmp/ws/feat-test",
             repo_path: "/tmp/repo",
             model: None,
@@ -5495,7 +5544,7 @@ And here is my actual output:
         let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
         let wf_mgr = WorkflowManager::new(&conn);
         let run = wf_mgr
-            .create_workflow_run("parent-wf", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("parent-wf", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
         wf_mgr
             .update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
@@ -5507,7 +5556,7 @@ And here is my actual output:
             conn: &conn,
             config: &config,
             workflow: &workflow,
-            worktree_id: "w1",
+            worktree_id: Some("w1"),
             worktree_path: "/tmp/ws/feat-test",
             repo_path: "/tmp/repo",
             model: None,
@@ -5783,7 +5832,7 @@ And here is my actual output:
         let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
         let wf_mgr = WorkflowManager::new(conn);
         let run = wf_mgr
-            .create_workflow_run("child-wf", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("child-wf", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
         (wf_mgr, run.id)
     }
@@ -5919,7 +5968,7 @@ And here is my actual output:
         let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
         let mgr = WorkflowManager::new(conn);
         let run = mgr
-            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
 
         // Step 0: completed
@@ -6412,7 +6461,14 @@ And here is my actual output:
         let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
         let wf_mgr = WorkflowManager::new(&conn);
         let run = wf_mgr
-            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", Some("{}"))
+            .create_workflow_run(
+                "test-wf",
+                Some("w1"),
+                &parent.id,
+                false,
+                "manual",
+                Some("{}"),
+            )
             .unwrap();
         wf_mgr
             .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"))
@@ -6441,7 +6497,14 @@ And here is my actual output:
         let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
         let wf_mgr = WorkflowManager::new(&conn);
         let run = wf_mgr
-            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", Some("{}"))
+            .create_workflow_run(
+                "test-wf",
+                Some("w1"),
+                &parent.id,
+                false,
+                "manual",
+                Some("{}"),
+            )
             .unwrap();
         wf_mgr
             .update_workflow_status(&run.id, WorkflowRunStatus::Cancelled, None)
@@ -6480,7 +6543,14 @@ And here is my actual output:
         let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
         let wf_mgr = WorkflowManager::new(&conn);
         let run = wf_mgr
-            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", Some("{}"))
+            .create_workflow_run(
+                "test-wf",
+                Some("w1"),
+                &parent.id,
+                false,
+                "manual",
+                Some("{}"),
+            )
             .unwrap();
         wf_mgr
             .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("error"))
@@ -6511,7 +6581,7 @@ And here is my actual output:
         let wf_mgr = WorkflowManager::new(&conn);
         // Create run with no definition_snapshot
         let run = wf_mgr
-            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
         wf_mgr
             .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("error"))
@@ -6559,7 +6629,14 @@ And here is my actual output:
         let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
         let wf_mgr = WorkflowManager::new(&conn);
         let run = wf_mgr
-            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", Some("{}"))
+            .create_workflow_run(
+                "test-wf",
+                Some("w1"),
+                &parent.id,
+                false,
+                "manual",
+                Some("{}"),
+            )
             .unwrap();
         wf_mgr
             .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("error"))
@@ -6603,7 +6680,14 @@ And here is my actual output:
         let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
         let wf_mgr = WorkflowManager::new(&conn);
         let run = wf_mgr
-            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", Some("{}"))
+            .create_workflow_run(
+                "test-wf",
+                Some("w1"),
+                &parent.id,
+                false,
+                "manual",
+                Some("{}"),
+            )
             .unwrap();
 
         // Initially inputs should be empty (no inputs set yet)
@@ -6635,7 +6719,14 @@ And here is my actual output:
         let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
         let wf_mgr = WorkflowManager::new(&conn);
         let run = wf_mgr
-            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", Some("{}"))
+            .create_workflow_run(
+                "test-wf",
+                Some("w1"),
+                &parent.id,
+                false,
+                "manual",
+                Some("{}"),
+            )
             .unwrap();
 
         // Directly write invalid JSON into the inputs column to simulate corruption
@@ -6710,7 +6801,7 @@ And here is my actual output:
         let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
         let mgr = WorkflowManager::new(&conn);
         let run = mgr
-            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", None)
+            .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
             .unwrap();
 
         // Insert 3 completed steps at positions 0, 1, 2
@@ -6855,7 +6946,14 @@ And here is my actual output:
         let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
         let wf_mgr = WorkflowManager::new(&conn);
         let run = wf_mgr
-            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", Some("{}"))
+            .create_workflow_run(
+                "test-wf",
+                Some("w1"),
+                &parent.id,
+                false,
+                "manual",
+                Some("{}"),
+            )
             .unwrap();
         wf_mgr
             .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"))
