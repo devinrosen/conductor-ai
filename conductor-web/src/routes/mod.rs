@@ -139,6 +139,10 @@ pub fn api_router() -> Router<AppState> {
             post(workflows::cancel_workflow),
         )
         .route(
+            "/api/workflows/runs/{id}/resume",
+            post(workflows::resume_workflow_endpoint),
+        )
+        .route(
             "/api/workflows/runs/{id}/gate/approve",
             post(workflows::approve_gate),
         )

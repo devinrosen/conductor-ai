@@ -264,6 +264,20 @@ enum WorkflowCommands {
         /// Workflow name
         name: String,
     },
+    /// Resume a failed or stalled workflow run
+    Resume {
+        /// Workflow run ID
+        id: String,
+        /// Resume from a specific step name (re-runs from that step onward)
+        #[arg(long)]
+        from_step: Option<String>,
+        /// Model override for agent steps
+        #[arg(long)]
+        model: Option<String>,
+        /// Restart from the beginning (reuse same run record)
+        #[arg(long)]
+        restart: bool,
+    },
     /// Cancel a running or waiting workflow
     Cancel {
         /// Workflow run ID
@@ -1575,6 +1589,50 @@ fn main() -> Result<()> {
 
                 if has_errors {
                     std::process::exit(1);
+                }
+            }
+            WorkflowCommands::Resume {
+                id,
+                from_step,
+                model,
+                restart,
+            } => {
+                let resume_input = conductor_core::workflow::WorkflowResumeInput {
+                    conn: &conn,
+                    config: &config,
+                    workflow_run_id: &id,
+                    model: model.as_deref(),
+                    from_step: from_step.as_deref(),
+                    restart,
+                };
+
+                if restart {
+                    println!("Restarting workflow run {id} from the beginning...");
+                } else if let Some(ref step) = from_step {
+                    println!("Resuming workflow run {id} from step '{step}'...");
+                } else {
+                    println!("Resuming workflow run {id}...");
+                }
+
+                match conductor_core::workflow::resume_workflow(&resume_input) {
+                    Ok(result) => {
+                        println!(
+                            "\nTotal: ${:.4}, {} turns, {:.1}s",
+                            result.total_cost,
+                            result.total_turns,
+                            result.total_duration_ms as f64 / 1000.0
+                        );
+                        if result.all_succeeded {
+                            println!("Workflow resumed and completed successfully.");
+                        } else {
+                            eprintln!("Workflow resumed but finished with failures.");
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Workflow resume failed: {e}");
+                        std::process::exit(1);
+                    }
                 }
             }
             WorkflowCommands::Cancel { id } => {

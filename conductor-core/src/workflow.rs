@@ -872,6 +872,34 @@ impl<'a> WorkflowManager<'a> {
     ) -> Result<WorkflowDef> {
         workflow_dsl::load_workflow_by_name(worktree_path, repo_path, name)
     }
+
+    /// Reset all non-completed steps for a workflow run back to `pending`.
+    ///
+    /// Used before resuming so that failed/running/timed_out steps get re-executed.
+    pub fn reset_failed_steps(&self, workflow_run_id: &str) -> Result<u64> {
+        let count = self.conn.execute(
+            "UPDATE workflow_run_steps SET status = 'pending', started_at = NULL, ended_at = NULL, \
+             result_text = NULL, context_out = NULL, markers_out = NULL, structured_output = NULL, \
+             child_run_id = NULL \
+             WHERE workflow_run_id = ?1 AND status IN ('failed', 'running', 'timed_out')",
+            params![workflow_run_id],
+        )?;
+        Ok(count as u64)
+    }
+
+    /// Return the set of completed step keys (as `step_name:iteration`) for a run.
+    ///
+    /// Used to build the skip set for resume.
+    pub fn get_completed_step_keys(&self, workflow_run_id: &str) -> Result<HashSet<String>> {
+        let steps = self.get_workflow_steps(workflow_run_id)?;
+        let mut keys = HashSet::new();
+        for step in &steps {
+            if step.status == WorkflowStepStatus::Completed {
+                keys.insert(format!("{}:{}", step.step_name, step.iteration));
+            }
+        }
+        Ok(keys)
+    }
 }
 
 fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
@@ -1042,6 +1070,8 @@ struct ExecutionState<'a> {
     block_output: Option<String>,
     /// Block-level prompt snippet refs inherited from an enclosing `do {}` block.
     block_with: Vec<String>,
+    /// Step keys to skip on resume (empty for fresh runs).
+    skip_completed: HashSet<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1170,6 +1200,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         last_structured_output: None,
         block_output: None,
         block_with: Vec::new(),
+        skip_completed: HashSet::new(),
     };
 
     // Execute main body
@@ -1275,6 +1306,218 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     };
 
     execute_workflow(&input)
+}
+
+/// Input parameters for resuming a workflow run.
+pub struct WorkflowResumeInput<'a> {
+    pub conn: &'a Connection,
+    pub config: &'a Config,
+    pub workflow_run_id: &'a str,
+    /// Optional model override for agent steps.
+    pub model: Option<&'a str>,
+    /// Resume from a specific step name (re-runs steps from that point).
+    pub from_step: Option<&'a str>,
+    /// Restart from the beginning (clear all step results).
+    pub restart: bool,
+}
+
+/// Resume a failed or stalled workflow run from the point of failure.
+///
+/// Loads the workflow definition from the run's `definition_snapshot`, rebuilds
+/// the skip set from completed steps, resets failed steps to pending, and
+/// re-enters the execution loop.
+pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult> {
+    let conn = input.conn;
+    let config = input.config;
+    let wf_mgr = WorkflowManager::new(conn);
+    let agent_mgr = AgentManager::new(conn);
+    let wt_mgr = WorktreeManager::new(conn, config);
+
+    // Load and validate the workflow run
+    let wf_run = wf_mgr
+        .get_workflow_run(input.workflow_run_id)?
+        .ok_or_else(|| {
+            ConductorError::Workflow(format!("Workflow run not found: {}", input.workflow_run_id))
+        })?;
+
+    if matches!(wf_run.status, WorkflowRunStatus::Completed) {
+        return Err(ConductorError::Workflow(
+            "Cannot resume a completed workflow run. Use --restart to re-run from the beginning."
+                .to_string(),
+        ));
+    }
+    if matches!(wf_run.status, WorkflowRunStatus::Cancelled) {
+        return Err(ConductorError::Workflow(
+            "Cannot resume a cancelled workflow run.".to_string(),
+        ));
+    }
+
+    // Deserialize definition from snapshot
+    let snapshot = wf_run.definition_snapshot.as_deref().ok_or_else(|| {
+        ConductorError::Workflow(
+            "Workflow run has no definition snapshot — cannot resume.".to_string(),
+        )
+    })?;
+    let workflow: WorkflowDef = serde_json::from_str(snapshot).map_err(|e| {
+        ConductorError::Workflow(format!("Failed to deserialize workflow snapshot: {e}"))
+    })?;
+
+    // Resolve worktree info
+    let worktree = wt_mgr.get_by_id(&wf_run.worktree_id)?;
+    let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&worktree.repo_id)?;
+
+    // Build the skip set
+    let skip_completed = if input.restart {
+        // Restart: clear all step results — skip nothing
+        wf_mgr.reset_failed_steps(&wf_run.id)?;
+        // Also reset completed steps for full restart
+        conn.execute(
+            "UPDATE workflow_run_steps SET status = 'pending', started_at = NULL, ended_at = NULL, \
+             result_text = NULL, context_out = NULL, markers_out = NULL, structured_output = NULL, \
+             child_run_id = NULL \
+             WHERE workflow_run_id = ?1 AND status = 'completed'",
+            params![wf_run.id],
+        )?;
+        HashSet::new()
+    } else {
+        let mut keys = wf_mgr.get_completed_step_keys(&wf_run.id)?;
+
+        // Handle --from-step: remove completed keys at or after the specified step
+        if let Some(from_step) = input.from_step {
+            let steps = wf_mgr.get_workflow_steps(&wf_run.id)?;
+            let from_pos = steps
+                .iter()
+                .find(|s| s.step_name == from_step)
+                .map(|s| s.position);
+            if let Some(pos) = from_pos {
+                // Remove all keys at position >= from_step's position
+                let to_remove: Vec<String> = steps
+                    .iter()
+                    .filter(|s| s.position >= pos && s.status == WorkflowStepStatus::Completed)
+                    .map(|s| format!("{}:{}", s.step_name, s.iteration))
+                    .collect();
+                for key in to_remove {
+                    keys.remove(&key);
+                }
+                // Reset those steps in DB
+                conn.execute(
+                    "UPDATE workflow_run_steps SET status = 'pending', started_at = NULL, \
+                     ended_at = NULL, result_text = NULL, context_out = NULL, markers_out = NULL, \
+                     structured_output = NULL, child_run_id = NULL \
+                     WHERE workflow_run_id = ?1 AND position >= ?2",
+                    params![wf_run.id, pos],
+                )?;
+            }
+        }
+
+        // Reset non-completed steps
+        wf_mgr.reset_failed_steps(&wf_run.id)?;
+        keys
+    };
+
+    // Reset run status to Running
+    wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Running, None)?;
+
+    tracing::info!(
+        "Resuming workflow '{}' (run {}), {} completed steps to skip",
+        workflow.name,
+        wf_run.id,
+        skip_completed.len(),
+    );
+
+    let mut state = ExecutionState {
+        conn,
+        config,
+        workflow_run_id: wf_run.id.clone(),
+        workflow_name: workflow.name.clone(),
+        worktree_id: wf_run.worktree_id.clone(),
+        worktree_path: worktree.path.clone(),
+        worktree_slug: worktree.slug.clone(),
+        repo_path: repo.local_path.clone(),
+        model: input.model.map(String::from),
+        exec_config: WorkflowExecConfig::default(),
+        inputs: HashMap::new(),
+        agent_mgr: AgentManager::new(conn),
+        wf_mgr: WorkflowManager::new(conn),
+        parent_run_id: wf_run.parent_run_id.clone(),
+        depth: 0,
+        step_results: HashMap::new(),
+        contexts: Vec::new(),
+        position: 0,
+        all_succeeded: true,
+        total_cost: 0.0,
+        total_turns: 0,
+        total_duration_ms: 0,
+        last_gate_feedback: None,
+        last_structured_output: None,
+        skip_completed,
+    };
+
+    // Execute main body
+    let body_result = execute_nodes(&mut state, &workflow.body);
+    if let Err(ref e) = body_result {
+        tracing::error!("Body execution error: {e}");
+        state.all_succeeded = false;
+    }
+
+    // Execute always block regardless of outcome
+    if !workflow.always.is_empty() {
+        let workflow_status = if state.all_succeeded {
+            "completed"
+        } else {
+            "failed"
+        };
+        state
+            .inputs
+            .insert("workflow_status".to_string(), workflow_status.to_string());
+        let always_result = execute_nodes(&mut state, &workflow.always);
+        if let Err(ref e) = always_result {
+            tracing::warn!("Always block error (non-fatal): {e}");
+        }
+    }
+
+    // Build summary
+    let summary = build_workflow_summary(&state);
+
+    // Finalize
+    if state.all_succeeded {
+        agent_mgr.update_run_completed(
+            &wf_run.parent_run_id,
+            None,
+            Some(&summary),
+            Some(state.total_cost),
+            Some(state.total_turns),
+            Some(state.total_duration_ms),
+        )?;
+        wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Completed, Some(&summary))?;
+        tracing::info!(
+            "Workflow '{}' resumed and completed successfully",
+            workflow.name
+        );
+    } else {
+        agent_mgr.update_run_failed(&wf_run.parent_run_id, &summary)?;
+        wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Failed, Some(&summary))?;
+        tracing::warn!(
+            "Workflow '{}' resumed but finished with failures",
+            workflow.name
+        );
+    }
+
+    tracing::info!(
+        "Total: ${:.4}, {} turns, {:.1}s",
+        state.total_cost,
+        state.total_turns,
+        state.total_duration_ms as f64 / 1000.0
+    );
+
+    Ok(WorkflowResult {
+        workflow_run_id: wf_run.id,
+        workflow_name: workflow.name.clone(),
+        all_succeeded: state.all_succeeded,
+        total_cost: state.total_cost,
+        total_turns: state.total_turns,
+        total_duration_ms: state.total_duration_ms,
+    })
 }
 
 /// Walk a list of workflow nodes, dispatching to the appropriate handler.
@@ -1522,6 +1765,19 @@ fn execute_call_with_schema(
     let pos = state.position;
     state.position += 1;
 
+    let step_key_check = node.agent.step_key();
+    let skip_key = format!("{}:{}", step_key_check, iteration);
+    if state.skip_completed.contains(&skip_key) {
+        tracing::info!(
+            "Skipping completed step '{}' (iteration {})",
+            step_key_check,
+            iteration
+        );
+        // Restore results from DB step records so downstream steps can reference them
+        restore_completed_step_from_db(state, &step_key_check, iteration);
+        return Ok(());
+    }
+
     // Load agent definition
     let agent_def = agent_config::load_agent(
         &state.worktree_path,
@@ -1762,6 +2018,14 @@ fn execute_call_workflow(
 ) -> Result<()> {
     let pos = state.position;
     state.position += 1;
+
+    // Skip completed sub-workflow steps on resume
+    let skip_key = format!("workflow:{}:{}", node.workflow, iteration);
+    if state.skip_completed.contains(&skip_key) {
+        tracing::info!("Skipping completed sub-workflow '{}'", node.workflow);
+        restore_completed_step_from_db(state, &format!("workflow:{}", node.workflow), iteration);
+        return Ok(());
+    }
 
     let child_depth = state.depth + 1;
     if child_depth > workflow_dsl::MAX_WORKFLOW_DEPTH {
@@ -2170,7 +2434,13 @@ fn check_max_iterations(
 }
 
 fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) -> Result<()> {
-    let mut iteration = 0u32;
+    // On resume, determine the last completed iteration so we can fast-forward
+    let start_iteration = if !state.skip_completed.is_empty() {
+        find_max_completed_while_iteration(state, node)
+    } else {
+        0u32
+    };
+    let mut iteration = start_iteration;
     let mut prev_marker_sets: Vec<HashSet<String>> = Vec::new();
 
     loop {
@@ -2380,11 +2650,22 @@ fn execute_parallel(
     }
 
     let mut children = Vec::new();
+    let mut skipped_count = 0u32;
 
     for (i, agent_ref) in node.calls.iter().enumerate() {
         let pos = pos_base + i as i64;
         state.position = pos + 1;
         let agent_label = agent_ref.label();
+
+        // Skip completed agents on resume
+        let agent_step_key = agent_ref.step_key();
+        let skip_key = format!("{}:{}", agent_step_key, iteration);
+        if state.skip_completed.contains(&skip_key) {
+            tracing::info!("parallel: skipping completed agent '{}'", agent_label);
+            restore_completed_step_from_db(state, &agent_step_key, iteration);
+            skipped_count += 1;
+            continue;
+        }
 
         let agent_def = agent_config::load_agent(
             &state.worktree_path,
@@ -2654,17 +2935,18 @@ fn execute_parallel(
         thread::sleep(state.exec_config.poll_interval);
     }
 
-    // Apply min_success policy
-    let min_required = node.min_success.unwrap_or(children.len() as u32);
+    // Apply min_success policy (skipped-on-resume agents count as successes)
+    let effective_successes = successes + skipped_count;
+    let total_agents = children.len() as u32 + skipped_count;
+    let min_required = node.min_success.unwrap_or(total_agents);
     tracing::info!(
-        "parallel: {successes} succeeded, {failures} failed out of {} agents",
-        children.len()
+        "parallel: {successes} succeeded, {failures} failed, {skipped_count} skipped (resume) out of {total_agents} agents",
     );
-    if successes < min_required {
+    if effective_successes < min_required {
         tracing::warn!(
             "parallel: only {}/{} succeeded (min_success={})",
-            successes,
-            children.len(),
+            effective_successes,
+            total_agents,
             min_required
         );
         state.all_succeeded = false;
@@ -2697,6 +2979,13 @@ fn execute_parallel(
 fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32) -> Result<()> {
     let pos = state.position;
     state.position += 1;
+
+    // Skip completed gates on resume
+    let skip_key = format!("{}:{}", node.name, iteration);
+    if state.skip_completed.contains(&skip_key) {
+        tracing::info!("Skipping completed gate '{}'", node.name);
+        return Ok(());
+    }
 
     // Dry-run: auto-approve all gates
     if state.exec_config.dry_run {
@@ -3042,6 +3331,107 @@ fn sanitize_tmux_name(name: &str) -> String {
         .collect()
 }
 
+/// Find the starting iteration for a while loop on resume.
+///
+/// Looks at the skip_completed set for step keys that match body nodes of the
+/// while loop. Returns the max iteration that has all body nodes completed,
+/// so the loop resumes from the iteration where it failed.
+fn find_max_completed_while_iteration(state: &ExecutionState<'_>, node: &WhileNode) -> u32 {
+    // Collect step keys from the body nodes
+    let body_keys: Vec<String> = node
+        .body
+        .iter()
+        .filter_map(|n| match n {
+            WorkflowNode::Call(c) => Some(c.agent.step_key()),
+            WorkflowNode::Parallel(_) => None, // parallel nodes don't have a single key
+            _ => None,
+        })
+        .collect();
+
+    if body_keys.is_empty() {
+        return 0;
+    }
+
+    // Find the highest iteration where all body nodes are in skip_completed
+    let mut iter = 0u32;
+    loop {
+        let all_done = body_keys
+            .iter()
+            .all(|k| state.skip_completed.contains(&format!("{k}:{iter}")));
+        if !all_done {
+            break;
+        }
+        iter += 1;
+    }
+    // iter is now the first incomplete iteration — start there
+    iter
+}
+
+/// Restore a completed step's results from DB into the execution state.
+///
+/// Used during resume to rebuild `step_results` and `contexts` for completed
+/// steps so that downstream variable substitution (e.g. `{{prior_context}}`)
+/// works correctly.
+fn restore_completed_step_from_db(state: &mut ExecutionState<'_>, step_key: &str, iteration: u32) {
+    let steps = state
+        .wf_mgr
+        .get_workflow_steps(&state.workflow_run_id)
+        .unwrap_or_default();
+
+    // Find the most recent completed step with this name
+    let completed_step = steps
+        .iter()
+        .rfind(|s| s.step_name == step_key && s.status == WorkflowStepStatus::Completed);
+
+    if let Some(step) = completed_step {
+        let markers: Vec<String> = step
+            .markers_out
+            .as_deref()
+            .and_then(|m| serde_json::from_str(m).ok())
+            .unwrap_or_default();
+        let context = step.context_out.clone().unwrap_or_default();
+
+        // Accumulate costs from the child agent run if present
+        if let Some(ref child_run_id) = step.child_run_id {
+            if let Ok(Some(run)) = state.agent_mgr.get_run(child_run_id) {
+                if let Some(cost) = run.cost_usd {
+                    state.total_cost += cost;
+                }
+                if let Some(turns) = run.num_turns {
+                    state.total_turns += turns;
+                }
+                if let Some(dur) = run.duration_ms {
+                    state.total_duration_ms += dur;
+                }
+            }
+        }
+
+        if step.structured_output.is_some() {
+            state.last_structured_output = step.structured_output.clone();
+        }
+
+        let step_result = StepResult {
+            step_name: step_key.to_string(),
+            status: WorkflowStepStatus::Completed,
+            result_text: step.result_text.clone(),
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            markers,
+            context: context.clone(),
+            child_run_id: step.child_run_id.clone(),
+            structured_output: step.structured_output.clone(),
+        };
+        state.step_results.insert(step_key.to_string(), step_result);
+
+        state.contexts.push(ContextEntry {
+            step: step_key.to_string(),
+            iteration,
+            context,
+        });
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -3340,6 +3730,7 @@ mod tests {
             last_structured_output: None,
             block_output: None,
             block_with: Vec::new(),
+            skip_completed: HashSet::new(),
         };
         (state, run_id)
     }
@@ -4133,6 +4524,7 @@ And here is my actual output:
             last_structured_output: None,
             block_output: None,
             block_with: Vec::new(),
+            skip_completed: HashSet::new(),
         }
     }
 

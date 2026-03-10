@@ -366,6 +366,9 @@ pub enum ConfirmAction {
     CancelWorkflow {
         workflow_run_id: String,
     },
+    ResumeWorkflow {
+        workflow_run_id: String,
+    },
 }
 
 #[derive(Debug, Clone)]

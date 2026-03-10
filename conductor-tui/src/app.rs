@@ -567,6 +567,7 @@ impl App {
 
             // Workflow actions
             Action::RunWorkflow => self.handle_run_workflow(),
+            Action::ResumeWorkflow => self.handle_resume_workflow(),
             Action::CancelWorkflow => self.handle_cancel_workflow(),
             Action::ApproveGate => self.handle_approve_gate(),
             Action::RejectGate => self.handle_reject_gate(),
@@ -1503,6 +1504,33 @@ impl App {
                     Err(e) => {
                         self.state.modal = Modal::Error {
                             message: format!("Cancel failed: {e}"),
+                        };
+                    }
+                }
+            }
+            ConfirmAction::ResumeWorkflow { workflow_run_id } => {
+                use conductor_core::workflow::{resume_workflow, WorkflowResumeInput};
+                let resume_input = WorkflowResumeInput {
+                    conn: &self.conn,
+                    config: &self.config,
+                    workflow_run_id: &workflow_run_id,
+                    model: None,
+                    from_step: None,
+                    restart: false,
+                };
+                match resume_workflow(&resume_input) {
+                    Ok(result) => {
+                        let msg = if result.all_succeeded {
+                            "Workflow resumed and completed successfully".to_string()
+                        } else {
+                            "Workflow resumed but finished with failures".to_string()
+                        };
+                        self.state.status_message = Some(msg);
+                        self.reload_workflow_data();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Resume failed: {e}"),
                         };
                     }
                 }
@@ -4383,6 +4411,39 @@ impl App {
 
         self.workflow_threads.push(handle);
         self.state.status_message = Some(format!("Starting workflow '{workflow_name}'…"));
+    }
+
+    fn handle_resume_workflow(&mut self) {
+        let run = match self
+            .state
+            .selected_workflow_run_id
+            .as_ref()
+            .and_then(|id| self.state.data.workflow_runs.iter().find(|r| &r.id == id))
+        {
+            Some(r) => r.clone(),
+            None => {
+                self.state.status_message = Some("No workflow run selected".to_string());
+                return;
+            }
+        };
+
+        use conductor_core::workflow::WorkflowRunStatus;
+        if matches!(run.status, WorkflowRunStatus::Completed) {
+            self.state.status_message = Some("Cannot resume a completed workflow run".to_string());
+            return;
+        }
+        if matches!(run.status, WorkflowRunStatus::Cancelled) {
+            self.state.status_message = Some("Cannot resume a cancelled workflow run".to_string());
+            return;
+        }
+
+        self.state.modal = Modal::Confirm {
+            title: "Resume Workflow".to_string(),
+            message: format!("Resume workflow run '{}'?", run.workflow_name),
+            on_confirm: ConfirmAction::ResumeWorkflow {
+                workflow_run_id: run.id.clone(),
+            },
+        };
     }
 
     fn handle_cancel_workflow(&mut self) {

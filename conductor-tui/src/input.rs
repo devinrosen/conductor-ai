@@ -305,6 +305,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
     if state.view == View::WorkflowRunDetail {
         match key.code {
             KeyCode::Char('x') => return Action::CancelWorkflow,
+            KeyCode::Char('r') => return Action::ResumeWorkflow,
             KeyCode::Char('g') if !state.pending_g => {
                 // Check for waiting gate
                 let has_gate = state
