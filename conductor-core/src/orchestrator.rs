@@ -676,6 +676,31 @@ mod tests {
     }
 
     #[test]
+    fn test_orchestrate_run_ephemeral_rejected() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a run with no worktree_id (ephemeral PR run)
+        let run = mgr.create_run(None, "test ephemeral", None, None).unwrap();
+
+        let result = orchestrate_run(
+            &conn,
+            &config,
+            &run.id,
+            "/tmp/ephemeral-clone",
+            None,
+            &OrchestratorConfig::default(),
+        );
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("ephemeral") || err_msg.contains("no registered worktree"),
+            "unexpected error message: {err_msg}"
+        );
+    }
+
+    #[test]
     fn test_orchestrate_run_not_found() {
         let conn = setup_db();
         let config = Config::default();

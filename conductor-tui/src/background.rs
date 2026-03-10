@@ -75,9 +75,13 @@ pub fn poll_data() -> Option<Action> {
     // Fetch recent runs sorted DESC; the first entry per worktree_id wins.
     let mut latest_workflow_runs_by_worktree = std::collections::HashMap::new();
     for run in wf_mgr.list_all_workflow_runs(100).unwrap_or_default() {
-        latest_workflow_runs_by_worktree
-            .entry(run.worktree_id.clone().unwrap_or_default())
-            .or_insert(run);
+        // Skip ephemeral runs (no registered worktree) — they have no worktree
+        // entry to display inline indicators for.
+        if let Some(ref wt_id) = run.worktree_id {
+            latest_workflow_runs_by_worktree
+                .entry(wt_id.clone())
+                .or_insert(run);
+        }
     }
 
     Some(Action::DataRefreshed(Box::new(DataRefreshedPayload {
