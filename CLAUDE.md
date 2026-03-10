@@ -65,7 +65,7 @@ All git operations and GitHub sync use `std::process::Command` (synchronous subp
 
 ### Database
 
-SQLite at `~/.conductor/conductor.db` with WAL mode, foreign keys on, 5s busy timeout. Schema managed via versioned migrations in `conductor-core/src/db/migrations/`. Tables: `repos`, `repo_issue_sources`, `worktrees`, `tickets`, `agent_runs`, `sessions`, `session_worktrees`, `_conductor_meta`. (Sessions are slated for removal — see #76.)
+SQLite at `~/.conductor/conductor.db` with WAL mode, foreign keys on, 5s busy timeout. Schema managed via versioned migrations in `conductor-core/src/db/migrations/`. Tables: `repos`, `repo_issue_sources`, `worktrees`, `tickets`, `agent_runs`, `workflow_runs`, `workflow_run_steps`, `_conductor_meta`.
 
 ### Data Directory
 
