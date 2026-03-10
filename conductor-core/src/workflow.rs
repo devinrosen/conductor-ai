@@ -21,7 +21,7 @@ use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::prompt_config;
 use crate::workflow_dsl::{
-    self, CallNode, CallWorkflowNode, DoWhileNode, GateNode, GateType, IfNode, OnMaxIter,
+    self, CallNode, CallWorkflowNode, DoNode, DoWhileNode, GateNode, GateType, IfNode, OnMaxIter,
     OnTimeout, ParallelNode, UnlessNode, WhileNode, WorkflowNode,
 };
 
@@ -989,6 +989,10 @@ struct ExecutionState<'a> {
     last_gate_feedback: Option<String>,
     /// Raw JSON from the most recent step's structured output (for `{{prior_output}}`).
     last_structured_output: Option<String>,
+    /// Block-level output schema name inherited from an enclosing `do {}` block.
+    block_output: Option<String>,
+    /// Block-level prompt snippet refs inherited from an enclosing `do {}` block.
+    block_with: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1115,6 +1119,8 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         total_duration_ms: 0,
         last_gate_feedback: None,
         last_structured_output: None,
+        block_output: None,
+        block_with: Vec::new(),
     };
 
     // Execute main body
@@ -1229,6 +1235,7 @@ fn execute_single_node(
         WorkflowNode::Unless(n) => execute_unless(state, n)?,
         WorkflowNode::While(n) => execute_while(state, n)?,
         WorkflowNode::DoWhile(n) => execute_do_while(state, n)?,
+        WorkflowNode::Do(n) => execute_do(state, n)?,
         WorkflowNode::Parallel(n) => execute_parallel(state, n, iteration)?,
         WorkflowNode::Gate(n) => execute_gate(state, n, iteration)?,
         WorkflowNode::Always(n) => {
@@ -1412,7 +1419,23 @@ fn resolve_child_inputs(
 // ---------------------------------------------------------------------------
 
 fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32) -> Result<()> {
-    execute_call_with_schema(state, node, iteration, node.output.as_deref(), &node.with)
+    // Call-level output overrides block-level; if neither is set, use None.
+    let effective_output: Option<String> =
+        node.output.clone().or_else(|| state.block_output.clone());
+    // Block-level `with` snippets prepended to call-level `with`.
+    let effective_with: Vec<String> = state
+        .block_with
+        .iter()
+        .cloned()
+        .chain(node.with.iter().cloned())
+        .collect();
+    execute_call_with_schema(
+        state,
+        node,
+        iteration,
+        effective_output.as_deref(),
+        &effective_with,
+    )
 }
 
 /// Inner implementation of execute_call that accepts an optional schema override
@@ -2147,6 +2170,40 @@ fn execute_do_while(state: &mut ExecutionState<'_>, node: &DoWhileNode) -> Resul
 
         iteration += 1;
     }
+
+    Ok(())
+}
+
+fn execute_do(state: &mut ExecutionState<'_>, node: &DoNode) -> Result<()> {
+    tracing::info!(
+        "do block: executing {} body nodes sequentially",
+        node.body.len()
+    );
+
+    // Save and apply block-level output/with so nested calls can inherit them
+    let saved_output = state.block_output.clone();
+    let saved_with = state.block_with.clone();
+
+    if node.output.is_some() {
+        state.block_output = node.output.clone();
+    }
+    if !node.with.is_empty() {
+        // Prepend block's with to any outer block_with already in state
+        let mut combined = node.with.clone();
+        combined.extend(saved_with.iter().cloned());
+        state.block_with = combined;
+    }
+
+    for body_node in &node.body {
+        execute_single_node(state, body_node, 0)?;
+        if !state.all_succeeded && state.exec_config.fail_fast {
+            break;
+        }
+    }
+
+    // Restore block-level context
+    state.block_output = saved_output;
+    state.block_with = saved_with;
 
     Ok(())
 }
@@ -3142,6 +3199,8 @@ mod tests {
             total_duration_ms: 0,
             last_gate_feedback: None,
             last_structured_output: None,
+            block_output: None,
+            block_with: Vec::new(),
         };
         (state, run_id)
     }
@@ -3782,6 +3841,8 @@ And here is my actual output:
             total_duration_ms: 0,
             last_gate_feedback: None,
             last_structured_output: None,
+            block_output: None,
+            block_with: Vec::new(),
         }
     }
 
@@ -4166,6 +4227,8 @@ And here is my actual output:
             total_duration_ms: 0,
             last_gate_feedback: None,
             last_structured_output: None,
+            block_output: None,
+            block_with: Vec::new(),
         }
     }
 

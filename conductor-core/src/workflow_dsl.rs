@@ -9,11 +9,13 @@
 //! meta          := "meta" "{" kv* "}"
 //! inputs        := "inputs" "{" input_decl* "}"
 //! input_decl    := IDENT ("required" | "default" "=" STRING)
-//! node          := call | call_workflow | if_node | while_node | parallel | gate | always
+//! node          := call | call_workflow | if_node | while_node | do_while | do | parallel | gate | always
 //! call          := "call" agent_ref ("{" kv* "}")?
 //! call_workflow := "call" "workflow" IDENT ("{" inputs? kv* "}")?
 //! if_node       := "if" condition "{" kv* node* "}"
 //! while_node    := "while" condition "{" kv* node* "}"
+//! do_while      := "do" "{" kv* node* "}" "while" condition
+//! do            := "do" "{" kv* node* "}"
 //! parallel      := "parallel" "{" kv* ("call" agent_ref)* "}"
 //! gate          := "gate" IDENT "{" kv* "}"
 //! always        := "always" "{" node* "}"
@@ -115,6 +117,7 @@ pub enum WorkflowNode {
     Unless(UnlessNode),
     While(WhileNode),
     DoWhile(DoWhileNode),
+    Do(DoNode),
     Parallel(ParallelNode),
     Gate(GateNode),
     Always(AlwaysNode),
@@ -219,6 +222,17 @@ pub struct DoWhileNode {
     pub max_iterations: u32,
     pub stuck_after: Option<u32>,
     pub on_max_iter: OnMaxIter,
+    pub body: Vec<WorkflowNode>,
+}
+
+/// A plain sequential grouping block (`do { ... }`), with optional `output` and `with`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DoNode {
+    /// Optional output schema reference for structured output.
+    pub output: Option<String>,
+    /// Prompt snippet references applied to all calls inside the block.
+    #[serde(default)]
+    pub with: Vec<String>,
     pub body: Vec<WorkflowNode>,
 }
 
@@ -813,7 +827,7 @@ impl Parser {
             Token::If => self.parse_if().map(WorkflowNode::If),
             Token::Unless => self.parse_unless().map(WorkflowNode::Unless),
             Token::While => self.parse_while().map(WorkflowNode::While),
-            Token::Do => self.parse_do_while().map(WorkflowNode::DoWhile),
+            Token::Do => self.parse_do(),
             Token::Parallel => self.parse_parallel().map(WorkflowNode::Parallel),
             Token::Gate => self.parse_gate().map(WorkflowNode::Gate),
             Token::Always => self.parse_always().map(WorkflowNode::Always),
@@ -1002,13 +1016,19 @@ impl Parser {
         })
     }
 
-    fn parse_do_while(&mut self) -> std::result::Result<DoWhileNode, String> {
+    fn parse_do(&mut self) -> std::result::Result<WorkflowNode, String> {
         self.expect(&Token::Do)?;
-        let (step, marker) = self.parse_condition()?;
+
+        // New syntax: do { ... } [while condition]
+        // Old syntax was: do x.y { ... } — give a clear error if we see an ident here.
+        if matches!(self.peek(), Token::Ident(_)) {
+            return Err(
+                "expected `{` after `do`, found identifier\n  hint: do-while syntax is now `do { ... } while x.y`".to_string()
+            );
+        }
         self.expect(&Token::LBrace)?;
 
-        let kvs = self.parse_kvs()?;
-        let (max_iterations, stuck_after, on_max_iter) = Self::parse_loop_options(&kvs, "do")?;
+        let mut kvs = self.parse_kvs()?;
 
         let mut body = Vec::new();
         while self.peek() != &Token::RBrace && self.peek() != &Token::Eof {
@@ -1016,14 +1036,28 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
 
-        Ok(DoWhileNode {
-            step,
-            marker,
-            max_iterations,
-            stuck_after,
-            on_max_iter,
-            body,
-        })
+        // Peek for optional `while` clause (one-token lookahead past `}`)
+        if self.peek() == &Token::While {
+            self.advance(); // consume `while`
+            let (step, marker) = self.parse_condition()?;
+            let (max_iterations, stuck_after, on_max_iter) = Self::parse_loop_options(&kvs, "do")?;
+            Ok(WorkflowNode::DoWhile(DoWhileNode {
+                step,
+                marker,
+                max_iterations,
+                stuck_after,
+                on_max_iter,
+                body,
+            }))
+        } else {
+            // Plain sequential block — only output/with allowed as options
+            let output = kvs.get("output").map(|v| v.as_str().to_string());
+            let with = kvs
+                .remove("with")
+                .map(|v| v.into_string_array())
+                .unwrap_or_default();
+            Ok(WorkflowNode::Do(DoNode { output, with, body }))
+        }
     }
 
     fn parse_parallel(&mut self) -> std::result::Result<ParallelNode, String> {
@@ -1302,6 +1336,7 @@ fn count_nodes(nodes: &[WorkflowNode]) -> usize {
             WorkflowNode::Unless(n) => count += count_nodes(&n.body),
             WorkflowNode::While(n) => count += count_nodes(&n.body),
             WorkflowNode::DoWhile(n) => count += count_nodes(&n.body),
+            WorkflowNode::Do(n) => count += count_nodes(&n.body),
             WorkflowNode::Parallel(n) => count += n.calls.len(),
             WorkflowNode::Gate(_) => {}
             WorkflowNode::Always(n) => count += count_nodes(&n.body),
@@ -1331,6 +1366,7 @@ pub fn collect_agent_names(nodes: &[WorkflowNode]) -> Vec<AgentRef> {
             WorkflowNode::Unless(n) => refs.extend(collect_agent_names(&n.body)),
             WorkflowNode::While(n) => refs.extend(collect_agent_names(&n.body)),
             WorkflowNode::DoWhile(n) => refs.extend(collect_agent_names(&n.body)),
+            WorkflowNode::Do(n) => refs.extend(collect_agent_names(&n.body)),
             WorkflowNode::Parallel(n) => refs.extend(n.calls.iter().cloned()),
             WorkflowNode::Gate(_) => {}
             WorkflowNode::Always(n) => refs.extend(collect_agent_names(&n.body)),
@@ -1355,6 +1391,10 @@ pub fn collect_snippet_refs(nodes: &[WorkflowNode]) -> Vec<String> {
             WorkflowNode::Unless(n) => refs.extend(collect_snippet_refs(&n.body)),
             WorkflowNode::While(n) => refs.extend(collect_snippet_refs(&n.body)),
             WorkflowNode::DoWhile(n) => refs.extend(collect_snippet_refs(&n.body)),
+            WorkflowNode::Do(n) => {
+                refs.extend(n.with.iter().cloned());
+                refs.extend(collect_snippet_refs(&n.body));
+            }
             WorkflowNode::Always(n) => refs.extend(collect_snippet_refs(&n.body)),
             WorkflowNode::CallWorkflow(_) | WorkflowNode::Gate(_) => {}
         }
@@ -1373,6 +1413,7 @@ pub fn collect_workflow_refs(nodes: &[WorkflowNode]) -> Vec<String> {
             WorkflowNode::Unless(n) => refs.extend(collect_workflow_refs(&n.body)),
             WorkflowNode::While(n) => refs.extend(collect_workflow_refs(&n.body)),
             WorkflowNode::DoWhile(n) => refs.extend(collect_workflow_refs(&n.body)),
+            WorkflowNode::Do(n) => refs.extend(collect_workflow_refs(&n.body)),
             WorkflowNode::Parallel(_) => {} // parallel only contains agent calls
             WorkflowNode::Always(n) => refs.extend(collect_workflow_refs(&n.body)),
         }
@@ -2806,13 +2847,13 @@ workflow parent {
         let input = r#"
 workflow test {
     call analyze
-    do analyze.needs_retry {
+    do {
         max_iterations = 3
         stuck_after    = 2
         on_max_iter    = continue
         call diagnose
         call fix
-    }
+    } while analyze.needs_retry
 }
 "#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
@@ -2832,15 +2873,27 @@ workflow test {
 
     #[test]
     fn test_parse_do_while_requires_max_iterations() {
-        let input = r#"workflow test { do foo.bar { call baz } }"#;
+        // New syntax: missing max_iterations after `while` clause
+        let input = r#"workflow test { do { call baz } while foo.bar }"#;
         let result = parse_workflow_str(input, "test.wf");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("max_iterations"));
     }
 
     #[test]
+    fn test_parse_do_while_old_syntax_gives_hint() {
+        // Old syntax (do x.y { ... }) must produce a clear error with a hint.
+        let input = r#"workflow test { do foo.bar { call baz } }"#;
+        let result = parse_workflow_str(input, "test.wf");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("expected `{` after `do`"), "msg={msg}");
+        assert!(msg.contains("do { ... } while x.y"), "msg={msg}");
+    }
+
+    #[test]
     fn test_parse_do_while_invalid_on_max_iter() {
-        let input = r#"workflow test { do foo.bar { max_iterations = 3  on_max_iter = explode  call baz } }"#;
+        let input = r#"workflow test { do { max_iterations = 3  on_max_iter = explode  call baz } while foo.bar }"#;
         let result = parse_workflow_str(input, "test.wf");
         assert!(result.is_err());
         assert!(result
@@ -2854,10 +2907,10 @@ workflow test {
         let input = r#"
 workflow test {
     call check
-    do check.has_issues {
+    do {
         max_iterations = 2
         call fix
-    }
+    } while check.has_issues
 }
 "#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
@@ -2879,10 +2932,10 @@ workflow test {
     #[test]
     fn test_collect_snippet_refs_inside_do_while() {
         let input = r#"workflow test {
-            do check.has_issues {
+            do {
                 max_iterations = 2
                 call fix { with = ["do-while-context"] }
-            }
+            } while check.has_issues
         }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
         let refs = collect_snippet_refs(&def.body);
@@ -2892,11 +2945,11 @@ workflow test {
     #[test]
     fn test_collect_agent_names_inside_do_while() {
         let input = r#"workflow test {
-            do check.has_issues {
+            do {
                 max_iterations = 2
                 call fix
                 call verify
-            }
+            } while check.has_issues
         }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
         let refs = collect_agent_names(&def.body);
@@ -2910,10 +2963,10 @@ workflow test {
         let input = r#"
 workflow parent {
     call analyze
-    do analyze.needs_fixes {
+    do {
         max_iterations = 3
         call workflow lint-fix
-    }
+    } while analyze.needs_fixes
 }
 "#;
         let def = parse_workflow_str(input, "test.wf").unwrap();

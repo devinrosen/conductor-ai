@@ -108,11 +108,13 @@ workflow_file  := "workflow" IDENT "{" meta? inputs? node* "}"
 meta           := "meta" "{" kv* "}"
 inputs         := "inputs" "{" input_decl* "}"
 input_decl     := IDENT ("required" | "default" "=" STRING)
-node           := call | if | unless | while | parallel | gate | always
+node           := call | if | unless | while | do_while | do | parallel | gate | always
 call           := "call" IDENT ("{" kv* "}")?
 if             := "if" condition "{" kv* node* "}"
 unless         := "unless" condition "{" kv* node* "}"
 while          := "while" condition "{" kv* node* "}"
+do_while       := "do" "{" kv* node* "}" "while" condition
+do             := "do" "{" kv* node* "}"
 parallel       := "parallel" "{" kv* call* "}"
 gate           := "gate" gate_type "{" kv* "}"
 always         := "always" "{" node* "}"
@@ -183,6 +185,53 @@ named step's most recent `CONDUCTOR_OUTPUT` includes that marker string in its
 `contains()` on agent output text. An agent saying "there are no
 has_review_issues" would evaluate to true. Structured markers eliminate this
 class of bugs entirely.
+
+### `do {} while`
+
+C-style do-while loop: the body always executes at least once, and the
+condition is checked **after** each iteration. The loop continues as long as
+the named step's most recent output includes the given marker.
+
+```
+do {
+  max_iterations = 5
+  stuck_after    = 3
+  on_max_iter    = fail
+  call fix-impl
+  call verify
+} while verify.has_failures
+```
+
+Supports the same loop options as `while`:
+
+| Option | Required | Description |
+|---|---|---|
+| `max_iterations` | Yes | Hard cap on iterations |
+| `stuck_after` | No | Fail if marker set is identical for N consecutive iterations |
+| `on_max_iter` | No | `fail` (default) or `continue` when cap is reached |
+
+### `do`
+
+A plain sequential grouping block. Runs all body nodes in order and supports
+block-level `output` and `with` options that are inherited by every `call`
+inside the block (call-level values override block-level).
+
+```
+do {
+  output = "review-summary"
+  with   = ["review-diff-scope"]
+  call review-security
+  call review-style
+}
+```
+
+| Option | Description |
+|---|---|
+| `output = <schema>` | Output schema applied to every call in the block (call-level overrides) |
+| `with = [<snippet>, ...]` | Prompt snippets prepended to every call's snippet list |
+
+Unlike `parallel`, `do` runs steps sequentially and its body may contain any
+node type (not just `call`).
 
 ### `parallel`
 
