@@ -188,6 +188,9 @@ pub enum Action {
         has_ticket: bool,
     },
 
+    // Post-create picker (after worktree creation)
+    SelectPostCreateChoice(usize),
+
     // Workflow actions
     RunWorkflow,
     CancelWorkflow,

@@ -89,6 +89,20 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         Modal::WorkTargetPicker { targets, selected } => {
             modal::render_work_target_picker(frame, area, targets, *selected)
         }
+        Modal::PostCreatePicker {
+            items,
+            selected,
+            ticket_id,
+            ..
+        } => {
+            let source_id = state
+                .data
+                .ticket_map
+                .get(ticket_id)
+                .map(|t| t.source_id.as_str())
+                .unwrap_or("?");
+            modal::render_post_create_picker(frame, area, items, *selected, source_id)
+        }
         Modal::WorkTargetManager { targets, selected } => {
             modal::render_work_target_manager(frame, area, targets, *selected)
         }

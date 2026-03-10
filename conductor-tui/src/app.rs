@@ -23,7 +23,7 @@ use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
 use crate::state::{
     AppState, ConfirmAction, DashboardFocus, FormAction, FormField, InputAction, Modal,
-    RepoDetailFocus, View, WorkflowRunDetailFocus, WorkflowsFocus,
+    PostCreateChoice, RepoDetailFocus, View, WorkflowRunDetailFocus, WorkflowsFocus,
 };
 use crate::ui;
 
@@ -380,6 +380,7 @@ impl App {
             Action::LinkTicket => self.handle_link_ticket(),
             Action::StartWork => self.handle_start_work(),
             Action::SelectWorkTarget(index) => self.handle_select_work_target(index),
+            Action::SelectPostCreateChoice(index) => self.handle_post_create_pick(index),
             Action::ManageWorkTargets => self.handle_manage_work_targets(),
             Action::ManageIssueSources => self.handle_manage_issue_sources(),
             Action::IssueSourceAdd => self.handle_issue_source_add(),
@@ -910,6 +911,14 @@ impl App {
                 wrap_decrement(selected, targets.len());
                 return;
             }
+            Modal::PostCreatePicker {
+                ref items,
+                ref mut selected,
+                ..
+            } => {
+                wrap_decrement(selected, items.len());
+                return;
+            }
             Modal::WorkTargetManager {
                 ref targets,
                 ref mut selected,
@@ -1018,6 +1027,14 @@ impl App {
                 ref mut selected,
             } => {
                 wrap_increment(selected, targets.len());
+                return;
+            }
+            Modal::PostCreatePicker {
+                ref items,
+                ref mut selected,
+                ..
+            } => {
+                wrap_increment(selected, items.len());
                 return;
             }
             Modal::WorkTargetManager {
@@ -1407,19 +1424,6 @@ impl App {
                     }
                 }
             }
-            ConfirmAction::StartAgentForWorktree {
-                worktree_id,
-                worktree_path,
-                worktree_slug,
-                ticket_id,
-            } => {
-                self.show_agent_prompt_for_ticket(
-                    worktree_id,
-                    worktree_path,
-                    worktree_slug,
-                    ticket_id,
-                );
-            }
             ConfirmAction::DeleteWorkTarget { index } => {
                 if index < self.config.general.work_targets.len() {
                     let removed = self.config.general.work_targets.remove(index);
@@ -1591,7 +1595,10 @@ impl App {
                         self.refresh_data();
 
                         if let Some(tid) = ticket_id {
-                            self.maybe_start_agent_for_worktree(wt.id, wt.path, wt.slug, tid);
+                            let repo_id = wt.repo_id.clone();
+                            self.maybe_start_agent_for_worktree(
+                                wt.id, wt.path, wt.slug, tid, repo_id,
+                            );
                         }
                     }
                     Err(e) => {
@@ -2775,6 +2782,97 @@ impl App {
         self.open_work_target(&targets[actual_index], &wt);
     }
 
+    fn handle_post_create_pick(&mut self, index: usize) {
+        let (items, selected, worktree_id, worktree_path, worktree_slug, ticket_id, repo_path) =
+            if let Modal::PostCreatePicker {
+                ref items,
+                selected,
+                ref worktree_id,
+                ref worktree_path,
+                ref worktree_slug,
+                ref ticket_id,
+                ref repo_path,
+            } = self.state.modal
+            {
+                (
+                    items.clone(),
+                    selected,
+                    worktree_id.clone(),
+                    worktree_path.clone(),
+                    worktree_slug.clone(),
+                    ticket_id.clone(),
+                    repo_path.clone(),
+                )
+            } else {
+                return;
+            };
+
+        let actual_index = if index == usize::MAX { selected } else { index };
+        if actual_index >= items.len() {
+            return;
+        }
+
+        self.state.modal = Modal::None;
+
+        match &items[actual_index] {
+            PostCreateChoice::StartAgent => {
+                self.show_agent_prompt_for_ticket(
+                    worktree_id,
+                    worktree_path,
+                    worktree_slug,
+                    ticket_id,
+                );
+            }
+            PostCreateChoice::RunWorkflow { def, .. } => {
+                use conductor_core::workflow::{
+                    execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
+                };
+
+                let config = self.config.clone();
+                let bg_tx = self.bg_tx.clone();
+                let def = def.clone();
+                let workflow_name = def.name.clone();
+
+                let mut inputs = std::collections::HashMap::new();
+                inputs.insert("ticket_id".to_string(), ticket_id);
+
+                std::thread::spawn(move || {
+                    let params = WorkflowExecStandalone {
+                        config,
+                        workflow: def.clone(),
+                        worktree_id,
+                        worktree_path,
+                        repo_path,
+                        model: None,
+                        exec_config: WorkflowExecConfig::default(),
+                        inputs,
+                    };
+
+                    let result = execute_workflow_standalone(&params);
+
+                    if let Some(ref tx) = bg_tx {
+                        let msg = match result {
+                            Ok(res) => {
+                                if res.all_succeeded {
+                                    format!("Workflow '{}' completed successfully", def.name)
+                                } else {
+                                    format!("Workflow '{}' completed with failures", def.name)
+                                }
+                            }
+                            Err(e) => format!("Workflow '{}' failed: {e}", def.name),
+                        };
+                        let _ = tx.send(Action::BackgroundSuccess { message: msg });
+                    }
+                });
+
+                self.state.status_message = Some(format!("Starting workflow '{workflow_name}'…"));
+            }
+            PostCreateChoice::Skip => {
+                // No-op — modal already dismissed
+            }
+        }
+    }
+
     fn resolve_selected_worktree(&self) -> Option<conductor_core::worktree::Worktree> {
         self.state
             .selected_worktree_id
@@ -3477,30 +3575,48 @@ impl App {
         worktree_path: String,
         worktree_slug: String,
         ticket_id: String,
+        repo_id: String,
     ) {
-        match self.config.general.auto_start_agent {
-            AutoStartAgent::Never => {}
-            AutoStartAgent::Ask => {
-                self.state.modal = Modal::Confirm {
-                    title: "Start Agent".to_string(),
-                    message: "Start an AI agent for this ticket?".to_string(),
-                    on_confirm: ConfirmAction::StartAgentForWorktree {
-                        worktree_id,
-                        worktree_path,
-                        worktree_slug,
-                        ticket_id,
-                    },
-                };
-            }
-            AutoStartAgent::Always => {
-                self.show_agent_prompt_for_ticket(
-                    worktree_id,
-                    worktree_path,
-                    worktree_slug,
-                    ticket_id,
-                );
-            }
+        if matches!(self.config.general.auto_start_agent, AutoStartAgent::Never) {
+            return;
         }
+
+        // Look up the repo path for workflow discovery
+        let repo_path = self
+            .state
+            .data
+            .repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .map(|r| r.local_path.clone())
+            .unwrap_or_default();
+
+        // Discover manual workflows
+        use conductor_core::workflow::{WorkflowManager, WorkflowTrigger};
+        let manual_defs: Vec<_> = WorkflowManager::list_defs(&worktree_path, &repo_path)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|d| d.trigger == WorkflowTrigger::Manual)
+            .collect();
+
+        let mut items = vec![PostCreateChoice::StartAgent];
+        for def in manual_defs {
+            items.push(PostCreateChoice::RunWorkflow {
+                name: def.name.clone(),
+                def,
+            });
+        }
+        items.push(PostCreateChoice::Skip);
+
+        self.state.modal = Modal::PostCreatePicker {
+            items,
+            selected: 0,
+            worktree_id,
+            worktree_path,
+            worktree_slug,
+            ticket_id,
+            repo_path,
+        };
     }
 
     fn show_agent_prompt_for_ticket(

@@ -158,6 +158,24 @@ impl WorkflowRunDetailFocus {
     }
 }
 
+/// Choice offered in the post-worktree-creation picker.
+#[derive(Clone)]
+pub enum PostCreateChoice {
+    StartAgent,
+    RunWorkflow { name: String, def: WorkflowDef },
+    Skip,
+}
+
+impl std::fmt::Display for PostCreateChoice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PostCreateChoice::StartAgent => write!(f, "Start agent"),
+            PostCreateChoice::RunWorkflow { name, .. } => write!(f, "Run: {name}"),
+            PostCreateChoice::Skip => write!(f, "Skip"),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub enum Modal {
     None,
@@ -272,6 +290,16 @@ pub enum Modal {
         loading: bool,
         error: Option<String>,
     },
+    /// Post-worktree-creation picker: start agent, run a workflow, or skip.
+    PostCreatePicker {
+        items: Vec<PostCreateChoice>,
+        selected: usize,
+        worktree_id: String,
+        worktree_path: String,
+        worktree_slug: String,
+        ticket_id: String,
+        repo_path: String,
+    },
 }
 
 impl fmt::Debug for Modal {
@@ -312,6 +340,7 @@ impl fmt::Debug for Modal {
                     "Modal::GithubDiscover(owner={owner:?}, loading={loading})"
                 )
             }
+            Modal::PostCreatePicker { .. } => write!(f, "Modal::PostCreatePicker"),
         }
     }
 }
@@ -327,12 +356,6 @@ pub enum ConfirmAction {
     },
     DeleteWorkTarget {
         index: usize,
-    },
-    StartAgentForWorktree {
-        worktree_id: String,
-        worktree_path: String,
-        worktree_slug: String,
-        ticket_id: String,
     },
     DeleteIssueSource {
         source_id: String,
