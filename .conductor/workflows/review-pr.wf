@@ -9,13 +9,13 @@ workflow review-pr {
     output    = "review-findings"
     with      = ["review-diff-scope"]
     fail_fast = false
-    call review-architecture
-    call review-security
-    call review-performance
-    call review-dry-abstraction
-    call review-error-handling
-    call review-test-coverage
-    call review-db-migrations
+    call review-architecture    { retries = 1 }
+    call review-security        { retries = 1 }
+    call review-performance     { retries = 1 }
+    call review-dry-abstraction { retries = 1 }
+    call review-error-handling  { retries = 1 }
+    call review-test-coverage   { retries = 1 }
+    call review-db-migrations   { retries = 1 }
   }
 
   call review-aggregator { output = "review-aggregator" }
