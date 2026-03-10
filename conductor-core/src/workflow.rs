@@ -21,8 +21,8 @@ use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::prompt_config;
 use crate::workflow_dsl::{
-    self, CallNode, CallWorkflowNode, GateNode, GateType, IfNode, OnMaxIter, OnTimeout,
-    ParallelNode, UnlessNode, WhileNode, WorkflowNode,
+    self, CallNode, CallWorkflowNode, DoWhileNode, GateNode, GateType, IfNode, OnMaxIter,
+    OnTimeout, ParallelNode, UnlessNode, WhileNode, WorkflowNode,
 };
 
 // Re-export DSL types so consumers go through `workflow::` instead of `workflow_dsl::` directly.
@@ -1200,6 +1200,7 @@ fn execute_single_node(
         WorkflowNode::If(n) => execute_if(state, n)?,
         WorkflowNode::Unless(n) => execute_unless(state, n)?,
         WorkflowNode::While(n) => execute_while(state, n)?,
+        WorkflowNode::DoWhile(n) => execute_do_while(state, n)?,
         WorkflowNode::Parallel(n) => execute_parallel(state, n, iteration)?,
         WorkflowNode::Gate(n) => execute_gate(state, n, iteration)?,
         WorkflowNode::Always(n) => {
@@ -2007,6 +2008,98 @@ fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) -> Result<()>
                     )));
                 }
             }
+        }
+
+        iteration += 1;
+    }
+
+    Ok(())
+}
+
+fn execute_do_while(state: &mut ExecutionState<'_>, node: &DoWhileNode) -> Result<()> {
+    let mut iteration = 0u32;
+    let mut prev_marker_sets: Vec<HashSet<String>> = Vec::new();
+
+    loop {
+        if iteration >= node.max_iterations {
+            tracing::warn!(
+                "do {}.{} — reached max_iterations ({})",
+                node.step,
+                node.marker,
+                node.max_iterations
+            );
+            match node.on_max_iter {
+                OnMaxIter::Fail => {
+                    state.all_succeeded = false;
+                    return Err(ConductorError::Workflow(format!(
+                        "do {}.{} reached max_iterations ({})",
+                        node.step, node.marker, node.max_iterations
+                    )));
+                }
+                OnMaxIter::Continue => break,
+            }
+        }
+
+        tracing::info!(
+            "do {}.{} — iteration {}/{}",
+            node.step,
+            node.marker,
+            iteration + 1,
+            node.max_iterations
+        );
+
+        // Execute body first (do-while: body always runs before condition check)
+        for body_node in &node.body {
+            execute_single_node(state, body_node, iteration)?;
+
+            if !state.all_succeeded && state.exec_config.fail_fast {
+                return Ok(());
+            }
+        }
+
+        // Check condition after body
+        let has_marker = state
+            .step_results
+            .get(&node.step)
+            .map(|r| r.markers.iter().any(|m| m == &node.marker))
+            .unwrap_or(false);
+
+        // Stuck detection
+        if let Some(stuck_after) = node.stuck_after {
+            let current_markers: HashSet<String> = state
+                .step_results
+                .get(&node.step)
+                .map(|r| r.markers.iter().cloned().collect())
+                .unwrap_or_default();
+
+            prev_marker_sets.push(current_markers.clone());
+
+            if prev_marker_sets.len() >= stuck_after as usize {
+                let window = &prev_marker_sets[prev_marker_sets.len() - stuck_after as usize..];
+                if window.iter().all(|s| s == &current_markers) {
+                    tracing::warn!(
+                        "do {}.{} — stuck: identical markers for {} consecutive iterations",
+                        node.step,
+                        node.marker,
+                        stuck_after
+                    );
+                    state.all_succeeded = false;
+                    return Err(ConductorError::Workflow(format!(
+                        "do {}.{} stuck after {} iterations with identical markers",
+                        node.step, node.marker, stuck_after
+                    )));
+                }
+            }
+        }
+
+        if !has_marker {
+            tracing::info!(
+                "do {}.{} — condition no longer met after {} iterations",
+                node.step,
+                node.marker,
+                iteration + 1
+            );
+            break;
         }
 
         iteration += 1;

@@ -16,27 +16,10 @@ workflow ticket-to-pr {
 
   call push-and-pr
 
-  parallel {
-    output    = "review-findings"
-    with      = ["review-diff-scope"]
-    fail_fast = false
-    call review-architecture
-    call review-security
-    call review-performance
-    call review-dry-abstraction
-    call review-error-handling
-    call review-test-coverage
-    call review-db-migrations
-  }
-
-  call review-aggregator { output = "review-aggregator" }
-
-  while review-aggregator.has_review_issues {
-    max_iterations = 3
+  do review-aggregator.has_review_issues {
+    max_iterations = 4
     stuck_after    = 2
     on_max_iter    = fail
-
-    call address-reviews
 
     parallel {
       output    = "review-findings"
@@ -52,5 +35,9 @@ workflow ticket-to-pr {
     }
 
     call review-aggregator { output = "review-aggregator" }
+
+    if review-aggregator.has_review_issues {
+      call address-reviews
+    }
   }
 }
