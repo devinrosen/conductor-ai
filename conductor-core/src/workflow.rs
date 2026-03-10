@@ -1445,6 +1445,11 @@ pub fn validate_resume_preconditions(
                 .to_string(),
         ));
     }
+    if matches!(status, WorkflowRunStatus::Running) {
+        return Err(ConductorError::Workflow(
+            "Cannot resume a workflow run that is already running.".to_string(),
+        ));
+    }
     if matches!(status, WorkflowRunStatus::Cancelled) {
         return Err(ConductorError::Workflow(
             "Cannot resume a cancelled workflow run.".to_string(),
@@ -6453,6 +6458,16 @@ And here is my actual output:
         assert!(
             err.to_string().contains("Cannot resume a cancelled"),
             "Expected cancelled-run error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_resume_rejects_running_run() {
+        let err =
+            validate_resume_preconditions(&WorkflowRunStatus::Running, false, None).unwrap_err();
+        assert!(
+            err.to_string().contains("already running"),
+            "Expected running-run error, got: {err}"
         );
     }
 
