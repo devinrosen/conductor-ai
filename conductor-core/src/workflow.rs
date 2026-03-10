@@ -922,13 +922,7 @@ impl<'a> WorkflowManager<'a> {
     /// Used to build the skip set for resume.
     pub fn get_completed_step_keys(&self, workflow_run_id: &str) -> Result<HashSet<String>> {
         let steps = self.get_workflow_steps(workflow_run_id)?;
-        let mut keys = HashSet::new();
-        for step in &steps {
-            if step.status == WorkflowStepStatus::Completed {
-                keys.insert(format!("{}:{}", step.step_name, step.iteration));
-            }
-        }
-        Ok(keys)
+        Ok(completed_keys_from_steps(&steps))
     }
 }
 
@@ -1067,6 +1061,38 @@ fn build_agent_prompt(
 // Execution state
 // ---------------------------------------------------------------------------
 
+/// Build a step key for skip-set lookups: `"step_name:iteration"`.
+fn make_step_key(name: &str, iteration: u32) -> String {
+    format!("{name}:{iteration}")
+}
+
+/// Extract completed step keys from a slice of step records.
+///
+/// Shared by [`WorkflowManager::get_completed_step_keys`] and [`resume_workflow`]
+/// so the key-building logic lives in one place.
+fn completed_keys_from_steps(steps: &[WorkflowRunStep]) -> HashSet<String> {
+    steps
+        .iter()
+        .filter(|s| s.status == WorkflowStepStatus::Completed)
+        .map(|s| make_step_key(&s.step_name, s.iteration as u32))
+        .collect()
+}
+
+/// Pre-loaded context for resuming a workflow run.
+///
+/// Separated from [`ExecutionState`] so that fresh runs carry no resume
+/// overhead and the borrow-splitting between "read completed data" and
+/// "mutate execution state" is explicit.
+struct ResumeContext {
+    /// Step keys to skip (e.g. `"lint:0"`).
+    skip_completed: HashSet<String>,
+    /// Completed step records keyed by step key, for O(1) restore.
+    step_map: HashMap<String, WorkflowRunStep>,
+    /// Pre-loaded child agent runs keyed by run ID, avoiding N+1 queries
+    /// when accumulating costs during restore.
+    child_runs: HashMap<String, crate::agent::AgentRun>,
+}
+
 /// Mutable runtime state for a workflow execution.
 struct ExecutionState<'a> {
     conn: &'a Connection,
@@ -1100,11 +1126,8 @@ struct ExecutionState<'a> {
     block_output: Option<String>,
     /// Block-level prompt snippet refs inherited from an enclosing `do {}` block.
     block_with: Vec<String>,
-    /// Step keys to skip on resume (empty for fresh runs).
-    skip_completed: HashSet<String>,
-    /// Pre-loaded completed step records for resume, keyed by `"step_name:iteration"`.
-    /// Avoids repeated O(n) scans — built once, looked up in O(1).
-    resume_step_map: HashMap<String, WorkflowRunStep>,
+    /// Resume context — `None` for fresh runs, `Some` when resuming.
+    resume_ctx: Option<ResumeContext>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1233,11 +1256,10 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         last_structured_output: None,
         block_output: None,
         block_with: Vec::new(),
-        skip_completed: HashSet::new(),
-        resume_step_map: HashMap::new(),
+        resume_ctx: None,
     };
 
-    run_workflow_engine(&mut state, workflow, &wf_run.id, &parent_run.id)
+    run_workflow_engine(&mut state, workflow)
 }
 
 /// Shared orchestration: execute body → always block → build summary → finalize.
@@ -1247,8 +1269,6 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
 fn run_workflow_engine(
     state: &mut ExecutionState<'_>,
     workflow: &WorkflowDef,
-    workflow_run_id: &str,
-    parent_run_id: &str,
 ) -> Result<WorkflowResult> {
     // Execute main body
     let mut body_error: Option<String> = None;
@@ -1283,9 +1303,11 @@ fn run_workflow_engine(
     }
 
     // Finalize
+    let wf_run_id = state.workflow_run_id.clone();
+    let parent_run_id = state.parent_run_id.clone();
     if state.all_succeeded {
         state.agent_mgr.update_run_completed(
-            parent_run_id,
+            &parent_run_id,
             None,
             Some(&summary),
             Some(state.total_cost),
@@ -1293,15 +1315,17 @@ fn run_workflow_engine(
             Some(state.total_duration_ms),
         )?;
         state.wf_mgr.update_workflow_status(
-            workflow_run_id,
+            &wf_run_id,
             WorkflowRunStatus::Completed,
             Some(&summary),
         )?;
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
     } else {
-        state.agent_mgr.update_run_failed(parent_run_id, &summary)?;
+        state
+            .agent_mgr
+            .update_run_failed(&parent_run_id, &summary)?;
         state.wf_mgr.update_workflow_status(
-            workflow_run_id,
+            &wf_run_id,
             WorkflowRunStatus::Failed,
             Some(&summary),
         )?;
@@ -1316,7 +1340,7 @@ fn run_workflow_engine(
     );
 
     Ok(WorkflowResult {
-        workflow_run_id: workflow_run_id.to_string(),
+        workflow_run_id: wf_run_id,
         worktree_id: state.worktree_id.clone(),
         workflow_name: workflow.name.clone(),
         all_succeeded: state.all_succeeded,
@@ -1435,9 +1459,10 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 
     // Deserialize definition from snapshot
     let snapshot = wf_run.definition_snapshot.as_deref().ok_or_else(|| {
-        ConductorError::Workflow(
-            "Workflow run has no definition snapshot — cannot resume.".to_string(),
-        )
+        ConductorError::Workflow(format!(
+            "Workflow run '{}' has no definition snapshot — cannot resume.",
+            wf_run.id
+        ))
     })?;
     let workflow: WorkflowDef = serde_json::from_str(snapshot).map_err(|e| {
         ConductorError::Workflow(format!("Failed to deserialize workflow snapshot: {e}"))
@@ -1457,11 +1482,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         wf_mgr.reset_completed_steps(&wf_run.id)?;
         HashSet::new()
     } else {
-        let mut keys: HashSet<String> = all_steps
-            .iter()
-            .filter(|s| s.status == WorkflowStepStatus::Completed)
-            .map(|s| format!("{}:{}", s.step_name, s.iteration))
-            .collect();
+        let mut keys = completed_keys_from_steps(&all_steps);
 
         // Handle --from-step: remove completed keys at or after the specified step
         if let Some(from_step) = input.from_step {
@@ -1475,7 +1496,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
                     let to_remove: Vec<String> = all_steps
                         .iter()
                         .filter(|s| s.position >= pos && s.status == WorkflowStepStatus::Completed)
-                        .map(|s| format!("{}:{}", s.step_name, s.iteration))
+                        .map(|s| make_step_key(&s.step_name, s.iteration as u32))
                         .collect();
                     for key in to_remove {
                         keys.remove(&key);
@@ -1485,8 +1506,8 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
                 }
                 None => {
                     return Err(ConductorError::Workflow(format!(
-                        "Step '{}' not found in workflow run",
-                        from_step
+                        "Step '{}' not found in workflow run '{}'",
+                        from_step, wf_run.id
                     )));
                 }
             }
@@ -1497,6 +1518,43 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         keys
     };
 
+    // Build the step map from `all_steps` (only the keys still in skip_completed
+    // survived any --from-step pruning, so filter by membership).
+    let step_map: HashMap<String, WorkflowRunStep> = all_steps
+        .into_iter()
+        .filter(|s| s.status == WorkflowStepStatus::Completed)
+        .map(|s| (make_step_key(&s.step_name, s.iteration as u32), s))
+        .filter(|(key, _)| skip_completed.contains(key))
+        .collect();
+
+    // Batch-load child agent runs to avoid N+1 queries during cost accumulation
+    let agent_mgr = AgentManager::new(conn);
+    let child_runs: HashMap<String, crate::agent::AgentRun> = step_map
+        .values()
+        .filter_map(|s| s.child_run_id.as_deref())
+        .filter_map(|id| match agent_mgr.get_run(id) {
+            Ok(Some(run)) => Some((id.to_string(), run)),
+            Ok(None) => {
+                tracing::warn!("resume: child run '{id}' not found in DB");
+                None
+            }
+            Err(e) => {
+                tracing::warn!("resume: failed to load child run '{id}': {e}");
+                None
+            }
+        })
+        .collect();
+
+    let resume_ctx = if skip_completed.is_empty() {
+        None
+    } else {
+        Some(ResumeContext {
+            skip_completed,
+            step_map,
+            child_runs,
+        })
+    };
+
     // Reset run status to Running
     wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Running, None)?;
 
@@ -1504,7 +1562,9 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         "Resuming workflow '{}' (run {}), {} completed steps to skip",
         workflow.name,
         wf_run.id,
-        skip_completed.len(),
+        resume_ctx
+            .as_ref()
+            .map_or(0, |ctx| ctx.skip_completed.len()),
     );
 
     let mut state = ExecutionState {
@@ -1532,17 +1592,10 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         total_duration_ms: 0,
         last_gate_feedback: None,
         last_structured_output: None,
-        skip_completed,
-        // Re-fetch steps after resets and build lookup map for O(1) restore
-        resume_step_map: wf_mgr
-            .get_workflow_steps(&wf_run.id)?
-            .into_iter()
-            .filter(|s| s.status == WorkflowStepStatus::Completed)
-            .map(|s| (format!("{}:{}", s.step_name, s.iteration), s))
-            .collect(),
+        resume_ctx,
     };
 
-    run_workflow_engine(&mut state, &workflow, &wf_run.id, &wf_run.parent_run_id)
+    run_workflow_engine(&mut state, &workflow)
 }
 
 /// Walk a list of workflow nodes, dispatching to the appropriate handler.
@@ -1791,8 +1844,7 @@ fn execute_call_with_schema(
     state.position += 1;
 
     let step_key_check = node.agent.step_key();
-    let skip_key = format!("{}:{}", step_key_check, iteration);
-    if state.skip_completed.contains(&skip_key) {
+    if should_skip(state, &step_key_check, iteration) {
         tracing::info!(
             "Skipping completed step '{}' (iteration {})",
             step_key_check,
@@ -2044,10 +2096,10 @@ fn execute_call_workflow(
     state.position += 1;
 
     // Skip completed sub-workflow steps on resume
-    let skip_key = format!("workflow:{}:{}", node.workflow, iteration);
-    if state.skip_completed.contains(&skip_key) {
+    let wf_step_name = format!("workflow:{}", node.workflow);
+    if should_skip(state, &wf_step_name, iteration) {
         tracing::info!("Skipping completed sub-workflow '{}'", node.workflow);
-        restore_step(state, &format!("workflow:{}", node.workflow), iteration);
+        restore_step(state, &wf_step_name, iteration);
         return Ok(());
     }
 
@@ -2086,7 +2138,7 @@ fn execute_call_workflow(
     for attempt in 0..max_attempts {
         let step_id = state.wf_mgr.insert_step(
             &state.workflow_run_id,
-            &format!("workflow:{}", node.workflow),
+            &wf_step_name,
             "workflow",
             false,
             pos,
@@ -2459,7 +2511,7 @@ fn check_max_iterations(
 
 fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) -> Result<()> {
     // On resume, determine the last completed iteration so we can fast-forward
-    let start_iteration = if !state.skip_completed.is_empty() {
+    let start_iteration = if state.resume_ctx.is_some() {
         find_max_completed_while_iteration(state, node)
     } else {
         0u32
@@ -2683,8 +2735,7 @@ fn execute_parallel(
 
         // Skip completed agents on resume
         let agent_step_key = agent_ref.step_key();
-        let skip_key = format!("{}:{}", agent_step_key, iteration);
-        if state.skip_completed.contains(&skip_key) {
+        if should_skip(state, &agent_step_key, iteration) {
             tracing::info!("parallel: skipping completed agent '{}'", agent_label);
             restore_step(state, &agent_step_key, iteration);
             skipped_count += 1;
@@ -3004,10 +3055,10 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
     let pos = state.position;
     state.position += 1;
 
-    // Skip completed gates on resume
-    let skip_key = format!("{}:{}", node.name, iteration);
-    if state.skip_completed.contains(&skip_key) {
+    // Skip completed gates on resume — restore feedback for downstream steps
+    if should_skip(state, &node.name, iteration) {
         tracing::info!("Skipping completed gate '{}'", node.name);
+        restore_step(state, &node.name, iteration);
         return Ok(());
     }
 
@@ -3361,6 +3412,11 @@ fn sanitize_tmux_name(name: &str) -> String {
 /// while loop. Returns the max iteration that has all body nodes completed,
 /// so the loop resumes from the iteration where it failed.
 fn find_max_completed_while_iteration(state: &ExecutionState<'_>, node: &WhileNode) -> u32 {
+    let skip_set = match state.resume_ctx {
+        Some(ref ctx) => &ctx.skip_completed,
+        None => return 0,
+    };
+
     // Collect step keys from the body nodes
     let body_keys: Vec<String> = node
         .body
@@ -3376,12 +3432,12 @@ fn find_max_completed_while_iteration(state: &ExecutionState<'_>, node: &WhileNo
         return 0;
     }
 
-    // Find the highest iteration where all body nodes are in skip_completed
+    // Find the highest iteration where all body nodes are completed
     let mut iter = 0u32;
     loop {
         let all_done = body_keys
             .iter()
-            .all(|k| state.skip_completed.contains(&format!("{k}:{iter}")));
+            .all(|k| skip_set.contains(&make_step_key(k, iter)));
         if !all_done {
             break;
         }
@@ -3391,99 +3447,107 @@ fn find_max_completed_while_iteration(state: &ExecutionState<'_>, node: &WhileNo
     iter
 }
 
-/// Convenience wrapper: temporarily moves the resume step map out of `state`
-/// so `restore_completed_step_from_db` can borrow `state` mutably while
-/// reading from the map.
-fn restore_step(state: &mut ExecutionState<'_>, key: &str, iteration: u32) {
-    let map = std::mem::take(&mut state.resume_step_map);
-    restore_completed_step_from_db(state, &map, key, iteration);
-    state.resume_step_map = map;
+/// Check whether a step should be skipped on resume.
+fn should_skip(state: &ExecutionState<'_>, step_name: &str, iteration: u32) -> bool {
+    state.resume_ctx.as_ref().is_some_and(|ctx| {
+        ctx.skip_completed
+            .contains(&make_step_key(step_name, iteration))
+    })
 }
 
-/// Restore a completed step's results from the pre-built map into the
+/// Temporarily take the `ResumeContext` out of `state` so we can borrow `state`
+/// mutably while reading from the context's maps.
+fn restore_step(state: &mut ExecutionState<'_>, key: &str, iteration: u32) {
+    let ctx = state.resume_ctx.take();
+    if let Some(ref ctx) = ctx {
+        restore_completed_step(state, ctx, key, iteration);
+    }
+    state.resume_ctx = ctx;
+}
+
+/// Restore a completed step's results from the resume context into the
 /// execution state.
 ///
-/// Used during resume to rebuild `step_results` and `contexts` for completed
-/// steps so that downstream variable substitution (e.g. `{{prior_context}}`)
-/// works correctly.
-fn restore_completed_step_from_db(
+/// Rebuilds `step_results` and `contexts` for completed steps so that
+/// downstream variable substitution (e.g. `{{prior_context}}`) works correctly.
+fn restore_completed_step(
     state: &mut ExecutionState<'_>,
-    step_map: &HashMap<String, WorkflowRunStep>,
+    ctx: &ResumeContext,
     step_key: &str,
     iteration: u32,
 ) {
-    let lookup_key = format!("{}:{}", step_key, iteration);
-    let completed_step = step_map.get(&lookup_key);
+    let lookup_key = make_step_key(step_key, iteration);
+    let completed_step = ctx.step_map.get(&lookup_key);
 
-    if let Some(step) = completed_step {
-        let markers: Vec<String> = step
-            .markers_out
-            .as_deref()
-            .and_then(|m| {
-                serde_json::from_str(m)
-                    .map_err(|e| {
-                        tracing::warn!(
-                            "resume: failed to deserialize markers for step '{}': {e}",
-                            step_key
-                        );
-                        e
-                    })
-                    .ok()
-            })
-            .unwrap_or_default();
-        let context = step.context_out.clone().unwrap_or_default();
+    let Some(step) = completed_step else {
+        tracing::warn!(
+            "resume: step '{step_key}:{iteration}' in skip set but not found in resume context \
+             — downstream variable substitution may be incorrect"
+        );
+        return;
+    };
 
-        // Accumulate costs from the child agent run if present
-        if let Some(ref child_run_id) = step.child_run_id {
-            match state.agent_mgr.get_run(child_run_id) {
-                Ok(Some(run)) => {
-                    if let Some(cost) = run.cost_usd {
-                        state.total_cost += cost;
-                    }
-                    if let Some(turns) = run.num_turns {
-                        state.total_turns += turns;
-                    }
-                    if let Some(dur) = run.duration_ms {
-                        state.total_duration_ms += dur;
-                    }
-                }
-                Ok(None) => {
+    let markers: Vec<String> = step
+        .markers_out
+        .as_deref()
+        .and_then(|m| {
+            serde_json::from_str(m)
+                .map_err(|e| {
                     tracing::warn!(
-                        "resume: child run '{child_run_id}' not found in DB, costs not accumulated for step '{step_key}'"
+                        "resume: failed to deserialize markers for step '{}': {e}",
+                        step_key
                     );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "resume: failed to load child run '{child_run_id}': {e}, costs not accumulated for step '{step_key}'"
-                    );
-                }
+                    e
+                })
+                .ok()
+        })
+        .unwrap_or_default();
+    let context = step.context_out.clone().unwrap_or_default();
+
+    // Accumulate costs from the pre-loaded child agent run
+    if let Some(ref child_run_id) = step.child_run_id {
+        if let Some(run) = ctx.child_runs.get(child_run_id) {
+            if let Some(cost) = run.cost_usd {
+                state.total_cost += cost;
+            }
+            if let Some(turns) = run.num_turns {
+                state.total_turns += turns;
+            }
+            if let Some(dur) = run.duration_ms {
+                state.total_duration_ms += dur;
             }
         }
-
-        if step.structured_output.is_some() {
-            state.last_structured_output = step.structured_output.clone();
-        }
-
-        let step_result = StepResult {
-            step_name: step_key.to_string(),
-            status: WorkflowStepStatus::Completed,
-            result_text: step.result_text.clone(),
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
-            markers,
-            context: context.clone(),
-            child_run_id: step.child_run_id.clone(),
-            structured_output: step.structured_output.clone(),
-        };
-        state.step_results.insert(step_key.to_string(), step_result);
-
-        state.contexts.push(ContextEntry {
-            step: step_key.to_string(),
-            iteration,
-            context,
-        });
+        // Warnings for missing child runs were already emitted during batch-load
     }
+
+    // Restore gate feedback if this was a gate step
+    if let Some(ref feedback) = step.gate_feedback {
+        state.last_gate_feedback = Some(feedback.clone());
+    }
+
+    if step.structured_output.is_some() {
+        state.last_structured_output = step.structured_output.clone();
+    }
+
+    let step_result = StepResult {
+        step_name: step_key.to_string(),
+        status: WorkflowStepStatus::Completed,
+        result_text: step.result_text.clone(),
+        cost_usd: None,
+        num_turns: None,
+        duration_ms: None,
+        markers,
+        context: context.clone(),
+        child_run_id: step.child_run_id.clone(),
+        structured_output: step.structured_output.clone(),
+    };
+    state.step_results.insert(step_key.to_string(), step_result);
+
+    state.contexts.push(ContextEntry {
+        step: step_key.to_string(),
+        iteration,
+        context,
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -3784,8 +3848,7 @@ mod tests {
             last_structured_output: None,
             block_output: None,
             block_with: Vec::new(),
-            skip_completed: HashSet::new(),
-            resume_step_map: HashMap::new(),
+            resume_ctx: None,
         };
         (state, run_id)
     }
@@ -4579,8 +4642,7 @@ And here is my actual output:
             last_structured_output: None,
             block_output: None,
             block_with: Vec::new(),
-            skip_completed: HashSet::new(),
-            resume_step_map: HashMap::new(),
+            resume_ctx: None,
         }
     }
 
@@ -5775,7 +5837,7 @@ And here is my actual output:
     }
 
     // -----------------------------------------------------------------------
-    // restore_completed_step_from_db tests
+    // restore_completed_step tests
     // -----------------------------------------------------------------------
 
     /// Helper to build a WorkflowRunStep for testing without listing every field.
@@ -5817,8 +5879,21 @@ And here is my actual output:
         }
     }
 
+    /// Helper to build a ResumeContext from a step map.
+    fn make_resume_ctx(
+        step_map: HashMap<String, WorkflowRunStep>,
+        child_runs: HashMap<String, crate::agent::AgentRun>,
+    ) -> ResumeContext {
+        let skip_completed = step_map.keys().cloned().collect();
+        ResumeContext {
+            skip_completed,
+            step_map,
+            child_runs,
+        }
+    }
+
     #[test]
-    fn test_restore_completed_step_from_db_basic() {
+    fn test_restore_completed_step_basic() {
         let conn = setup_db();
         let mut state = make_test_state(&conn);
 
@@ -5831,10 +5906,12 @@ And here is my actual output:
             None,
             Some(r#"{"verdict":"approve"}"#),
         );
-        let steps: HashMap<String, WorkflowRunStep> =
-            [("review:0".to_string(), step)].into_iter().collect();
+        let ctx = make_resume_ctx(
+            [("review:0".to_string(), step)].into_iter().collect(),
+            HashMap::new(),
+        );
 
-        restore_completed_step_from_db(&mut state, &steps, "review", 0);
+        restore_completed_step(&mut state, &ctx, "review", 0);
 
         // Verify step_results populated
         let result = state.step_results.get("review").unwrap();
@@ -5856,20 +5933,20 @@ And here is my actual output:
     }
 
     #[test]
-    fn test_restore_completed_step_from_db_not_found() {
+    fn test_restore_completed_step_not_found() {
         let conn = setup_db();
         let mut state = make_test_state(&conn);
 
-        let steps: HashMap<String, WorkflowRunStep> = HashMap::new();
-        restore_completed_step_from_db(&mut state, &steps, "nonexistent", 0);
+        let ctx = make_resume_ctx(HashMap::new(), HashMap::new());
+        restore_completed_step(&mut state, &ctx, "nonexistent", 0);
 
-        // Should be a no-op
+        // Should be a no-op (with warning logged)
         assert!(state.step_results.is_empty());
         assert!(state.contexts.is_empty());
     }
 
     #[test]
-    fn test_restore_completed_step_from_db_accumulates_costs() {
+    fn test_restore_completed_step_accumulates_costs() {
         let conn = setup_db();
         let agent_mgr = AgentManager::new(&conn);
 
@@ -5893,6 +5970,9 @@ And here is my actual output:
         state.total_turns = 5;
         state.total_duration_ms = 10000;
 
+        // Re-fetch the child run so we have the full AgentRun with costs
+        let loaded_run = agent_mgr.get_run(&child_run.id).unwrap().unwrap();
+
         let step = make_test_step(
             "build",
             WorkflowStepStatus::Completed,
@@ -5902,15 +5982,46 @@ And here is my actual output:
             Some(&child_run.id),
             None,
         );
-        let steps: HashMap<String, WorkflowRunStep> =
-            [("build:0".to_string(), step)].into_iter().collect();
+        let ctx = make_resume_ctx(
+            [("build:0".to_string(), step)].into_iter().collect(),
+            [(child_run.id.clone(), loaded_run)].into_iter().collect(),
+        );
 
-        restore_completed_step_from_db(&mut state, &steps, "build", 0);
+        restore_completed_step(&mut state, &ctx, "build", 0);
 
         // Costs should be accumulated from the child run
         assert!((state.total_cost - 0.15).abs() < 0.001);
         assert_eq!(state.total_turns, 8);
         assert_eq!(state.total_duration_ms, 15000);
+    }
+
+    #[test]
+    fn test_restore_completed_step_restores_gate_feedback() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+
+        let mut step = make_test_step(
+            "approval-gate",
+            WorkflowStepStatus::Completed,
+            Some("approved"),
+            None,
+            None,
+            None,
+            None,
+        );
+        step.gate_feedback = Some("LGTM, ship it".to_string());
+
+        let ctx = make_resume_ctx(
+            [("approval-gate:0".to_string(), step)]
+                .into_iter()
+                .collect(),
+            HashMap::new(),
+        );
+
+        restore_completed_step(&mut state, &ctx, "approval-gate", 0);
+
+        // Gate feedback should be restored for downstream steps
+        assert_eq!(state.last_gate_feedback.as_deref(), Some("LGTM, ship it"));
     }
 
     // -----------------------------------------------------------------------
@@ -5946,8 +6057,15 @@ And here is my actual output:
         let mut state = make_test_state(&conn);
 
         // Iterations 0 and 1 completed for "fixer"
-        state.skip_completed.insert("fixer:0".to_string());
-        state.skip_completed.insert("fixer:1".to_string());
+        let skip = ["fixer:0", "fixer:1"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        state.resume_ctx = Some(ResumeContext {
+            skip_completed: skip,
+            step_map: HashMap::new(),
+            child_runs: HashMap::new(),
+        });
 
         let node = WhileNode {
             step: "check".to_string(),
@@ -5992,7 +6110,12 @@ And here is my actual output:
         let mut state = make_test_state(&conn);
 
         // Two body nodes, but only one completed for iteration 0
-        state.skip_completed.insert("step-a:0".to_string());
+        let skip = ["step-a:0"].iter().map(|s| s.to_string()).collect();
+        state.resume_ctx = Some(ResumeContext {
+            skip_completed: skip,
+            step_map: HashMap::new(),
+            child_runs: HashMap::new(),
+        });
         // step-b:0 is NOT in skip_completed
 
         let node = WhileNode {
