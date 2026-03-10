@@ -4445,6 +4445,42 @@ And here is my actual output:
     }
 
     #[test]
+    fn test_while_fail_fast_exits_early() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+        state.exec_config.fail_fast = true;
+
+        // Marker is set so the loop would keep iterating if not for fail_fast
+        state.step_results.insert(
+            "check".into(),
+            make_step_result("check", vec!["needs_work"]),
+        );
+
+        // Simulate a prior failure — all_succeeded is already false
+        state.all_succeeded = false;
+
+        // Body has a no-op If node (condition never true → body skipped, returns Ok)
+        let node = WhileNode {
+            step: "check".into(),
+            marker: "needs_work".into(),
+            max_iterations: 10,
+            stuck_after: None,
+            on_max_iter: OnMaxIter::Fail,
+            body: vec![WorkflowNode::If(IfNode {
+                step: "nonexistent".into(),
+                marker: "nope".into(),
+                body: vec![],
+            })],
+        };
+
+        // fail_fast should cause early exit with Ok(()) instead of looping to max_iterations
+        let result = execute_while(&mut state, &node);
+        assert!(result.is_ok());
+        assert!(!state.all_succeeded);
+    }
+
+    #[test]
     fn test_get_active_run_for_worktree_none_when_empty() {
         let conn = setup_db();
         let mgr = WorkflowManager::new(&conn);
