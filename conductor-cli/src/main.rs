@@ -17,8 +17,6 @@ use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig}
 use conductor_core::jira_acli;
 use conductor_core::merge_queue::MergeQueueManager;
 use conductor_core::orchestrator::{self, OrchestratorConfig};
-use conductor_core::post_run::{self, PostRunInput};
-use conductor_core::pr_review::{self, ReviewSwarmConfig, ReviewSwarmInput};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketInput, TicketSyncer};
 use conductor_core::workflow::{
@@ -70,13 +68,6 @@ enum Commands {
     Workflow {
         #[command(subcommand)]
         command: WorkflowCommands,
-    },
-    /// Approve and merge a PR that is awaiting manual approval
-    Approve {
-        /// Repo slug
-        repo: String,
-        /// Worktree slug
-        worktree: String,
     },
 }
 
@@ -184,29 +175,6 @@ enum AgentCommands {
         /// Agent run ID (defaults to $CONDUCTOR_RUN_ID env var)
         #[arg(long)]
         run_id: Option<String>,
-    },
-    /// Run the automated post-agent lifecycle (commit, PR, review loop, merge)
-    PostRun {
-        /// Repo slug
-        repo: String,
-        /// Worktree slug
-        worktree: String,
-    },
-    /// Run a multi-agent PR review swarm on a worktree
-    Review {
-        /// Repo slug
-        repo: String,
-        /// Worktree slug
-        worktree: String,
-        /// PR number (auto-detected from branch if omitted)
-        #[arg(long)]
-        pr_number: Option<i64>,
-        /// Model to use for reviewer agents
-        #[arg(long)]
-        model: Option<String>,
-        /// Reviewer timeout in seconds (default: 900 = 15 min)
-        #[arg(long, default_value = "900")]
-        reviewer_timeout_secs: u64,
     },
 }
 
@@ -925,95 +893,6 @@ fn main() -> Result<()> {
                     )?;
 
                     println!("Created issue #{source_id}: {url}");
-                }
-                AgentCommands::PostRun { repo, worktree } => {
-                    match post_run::run_post_lifecycle(&PostRunInput {
-                        conn: &conn,
-                        config: &config,
-                        repo_slug: &repo,
-                        worktree_slug: &worktree,
-                    }) {
-                        Ok(result) => {
-                            println!("{}", result.summary);
-                            if let Some(ref url) = result.pr_url {
-                                println!("PR: {url}");
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Post-run lifecycle failed: {e}");
-                            std::process::exit(1);
-                        }
-                    }
-                }
-                AgentCommands::Review {
-                    repo,
-                    worktree,
-                    pr_number,
-                    model,
-                    reviewer_timeout_secs,
-                } => {
-                    let repo_mgr = RepoManager::new(&conn, &config);
-                    let r = repo_mgr.get_by_slug(&repo)?;
-                    let wt_mgr = WorktreeManager::new(&conn, &config);
-                    let wt = wt_mgr.get_by_slug(&r.id, &worktree)?;
-
-                    // Auto-detect PR number from branch if not provided
-                    let pr_num = match pr_number {
-                        Some(n) => Some(n),
-                        None => github::detect_pr_number(&r.remote_url, &wt.branch),
-                    };
-
-                    let swarm_config = ReviewSwarmConfig {
-                        reviewer_timeout: std::time::Duration::from_secs(reviewer_timeout_secs),
-                        ..Default::default()
-                    };
-
-                    println!(
-                        "Starting PR review swarm for {}/{} (branch: {})...",
-                        repo, worktree, wt.branch
-                    );
-                    if let Some(n) = pr_num {
-                        println!("PR #{n}");
-                    }
-
-                    let token_resolution = github_app::resolve_app_token(&config, "review");
-
-                    match pr_review::run_review_swarm(&ReviewSwarmInput {
-                        conn: &conn,
-                        config: &config,
-                        repo_id: &r.id,
-                        worktree_id: &wt.id,
-                        pr_branch: &wt.branch,
-                        pr_number: pr_num,
-                        model: model.as_deref(),
-                        swarm_config: &swarm_config,
-                        app_token: token_resolution.token(),
-                    }) {
-                        Ok(result) => {
-                            println!("\n{}", result.aggregated_comment);
-                            if result.all_required_approved {
-                                println!("All required reviewers approved — added to merge queue.");
-                            } else {
-                                let blocking: Vec<_> = result
-                                    .reviewer_results
-                                    .iter()
-                                    .filter(|r| r.required && !r.approved)
-                                    .map(|r| r.role_name.as_str())
-                                    .collect();
-                                println!("Blocking reviewers: {}", blocking.join(", "));
-                            }
-                            println!(
-                                "Total: ${:.4}, {} turns, {:.1}s",
-                                result.total_cost,
-                                result.total_turns,
-                                result.total_duration_ms as f64 / 1000.0
-                            );
-                        }
-                        Err(e) => {
-                            eprintln!("Review swarm failed: {e}");
-                            std::process::exit(1);
-                        }
-                    }
                 }
             }
         }
@@ -1750,22 +1629,6 @@ fn main() -> Result<()> {
                 }
             }
         },
-        Commands::Approve { repo, worktree } => {
-            match post_run::approve_and_merge(&PostRunInput {
-                conn: &conn,
-                config: &config,
-                repo_slug: &repo,
-                worktree_slug: &worktree,
-            }) {
-                Ok(result) => {
-                    println!("{}", result.summary);
-                }
-                Err(e) => {
-                    eprintln!("Approve failed: {e}");
-                    std::process::exit(1);
-                }
-            }
-        }
     }
 
     Ok(())
