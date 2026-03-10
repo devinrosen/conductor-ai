@@ -950,16 +950,15 @@ impl Parser {
         Ok(UnlessNode { step, marker, body })
     }
 
-    fn parse_while(&mut self) -> std::result::Result<WhileNode, String> {
-        self.expect(&Token::While)?;
-        let (step, marker) = self.parse_condition()?;
-        self.expect(&Token::LBrace)?;
-
-        let kvs = self.parse_kvs()?;
-
+    /// Extract the common loop KV options (`max_iterations`, `stuck_after`, `on_max_iter`)
+    /// shared by `while` and `do` loops.
+    fn parse_loop_options(
+        kvs: &HashMap<String, KvValue>,
+        loop_kind: &str,
+    ) -> std::result::Result<(u32, Option<u32>, OnMaxIter), String> {
         let max_iterations = kvs
             .get("max_iterations")
-            .ok_or("while loop requires max_iterations")?
+            .ok_or(format!("{loop_kind} loop requires max_iterations"))?
             .as_str()
             .parse::<u32>()
             .map_err(|e| format!("Invalid max_iterations: {e}"))?;
@@ -975,6 +974,17 @@ impl Parser {
             Some("fail") | None => OnMaxIter::Fail,
             Some(other) => return Err(format!("Invalid on_max_iter: {other}")),
         };
+
+        Ok((max_iterations, stuck_after, on_max_iter))
+    }
+
+    fn parse_while(&mut self) -> std::result::Result<WhileNode, String> {
+        self.expect(&Token::While)?;
+        let (step, marker) = self.parse_condition()?;
+        self.expect(&Token::LBrace)?;
+
+        let kvs = self.parse_kvs()?;
+        let (max_iterations, stuck_after, on_max_iter) = Self::parse_loop_options(&kvs, "while")?;
 
         let mut body = Vec::new();
         while self.peek() != &Token::RBrace && self.peek() != &Token::Eof {
@@ -998,25 +1008,7 @@ impl Parser {
         self.expect(&Token::LBrace)?;
 
         let kvs = self.parse_kvs()?;
-
-        let max_iterations = kvs
-            .get("max_iterations")
-            .ok_or("do loop requires max_iterations")?
-            .as_str()
-            .parse::<u32>()
-            .map_err(|e| format!("Invalid max_iterations: {e}"))?;
-
-        let stuck_after = kvs
-            .get("stuck_after")
-            .map(|v| v.as_str().parse::<u32>())
-            .transpose()
-            .map_err(|e| format!("Invalid stuck_after: {e}"))?;
-
-        let on_max_iter = match kvs.get("on_max_iter").map(|s| s.as_str()) {
-            Some("continue") => OnMaxIter::Continue,
-            Some("fail") | None => OnMaxIter::Fail,
-            Some(other) => return Err(format!("Invalid on_max_iter: {other}")),
-        };
+        let (max_iterations, stuck_after, on_max_iter) = Self::parse_loop_options(&kvs, "do")?;
 
         let mut body = Vec::new();
         while self.peek() != &Token::RBrace && self.peek() != &Token::Eof {
