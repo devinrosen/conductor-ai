@@ -2237,7 +2237,7 @@ fn execute_parallel(
 
                         if let Err(e) = state.wf_mgr.update_step_status_full(
                             &child.step_id,
-                            step_status,
+                            step_status.clone(),
                             Some(&child.child_run_id),
                             run.result_text.as_deref(),
                             Some(&context),
@@ -2259,6 +2259,32 @@ fn execute_parallel(
                         }
                         if let Some(dur) = run.duration_ms {
                             state.total_duration_ms += dur;
+                        }
+
+                        state.step_results.insert(
+                            child.agent_name.clone(),
+                            StepResult {
+                                step_name: child.agent_name.clone(),
+                                status: step_status.clone(),
+                                result_text: run.result_text.clone(),
+                                cost_usd: run.cost_usd,
+                                num_turns: run.num_turns,
+                                duration_ms: run.duration_ms,
+                                markers: markers.clone(),
+                                context: context.clone(),
+                                child_run_id: Some(child.child_run_id.clone()),
+                                structured_output: structured_json.clone(),
+                            },
+                        );
+                        if succeeded {
+                            state.contexts.push(ContextEntry {
+                                step: child.agent_name.clone(),
+                                iteration,
+                                context: context.clone(),
+                            });
+                            if structured_json.is_some() {
+                                state.last_structured_output = structured_json.clone();
+                            }
                         }
 
                         tracing::info!(
@@ -3693,6 +3719,35 @@ And here is my actual output:
 
         let vars = build_variable_map(&state);
         assert_eq!(vars.get("prior_output").unwrap(), &json);
+    }
+
+
+    #[test]
+    fn test_build_variable_map_includes_parallel_contexts() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+        state.contexts.push(ContextEntry {
+            step: "review-security".to_string(),
+            iteration: 0,
+            context: "Found one auth issue".to_string(),
+        });
+        state.contexts.push(ContextEntry {
+            step: "review-performance".to_string(),
+            iteration: 0,
+            context: "No perf issues found".to_string(),
+        });
+
+        let vars = build_variable_map(&state);
+        let prior_contexts = vars.get("prior_contexts").unwrap();
+        assert!(prior_contexts.contains("review-security"));
+        assert!(prior_contexts.contains("Found one auth issue"));
+        assert!(prior_contexts.contains("review-performance"));
+        assert!(prior_contexts.contains("No perf issues found"));
+        assert_eq!(
+            vars.get("prior_context").unwrap(),
+            "No perf issues found",
+            "latest parallel child context should become prior_context"
+        );
     }
 
     // -----------------------------------------------------------------------
