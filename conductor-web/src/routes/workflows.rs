@@ -276,28 +276,6 @@ pub async fn resume_workflow_endpoint(
     Path(id): Path<String>,
     Json(req): Json<ResumeWorkflowRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    // Validate the run exists and can be resumed
-    {
-        let db = state.db.lock().await;
-        let mgr = WorkflowManager::new(&db);
-        let run = mgr.get_workflow_run(&id)?.ok_or_else(|| {
-            ApiError(ConductorError::Workflow(format!(
-                "Workflow run not found: {id}"
-            )))
-        })?;
-
-        if matches!(run.status, WorkflowRunStatus::Completed) && !req.restart.unwrap_or(false) {
-            return Err(ApiError(ConductorError::Workflow(
-                "Cannot resume a completed workflow run. Use restart: true to re-run.".to_string(),
-            )));
-        }
-        if matches!(run.status, WorkflowRunStatus::Cancelled) {
-            return Err(ApiError(ConductorError::Workflow(
-                "Cannot resume a cancelled workflow run.".to_string(),
-            )));
-        }
-    }
-
     let config = state.config.read().await.clone();
     let model = req.model.clone();
     let from_step = req.from_step.clone();

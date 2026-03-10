@@ -1456,6 +1456,13 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
             "Cannot resume a cancelled workflow run.".to_string(),
         ));
     }
+    if input.restart && input.from_step.is_some() {
+        return Err(ConductorError::Workflow(
+            "Cannot use --restart and --from-step together: --restart re-runs all steps, \
+             --from-step resumes from a specific step."
+                .to_string(),
+        ));
+    }
 
     // Load all steps once (avoids N+1 queries later)
     let all_steps = wf_mgr.get_workflow_steps(&wf_run.id)?;
@@ -3522,8 +3529,12 @@ fn restore_completed_step(
             if let Some(dur) = run.duration_ms {
                 state.total_duration_ms += dur;
             }
+        } else {
+            tracing::warn!(
+                "resume: child agent run '{child_run_id}' for step '{step_key}' not found \
+                 — cost/turns/duration will be excluded from resumed run totals"
+            );
         }
-        // Warnings for missing child runs were already emitted during batch-load
     }
 
     // Restore gate feedback if this was a gate step
@@ -6391,6 +6402,36 @@ And here is my actual output:
         assert!(
             err.to_string().contains("Cannot resume a cancelled"),
             "Expected cancelled-run error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_resume_rejects_restart_and_from_step_together() {
+        let conn = setup_db();
+        let config = make_resume_config();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", Some("{}"))
+            .unwrap();
+        wf_mgr
+            .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("error"))
+            .unwrap();
+
+        let input = WorkflowResumeInput {
+            conn: &conn,
+            config,
+            workflow_run_id: &run.id,
+            model: None,
+            from_step: Some("step-one"),
+            restart: true,
+        };
+        let err = resume_workflow(&input).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("--restart and --from-step together"),
+            "Expected conflict error, got: {err}"
         );
     }
 

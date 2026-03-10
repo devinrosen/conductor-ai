@@ -3592,6 +3592,54 @@ mod tests {
         );
     }
 
+    // ── get_runs_by_ids tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_get_runs_by_ids_returns_matching() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let r1 = mgr.create_run("w1", "Task 1", None, None).unwrap();
+        let r2 = mgr.create_run("w1", "Task 2", None, None).unwrap();
+        let r3 = mgr.create_run("w1", "Task 3", None, None).unwrap();
+
+        let ids = vec![r1.id.as_str(), r2.id.as_str()];
+        let result = mgr.get_runs_by_ids(&ids).unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert!(result.contains_key(&r1.id));
+        assert!(result.contains_key(&r2.id));
+        assert!(!result.contains_key(&r3.id));
+        assert_eq!(result[&r1.id].prompt, "Task 1");
+        assert_eq!(result[&r2.id].prompt, "Task 2");
+    }
+
+    #[test]
+    fn test_get_runs_by_ids_empty_input() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let _r1 = mgr.create_run("w1", "Task 1", None, None).unwrap();
+
+        let result = mgr.get_runs_by_ids(&[]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_runs_by_ids_missing_ids_skipped() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let r1 = mgr.create_run("w1", "Task 1", None, None).unwrap();
+
+        let ids = vec![r1.id.as_str(), "nonexistent-id-xyz"];
+        let result = mgr.get_runs_by_ids(&ids).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_key(&r1.id));
+        assert!(!result.contains_key("nonexistent-id-xyz"));
+    }
+
     #[test]
     fn test_attach_agent_window_nonexistent_returns_error() {
         // A clearly nonexistent window name should always produce an error:
