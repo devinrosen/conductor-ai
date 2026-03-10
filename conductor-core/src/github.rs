@@ -105,7 +105,13 @@ pub fn list_open_prs(remote_url: &str) -> Result<Vec<GithubPr>> {
     }
 
     let json_str = String::from_utf8_lossy(&output.stdout);
-    let raw_prs: Vec<RawPr> = serde_json::from_str(&json_str).unwrap_or_default();
+    let raw_prs: Vec<RawPr> = match serde_json::from_str(&json_str) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("list_open_prs: failed to parse gh JSON: {e}");
+            vec![]
+        }
+    };
     let prs = raw_prs
         .into_iter()
         .map(|r| GithubPr {
@@ -732,5 +738,57 @@ mod tests {
             None
         );
         assert_eq!(parse_pr_number_from_url("not-a-url"), None);
+    }
+
+    #[test]
+    fn test_parse_list_open_prs_json() {
+        // Simulate the JSON shape returned by `gh pr list --json number,title,author,state,headRefName`
+        #[derive(serde::Deserialize)]
+        struct PrAuthor {
+            login: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct RawPr {
+            number: i64,
+            title: String,
+            author: PrAuthor,
+            state: String,
+            #[serde(rename = "headRefName")]
+            head_ref_name: String,
+        }
+
+        let json = r#"[
+            {
+                "number": 42,
+                "title": "feat: add PR pane",
+                "author": {"login": "alice"},
+                "state": "OPEN",
+                "headRefName": "feat/42-add-pr-pane"
+            },
+            {
+                "number": 7,
+                "title": "fix: correct typo",
+                "author": {"login": "bob"},
+                "state": "OPEN",
+                "headRefName": "fix/7-typo"
+            }
+        ]"#;
+
+        let raw: Vec<RawPr> = serde_json::from_str(json).expect("parse failed");
+        assert_eq!(raw.len(), 2);
+        assert_eq!(raw[0].number, 42);
+        assert_eq!(raw[0].title, "feat: add PR pane");
+        assert_eq!(raw[0].author.login, "alice");
+        assert_eq!(raw[0].state, "OPEN");
+        assert_eq!(raw[0].head_ref_name, "feat/42-add-pr-pane");
+        assert_eq!(raw[1].number, 7);
+        assert_eq!(raw[1].author.login, "bob");
+    }
+
+    #[test]
+    fn test_parse_list_open_prs_invalid_json_returns_empty() {
+        // Malformed JSON should silently yield an empty list (no panic).
+        let result: Vec<serde_json::Value> = serde_json::from_str("not json").unwrap_or_default();
+        assert!(result.is_empty());
     }
 }

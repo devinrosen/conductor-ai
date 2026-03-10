@@ -372,9 +372,20 @@ pub fn spawn_workflow_poll_once_guarded(
 
 /// Spawn a one-shot PR fetch for a single repo. Sends `Action::PrsRefreshed`
 /// with the results (or an empty list if `gh` is unavailable).
+///
+/// A static in-flight guard prevents concurrent `gh` subprocesses when the
+/// user navigates quickly between repos (same pattern as the `LAST_REAP` guard
+/// used for orphan reaping above).
 pub fn spawn_pr_fetch_once(tx: BackgroundSender, remote_url: String, repo_id: String) {
+    use std::sync::atomic::AtomicBool;
+    static PR_FETCH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+    if PR_FETCH_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+        // A fetch is already running; skip to avoid redundant `gh` subprocesses.
+        return;
+    }
     thread::spawn(move || {
         let prs = conductor_core::github::list_open_prs(&remote_url).unwrap_or_default();
+        PR_FETCH_IN_FLIGHT.store(false, Ordering::SeqCst);
         let _ = tx.send(Action::PrsRefreshed { repo_id, prs });
     });
 }
