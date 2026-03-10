@@ -259,7 +259,7 @@ impl App {
                         .state
                         .pr_last_fetched_at
                         .map(|t| t.elapsed() >= Duration::from_secs(30))
-                        .unwrap_or(false);
+                        .unwrap_or(true);
                     if needs_refresh {
                         if let Some(ref repo_id) = self.state.selected_repo_id.clone() {
                             if let Some(repo) =

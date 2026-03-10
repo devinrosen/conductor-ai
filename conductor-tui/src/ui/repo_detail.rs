@@ -210,7 +210,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             .detail_prs
             .iter()
             .map(|pr| {
-                let state_color = if pr.state == "open" {
+                let state_color = if pr.state.eq_ignore_ascii_case("open") {
                     Color::Green
                 } else {
                     Color::White
