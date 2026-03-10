@@ -84,9 +84,16 @@ pub fn orchestrate_run(
         crate::error::ConductorError::Agent(format!("Parent run not found: {parent_run_id}"))
     })?;
 
-    // Get the worktree info for tmux window naming
+    // Orchestration requires a registered worktree for tmux window naming.
+    // Ephemeral PR runs (worktree_id == None) are not supported by the orchestrator.
+    let worktree_id = parent_run.worktree_id.as_deref().ok_or_else(|| {
+        crate::error::ConductorError::Agent(
+            "Orchestration is not supported for ephemeral PR runs (no registered worktree)."
+                .to_string(),
+        )
+    })?;
     let wt_mgr = WorktreeManager::new(conn, config);
-    let worktree = wt_mgr.get_by_id(parent_run.worktree_id.as_deref().unwrap_or(""))?;
+    let worktree = wt_mgr.get_by_id(worktree_id)?;
 
     let steps = mgr.get_run_steps(parent_run_id)?;
     if steps.is_empty() {
@@ -128,7 +135,7 @@ pub fn orchestrate_run(
         // Create child run record
         let child_window = format!("{}-step-{}", worktree.slug, i + 1);
         let child_run = mgr.create_child_run(
-            parent_run.worktree_id.as_deref().unwrap_or(""),
+            worktree_id,
             &child_prompt,
             Some(&child_window),
             model,

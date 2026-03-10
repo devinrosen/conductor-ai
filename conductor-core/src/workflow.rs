@@ -7069,4 +7069,99 @@ And here is my actual output:
             "should fail when effective successes don't meet min_required"
         );
     }
+
+    // ---------------------------------------------------------------------------
+    // apply_workflow_input_defaults tests
+    // ---------------------------------------------------------------------------
+
+    fn make_workflow_def_with_inputs(
+        inputs: Vec<crate::workflow_dsl::InputDecl>,
+    ) -> crate::workflow_dsl::WorkflowDef {
+        crate::workflow_dsl::WorkflowDef {
+            name: "test-wf".to_string(),
+            description: String::new(),
+            trigger: crate::workflow_dsl::WorkflowTrigger::Manual,
+            targets: vec![],
+            inputs,
+            body: vec![],
+            always: vec![],
+            source_path: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_apply_workflow_input_defaults_fills_missing_default() {
+        use crate::workflow_dsl::InputDecl;
+
+        let workflow = make_workflow_def_with_inputs(vec![InputDecl {
+            name: "skip_tests".to_string(),
+            required: false,
+            default: Some("false".to_string()),
+        }]);
+
+        let mut inputs = HashMap::new();
+        apply_workflow_input_defaults(&workflow, &mut inputs).unwrap();
+        assert_eq!(inputs.get("skip_tests").map(String::as_str), Some("false"));
+    }
+
+    #[test]
+    fn test_apply_workflow_input_defaults_does_not_overwrite_provided_value() {
+        use crate::workflow_dsl::InputDecl;
+
+        let workflow = make_workflow_def_with_inputs(vec![InputDecl {
+            name: "skip_tests".to_string(),
+            required: false,
+            default: Some("false".to_string()),
+        }]);
+
+        let mut inputs = HashMap::new();
+        inputs.insert("skip_tests".to_string(), "true".to_string());
+        apply_workflow_input_defaults(&workflow, &mut inputs).unwrap();
+        // Provided value must not be replaced by the default.
+        assert_eq!(inputs.get("skip_tests").map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn test_apply_workflow_input_defaults_errors_on_missing_required() {
+        use crate::workflow_dsl::InputDecl;
+
+        let workflow = make_workflow_def_with_inputs(vec![InputDecl {
+            name: "ticket_id".to_string(),
+            required: true,
+            default: None,
+        }]);
+
+        let mut inputs = HashMap::new();
+        let result = apply_workflow_input_defaults(&workflow, &mut inputs);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("ticket_id"),
+            "error message should name the missing input, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_apply_workflow_input_defaults_required_input_provided_succeeds() {
+        use crate::workflow_dsl::InputDecl;
+
+        let workflow = make_workflow_def_with_inputs(vec![InputDecl {
+            name: "ticket_id".to_string(),
+            required: true,
+            default: None,
+        }]);
+
+        let mut inputs = HashMap::new();
+        inputs.insert("ticket_id".to_string(), "TKT-1".to_string());
+        apply_workflow_input_defaults(&workflow, &mut inputs).unwrap();
+        assert_eq!(inputs.get("ticket_id").map(String::as_str), Some("TKT-1"));
+    }
+
+    #[test]
+    fn test_apply_workflow_input_defaults_no_inputs_is_noop() {
+        let workflow = make_workflow_def_with_inputs(vec![]);
+        let mut inputs = HashMap::new();
+        apply_workflow_input_defaults(&workflow, &mut inputs).unwrap();
+        assert!(inputs.is_empty());
+    }
 }
