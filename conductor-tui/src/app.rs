@@ -852,18 +852,7 @@ impl App {
                 self.state.workflows_focus = self.state.workflows_focus.toggle();
             }
             View::WorkflowRunDetail => {
-                // Only toggle if the selected step has agent activity
-                let has_agent = self
-                    .state
-                    .data
-                    .workflow_steps
-                    .get(self.state.workflow_step_index)
-                    .map(|s| s.child_run_id.is_some())
-                    .unwrap_or(false);
-                if has_agent {
-                    self.state.workflow_run_detail_focus =
-                        self.state.workflow_run_detail_focus.toggle();
-                }
+                self.toggle_workflow_run_detail_focus();
             }
             _ => {}
         }
@@ -881,19 +870,17 @@ impl App {
                 self.state.workflows_focus = self.state.workflows_focus.toggle();
             }
             View::WorkflowRunDetail => {
-                let has_agent = self
-                    .state
-                    .data
-                    .workflow_steps
-                    .get(self.state.workflow_step_index)
-                    .map(|s| s.child_run_id.is_some())
-                    .unwrap_or(false);
-                if has_agent {
-                    self.state.workflow_run_detail_focus =
-                        self.state.workflow_run_detail_focus.toggle();
-                }
+                self.toggle_workflow_run_detail_focus();
             }
             _ => {}
+        }
+    }
+
+    /// Toggle focus between Steps and Agent Activity panes, but only if the
+    /// selected step has agent activity to show.
+    fn toggle_workflow_run_detail_focus(&mut self) {
+        if self.state.selected_step_has_agent() {
+            self.state.workflow_run_detail_focus = self.state.workflow_run_detail_focus.toggle();
         }
     }
 
@@ -4104,14 +4091,7 @@ impl App {
             self.state.step_agent_event_index = event_len - 1;
         }
         // Auto-reset focus to Steps if current step has no agent activity
-        let has_agent = self
-            .state
-            .data
-            .workflow_steps
-            .get(self.state.workflow_step_index)
-            .map(|s| s.child_run_id.is_some())
-            .unwrap_or(false);
-        if !has_agent {
+        if !self.state.selected_step_has_agent() {
             self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
         }
     }

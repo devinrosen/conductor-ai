@@ -899,6 +899,15 @@ impl AppState {
         self.data.tickets.get(self.ticket_index)
     }
 
+    /// Returns true if the currently selected workflow step has a child agent run.
+    pub fn selected_step_has_agent(&self) -> bool {
+        self.data
+            .workflow_steps
+            .get(self.workflow_step_index)
+            .map(|s| s.child_run_id.is_some())
+            .unwrap_or(false)
+    }
+
     /// Called on each tick: clears `status_message` (and `status_message_at`) if
     /// the message has been visible for longer than `timeout`.
     pub(crate) fn tick_status_message(&mut self, timeout: Duration) {
