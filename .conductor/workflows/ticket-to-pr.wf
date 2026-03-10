@@ -2,6 +2,7 @@ workflow ticket-to-pr {
   meta {
     description = "Full development cycle — plan from ticket, implement, push PR, run review swarm, iterate until clean"
     trigger     = "manual"
+    targets     = ["worktree"]
   }
 
   inputs {

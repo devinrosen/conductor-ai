@@ -2,6 +2,7 @@ workflow test-coverage {
   meta {
     description = "Validate PR has sufficient tests; write and commit missing ones"
     trigger     = "manual"
+    targets     = ["worktree"]
   }
 
   inputs {

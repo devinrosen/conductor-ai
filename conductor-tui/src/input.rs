@@ -473,6 +473,7 @@ mod tests {
                     name: format!("workflow-{i}"),
                     description: String::new(),
                     trigger: conductor_core::workflow::WorkflowTrigger::Manual,
+                    targets: vec![],
                     inputs: vec![],
                     body: vec![],
                     always: vec![],

@@ -46,6 +46,8 @@ pub struct WorkflowDef {
     pub name: String,
     pub description: String,
     pub trigger: WorkflowTrigger,
+    #[serde(default)]
+    pub targets: Vec<String>,
     pub inputs: Vec<InputDecl>,
     pub body: Vec<WorkflowNode>,
     pub always: Vec<WorkflowNode>,
@@ -535,7 +537,7 @@ impl KvValue {
         match self {
             Self::Quoted(s) | Self::Bare(s) => s.as_str(),
             Self::Array(_) => unreachable!(
-                "BUG: as_str() called on KvValue::Array — arrays are only valid for `with` keys"
+                "BUG: as_str() called on KvValue::Array — arrays are only valid for array-valued keys (e.g. `with`, `targets`)"
             ),
         }
     }
@@ -544,7 +546,7 @@ impl KvValue {
         match self {
             Self::Quoted(s) | Self::Bare(s) => s,
             Self::Array(_) => unreachable!(
-                "BUG: into_string() called on KvValue::Array — arrays are only valid for `with` keys"
+                "BUG: into_string() called on KvValue::Array — arrays are only valid for array-valued keys (e.g. `with`, `targets`)"
             ),
         }
     }
@@ -722,6 +724,7 @@ impl Parser {
 
         let mut description = String::new();
         let mut trigger = WorkflowTrigger::Manual;
+        let mut targets: Vec<String> = Vec::new();
         let mut inputs = Vec::new();
         let mut body = Vec::new();
         let mut always = Vec::new();
@@ -749,6 +752,9 @@ impl Parser {
                                 trig_str
                             ));
                         }
+                    }
+                    if let Some(tgts) = kvs.get("targets") {
+                        targets = tgts.clone().into_string_array();
                     }
                 }
                 Token::Inputs => {
@@ -803,10 +809,18 @@ impl Parser {
 
         self.expect(&Token::RBrace)?;
 
+        if targets.is_empty() {
+            return Err(format!(
+                "workflow '{name}' is missing a required `targets` field in its meta block.\n\
+                 Add at least one target, e.g.: targets = [\"worktree\"]"
+            ));
+        }
+
         Ok(WorkflowDef {
             name,
             description,
             trigger,
+            targets,
             inputs,
             body,
             always,
@@ -1648,6 +1662,7 @@ workflow ticket-to-pr {
   meta {
     description = "Full development cycle"
     trigger     = "manual"
+    targets     = ["worktree"]
   }
 
   inputs {
@@ -1829,7 +1844,7 @@ workflow ticket-to-pr {
 
     #[test]
     fn test_parse_minimal_workflow() {
-        let input = "workflow simple { call build }";
+        let input = "workflow simple { meta { targets = [\"worktree\"] } call build }";
         let def = parse_workflow_str(input, "test.wf").unwrap();
         assert_eq!(def.name, "simple");
         assert_eq!(def.body.len(), 1);
@@ -1896,6 +1911,7 @@ workflow ticket-to-pr {
         let input = r#"
             // This is a comment
             workflow test {
+                meta { targets = ["worktree"] }
                 // Another comment
                 call build // inline comment
             }
@@ -1932,7 +1948,11 @@ workflow ticket-to-pr {
         let tmp = tempfile::TempDir::new().unwrap();
         let wf_dir = tmp.path().join(".conductor").join("workflows");
         fs::create_dir_all(&wf_dir).unwrap();
-        fs::write(wf_dir.join("simple.wf"), "workflow simple { call build }").unwrap();
+        fs::write(
+            wf_dir.join("simple.wf"),
+            "workflow simple { meta { targets = [\"worktree\"] } call build }",
+        )
+        .unwrap();
 
         let defs = load_workflow_defs(tmp.path().to_str().unwrap(), "/nonexistent").unwrap();
         assert_eq!(defs.len(), 1);
@@ -1955,6 +1975,7 @@ workflow ticket-to-pr {
   meta {
     description = "Full development cycle — plan from ticket, implement, push PR, run review swarm, iterate until clean"
     trigger     = "manual"
+    targets     = ["worktree"]
   }
 
   inputs {
@@ -2070,6 +2091,7 @@ workflow test-coverage {
   meta {
     description = "Validate PR has sufficient tests; write and commit missing ones"
     trigger     = "manual"
+    targets     = ["worktree"]
   }
 
   call analyze-coverage
@@ -2100,6 +2122,7 @@ workflow lint-fix {
   meta {
     description = "Analyze lint errors and apply fixes"
     trigger     = "manual"
+    targets     = ["worktree"]
   }
 
   call analyze-lint
@@ -2155,7 +2178,11 @@ workflow lint-fix {
         let tmp = tempfile::TempDir::new().unwrap();
         let wf_dir = tmp.path().join(".conductor").join("workflows");
         fs::create_dir_all(&wf_dir).unwrap();
-        fs::write(wf_dir.join("deploy.wf"), "workflow deploy { call build }").unwrap();
+        fs::write(
+            wf_dir.join("deploy.wf"),
+            "workflow deploy { meta { targets = [\"worktree\"] } call build }",
+        )
+        .unwrap();
 
         let def =
             load_workflow_by_name(tmp.path().to_str().unwrap(), "/nonexistent", "deploy").unwrap();
@@ -2167,7 +2194,11 @@ workflow lint-fix {
         let tmp = tempfile::TempDir::new().unwrap();
         let wf_dir = tmp.path().join(".conductor").join("workflows");
         fs::create_dir_all(&wf_dir).unwrap();
-        fs::write(wf_dir.join("deploy.wf"), "workflow deploy { call build }").unwrap();
+        fs::write(
+            wf_dir.join("deploy.wf"),
+            "workflow deploy { meta { targets = [\"worktree\"] } call build }",
+        )
+        .unwrap();
 
         let result =
             load_workflow_by_name(tmp.path().to_str().unwrap(), "/nonexistent", "nonexistent");
@@ -2194,7 +2225,11 @@ workflow lint-fix {
         let repo = tempfile::TempDir::new().unwrap();
         let wf_dir = repo.path().join(".conductor").join("workflows");
         fs::create_dir_all(&wf_dir).unwrap();
-        fs::write(wf_dir.join("deploy.wf"), "workflow deploy { call build }").unwrap();
+        fs::write(
+            wf_dir.join("deploy.wf"),
+            "workflow deploy { meta { targets = [\"worktree\"] } call build }",
+        )
+        .unwrap();
 
         // worktree has no .conductor/workflows/, should fall back to repo_path
         let worktree = tempfile::TempDir::new().unwrap();
@@ -2222,7 +2257,8 @@ workflow lint-fix {
 
     #[test]
     fn test_parse_call_explicit_path() {
-        let input = r#"workflow test { call ".claude/agents/review.md" }"#;
+        let input =
+            r#"workflow test { meta { targets = ["worktree"] } call ".claude/agents/review.md" }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
         assert_eq!(def.body.len(), 1);
         match &def.body[0] {
@@ -2240,6 +2276,7 @@ workflow lint-fix {
     fn test_parse_call_mixed_name_and_path() {
         let input = r#"
 workflow test {
+    meta { targets = ["worktree"] }
     call plan
     call ".claude/agents/code-review.md"
     call implement { retries = 1  on_fail = ".claude/agents/diagnose.md" }
@@ -2279,6 +2316,7 @@ workflow test {
     fn test_parse_parallel_explicit_paths() {
         let input = r#"
 workflow test {
+    meta { targets = ["worktree"] }
     parallel {
         call reviewer-security
         call ".claude/agents/code-review.md"
@@ -2334,7 +2372,7 @@ workflow test {
     /// not `AgentRef::Path` — quoting alone does not make a value a path.
     #[test]
     fn test_on_fail_quoted_bare_name_is_name() {
-        let input = r#"workflow test { call agent { on_fail = "diagnose" } }"#;
+        let input = r#"workflow test { meta { targets = ["worktree"] } call agent { on_fail = "diagnose" } }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
         match &def.body[0] {
             WorkflowNode::Call(c) => {
@@ -2351,7 +2389,7 @@ workflow test {
     /// A bare (unquoted) name in `on_fail` should produce `AgentRef::Name`.
     #[test]
     fn test_on_fail_bare_name_is_name() {
-        let input = r#"workflow test { call agent { on_fail = diagnose } }"#;
+        let input = r#"workflow test { meta { targets = ["worktree"] } call agent { on_fail = diagnose } }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
         match &def.body[0] {
             WorkflowNode::Call(c) => {
@@ -2369,6 +2407,7 @@ workflow test {
     fn test_parse_call_workflow_simple() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call workflow lint-fix
 }
 "#;
@@ -2389,6 +2428,7 @@ workflow parent {
     fn test_parse_call_workflow_with_inputs() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call workflow test-coverage {
         inputs {
             pr_url = "{{pr_url}}"
@@ -2418,7 +2458,7 @@ workflow parent {
 
     #[test]
     fn test_parse_call_workflow_no_block() {
-        let input = "workflow parent { call workflow child }";
+        let input = "workflow parent { meta { targets = [\"worktree\"] } call workflow child }";
         let def = parse_workflow_str(input, "test.wf").unwrap();
         assert_eq!(def.body.len(), 1);
         match &def.body[0] {
@@ -2434,6 +2474,7 @@ workflow parent {
     fn test_parse_mixed_call_and_call_workflow() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call plan
     call workflow lint-fix
     call implement
@@ -2450,6 +2491,7 @@ workflow parent {
     fn test_parse_call_workflow_in_if_block() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call analyze
     if analyze.needs_lint {
         call workflow lint-fix
@@ -2471,6 +2513,7 @@ workflow parent {
     fn test_parse_unless() {
         let input = r#"
 workflow test {
+    meta { targets = ["worktree"] }
     call analyze
     unless analyze.has_errors {
         call deploy
@@ -2494,6 +2537,7 @@ workflow test {
     fn test_parse_call_workflow_in_unless_block() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call analyze
     unless analyze.needs_lint {
         call workflow lint-fix
@@ -2515,6 +2559,7 @@ workflow parent {
     fn test_collect_workflow_refs() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call plan
     call workflow lint-fix
     if plan.needs_tests {
@@ -2535,11 +2580,16 @@ workflow parent {
     #[test]
     fn test_detect_workflow_cycles_no_cycle() {
         let result = detect_workflow_cycles("a", &|name| match name {
-            "a" => parse_workflow_str("workflow a { call workflow b }", "a.wf")
-                .map_err(|e| e.to_string()),
-            "b" => {
-                parse_workflow_str("workflow b { call agent }", "b.wf").map_err(|e| e.to_string())
-            }
+            "a" => parse_workflow_str(
+                "workflow a { meta { targets = [\"worktree\"] } call workflow b }",
+                "a.wf",
+            )
+            .map_err(|e| e.to_string()),
+            "b" => parse_workflow_str(
+                "workflow b { meta { targets = [\"worktree\"] } call agent }",
+                "b.wf",
+            )
+            .map_err(|e| e.to_string()),
             other => Err(format!("Unknown workflow: {other}")),
         });
         assert!(result.is_ok());
@@ -2548,10 +2598,16 @@ workflow parent {
     #[test]
     fn test_detect_workflow_cycles_direct_cycle() {
         let result = detect_workflow_cycles("a", &|name| match name {
-            "a" => parse_workflow_str("workflow a { call workflow b }", "a.wf")
-                .map_err(|e| e.to_string()),
-            "b" => parse_workflow_str("workflow b { call workflow a }", "b.wf")
-                .map_err(|e| e.to_string()),
+            "a" => parse_workflow_str(
+                "workflow a { meta { targets = [\"worktree\"] } call workflow b }",
+                "a.wf",
+            )
+            .map_err(|e| e.to_string()),
+            "b" => parse_workflow_str(
+                "workflow b { meta { targets = [\"worktree\"] } call workflow a }",
+                "b.wf",
+            )
+            .map_err(|e| e.to_string()),
             other => Err(format!("Unknown workflow: {other}")),
         });
         assert!(result.is_err());
@@ -2563,8 +2619,11 @@ workflow parent {
     #[test]
     fn test_detect_workflow_cycles_self_reference() {
         let result = detect_workflow_cycles("a", &|name| match name {
-            "a" => parse_workflow_str("workflow a { call workflow a }", "a.wf")
-                .map_err(|e| e.to_string()),
+            "a" => parse_workflow_str(
+                "workflow a { meta { targets = [\"worktree\"] } call workflow a }",
+                "a.wf",
+            )
+            .map_err(|e| e.to_string()),
             other => Err(format!("Unknown workflow: {other}")),
         });
         assert!(result.is_err());
@@ -2576,12 +2635,21 @@ workflow parent {
     #[test]
     fn test_detect_workflow_cycles_transitive() {
         let result = detect_workflow_cycles("a", &|name| match name {
-            "a" => parse_workflow_str("workflow a { call workflow b }", "a.wf")
-                .map_err(|e| e.to_string()),
-            "b" => parse_workflow_str("workflow b { call workflow c }", "b.wf")
-                .map_err(|e| e.to_string()),
-            "c" => parse_workflow_str("workflow c { call workflow a }", "c.wf")
-                .map_err(|e| e.to_string()),
+            "a" => parse_workflow_str(
+                "workflow a { meta { targets = [\"worktree\"] } call workflow b }",
+                "a.wf",
+            )
+            .map_err(|e| e.to_string()),
+            "b" => parse_workflow_str(
+                "workflow b { meta { targets = [\"worktree\"] } call workflow c }",
+                "b.wf",
+            )
+            .map_err(|e| e.to_string()),
+            "c" => parse_workflow_str(
+                "workflow c { meta { targets = [\"worktree\"] } call workflow a }",
+                "c.wf",
+            )
+            .map_err(|e| e.to_string()),
             other => Err(format!("Unknown workflow: {other}")),
         });
         assert!(result.is_err());
@@ -2596,10 +2664,11 @@ workflow parent {
             let idx: usize = name[1..].parse().unwrap();
             if idx < 6 {
                 let next = format!("w{}", idx + 1);
-                let src = format!("workflow {name} {{ call workflow {next} }}");
+                let src = format!("workflow {name} {{ meta {{ targets = [\"worktree\"] }} call workflow {next} }}");
                 parse_workflow_str(&src, &format!("{name}.wf")).map_err(|e| e.to_string())
             } else {
-                let src = format!("workflow {name} {{ call agent }}");
+                let src =
+                    format!("workflow {name} {{ meta {{ targets = [\"worktree\"] }} call agent }}");
                 parse_workflow_str(&src, &format!("{name}.wf")).map_err(|e| e.to_string())
             }
         });
@@ -2612,6 +2681,7 @@ workflow parent {
     fn test_call_workflow_serialization_roundtrip() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call workflow test-coverage {
         inputs { pr_url = "https://example.com" }
         retries = 2
@@ -2636,6 +2706,7 @@ workflow parent {
     fn test_parse_call_workflow_in_while_block() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call analyze
     while analyze.needs_fixes {
         max_iterations = 3
@@ -2661,6 +2732,7 @@ workflow parent {
     fn test_collect_workflow_refs_in_while() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call analyze
     while analyze.needs_fixes {
         max_iterations = 3
@@ -2677,6 +2749,7 @@ workflow parent {
     fn test_collect_agent_names_call_workflow_on_fail() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call workflow lint-fix {
         on_fail = recovery-agent
     }
@@ -2693,6 +2766,7 @@ workflow parent {
     fn test_parse_call_workflow_in_always_block() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call build
     always {
         call workflow notify
@@ -2711,6 +2785,7 @@ workflow parent {
     fn test_collect_workflow_refs_in_always() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call build
     always {
         call workflow notify
@@ -2730,7 +2805,7 @@ workflow parent {
     /// slash-heuristic used by `KvValue::into_agent_ref` does not apply.
     #[test]
     fn test_call_quoted_bare_name_is_path() {
-        let input = r#"workflow test { call "diagnose" }"#;
+        let input = r#"workflow test { meta { targets = ["worktree"] } call "diagnose" }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
         match &def.body[0] {
             WorkflowNode::Call(c) => {
@@ -2747,6 +2822,7 @@ workflow parent {
     #[test]
     fn test_call_with_output_option() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             call review-security { output = "review-findings" }
         }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
@@ -2762,6 +2838,7 @@ workflow parent {
     #[test]
     fn test_call_with_output_and_retries() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             call review { output = "review-findings" retries = 2 }
         }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
@@ -2776,7 +2853,7 @@ workflow parent {
 
     #[test]
     fn test_call_without_output() {
-        let input = r#"workflow test { call plan }"#;
+        let input = r#"workflow test { meta { targets = ["worktree"] } call plan }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
         match &def.body[0] {
             WorkflowNode::Call(c) => {
@@ -2789,6 +2866,7 @@ workflow parent {
     #[test]
     fn test_parallel_with_block_level_output() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             parallel {
                 output = "review-findings"
                 fail_fast = false
@@ -2810,6 +2888,7 @@ workflow parent {
     #[test]
     fn test_parallel_with_per_call_output_override() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             parallel {
                 output = "review-findings"
                 call review-security
@@ -2834,6 +2913,7 @@ workflow parent {
     #[test]
     fn test_call_with_single_snippet() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             call plan { with = "ticket-context" }
         }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
@@ -2848,6 +2928,7 @@ workflow parent {
     #[test]
     fn test_call_with_array_snippets() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             call plan { with = ["ticket-context", "rust-conventions"] }
         }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
@@ -2865,6 +2946,7 @@ workflow parent {
     #[test]
     fn test_parallel_with_block_level_snippets() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             parallel {
                 with      = ["review-diff-scope", "rust-conventions"]
                 fail_fast = false
@@ -2892,6 +2974,7 @@ workflow parent {
     #[test]
     fn test_parallel_with_per_call_snippets() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             parallel {
                 with = ["review-diff-scope"]
                 call ".conductor/reviewers/architecture.md"
@@ -2915,6 +2998,7 @@ workflow parent {
     #[test]
     fn test_collect_snippet_refs() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             call plan { with = ["context-a"] }
             parallel {
                 with = ["scope-b"]
@@ -2938,7 +3022,7 @@ workflow parent {
 
     #[test]
     fn test_call_with_no_snippets() {
-        let input = r#"workflow test { call plan }"#;
+        let input = r#"workflow test { meta { targets = ["worktree"] } call plan }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
         match &def.body[0] {
             WorkflowNode::Call(c) => {
@@ -2951,6 +3035,7 @@ workflow parent {
     #[test]
     fn test_collect_snippet_refs_inside_if() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             call plan
             if plan.approved {
                 call implement { with = ["if-context"] }
@@ -2964,6 +3049,7 @@ workflow parent {
     #[test]
     fn test_collect_snippet_refs_inside_unless() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             call review
             unless review.approved {
                 call fix { with = ["unless-context"] }
@@ -2977,6 +3063,7 @@ workflow parent {
     #[test]
     fn test_collect_snippet_refs_inside_while() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             call review
             while review.has_issues {
                 max_iterations = 3
@@ -2993,6 +3080,7 @@ workflow parent {
         // Top-level `always { }` block is parsed into `def.always`, not `def.body`.
         // collect_all_snippet_refs() covers both; here we test the always slice directly.
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             call plan
             always {
                 call cleanup { with = ["always-context"] }
@@ -3007,6 +3095,7 @@ workflow parent {
     fn test_parse_do_while() {
         let input = r#"
 workflow test {
+    meta { targets = ["worktree"] }
     call analyze
     do {
         max_iterations = 3
@@ -3067,6 +3156,7 @@ workflow test {
     fn test_parse_do_while_serde_roundtrip() {
         let input = r#"
 workflow test {
+    meta { targets = ["worktree"] }
     call check
     do {
         max_iterations = 2
@@ -3093,6 +3183,7 @@ workflow test {
     #[test]
     fn test_collect_snippet_refs_inside_do_while() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             do {
                 max_iterations = 2
                 call fix { with = ["do-while-context"] }
@@ -3106,6 +3197,7 @@ workflow test {
     #[test]
     fn test_collect_agent_names_inside_do_while() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             do {
                 max_iterations = 2
                 call fix
@@ -3123,6 +3215,7 @@ workflow test {
     fn test_collect_workflow_refs_in_do_while() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call analyze
     do {
         max_iterations = 3
@@ -3139,6 +3232,7 @@ workflow parent {
     fn test_parse_plain_do_block() {
         let input = r#"
 workflow test {
+    meta { targets = ["worktree"] }
     do {
         output = "review-result"
         with   = ["shared-context", "extra"]
@@ -3169,7 +3263,7 @@ workflow test {
     #[test]
     fn test_parse_plain_do_block_minimal() {
         // Plain do block with no options — just grouping
-        let input = r#"workflow test { do { call build } }"#;
+        let input = r#"workflow test { meta { targets = ["worktree"] } do { call build } }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
         assert_eq!(def.body.len(), 1);
         match &def.body[0] {
@@ -3197,6 +3291,7 @@ workflow test {
     #[test]
     fn test_collect_snippet_refs_inside_do_block() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             do {
                 with = ["block-snippet"]
                 call fix { with = ["call-snippet"] }
@@ -3213,6 +3308,7 @@ workflow test {
     #[test]
     fn test_collect_all_snippet_refs_deduplicates_across_body_and_always() {
         let input = r#"workflow test {
+            meta { targets = ["worktree"] }
             call plan { with = ["shared-context", "body-only"] }
             always {
                 call cleanup { with = ["shared-context", "always-only"] }
@@ -3243,6 +3339,7 @@ workflow test {
     fn test_semantics_valid_simple() {
         let input = r#"
 workflow test {
+    meta { targets = ["worktree"] }
     call plan
     call implement
     while plan.has_issues {
@@ -3265,6 +3362,7 @@ workflow test {
         // `review-aggregator` was never produced — only `review-pr` was
         let input = r#"
 workflow test {
+    meta { targets = ["worktree"] }
     call workflow review-pr
     if review-aggregator.has_review_issues {
         call fix
@@ -3275,7 +3373,7 @@ workflow test {
         let report = validate_workflow_semantics(&def, &|name| {
             if name == "review-pr" {
                 parse_workflow_str(
-                    "workflow review-pr { meta { description = \"r\" trigger = \"manual\" } call review-aggregator }",
+                    "workflow review-pr { meta { description = \"r\" trigger = \"manual\" targets = [\"worktree\"] } call review-aggregator }",
                     "review-pr.wf",
                 )
                 .map_err(|e| e.to_string())
@@ -3294,6 +3392,7 @@ workflow test {
         // check is produced inside do-while body; condition references it after body runs
         let input = r#"
 workflow test {
+    meta { targets = ["worktree"] }
     do {
         max_iterations = 3
         call check
@@ -3316,6 +3415,7 @@ workflow test {
         // the error must mention the step name and include a hint.
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call workflow review-pr
     while review-aggregator.has_review_issues {
         max_iterations = 3
@@ -3327,7 +3427,7 @@ workflow parent {
         let report = validate_workflow_semantics(&def, &|name| {
             if name == "review-pr" {
                 parse_workflow_str(
-                    "workflow review-pr { meta { description = \"r\" trigger = \"manual\" } call review-aggregator }",
+                    "workflow review-pr { meta { description = \"r\" trigger = \"manual\" targets = [\"worktree\"] } call review-aggregator }",
                     "review-pr.wf",
                 )
                 .map_err(|e| e.to_string())
@@ -3347,6 +3447,7 @@ workflow parent {
     fn test_semantics_missing_required_input() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call workflow child
 }
 "#;
@@ -3355,7 +3456,7 @@ workflow parent {
             if name == "child" {
                 parse_workflow_str(
                     r#"workflow child {
-                        meta { description = "c" trigger = "manual" }
+                        meta { description = "c" trigger = "manual" targets = ["worktree"] }
                         inputs { ticket_id required }
                         call do-work
                     }"#,
@@ -3376,6 +3477,7 @@ workflow parent {
     fn test_semantics_provided_required_input_ok() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call workflow child {
         inputs { ticket_id = "{{ticket_id}}" }
     }
@@ -3386,7 +3488,7 @@ workflow parent {
             if name == "child" {
                 parse_workflow_str(
                     r#"workflow child {
-                        meta { description = "c" trigger = "manual" }
+                        meta { description = "c" trigger = "manual" targets = ["worktree"] }
                         inputs { ticket_id required }
                         call do-work
                     }"#,
@@ -3408,6 +3510,7 @@ workflow parent {
     fn test_semantics_sub_workflow_not_found() {
         let input = r#"
 workflow parent {
+    meta { targets = ["worktree"] }
     call workflow missing-workflow
 }
 "#;
@@ -3423,6 +3526,7 @@ workflow parent {
         // `plan` and `implement` are produced in the body; `always` can reference `plan`
         let input = r#"
 workflow test {
+    meta { targets = ["worktree"] }
     call plan
     call implement
     always {
@@ -3445,6 +3549,7 @@ workflow test {
     fn test_semantics_parallel_produces_step_keys() {
         let input = r#"
 workflow test {
+    meta { targets = ["worktree"] }
     parallel {
         call reviewer-security
         call reviewer-style

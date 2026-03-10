@@ -2,6 +2,7 @@ workflow review-pr {
   meta {
     description = "Run review swarm and aggregate findings"
     trigger     = "manual"
+    targets     = ["pr", "worktree"]
   }
 
   parallel {

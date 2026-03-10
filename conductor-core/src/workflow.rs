@@ -5407,6 +5407,7 @@ And here is my actual output:
             name: "test-wf".into(),
             description: "test".into(),
             trigger: WorkflowTrigger::Manual,
+            targets: vec![],
             inputs: vec![],
             body: vec![],
             always: vec![],

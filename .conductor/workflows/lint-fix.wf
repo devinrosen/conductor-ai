@@ -2,6 +2,7 @@ workflow lint-fix {
   meta {
     description = "Analyze lint errors and apply fixes"
     trigger     = "manual"
+    targets     = ["worktree"]
   }
 
   call analyze-lint
