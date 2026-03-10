@@ -492,5 +492,201 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 26)?;
     }
 
+    // Migration 027: make workflow_runs.worktree_id nullable (for ephemeral PR runs),
+    // and make agent_runs.worktree_id nullable with FK preserved (for ephemeral PR runs
+    // that have no registered worktree).
+    if version < 27 {
+        conn.pragma_update(None, "foreign_keys", "off")?;
+
+        conn.execute_batch(
+            "BEGIN;
+
+            -- Recreate workflow_runs with nullable worktree_id
+            CREATE TABLE workflow_runs_new (
+                id                  TEXT PRIMARY KEY,
+                workflow_name       TEXT NOT NULL,
+                worktree_id         TEXT REFERENCES worktrees(id) ON DELETE CASCADE,
+                parent_run_id       TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+                status              TEXT NOT NULL DEFAULT 'pending'
+                                    CHECK (status IN ('pending','running','completed','failed','cancelled','waiting')),
+                dry_run             INTEGER NOT NULL DEFAULT 0,
+                trigger             TEXT NOT NULL DEFAULT 'manual',
+                started_at          TEXT NOT NULL,
+                ended_at            TEXT,
+                result_summary      TEXT,
+                definition_snapshot TEXT,
+                inputs              TEXT
+            );
+            INSERT INTO workflow_runs_new SELECT * FROM workflow_runs;
+            DROP TABLE workflow_runs;
+            ALTER TABLE workflow_runs_new RENAME TO workflow_runs;
+            CREATE INDEX IF NOT EXISTS idx_workflow_runs_worktree ON workflow_runs(worktree_id);
+            CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent ON workflow_runs(parent_run_id);
+
+            -- Recreate agent_runs with nullable worktree_id
+            CREATE TABLE agent_runs_new (
+                id                TEXT PRIMARY KEY,
+                worktree_id       TEXT REFERENCES worktrees(id) ON DELETE CASCADE,
+                claude_session_id TEXT,
+                prompt            TEXT NOT NULL,
+                status            TEXT NOT NULL DEFAULT 'running'
+                                  CHECK (status IN ('running','completed','failed','cancelled','waiting_for_feedback')),
+                result_text       TEXT,
+                cost_usd          REAL,
+                num_turns         INTEGER,
+                duration_ms       INTEGER,
+                started_at        TEXT NOT NULL,
+                ended_at          TEXT,
+                tmux_window       TEXT,
+                log_file          TEXT,
+                model             TEXT,
+                plan              TEXT,
+                parent_run_id     TEXT REFERENCES agent_runs_new(id) ON DELETE SET NULL
+            );
+            INSERT INTO agent_runs_new SELECT * FROM agent_runs;
+            DROP TABLE agent_runs;
+            ALTER TABLE agent_runs_new RENAME TO agent_runs;
+            CREATE INDEX IF NOT EXISTS idx_agent_runs_parent ON agent_runs(parent_run_id);
+            CREATE INDEX IF NOT EXISTS idx_agent_runs_worktree ON agent_runs(worktree_id);
+
+            COMMIT;",
+        )?;
+
+        conn.pragma_update(None, "foreign_keys", "on")?;
+        bump_version(conn, 27)?;
+    }
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    /// Verifies that migration 027 preserves existing rows in `workflow_runs` and
+    /// `agent_runs` when re-creating the tables to make `worktree_id` nullable.
+    ///
+    /// Sets up the schema as it exists at version 26 (NOT NULL worktree_id),
+    /// inserts test rows, applies migration 027, then asserts the rows survived.
+    #[test]
+    fn test_migration_027_preserves_existing_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Disable FK enforcement while building the simplified pre-027 schema.
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+
+        // Build the minimal schema matching version 26.  The column order must
+        // exactly match what migration 027 does with `INSERT … SELECT *`.
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE repos (
+                id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE,
+                local_path TEXT NOT NULL, remote_url TEXT NOT NULL,
+                default_branch TEXT NOT NULL, workspace_dir TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE worktrees (
+                id TEXT PRIMARY KEY, repo_id TEXT NOT NULL,
+                slug TEXT NOT NULL, branch TEXT NOT NULL, path TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL
+            );
+            -- agent_runs at version 26: worktree_id NOT NULL, columns in order
+            CREATE TABLE agent_runs (
+                id                TEXT PRIMARY KEY,
+                worktree_id       TEXT NOT NULL,
+                claude_session_id TEXT,
+                prompt            TEXT NOT NULL,
+                status            TEXT NOT NULL DEFAULT 'running',
+                result_text       TEXT,
+                cost_usd          REAL,
+                num_turns         INTEGER,
+                duration_ms       INTEGER,
+                started_at        TEXT NOT NULL,
+                ended_at          TEXT,
+                tmux_window       TEXT,
+                log_file          TEXT,
+                model             TEXT,
+                plan              TEXT,
+                parent_run_id     TEXT
+            );
+            -- workflow_runs at version 26: worktree_id NOT NULL, columns in order
+            CREATE TABLE workflow_runs (
+                id                  TEXT PRIMARY KEY,
+                workflow_name       TEXT NOT NULL,
+                worktree_id         TEXT NOT NULL,
+                parent_run_id       TEXT NOT NULL,
+                status              TEXT NOT NULL DEFAULT 'pending',
+                dry_run             INTEGER NOT NULL DEFAULT 0,
+                trigger             TEXT NOT NULL DEFAULT 'manual',
+                started_at          TEXT NOT NULL,
+                ended_at            TEXT,
+                result_summary      TEXT,
+                definition_snapshot TEXT,
+                inputs              TEXT
+            );
+            INSERT INTO _conductor_meta VALUES ('schema_version', '26');
+            INSERT INTO repos VALUES ('r1', 'test-repo', '/tmp/repo',
+                'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z');
+            INSERT INTO worktrees VALUES ('w1', 'r1', 'feat-test', 'feat/test',
+                '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z');
+            INSERT INTO agent_runs (id, worktree_id, prompt, started_at)
+                VALUES ('ar1', 'w1', 'workflow', '2024-01-01T00:00:00Z');
+            INSERT INTO workflow_runs (id, workflow_name, worktree_id, parent_run_id,
+                status, dry_run, trigger, started_at)
+                VALUES ('wfr1', 'my-flow', 'w1', 'ar1',
+                        'completed', 0, 'manual', '2024-01-01T00:00:00Z');",
+        )
+        .unwrap();
+
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+
+        // Apply migration 027 (the only pending migration given version = 26).
+        run(&conn).unwrap();
+
+        // The original workflow_runs row must survive the table recreation.
+        let (name, wt_id): (String, Option<String>) = conn
+            .query_row(
+                "SELECT workflow_name, worktree_id FROM workflow_runs WHERE id = 'wfr1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("workflow_runs row must survive migration 027");
+        assert_eq!(name, "my-flow");
+        assert_eq!(wt_id.as_deref(), Some("w1"));
+
+        // The original agent_runs row must also survive.
+        let ar_wt_id: Option<String> = conn
+            .query_row(
+                "SELECT worktree_id FROM agent_runs WHERE id = 'ar1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("agent_runs row must survive migration 027");
+        assert_eq!(ar_wt_id.as_deref(), Some("w1"));
+
+        // After migration 027, worktree_id is nullable — a NULL insert must succeed.
+        conn.execute(
+            "INSERT INTO agent_runs (id, prompt, started_at) \
+             VALUES ('ar2', 'ephemeral', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("agent_runs must accept NULL worktree_id after migration 027");
+
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at) \
+             VALUES ('wfr2', 'eph-flow', NULL, 'ar2', 'running', 0, 'manual', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("workflow_runs must accept NULL worktree_id after migration 027");
+
+        let null_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workflow_runs WHERE worktree_id IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(null_count, 1);
+    }
 }

@@ -40,7 +40,7 @@ pub enum ConductorEvent {
     #[serde(rename = "workflow_run_status_changed")]
     WorkflowRunStatusChanged {
         run_id: String,
-        worktree_id: String,
+        worktree_id: Option<String>,
         status: String,
     },
     #[serde(rename = "workflow_step_status_changed")]
@@ -206,7 +206,7 @@ mod tests {
             (
                 ConductorEvent::WorkflowRunStatusChanged {
                     run_id: "".into(),
-                    worktree_id: "".into(),
+                    worktree_id: None,
                     status: "".into(),
                 },
                 "workflow_run_status_changed",

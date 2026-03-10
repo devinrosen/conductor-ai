@@ -1281,8 +1281,9 @@ impl App {
                         {
                             let run_id = run.id.clone();
                             // In global mode, set the worktree context from the run
+                            // (ephemeral PR runs have no worktree_id — skip)
                             if self.state.selected_worktree_id.is_none() {
-                                self.state.selected_worktree_id = Some(run.worktree_id.clone());
+                                self.state.selected_worktree_id = run.worktree_id.clone();
                             }
                             self.state.selected_workflow_run_id = Some(run_id);
                             self.state.view = View::WorkflowRunDetail;
@@ -3586,7 +3587,7 @@ impl App {
         // Create DB record with tmux window name
         let mgr = AgentManager::new(&self.conn);
         let run = match mgr.create_run(
-            &worktree_id,
+            Some(&worktree_id),
             &prompt,
             Some(&worktree_slug),
             model.as_deref(),
@@ -3786,7 +3787,7 @@ impl App {
         // Create DB record with tmux window name
         let mgr = AgentManager::new(&self.conn);
         let run = match mgr.create_run(
-            &worktree_id,
+            Some(&worktree_id),
             &prompt,
             Some(&worktree_slug),
             model.as_deref(),
@@ -4391,7 +4392,7 @@ impl App {
             let params = WorkflowExecStandalone {
                 config,
                 workflow: def.clone(),
-                worktree_id,
+                worktree_id: Some(worktree_id),
                 worktree_path,
                 repo_path,
                 model: None,

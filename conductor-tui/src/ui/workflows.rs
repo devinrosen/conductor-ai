@@ -142,7 +142,9 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
             ];
 
             if global_mode {
-                let wt_slug = worktree_slug(&state.data.worktrees, |w| w.id == run.worktree_id);
+                let wt_slug = worktree_slug(&state.data.worktrees, |w| {
+                    Some(w.id.as_str()) == run.worktree_id.as_deref()
+                });
                 spans.push(Span::styled(
                     format!("  {wt_slug}"),
                     Style::default().fg(Color::DarkGray),
@@ -213,7 +215,7 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
             .data
             .worktrees
             .iter()
-            .find(|wt| wt.id == run.worktree_id)
+            .find(|wt| Some(wt.id.as_str()) == run.worktree_id.as_deref())
     });
     let run_ticket = run_worktree.and_then(|wt| {
         wt.ticket_id
@@ -508,7 +510,7 @@ fn render_step_agent_activity(
                     .data
                     .worktrees
                     .iter()
-                    .find(|w| w.id == run.worktree_id)
+                    .find(|w| run.worktree_id.as_deref() == Some(w.id.as_str()))
             })
         })
         .map(|wt| wt.path.as_str())

@@ -403,7 +403,7 @@ mod tests {
     fn make_agent_run(worktree_id: &str, status: AgentRunStatus) -> AgentRun {
         AgentRun {
             id: "run-1".into(),
-            worktree_id: worktree_id.into(),
+            worktree_id: Some(worktree_id.to_string()),
             claude_session_id: None,
             prompt: "do stuff".into(),
             status,

@@ -84,9 +84,16 @@ pub fn orchestrate_run(
         crate::error::ConductorError::Agent(format!("Parent run not found: {parent_run_id}"))
     })?;
 
-    // Get the worktree info for tmux window naming
+    // Orchestration requires a registered worktree for tmux window naming.
+    // Ephemeral PR runs (worktree_id == None) are not supported by the orchestrator.
+    let worktree_id = parent_run.worktree_id.as_deref().ok_or_else(|| {
+        crate::error::ConductorError::Agent(
+            "Orchestration is not supported for ephemeral PR runs (no registered worktree)."
+                .to_string(),
+        )
+    })?;
     let wt_mgr = WorktreeManager::new(conn, config);
-    let worktree = wt_mgr.get_by_id(&parent_run.worktree_id)?;
+    let worktree = wt_mgr.get_by_id(worktree_id)?;
 
     let steps = mgr.get_run_steps(parent_run_id)?;
     if steps.is_empty() {
@@ -128,7 +135,7 @@ pub fn orchestrate_run(
         // Create child run record
         let child_window = format!("{}-step-{}", worktree.slug, i + 1);
         let child_run = mgr.create_child_run(
-            &parent_run.worktree_id,
+            Some(worktree_id),
             &child_prompt,
             Some(&child_window),
             model,
@@ -381,7 +388,7 @@ mod tests {
     fn make_parent_run(prompt: &str) -> AgentRun {
         AgentRun {
             id: "parent-1".to_string(),
-            worktree_id: "w1".to_string(),
+            worktree_id: Some("w1".to_string()),
             claude_session_id: None,
             prompt: prompt.to_string(),
             status: AgentRunStatus::Running,
@@ -549,7 +556,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "test", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
         mgr.update_run_completed(&run.id, None, Some("done"), Some(0.05), Some(3), Some(5000))
             .unwrap();
 
@@ -571,7 +578,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "test", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
         mgr.update_run_failed(&run.id, "something broke").unwrap();
 
         let result = agent_runtime::poll_child_completion(
@@ -591,7 +598,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "test", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
         mgr.update_run_cancelled(&run.id).unwrap();
 
         let result = agent_runtime::poll_child_completion(
@@ -630,7 +637,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a run that stays in "running" status
-        let run = mgr.create_run("w1", "test", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
         assert_eq!(run.status, AgentRunStatus::Running);
 
         let result = agent_runtime::poll_child_completion(
@@ -653,7 +660,7 @@ mod tests {
         let config = Config::default();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "test", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
 
         let result = orchestrate_run(
             &conn,
@@ -666,6 +673,31 @@ mod tests {
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
         assert!(err_msg.contains("no plan steps"));
+    }
+
+    #[test]
+    fn test_orchestrate_run_ephemeral_rejected() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a run with no worktree_id (ephemeral PR run)
+        let run = mgr.create_run(None, "test ephemeral", None, None).unwrap();
+
+        let result = orchestrate_run(
+            &conn,
+            &config,
+            &run.id,
+            "/tmp/ephemeral-clone",
+            None,
+            &OrchestratorConfig::default(),
+        );
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("ephemeral") || err_msg.contains("no registered worktree"),
+            "unexpected error message: {err_msg}"
+        );
     }
 
     #[test]

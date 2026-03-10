@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 use conductor_core::error::ConductorError;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
-    execute_workflow, validate_resume_preconditions, InputDecl, WorkflowDef, WorkflowExecConfig,
-    WorkflowExecInput, WorkflowManager, WorkflowResumeStandalone, WorkflowRun, WorkflowRunStatus,
-    WorkflowRunStep,
+    apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
+    WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowManager, WorkflowResumeStandalone,
+    WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -136,7 +136,7 @@ pub async fn run_workflow(
 
     let workflow_name = req.name.clone();
     let dry_run = req.dry_run.unwrap_or(false);
-    let inputs = req.inputs.unwrap_or_default();
+    let mut inputs = req.inputs.unwrap_or_default();
     let wt_id = worktree_id.clone();
 
     // Spawn background task to run the workflow
@@ -155,6 +155,12 @@ pub async fn run_workflow(
                 }
             };
 
+            // Validate required inputs and apply defaults (matches CLI and ephemeral paths)
+            if let Err(e) = apply_workflow_input_defaults(&def, &mut inputs) {
+                tracing::error!("Workflow input validation failed: {e}");
+                return;
+            }
+
             let exec_config = WorkflowExecConfig {
                 dry_run,
                 ..Default::default()
@@ -164,7 +170,7 @@ pub async fn run_workflow(
                 conn: &db,
                 config: &config,
                 workflow: &def,
-                worktree_id: &wt_id,
+                worktree_id: Some(&wt_id),
                 worktree_path: &wt_path,
                 repo_path: &repo_path,
                 model: model.as_deref(),

@@ -751,7 +751,11 @@ impl AppState {
                 _ => {}
             }
             if run.is_active() {
-                let worktree_slug = resolve_slug(run.worktree_id.as_str());
+                let worktree_slug = run
+                    .worktree_id
+                    .as_deref()
+                    .map(&resolve_slug)
+                    .unwrap_or_else(|| "(ephemeral)".to_string());
                 let elapsed_secs = chrono::DateTime::parse_from_rfc3339(&run.started_at)
                     .ok()
                     .map(|dt| {
@@ -777,7 +781,11 @@ impl AppState {
                 run.status,
                 WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
             ) {
-                let worktree_slug = resolve_slug(run.worktree_id.as_str());
+                let worktree_slug = run
+                    .worktree_id
+                    .as_deref()
+                    .map(&resolve_slug)
+                    .unwrap_or_else(|| "(ephemeral)".to_string());
                 gs.active_items.push(GlobalStatusItem::Workflow {
                     worktree_slug,
                     workflow_name: run.workflow_name.clone(),
@@ -1063,7 +1071,7 @@ mod tests {
         conductor_core::workflow::WorkflowRun {
             id: "wfrun-1".into(),
             workflow_name: "test-workflow".into(),
-            worktree_id: worktree_id.into(),
+            worktree_id: Some(worktree_id.into()),
             parent_run_id: "run-1".into(),
             status,
             dry_run: false,
@@ -1082,7 +1090,7 @@ mod tests {
     ) -> conductor_core::agent::AgentRun {
         conductor_core::agent::AgentRun {
             id: "run-1".into(),
-            worktree_id: worktree_id.into(),
+            worktree_id: Some(worktree_id.to_string()),
             claude_session_id: None,
             prompt: "do stuff".into(),
             status,
@@ -1437,6 +1445,43 @@ mod tests {
         state.tick_status_message(Duration::from_secs(4));
         assert!(state.status_message.is_none());
         assert!(state.status_message_at.is_none());
+    }
+
+    /// Verifies that an `AgentRun` with `worktree_id = None` (ephemeral PR run)
+    /// in the active runs map does not panic and produces a `GlobalStatusItem::Agent`
+    /// with an "(ephemeral)" worktree slug.
+    #[test]
+    fn global_status_agent_with_none_worktree_id_uses_ephemeral_slug() {
+        let mut state = AppState::new();
+        let run = conductor_core::agent::AgentRun {
+            id: "run-eph".into(),
+            worktree_id: None,
+            claude_session_id: None,
+            prompt: "ephemeral".into(),
+            status: AgentRunStatus::Running,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
+            tmux_window: None,
+            log_file: None,
+            model: None,
+            plan: None,
+            parent_run_id: None,
+        };
+        // Insert under an arbitrary key to exercise the global_status iteration path.
+        state.data.latest_agent_runs.insert("run-eph".into(), run);
+        let gs = state.global_status();
+        assert_eq!(gs.running_agents, 1);
+        assert_eq!(gs.active_items.len(), 1);
+        match &gs.active_items[0] {
+            GlobalStatusItem::Agent { worktree_slug, .. } => {
+                assert_eq!(worktree_slug, "(ephemeral)");
+            }
+            _ => panic!("expected Agent item"),
+        }
     }
 
     #[test]

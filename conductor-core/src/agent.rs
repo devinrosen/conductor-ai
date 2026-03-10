@@ -286,7 +286,7 @@ impl Default for PlanStep {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRun {
     pub id: String,
-    pub worktree_id: String,
+    pub worktree_id: Option<String>,
     pub claude_session_id: Option<String>,
     pub prompt: String,
     pub status: AgentRunStatus,
@@ -651,7 +651,7 @@ impl<'a> AgentManager<'a> {
 
     pub fn create_run(
         &self,
-        worktree_id: &str,
+        worktree_id: Option<&str>,
         prompt: &str,
         tmux_window: Option<&str>,
         model: Option<&str>,
@@ -661,7 +661,7 @@ impl<'a> AgentManager<'a> {
 
     pub fn create_child_run(
         &self,
-        worktree_id: &str,
+        worktree_id: Option<&str>,
         prompt: &str,
         tmux_window: Option<&str>,
         model: Option<&str>,
@@ -672,7 +672,7 @@ impl<'a> AgentManager<'a> {
 
     fn create_run_with_parent(
         &self,
-        worktree_id: &str,
+        worktree_id: Option<&str>,
         prompt: &str,
         tmux_window: Option<&str>,
         model: Option<&str>,
@@ -683,7 +683,7 @@ impl<'a> AgentManager<'a> {
 
         let run = AgentRun {
             id: id.clone(),
-            worktree_id: worktree_id.to_string(),
+            worktree_id: worktree_id.map(String::from),
             claude_session_id: None,
             prompt: prompt.to_string(),
             status: AgentRunStatus::Running,
@@ -1290,7 +1290,9 @@ impl<'a> AgentManager<'a> {
         self.populate_plans(&mut runs)?;
         let mut map = HashMap::new();
         for run in runs {
-            map.insert(run.worktree_id.clone(), run);
+            if let Some(ref wt_id) = run.worktree_id {
+                map.insert(wt_id.clone(), run);
+            }
         }
         Ok(map)
     }
@@ -1658,17 +1660,43 @@ pub(crate) fn list_live_tmux_windows() -> std::collections::HashSet<String> {
 /// protocol so agents know how to request human input mid-run.
 pub fn build_startup_context(
     conn: &Connection,
-    worktree_id: &str,
+    worktree_id: Option<&str>,
     current_run_id: &str,
     worktree_path: &str,
 ) -> String {
     let mut sections = Vec::new();
 
+    // For ephemeral runs (no worktree), skip worktree-specific context
+    let Some(wt_id) = worktree_id else {
+        // Still include commits + feedback protocol below
+        let commits = Command::new("git")
+            .args(["log", "--oneline", "-10"])
+            .current_dir(worktree_path)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if !commits.is_empty() {
+            sections.push(format!("**Recent commits:**\n{commits}"));
+        }
+        sections.push(
+            "**Feedback protocol:** If you need human input to continue \
+             (e.g. a decision, clarification, or approval), output \
+             `[NEEDS_FEEDBACK] <your question>` as a standalone line. \
+             The conductor will pause your run and surface the question \
+             to the user. When they respond, your run will resume with \
+             their answer."
+                .to_string(),
+        );
+        return sections.join("\n\n---\n\n");
+    };
+
     // 1. Worktree branch
     let branch: Option<String> = conn
         .query_row(
             "SELECT branch FROM worktrees WHERE id = ?1",
-            params![worktree_id],
+            params![wt_id],
             |row| row.get(0),
         )
         .ok();
@@ -1683,7 +1711,7 @@ pub fn build_startup_context(
             "SELECT t.source_id, t.title FROM tickets t \
              JOIN worktrees w ON w.ticket_id = t.id \
              WHERE w.id = ?1",
-            params![worktree_id],
+            params![wt_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .ok();
@@ -1694,7 +1722,7 @@ pub fn build_startup_context(
 
     // 3. Prior runs (excluding the current run being started)
     let mgr = AgentManager::new(conn);
-    if let Ok(runs) = mgr.list_for_worktree(worktree_id) {
+    if let Ok(runs) = mgr.list_for_worktree(wt_id) {
         let prior_runs: Vec<&AgentRun> = runs.iter().filter(|r| r.id != current_run_id).collect();
 
         // Plan steps from the most recent run that has a plan
@@ -1897,7 +1925,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         assert_eq!(run.status, AgentRunStatus::Running);
         assert_eq!(run.prompt, "Fix the bug");
         assert!(run.tmux_window.is_none());
@@ -1913,7 +1943,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let run = mgr
-            .create_run("w1", "Fix the bug", Some("feat-test"), None)
+            .create_run(Some("w1"), "Fix the bug", Some("feat-test"), None)
             .unwrap();
         assert_eq!(run.tmux_window.as_deref(), Some("feat-test"));
 
@@ -1926,7 +1956,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.id, run.id);
         assert_eq!(fetched.prompt, "Fix the bug");
@@ -1940,7 +1972,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         mgr.update_run_completed(
             &run.id,
             Some("sess-123"),
@@ -1962,7 +1996,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         mgr.update_run_failed(&run.id, "Something went wrong")
             .unwrap();
 
@@ -1976,7 +2012,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         mgr.update_run_cancelled(&run.id).unwrap();
 
         let latest = mgr.latest_for_worktree("w1").unwrap().unwrap();
@@ -2002,7 +2040,8 @@ mod tests {
         assert!(!mgr.has_runs_for_worktree("w1").unwrap());
 
         // Create a run
-        mgr.create_run("w1", "First prompt", None, None).unwrap();
+        mgr.create_run(Some("w1"), "First prompt", None, None)
+            .unwrap();
         assert!(mgr.has_runs_for_worktree("w1").unwrap());
 
         // Different worktree still has no runs
@@ -2015,9 +2054,15 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create runs for two different worktrees
-        let _run1 = mgr.create_run("w1", "First prompt", None, None).unwrap();
-        let run2 = mgr.create_run("w1", "Second prompt", None, None).unwrap();
-        let run3 = mgr.create_run("w2", "Other prompt", None, None).unwrap();
+        let _run1 = mgr
+            .create_run(Some("w1"), "First prompt", None, None)
+            .unwrap();
+        let run2 = mgr
+            .create_run(Some("w1"), "Second prompt", None, None)
+            .unwrap();
+        let run3 = mgr
+            .create_run(Some("w2"), "Other prompt", None, None)
+            .unwrap();
 
         let map = mgr.latest_runs_by_worktree().unwrap();
         assert_eq!(map.len(), 2);
@@ -2026,12 +2071,33 @@ mod tests {
     }
 
     #[test]
+    fn test_latest_runs_by_worktree_excludes_none_worktree() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create an ephemeral run with no worktree_id
+        mgr.create_run(None, "ephemeral prompt", None, None)
+            .unwrap();
+        // Create a run with a real worktree_id
+        let run_w1 = mgr
+            .create_run(Some("w1"), "real prompt", None, None)
+            .unwrap();
+
+        let map = mgr.latest_runs_by_worktree().unwrap();
+        // Only the run with a worktree_id should appear
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("w1").unwrap().id, run_w1.id);
+        // Ephemeral run must not appear under any key
+        assert!(!map.contains_key(""));
+    }
+
+    #[test]
     fn test_update_log_file() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
         let run = mgr
-            .create_run("w1", "Fix the bug", Some("feat-test"), None)
+            .create_run(Some("w1"), "Fix the bug", Some("feat-test"), None)
             .unwrap();
         assert!(run.log_file.is_none());
 
@@ -2062,18 +2128,26 @@ mod tests {
             .unwrap();
 
         // Create completed runs on both worktrees
-        let run1 = mgr.create_run("w1", "First task", None, None).unwrap();
+        let run1 = mgr
+            .create_run(Some("w1"), "First task", None, None)
+            .unwrap();
         mgr.update_run_completed(&run1.id, None, None, Some(0.10), Some(5), Some(30000))
             .unwrap();
-        let run2 = mgr.create_run("w1", "Second task", None, None).unwrap();
+        let run2 = mgr
+            .create_run(Some("w1"), "Second task", None, None)
+            .unwrap();
         mgr.update_run_completed(&run2.id, None, None, Some(0.05), Some(3), Some(15000))
             .unwrap();
-        let run3 = mgr.create_run("w2", "Third task", None, None).unwrap();
+        let run3 = mgr
+            .create_run(Some("w2"), "Third task", None, None)
+            .unwrap();
         mgr.update_run_completed(&run3.id, None, None, Some(0.08), Some(4), Some(20000))
             .unwrap();
 
         // Create a running run (should NOT be included)
-        let _run4 = mgr.create_run("w1", "In progress", None, None).unwrap();
+        let _run4 = mgr
+            .create_run(Some("w1"), "In progress", None, None)
+            .unwrap();
 
         let totals = mgr.totals_by_ticket_all().unwrap();
         assert_eq!(totals.len(), 1);
@@ -2099,7 +2173,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         assert!(run.plan.is_none());
 
         let steps = vec![
@@ -2132,7 +2208,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let steps = vec![
             PlanStep {
                 description: "Step one".to_string(),
@@ -2161,7 +2239,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         // Should not error when no plan exists
         mgr.mark_plan_done(&run.id).unwrap();
 
@@ -2174,7 +2254,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let steps = vec![PlanStep {
             description: "Do the thing".to_string(),
             done: true,
@@ -2196,7 +2278,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let steps = vec![
             PlanStep {
                 description: "Step one".to_string(),
@@ -2239,7 +2323,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let steps = vec![PlanStep {
             description: "Step one".to_string(),
             ..Default::default()
@@ -2261,7 +2347,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let steps = vec![
             PlanStep {
                 description: "First".to_string(),
@@ -2293,7 +2381,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let steps1 = vec![PlanStep {
             description: "Old step".to_string(),
             ..Default::default()
@@ -2323,8 +2413,12 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run1 = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
-        let run2 = mgr.create_run("w2", "Other task", None, None).unwrap();
+        let run1 = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+        let run2 = mgr
+            .create_run(Some("w2"), "Other task", None, None)
+            .unwrap();
 
         // No issues yet
         assert!(mgr
@@ -2404,7 +2498,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let t0 = "2024-01-01T00:00:00Z";
         let t1 = "2024-01-01T00:00:02Z";
         let t2 = "2024-01-01T00:00:05Z";
@@ -2436,9 +2532,15 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run1 = mgr.create_run("w1", "First task", None, None).unwrap();
-        let run2 = mgr.create_run("w1", "Second task", None, None).unwrap();
-        let run3 = mgr.create_run("w2", "Other task", None, None).unwrap();
+        let run1 = mgr
+            .create_run(Some("w1"), "First task", None, None)
+            .unwrap();
+        let run2 = mgr
+            .create_run(Some("w1"), "Second task", None, None)
+            .unwrap();
+        let run3 = mgr
+            .create_run(Some("w2"), "Other task", None, None)
+            .unwrap();
 
         let t = "2024-01-01T00:00:00Z";
         mgr.create_event(&run1.id, "text", "Planning", t, None)
@@ -2467,7 +2569,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let prompt_text = "Fix the login bug";
-        let run = mgr.create_run("w1", prompt_text, None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), prompt_text, None, None).unwrap();
 
         let t0 = "2024-01-01T00:00:00Z";
         let t1 = "2024-01-01T00:00:01Z";
@@ -2499,7 +2601,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let t = "2024-01-01T00:00:00Z";
         mgr.create_event(&run.id, "text", "hello", t, None).unwrap();
         mgr.create_event(&run.id, "tool", "[Bash] ls", t, None)
@@ -2567,7 +2671,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let run = mgr
-            .create_run("w1", "Fix the bug", None, Some("claude-sonnet-4-6"))
+            .create_run(Some("w1"), "Fix the bug", None, Some("claude-sonnet-4-6"))
             .unwrap();
         assert_eq!(run.model.as_deref(), Some("claude-sonnet-4-6"));
 
@@ -2580,7 +2684,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         assert!(run.model.is_none());
 
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
@@ -2594,11 +2700,13 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let parent = mgr.create_run("w1", "Supervisor task", None, None).unwrap();
+        let parent = mgr
+            .create_run(Some("w1"), "Supervisor task", None, None)
+            .unwrap();
         assert!(parent.parent_run_id.is_none());
 
         let child = mgr
-            .create_child_run("w1", "Sub-task A", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Sub-task A", None, None, &parent.id)
             .unwrap();
         assert_eq!(child.parent_run_id.as_deref(), Some(parent.id.as_str()));
 
@@ -2611,16 +2719,20 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let parent = mgr.create_run("w1", "Supervisor", None, None).unwrap();
+        let parent = mgr
+            .create_run(Some("w1"), "Supervisor", None, None)
+            .unwrap();
         let _child1 = mgr
-            .create_child_run("w1", "Child 1", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Child 1", None, None, &parent.id)
             .unwrap();
         let _child2 = mgr
-            .create_child_run("w1", "Child 2", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Child 2", None, None, &parent.id)
             .unwrap();
 
         // Unrelated run should not appear
-        let _other = mgr.create_run("w1", "Independent", None, None).unwrap();
+        let _other = mgr
+            .create_run(Some("w1"), "Independent", None, None)
+            .unwrap();
 
         let children = mgr.list_child_runs(&parent.id).unwrap();
         assert_eq!(children.len(), 2);
@@ -2635,19 +2747,19 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Build a tree: parent -> child1, child2 -> grandchild
-        let parent = mgr.create_run("w1", "Root task", None, None).unwrap();
+        let parent = mgr.create_run(Some("w1"), "Root task", None, None).unwrap();
         let child1 = mgr
-            .create_child_run("w1", "Child 1", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Child 1", None, None, &parent.id)
             .unwrap();
         let _child2 = mgr
-            .create_child_run("w2", "Child 2", None, None, &parent.id)
+            .create_child_run(Some("w2"), "Child 2", None, None, &parent.id)
             .unwrap();
         let _grandchild = mgr
-            .create_child_run("w1", "Grandchild", None, None, &child1.id)
+            .create_child_run(Some("w1"), "Grandchild", None, None, &child1.id)
             .unwrap();
 
         // Unrelated run
-        let _other = mgr.create_run("w1", "Other", None, None).unwrap();
+        let _other = mgr.create_run(Some("w1"), "Other", None, None).unwrap();
 
         let tree = mgr.get_run_tree(&parent.id).unwrap();
         assert_eq!(tree.len(), 4); // parent + 2 children + 1 grandchild
@@ -2659,11 +2771,15 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let parent = mgr.create_run("w1", "Supervisor", None, None).unwrap();
-        let _child = mgr
-            .create_child_run("w1", "Child", None, None, &parent.id)
+        let parent = mgr
+            .create_run(Some("w1"), "Supervisor", None, None)
             .unwrap();
-        let standalone = mgr.create_run("w1", "Standalone", None, None).unwrap();
+        let _child = mgr
+            .create_child_run(Some("w1"), "Child", None, None, &parent.id)
+            .unwrap();
+        let standalone = mgr
+            .create_run(Some("w1"), "Standalone", None, None)
+            .unwrap();
 
         let root_runs = mgr.list_root_runs_for_worktree("w1").unwrap();
         assert_eq!(root_runs.len(), 2);
@@ -2678,25 +2794,27 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let parent = mgr.create_run("w1", "Supervisor", None, None).unwrap();
+        let parent = mgr
+            .create_run(Some("w1"), "Supervisor", None, None)
+            .unwrap();
         mgr.update_run_completed(&parent.id, None, None, Some(0.10), Some(5), Some(30000))
             .unwrap();
 
         let child1 = mgr
-            .create_child_run("w1", "Child 1", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Child 1", None, None, &parent.id)
             .unwrap();
         mgr.update_run_completed(&child1.id, None, None, Some(0.05), Some(3), Some(15000))
             .unwrap();
 
         let child2 = mgr
-            .create_child_run("w2", "Child 2", None, None, &parent.id)
+            .create_child_run(Some("w2"), "Child 2", None, None, &parent.id)
             .unwrap();
         mgr.update_run_completed(&child2.id, None, None, Some(0.08), Some(4), Some(20000))
             .unwrap();
 
         // Still-running child should NOT be included in totals
         let _running = mgr
-            .create_child_run("w1", "Still running", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Still running", None, None, &parent.id)
             .unwrap();
 
         let totals = mgr.aggregate_run_tree(&parent.id).unwrap();
@@ -2711,9 +2829,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let parent = mgr.create_run("w1", "Parent", None, None).unwrap();
+        let parent = mgr.create_run(Some("w1"), "Parent", None, None).unwrap();
         let child = mgr
-            .create_child_run("w1", "Child", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Child", None, None, &parent.id)
             .unwrap();
 
         // Delete the parent — ON DELETE SET NULL should clear child's parent_run_id
@@ -2735,10 +2853,10 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a current run (no prior runs, no ticket, non-git path)
-        let current = mgr.create_run("w1", "Do stuff", None, None).unwrap();
+        let current = mgr.create_run(Some("w1"), "Do stuff", None, None).unwrap();
 
         // worktree_path is /tmp which has no git repo → commits section will be empty
-        let text = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let text = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(text.contains("**Worktree:** feat/test"));
         assert!(text.contains("**Feedback protocol:**"));
         assert!(text.contains("[NEEDS_FEEDBACK]"));
@@ -2762,9 +2880,9 @@ mod tests {
             .unwrap();
 
         let mgr = AgentManager::new(&conn);
-        let current = mgr.create_run("w1", "Fix it", None, None).unwrap();
+        let current = mgr.create_run(Some("w1"), "Fix it", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Ticket:** #42 — Fix payment bug"));
     }
 
@@ -2774,7 +2892,9 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a prior completed run with a plan
-        let prior = mgr.create_run("w1", "Prior work", None, None).unwrap();
+        let prior = mgr
+            .create_run(Some("w1"), "Prior work", None, None)
+            .unwrap();
         let steps = vec![
             PlanStep {
                 description: "Read the code".to_string(),
@@ -2798,9 +2918,11 @@ mod tests {
             .unwrap();
 
         // Create current run
-        let current = mgr.create_run("w1", "Continue work", None, None).unwrap();
+        let current = mgr
+            .create_run(Some("w1"), "Continue work", None, None)
+            .unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Plan steps (from prior run):**"));
         assert!(ctx.contains("1. ✅ Read the code"));
         assert!(ctx.contains("2. ✅ Write tests"));
@@ -2813,7 +2935,9 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a prior completed run with a result
-        let prior = mgr.create_run("w1", "Prior task", None, None).unwrap();
+        let prior = mgr
+            .create_run(Some("w1"), "Prior task", None, None)
+            .unwrap();
         mgr.update_run_completed(
             &prior.id,
             None,
@@ -2825,9 +2949,9 @@ mod tests {
         .unwrap();
 
         // Create current run
-        let current = mgr.create_run("w1", "Next task", None, None).unwrap();
+        let current = mgr.create_run(Some("w1"), "Next task", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Prior run outcome (completed):**"));
         assert!(ctx.contains("Successfully implemented the payment module"));
     }
@@ -2838,9 +2962,9 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Only the current run exists (no prior runs)
-        let current = mgr.create_run("w1", "My prompt", None, None).unwrap();
+        let current = mgr.create_run(Some("w1"), "My prompt", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         // Should NOT include any prior run info
         assert!(!ctx.contains("**Plan steps"));
         assert!(!ctx.contains("**Prior run outcome"));
@@ -2852,14 +2976,16 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a prior run with a very long result
-        let prior = mgr.create_run("w1", "Prior task", None, None).unwrap();
+        let prior = mgr
+            .create_run(Some("w1"), "Prior task", None, None)
+            .unwrap();
         let long_result = "x".repeat(1000);
         mgr.update_run_completed(&prior.id, None, Some(&long_result), None, None, None)
             .unwrap();
 
-        let current = mgr.create_run("w1", "Next", None, None).unwrap();
+        let current = mgr.create_run(Some("w1"), "Next", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Prior run outcome (completed):**"));
         // Should be truncated to 500 chars + ellipsis
         assert!(ctx.contains(&"x".repeat(500)));
@@ -2873,14 +2999,16 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // 'é' is 2 bytes; 300 copies = 600 bytes > 500 byte limit
-        let prior = mgr.create_run("w1", "Prior task", None, None).unwrap();
+        let prior = mgr
+            .create_run(Some("w1"), "Prior task", None, None)
+            .unwrap();
         let long_result = "é".repeat(300);
         mgr.update_run_completed(&prior.id, None, Some(&long_result), None, None, None)
             .unwrap();
 
-        let current = mgr.create_run("w1", "Next", None, None).unwrap();
+        let current = mgr.create_run(Some("w1"), "Next", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains('…'));
         // Extract the truncated 'é' portion before the ellipsis
         let ellipsis_pos = ctx.find('…').unwrap();
@@ -2902,7 +3030,9 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a prior run
-        let prior = mgr.create_run("w1", "Prior task", None, None).unwrap();
+        let prior = mgr
+            .create_run(Some("w1"), "Prior task", None, None)
+            .unwrap();
 
         // Add feedback Q&A (before completion, as in real flow)
         let fb = mgr
@@ -2921,9 +3051,9 @@ mod tests {
             .unwrap();
 
         // Create current run
-        let current = mgr.create_run("w1", "Next task", None, None).unwrap();
+        let current = mgr.create_run(Some("w1"), "Next task", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Feedback from prior run:**"));
         assert!(ctx.contains("Should I close this as false positive?"));
         assert!(ctx.contains("Yes, close it"));
@@ -2937,13 +3067,15 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a prior completed run with NO feedback
-        let prior = mgr.create_run("w1", "Prior task", None, None).unwrap();
+        let prior = mgr
+            .create_run(Some("w1"), "Prior task", None, None)
+            .unwrap();
         mgr.update_run_completed(&prior.id, None, Some("Done"), None, None, None)
             .unwrap();
 
-        let current = mgr.create_run("w1", "Next task", None, None).unwrap();
+        let current = mgr.create_run(Some("w1"), "Next task", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(!ctx.contains("**Feedback from prior run:**"));
     }
 
@@ -2954,7 +3086,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let steps = vec![
             PlanStep {
                 description: "Investigate".to_string(),
@@ -2986,7 +3120,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let steps = vec![
             PlanStep {
                 description: "Step 1".to_string(),
@@ -3012,7 +3148,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let steps = vec![PlanStep {
             description: "Step 1".to_string(),
             ..Default::default()
@@ -3031,7 +3169,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let steps = vec![PlanStep {
             description: "Step 1".to_string(),
             ..Default::default()
@@ -3049,7 +3189,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let steps = vec![PlanStep {
             description: "Step 1".to_string(),
             done: true,
@@ -3067,7 +3209,7 @@ mod tests {
     fn test_build_resume_prompt() {
         let run = AgentRun {
             id: "test".to_string(),
-            worktree_id: "w1".to_string(),
+            worktree_id: Some("w1".to_string()),
             claude_session_id: Some("sess-abc".to_string()),
             prompt: "Fix the bug".to_string(),
             status: AgentRunStatus::Failed,
@@ -3110,7 +3252,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         mgr.update_run_failed_with_session(&run.id, "Context exhausted", Some("sess-456"))
             .unwrap();
 
@@ -3125,7 +3269,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         assert!(run.claude_session_id.is_none());
 
         mgr.update_run_session_id(&run.id, "sess-early").unwrap();
@@ -3139,7 +3285,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         // Session ID was saved eagerly during stream
         mgr.update_run_session_id(&run.id, "sess-eager").unwrap();
         // Fail without passing session_id (uses COALESCE to keep existing)
@@ -3164,7 +3312,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let run = mgr
-            .create_run("w1", "Fix the bug", None, Some("claude-sonnet-4-6"))
+            .create_run(Some("w1"), "Fix the bug", None, Some("claude-sonnet-4-6"))
             .unwrap();
         mgr.update_run_completed(
             &run.id,
@@ -3191,7 +3339,7 @@ mod tests {
 
         // Initial run
         let run1 = mgr
-            .create_run("w1", "Implement feature", None, Some("sonnet"))
+            .create_run(Some("w1"), "Implement feature", None, Some("sonnet"))
             .unwrap();
         mgr.update_run_completed(
             &run1.id,
@@ -3206,14 +3354,20 @@ mod tests {
         // Review swarm (parent run with child)
         let review = mgr
             .create_run(
-                "w1",
+                Some("w1"),
                 "PR review swarm for branch 'feat/test'. Coordinating 2 reviewer agents.",
                 None,
                 Some("haiku"),
             )
             .unwrap();
         let child = mgr
-            .create_child_run("w1", "Review correctness", None, Some("haiku"), &review.id)
+            .create_child_run(
+                Some("w1"),
+                "Review correctness",
+                None,
+                Some("haiku"),
+                &review.id,
+            )
             .unwrap();
         mgr.update_run_completed(
             &child.id,
@@ -3248,9 +3402,11 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Parent run
-        let parent = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let parent = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let child = mgr
-            .create_child_run("w1", "Sub-task", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Sub-task", None, None, &parent.id)
             .unwrap();
         mgr.update_run_completed(
             &parent.id,
@@ -3284,7 +3440,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         assert_eq!(run.status, AgentRunStatus::Running);
 
         let fb = mgr
@@ -3306,7 +3464,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let fb = mgr
             .request_feedback(&run.id, "Proceed with refactor?")
             .unwrap();
@@ -3326,7 +3486,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let fb = mgr.request_feedback(&run.id, "Need approval").unwrap();
 
         mgr.dismiss_feedback(&fb.id).unwrap();
@@ -3345,7 +3507,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
 
         // No pending feedback yet
         assert!(mgr.pending_feedback_for_run(&run.id).unwrap().is_none());
@@ -3365,7 +3529,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
 
         // No pending feedback
         assert!(mgr.pending_feedback_for_worktree("w1").unwrap().is_none());
@@ -3383,7 +3549,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
 
         // Create first feedback, respond to it
         let fb1 = mgr.request_feedback(&run.id, "Question 1").unwrap();
@@ -3401,7 +3569,9 @@ mod tests {
         assert_eq!(all[1].status, FeedbackStatus::Responded);
 
         // Different run should have no feedback
-        let run2 = mgr.create_run("w2", "Other task", None, None).unwrap();
+        let run2 = mgr
+            .create_run(Some("w2"), "Other task", None, None)
+            .unwrap();
         assert!(mgr.list_feedback_for_run(&run2.id).unwrap().is_empty());
 
         // Clean up: dismiss fb2 so run goes back to running
@@ -3413,7 +3583,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "Fix the bug", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
         let fb = mgr.request_feedback(&run.id, "Approve?").unwrap();
 
         // Delete the run
@@ -3486,7 +3658,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
         let run = mgr
-            .create_run("w1", "test prompt", Some("nonexistent-win-xyz"), None)
+            .create_run(Some("w1"), "test prompt", Some("nonexistent-win-xyz"), None)
             .unwrap();
         assert!(run.log_file.is_none());
 
@@ -3518,7 +3690,9 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a run with no tmux_window — treated as orphaned
-        let run = mgr.create_run("w1", "test prompt", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "test prompt", None, None)
+            .unwrap();
         assert_eq!(run.status, AgentRunStatus::Running);
 
         let reaped = mgr.reap_orphaned_runs().unwrap();
@@ -3542,7 +3716,7 @@ mod tests {
         // Create a run with a tmux window name that won't exist
         let run = mgr
             .create_run(
-                "w1",
+                Some("w1"),
                 "test prompt",
                 Some("nonexistent-window-xyz-999"),
                 None,
@@ -3562,7 +3736,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "test prompt", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "test prompt", None, None)
+            .unwrap();
         mgr.update_run_completed(&run.id, None, Some("Done"), None, None, None)
             .unwrap();
 
@@ -3576,9 +3752,9 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Two orphaned runs, one completed
-        let r1 = mgr.create_run("w1", "prompt 1", None, None).unwrap();
-        let r2 = mgr.create_run("w1", "prompt 2", None, None).unwrap();
-        let r3 = mgr.create_run("w1", "prompt 3", None, None).unwrap();
+        let r1 = mgr.create_run(Some("w1"), "prompt 1", None, None).unwrap();
+        let r2 = mgr.create_run(Some("w1"), "prompt 2", None, None).unwrap();
+        let r3 = mgr.create_run(Some("w1"), "prompt 3", None, None).unwrap();
         mgr.update_run_completed(&r3.id, None, Some("Done"), None, None, None)
             .unwrap();
 
@@ -3606,9 +3782,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let r1 = mgr.create_run("w1", "Task 1", None, None).unwrap();
-        let r2 = mgr.create_run("w1", "Task 2", None, None).unwrap();
-        let r3 = mgr.create_run("w1", "Task 3", None, None).unwrap();
+        let r1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
+        let r2 = mgr.create_run(Some("w1"), "Task 2", None, None).unwrap();
+        let r3 = mgr.create_run(Some("w1"), "Task 3", None, None).unwrap();
 
         let ids = vec![r1.id.as_str(), r2.id.as_str()];
         let result = mgr.get_runs_by_ids(&ids).unwrap();
@@ -3626,7 +3802,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let _r1 = mgr.create_run("w1", "Task 1", None, None).unwrap();
+        let _r1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
 
         let result = mgr.get_runs_by_ids(&[]).unwrap();
         assert!(result.is_empty());
@@ -3637,7 +3813,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let r1 = mgr.create_run("w1", "Task 1", None, None).unwrap();
+        let r1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
 
         let ids = vec![r1.id.as_str(), "nonexistent-id-xyz"];
         let result = mgr.get_runs_by_ids(&ids).unwrap();
