@@ -201,15 +201,6 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 15)?;
     }
 
-    // Migration 016: create merge_queue table for serializing parallel agent merges.
-    let has_merge_queue: bool = conn.prepare("SELECT id FROM merge_queue LIMIT 0").is_ok();
-    if !has_merge_queue {
-        conn.execute_batch(include_str!("migrations/016_merge_queue.sql"))?;
-    }
-    if version < 16 {
-        bump_version(conn, 16)?;
-    }
-
     // Migration 017: create review_configs table for multi-agent PR review swarms.
     let has_review_configs: bool = conn
         .prepare("SELECT id FROM review_configs LIMIT 0")
@@ -554,6 +545,12 @@ pub fn run(conn: &Connection) -> Result<()> {
 
         conn.pragma_update(None, "foreign_keys", "on")?;
         bump_version(conn, 27)?;
+    }
+
+    // Migration 028: drop the merge_queue table (replaced by gh pr merge --auto).
+    if version < 28 {
+        conn.execute_batch(include_str!("migrations/028_drop_merge_queue.sql"))?;
+        bump_version(conn, 28)?;
     }
 
     Ok(())

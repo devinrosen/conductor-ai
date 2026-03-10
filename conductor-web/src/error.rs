@@ -9,8 +9,7 @@ impl IntoResponse for ApiError {
         let status = match &self.0 {
             ConductorError::RepoNotFound { .. }
             | ConductorError::WorktreeNotFound { .. }
-            | ConductorError::TicketNotFound { .. }
-            | ConductorError::MergeQueueEntryNotFound { .. } => StatusCode::NOT_FOUND,
+            | ConductorError::TicketNotFound { .. } => StatusCode::NOT_FOUND,
             ConductorError::RepoAlreadyExists { .. }
             | ConductorError::WorktreeAlreadyExists { .. }
             | ConductorError::IssueSourceAlreadyExists { .. }
