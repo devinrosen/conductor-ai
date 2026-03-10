@@ -1166,7 +1166,7 @@ pub fn parse_workflow_str(input: &str, source_path: &str) -> Result<WorkflowDef>
     def.source_path = source_path.to_string();
 
     for warning in &parser.warnings {
-        eprintln!("[workflow] Warning in {source_path}: {warning}");
+        tracing::warn!("Warning in {source_path}: {warning}");
     }
 
     Ok(def)
