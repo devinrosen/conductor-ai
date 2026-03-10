@@ -471,6 +471,62 @@ pub fn render_work_target_picker(
     frame.render_widget(content, popup);
 }
 
+pub fn render_post_create_picker(
+    frame: &mut Frame,
+    area: Rect,
+    items: &[crate::state::PostCreateChoice],
+    selected: usize,
+    ticket_source_id: &str,
+) {
+    let height = (items.len() as u16 + 6).min(20);
+    let percent_y = ((height as f32 / area.height as f32) * 100.0) as u16;
+    let popup = centered_rect(50, percent_y.max(25), area);
+    frame.render_widget(Clear, popup);
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  Start work on #{ticket_source_id}?"),
+            Style::default().fg(Color::Cyan),
+        )),
+        Line::from(""),
+    ];
+
+    for (i, item) in items.iter().enumerate() {
+        let is_selected = i == selected;
+        let prefix = if is_selected { "▸ " } else { "  " };
+        let number = format!("{}. ", i + 1);
+
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {prefix}{number}"), style),
+            Span::styled(format!("{item}"), style),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  1-9 select  Enter confirm  Esc skip",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let content = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" Post-Create Actions "),
+    );
+
+    frame.render_widget(content, popup);
+}
+
 pub fn render_work_target_manager(
     frame: &mut Frame,
     area: Rect,

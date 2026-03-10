@@ -23,7 +23,7 @@ use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
 use crate::state::{
     AppState, ConfirmAction, DashboardFocus, FormAction, FormField, InputAction, Modal,
-    RepoDetailFocus, View, WorkflowRunDetailFocus, WorkflowsFocus,
+    PostCreateChoice, RepoDetailFocus, View, WorkflowRunDetailFocus, WorkflowsFocus,
 };
 use crate::ui;
 
@@ -380,6 +380,25 @@ impl App {
             Action::LinkTicket => self.handle_link_ticket(),
             Action::StartWork => self.handle_start_work(),
             Action::SelectWorkTarget(index) => self.handle_select_work_target(index),
+            Action::SelectPostCreateChoice(index) => self.handle_post_create_pick(index),
+            Action::PostCreatePickerReady {
+                items,
+                worktree_id,
+                worktree_path,
+                worktree_slug,
+                ticket_id,
+                repo_path,
+            } => {
+                self.state.modal = Modal::PostCreatePicker {
+                    items,
+                    selected: 0,
+                    worktree_id,
+                    worktree_path,
+                    worktree_slug,
+                    ticket_id,
+                    repo_path,
+                };
+            }
             Action::ManageWorkTargets => self.handle_manage_work_targets(),
             Action::ManageIssueSources => self.handle_manage_issue_sources(),
             Action::IssueSourceAdd => self.handle_issue_source_add(),
@@ -910,6 +929,14 @@ impl App {
                 wrap_decrement(selected, targets.len());
                 return;
             }
+            Modal::PostCreatePicker {
+                ref items,
+                ref mut selected,
+                ..
+            } => {
+                wrap_decrement(selected, items.len());
+                return;
+            }
             Modal::WorkTargetManager {
                 ref targets,
                 ref mut selected,
@@ -1018,6 +1045,14 @@ impl App {
                 ref mut selected,
             } => {
                 wrap_increment(selected, targets.len());
+                return;
+            }
+            Modal::PostCreatePicker {
+                ref items,
+                ref mut selected,
+                ..
+            } => {
+                wrap_increment(selected, items.len());
                 return;
             }
             Modal::WorkTargetManager {
@@ -1407,19 +1442,6 @@ impl App {
                     }
                 }
             }
-            ConfirmAction::StartAgentForWorktree {
-                worktree_id,
-                worktree_path,
-                worktree_slug,
-                ticket_id,
-            } => {
-                self.show_agent_prompt_for_ticket(
-                    worktree_id,
-                    worktree_path,
-                    worktree_slug,
-                    ticket_id,
-                );
-            }
             ConfirmAction::DeleteWorkTarget { index } => {
                 if index < self.config.general.work_targets.len() {
                     let removed = self.config.general.work_targets.remove(index);
@@ -1591,7 +1613,10 @@ impl App {
                         self.refresh_data();
 
                         if let Some(tid) = ticket_id {
-                            self.maybe_start_agent_for_worktree(wt.id, wt.path, wt.slug, tid);
+                            let repo_id = wt.repo_id.clone();
+                            self.maybe_start_agent_for_worktree(
+                                wt.id, wt.path, wt.slug, tid, repo_id,
+                            );
                         }
                     }
                     Err(e) => {
@@ -2775,6 +2800,77 @@ impl App {
         self.open_work_target(&targets[actual_index], &wt);
     }
 
+    fn handle_post_create_pick(&mut self, index: usize) {
+        // Resolve the selected index while borrowing the modal immutably
+        let actual_index = if let Modal::PostCreatePicker {
+            ref items,
+            selected,
+            ..
+        } = self.state.modal
+        {
+            let idx = if index == usize::MAX { selected } else { index };
+            if idx >= items.len() {
+                return;
+            }
+            idx
+        } else {
+            return;
+        };
+
+        // Take ownership of the modal to avoid cloning the entire items Vec
+        let modal = std::mem::replace(&mut self.state.modal, Modal::None);
+        let (items, worktree_id, worktree_path, worktree_slug, ticket_id, repo_path) =
+            if let Modal::PostCreatePicker {
+                items,
+                worktree_id,
+                worktree_path,
+                worktree_slug,
+                ticket_id,
+                repo_path,
+                ..
+            } = modal
+            {
+                (
+                    items,
+                    worktree_id,
+                    worktree_path,
+                    worktree_slug,
+                    ticket_id,
+                    repo_path,
+                )
+            } else {
+                unreachable!()
+            };
+
+        // Use into_iter to take ownership of the selected item without cloning
+        let choice = items.into_iter().nth(actual_index).unwrap();
+
+        match choice {
+            PostCreateChoice::StartAgent => {
+                self.show_agent_prompt_for_ticket(
+                    worktree_id,
+                    worktree_path,
+                    worktree_slug,
+                    ticket_id,
+                );
+            }
+            PostCreateChoice::RunWorkflow { def, .. } => {
+                let mut inputs = std::collections::HashMap::new();
+                inputs.insert("ticket_id".to_string(), ticket_id);
+                self.spawn_workflow_in_background(
+                    def,
+                    worktree_id,
+                    worktree_path,
+                    repo_path,
+                    inputs,
+                );
+            }
+            PostCreateChoice::Skip => {
+                // No-op — modal already dismissed
+            }
+        }
+    }
+
     fn resolve_selected_worktree(&self) -> Option<conductor_core::worktree::Worktree> {
         self.state
             .selected_worktree_id
@@ -3477,30 +3573,79 @@ impl App {
         worktree_path: String,
         worktree_slug: String,
         ticket_id: String,
+        repo_id: String,
     ) {
         match self.config.general.auto_start_agent {
-            AutoStartAgent::Never => {}
-            AutoStartAgent::Ask => {
-                self.state.modal = Modal::Confirm {
-                    title: "Start Agent".to_string(),
-                    message: "Start an AI agent for this ticket?".to_string(),
-                    on_confirm: ConfirmAction::StartAgentForWorktree {
-                        worktree_id,
-                        worktree_path,
-                        worktree_slug,
-                        ticket_id,
-                    },
-                };
-            }
+            AutoStartAgent::Never => return,
             AutoStartAgent::Always => {
+                // Skip the picker and go straight to the agent prompt
                 self.show_agent_prompt_for_ticket(
                     worktree_id,
                     worktree_path,
                     worktree_slug,
                     ticket_id,
                 );
+                return;
             }
+            AutoStartAgent::Ask => {}
         }
+
+        // Look up the repo path for workflow discovery
+        let repo_path = match self
+            .state
+            .data
+            .repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .map(|r| r.local_path.clone())
+        {
+            Some(path) => path,
+            None => {
+                tracing::warn!(
+                    "could not find repo with id {repo_id}; \
+                     falling back to empty repo_path for workflow discovery"
+                );
+                String::new()
+            }
+        };
+
+        // Discover manual workflows in a background thread to avoid blocking the UI
+        let bg_tx = self.bg_tx.clone();
+        let wt_path = worktree_path.clone();
+        let rp = repo_path.clone();
+        std::thread::spawn(move || {
+            use conductor_core::workflow::{WorkflowManager, WorkflowTrigger};
+            let manual_defs: Vec<_> = match WorkflowManager::list_defs(&wt_path, &rp) {
+                Ok(defs) => defs
+                    .into_iter()
+                    .filter(|d| d.trigger == WorkflowTrigger::Manual)
+                    .collect(),
+                Err(e) => {
+                    tracing::warn!("failed to list workflow defs: {e}");
+                    Vec::new()
+                }
+            };
+
+            let mut items = vec![PostCreateChoice::StartAgent];
+            for def in manual_defs {
+                items.push(PostCreateChoice::RunWorkflow {
+                    name: def.name.clone(),
+                    def,
+                });
+            }
+            items.push(PostCreateChoice::Skip);
+
+            if let Some(ref tx) = bg_tx {
+                let _ = tx.send(Action::PostCreatePickerReady {
+                    items,
+                    worktree_id,
+                    worktree_path,
+                    worktree_slug,
+                    ticket_id,
+                    repo_path,
+                });
+            }
+        });
     }
 
     fn show_agent_prompt_for_ticket(
@@ -4132,11 +4277,28 @@ impl App {
             .map(|r| r.local_path.clone())
             .unwrap_or_default();
 
+        self.spawn_workflow_in_background(
+            def,
+            wt.id,
+            wt.path,
+            repo_path,
+            std::collections::HashMap::new(),
+        );
+    }
+
+    /// Spawn a workflow execution in a background thread, reporting result via bg_tx.
+    fn spawn_workflow_in_background(
+        &mut self,
+        def: conductor_core::workflow::WorkflowDef,
+        worktree_id: String,
+        worktree_path: String,
+        repo_path: String,
+        inputs: std::collections::HashMap<String, String>,
+    ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
         let workflow_name = def.name.clone();
 
-        // Spawn workflow execution in a background thread
         std::thread::spawn(move || {
             use conductor_core::workflow::{
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
@@ -4145,12 +4307,12 @@ impl App {
             let params = WorkflowExecStandalone {
                 config,
                 workflow: def.clone(),
-                worktree_id: wt.id.clone(),
-                worktree_path: wt.path.clone(),
+                worktree_id,
+                worktree_path,
                 repo_path,
                 model: None,
                 exec_config: WorkflowExecConfig::default(),
-                inputs: std::collections::HashMap::new(),
+                inputs,
             };
 
             let result = execute_workflow_standalone(&params);
