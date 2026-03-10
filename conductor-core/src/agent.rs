@@ -739,6 +739,36 @@ impl<'a> AgentManager<'a> {
         }
     }
 
+    /// Batch-load multiple agent runs by ID in a single query.
+    ///
+    /// Returns a map from run ID → `AgentRun`. Missing IDs are silently skipped.
+    /// Plan steps are **not** loaded (callers only need cost/turn/duration data).
+    pub fn get_runs_by_ids(&self, ids: &[&str]) -> Result<HashMap<String, AgentRun>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
+             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
+             model, plan, parent_run_id \
+             FROM agent_runs WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+        let params: Vec<&dyn rusqlite::types::ToSql> = ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(&*params, row_to_agent_run)?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let run = row?;
+            map.insert(run.id.clone(), run);
+        }
+        Ok(map)
+    }
+
     pub fn update_run_completed(
         &self,
         run_id: &str,
