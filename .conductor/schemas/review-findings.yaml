@@ -9,6 +9,15 @@ fields:
       suggestion?:
         type: string
         desc: "Suggested fix or remediation"
+  off_diff_findings?:
+    type: array
+    desc: "Issues found in unchanged/removed code — filed as separate issues, do not affect approval"
+    items:
+      title: string
+      file: string
+      line: number
+      severity: enum(critical, warning, suggestion)
+      body: string
   approved: boolean
   summary: string
 
