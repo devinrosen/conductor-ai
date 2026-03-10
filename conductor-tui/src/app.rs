@@ -3989,44 +3989,7 @@ impl App {
             return;
         };
 
-        // Try pbcopy (macOS), then xclip, then xsel
-        let copy_result = Command::new("pbcopy")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .or_else(|_| {
-                Command::new("xclip")
-                    .args(["-selection", "clipboard"])
-                    .stdin(std::process::Stdio::piped())
-                    .spawn()
-            })
-            .or_else(|_| {
-                Command::new("xsel")
-                    .arg("--clipboard")
-                    .stdin(std::process::Stdio::piped())
-                    .spawn()
-            });
-
-        match copy_result {
-            Ok(mut child) => {
-                use std::io::Write;
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(code_block.as_bytes());
-                    drop(stdin); // Close stdin so clipboard tool sees EOF
-                }
-                match child.wait() {
-                    Ok(status) if status.success() => {
-                        self.state.status_message = Some("Copied to clipboard".to_string());
-                    }
-                    _ => {
-                        self.state.status_message = Some("Clipboard command failed".to_string());
-                    }
-                }
-            }
-            Err(_) => {
-                self.state.status_message =
-                    Some("No clipboard tool found (pbcopy/xclip/xsel)".to_string());
-            }
-        }
+        self.copy_text_to_clipboard(code_block);
     }
 
     fn handle_expand_agent_event(&mut self) {
@@ -4114,10 +4077,18 @@ impl App {
             4 => {
                 // Path row: open a new tmux window in the worktree directory
                 let path = wt.path.clone();
-                let _ = Command::new("tmux")
+                match Command::new("tmux")
                     .args(["new-window", "-c", &path])
-                    .spawn();
-                self.state.status_message = Some(format!("Opened tmux window at {path}"));
+                    .spawn()
+                {
+                    Ok(_) => {
+                        self.state.status_message = Some(format!("Opened tmux window at {path}"));
+                    }
+                    Err(e) => {
+                        self.state.status_message =
+                            Some(format!("Failed to open tmux window: {e}"));
+                    }
+                }
             }
             _ => {
                 self.state.status_message =
