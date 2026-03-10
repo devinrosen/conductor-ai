@@ -242,6 +242,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_pr_ref_repo_slug() {
+        let pr = PrRef {
+            owner: "acme".to_string(),
+            repo: "my-repo".to_string(),
+            number: 42,
+        };
+        assert_eq!(pr.repo_slug(), "acme/my-repo");
+    }
+
+    #[test]
     fn test_parse_pr_ref_full_url() {
         let pr = parse_pr_ref("https://github.com/acme/my-repo/pull/42").unwrap();
         assert_eq!(pr.owner, "acme");
