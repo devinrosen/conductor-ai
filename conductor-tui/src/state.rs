@@ -751,7 +751,11 @@ impl AppState {
                 _ => {}
             }
             if run.is_active() {
-                let worktree_slug = resolve_slug(run.worktree_id.as_deref().unwrap_or(""));
+                let worktree_slug = run
+                    .worktree_id
+                    .as_deref()
+                    .map(&resolve_slug)
+                    .unwrap_or_else(|| "(ephemeral)".to_string());
                 let elapsed_secs = chrono::DateTime::parse_from_rfc3339(&run.started_at)
                     .ok()
                     .map(|dt| {
@@ -777,7 +781,11 @@ impl AppState {
                 run.status,
                 WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
             ) {
-                let worktree_slug = resolve_slug(run.worktree_id.as_deref().unwrap_or(""));
+                let worktree_slug = run
+                    .worktree_id
+                    .as_deref()
+                    .map(&resolve_slug)
+                    .unwrap_or_else(|| "(ephemeral)".to_string());
                 gs.active_items.push(GlobalStatusItem::Workflow {
                     worktree_slug,
                     workflow_name: run.workflow_name.clone(),
@@ -1441,9 +1449,9 @@ mod tests {
 
     /// Verifies that an `AgentRun` with `worktree_id = None` (ephemeral PR run)
     /// in the active runs map does not panic and produces a `GlobalStatusItem::Agent`
-    /// with an empty worktree slug (the `unwrap_or("")` fallback path).
+    /// with an "(ephemeral)" worktree slug.
     #[test]
-    fn global_status_agent_with_none_worktree_id_uses_empty_slug() {
+    fn global_status_agent_with_none_worktree_id_uses_ephemeral_slug() {
         let mut state = AppState::new();
         let run = conductor_core::agent::AgentRun {
             id: "run-eph".into(),
@@ -1470,7 +1478,7 @@ mod tests {
         assert_eq!(gs.active_items.len(), 1);
         match &gs.active_items[0] {
             GlobalStatusItem::Agent { worktree_slug, .. } => {
-                assert_eq!(worktree_slug, "");
+                assert_eq!(worktree_slug, "(ephemeral)");
             }
             _ => panic!("expected Agent item"),
         }

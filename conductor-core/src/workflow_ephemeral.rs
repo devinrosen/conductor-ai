@@ -121,19 +121,20 @@ pub fn checkout_pr(pr: &PrRef, dir: &Path) -> Result<String> {
     })?;
 
     // Step 1: clone the repo (shallow)
-    let status = Command::new("gh")
+    let output = Command::new("gh")
         .args(["repo", "clone", &repo_slug, dir_str, "--", "--depth=1"])
-        .status()
+        .output()
         .map_err(|e| ConductorError::Workflow(format!("Failed to run 'gh repo clone': {e}")))?;
 
-    if !status.success() {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(ConductorError::Workflow(format!(
-            "gh repo clone failed for {repo_slug}"
+            "gh repo clone failed for {repo_slug}: {stderr}"
         )));
     }
 
     // Step 2: checkout the PR branch
-    let status = Command::new("gh")
+    let output = Command::new("gh")
         .args([
             "pr",
             "checkout",
@@ -143,12 +144,13 @@ pub fn checkout_pr(pr: &PrRef, dir: &Path) -> Result<String> {
             "--force",
         ])
         .current_dir(dir)
-        .status()
+        .output()
         .map_err(|e| ConductorError::Workflow(format!("Failed to run 'gh pr checkout': {e}")))?;
 
-    if !status.success() {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(ConductorError::Workflow(format!(
-            "gh pr checkout {} failed for {repo_slug}",
+            "gh pr checkout {} failed for {repo_slug}: {stderr}",
             pr.number
         )));
     }

@@ -1894,24 +1894,26 @@ fn run_agent(
     } else {
         // Resuming: carry forward the plan from the previous run
         // Look up the previous run that owns this session_id
-        if let Ok(prev_runs) = mgr.list_for_worktree(run.worktree_id.as_deref().unwrap_or("")) {
-            let prev_run = prev_runs
-                .iter()
-                .find(|r| r.claude_session_id.as_deref() == resume_session_id && r.id != run_id);
-            if let Some(prev) = prev_run {
-                if prev.has_incomplete_plan_steps() {
-                    let incomplete: Vec<&PlanStep> = prev.incomplete_plan_steps();
-                    eprintln!(
-                        "[conductor] Resuming with {} incomplete plan steps:",
-                        incomplete.len()
-                    );
-                    for (i, step) in incomplete.iter().enumerate() {
-                        eprintln!("  {}. {}", i + 1, step.description);
-                    }
-                    // Carry forward the full plan to the new run
-                    if let Some(ref plan) = prev.plan {
-                        if let Err(e) = mgr.update_run_plan(run_id, plan) {
-                            eprintln!("[conductor] Warning: could not carry forward plan: {e}");
+        if let Some(wt_id) = run.worktree_id.as_deref() {
+            if let Ok(prev_runs) = mgr.list_for_worktree(wt_id) {
+                let prev_run = prev_runs.iter().find(|r| {
+                    r.claude_session_id.as_deref() == resume_session_id && r.id != run_id
+                });
+                if let Some(prev) = prev_run {
+                    if prev.has_incomplete_plan_steps() {
+                        let incomplete: Vec<&PlanStep> = prev.incomplete_plan_steps();
+                        eprintln!(
+                            "[conductor] Resuming with {} incomplete plan steps:",
+                            incomplete.len()
+                        );
+                        for (i, step) in incomplete.iter().enumerate() {
+                            eprintln!("  {}. {}", i + 1, step.description);
+                        }
+                        // Carry forward the full plan to the new run
+                        if let Some(ref plan) = prev.plan {
+                            if let Err(e) = mgr.update_run_plan(run_id, plan) {
+                                eprintln!("[conductor] Warning: could not carry forward plan: {e}");
+                            }
                         }
                     }
                 }
