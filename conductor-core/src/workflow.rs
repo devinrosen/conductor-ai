@@ -1092,7 +1092,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     // Execute main body
     let body_result = execute_nodes(&mut state, &workflow.body);
     if let Err(ref e) = body_result {
-        eprintln!("[workflow] Body execution error: {e}");
+        tracing::error!("Body execution error: {e}");
         state.all_succeeded = false;
     }
 
@@ -1109,7 +1109,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
             .insert("workflow_status".to_string(), workflow_status.to_string());
         let always_result = execute_nodes(&mut state, &workflow.always);
         if let Err(ref e) = always_result {
-            eprintln!("[workflow] Always block error (non-fatal): {e}");
+            tracing::warn!("Always block error (non-fatal): {e}");
             // Don't change all_succeeded for always failures
         }
     }
@@ -1128,21 +1128,15 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
             Some(state.total_duration_ms),
         )?;
         wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Completed, Some(&summary))?;
-        eprintln!(
-            "[workflow] Workflow '{}' completed successfully",
-            workflow.name
-        );
+        tracing::info!("Workflow '{}' completed successfully", workflow.name);
     } else {
         agent_mgr.update_run_failed(&parent_run.id, &summary)?;
         wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Failed, Some(&summary))?;
-        eprintln!(
-            "[workflow] Workflow '{}' finished with failures",
-            workflow.name
-        );
+        tracing::warn!("Workflow '{}' finished with failures", workflow.name);
     }
 
-    eprintln!(
-        "[workflow] Total: ${:.4}, {} turns, {:.1}s",
+    tracing::info!(
+        "Total: ${:.4}, {} turns, {:.1}s",
         state.total_cost,
         state.total_turns,
         state.total_duration_ms as f64 / 1000.0
@@ -1242,8 +1236,8 @@ fn run_on_fail_agent(
     retries: u32,
     iteration: u32,
 ) {
-    eprintln!(
-        "[workflow] All retries exhausted for '{}', running on_fail agent '{}'",
+    tracing::warn!(
+        "All retries exhausted for '{}', running on_fail agent '{}'",
         step_label,
         on_fail_agent.label(),
     );
@@ -1265,10 +1259,7 @@ fn run_on_fail_agent(
         with: Vec::new(),
     };
     if let Err(e) = execute_call(state, &on_fail_node, iteration) {
-        eprintln!(
-            "[workflow] on_fail agent '{}' also failed: {e}",
-            on_fail_agent.label(),
-        );
+        tracing::warn!("on_fail agent '{}' also failed: {e}", on_fail_agent.label(),);
     }
 
     state.inputs.remove("failed_step");
@@ -1471,8 +1462,8 @@ fn execute_call_with_schema(
             Some(attempt as i64),
         )?;
 
-        eprintln!(
-            "[workflow] Step '{}' (attempt {}/{}): spawning in '{}'",
+        tracing::info!(
+            "Step '{}' (attempt {}/{}): spawning in '{}'",
             agent_label,
             attempt + 1,
             max_attempts,
@@ -1487,7 +1478,7 @@ fn execute_call_with_schema(
             step_model,
             &child_window,
         ) {
-            eprintln!("[workflow] Failed to spawn child: {e}");
+            tracing::warn!("Failed to spawn child: {e}");
             let _ = state
                 .agent_mgr
                 .update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
@@ -1522,8 +1513,8 @@ fn execute_call_with_schema(
                 ) {
                     Ok(result) => result,
                     Err(validation_err) => {
-                        eprintln!(
-                            "[workflow] Step '{}' structured output validation failed: {validation_err}",
+                        tracing::warn!(
+                            "Step '{}' structured output validation failed: {validation_err}",
                             agent_label,
                         );
                         state.wf_mgr.update_step_status(
@@ -1543,8 +1534,8 @@ fn execute_call_with_schema(
                 let markers_json = serde_json::to_string(&markers).unwrap_or_default();
 
                 if succeeded {
-                    eprintln!(
-                        "[workflow] Step '{}' completed: cost=${:.4}, {} turns, markers={:?}",
+                    tracing::info!(
+                        "Step '{}' completed: cost=${:.4}, {} turns, markers={:?}",
                         agent_label,
                         completed_run.cost_usd.unwrap_or(0.0),
                         completed_run.num_turns.unwrap_or(0),
@@ -1579,8 +1570,8 @@ fn execute_call_with_schema(
 
                     return Ok(());
                 } else {
-                    eprintln!(
-                        "[workflow] Step '{}' failed (attempt {}/{}): {}",
+                    tracing::warn!(
+                        "Step '{}' failed (attempt {}/{}): {}",
                         agent_label,
                         attempt + 1,
                         max_attempts,
@@ -1607,7 +1598,7 @@ fn execute_call_with_schema(
                 }
             }
             Err(e) => {
-                eprintln!("[workflow] Step '{}' poll error: {e}", agent_label);
+                tracing::warn!("Step '{}' poll error: {e}", agent_label);
                 let _ = state.agent_mgr.update_run_cancelled(&child_run.id);
                 state.wf_mgr.update_step_status(
                     &step_id,
@@ -1659,7 +1650,7 @@ fn execute_call_workflow(
         if state.exec_config.fail_fast {
             return Err(ConductorError::Workflow(msg));
         }
-        eprintln!("[workflow] {msg}");
+        tracing::error!("{msg}");
         return Ok(());
     }
 
@@ -1699,8 +1690,8 @@ fn execute_call_workflow(
             Some(attempt as i64),
         )?;
 
-        eprintln!(
-            "[workflow] Step 'workflow:{}' (attempt {}/{}): executing sub-workflow",
+        tracing::info!(
+            "Step 'workflow:{}' (attempt {}/{}): executing sub-workflow",
             node.workflow,
             attempt + 1,
             max_attempts,
@@ -1715,7 +1706,7 @@ fn execute_call_workflow(
                     "Sub-workflow '{}' requires input '{}' but it was not provided",
                     node.workflow, missing,
                 );
-                eprintln!("[workflow] {msg}");
+                tracing::warn!("{msg}");
                 state.wf_mgr.update_step_status(
                     &step_id,
                     WorkflowStepStatus::Failed,
@@ -1747,9 +1738,11 @@ fn execute_call_workflow(
         match execute_workflow(&child_input) {
             Ok(result) => {
                 if result.all_succeeded {
-                    eprintln!(
-                        "[workflow] Sub-workflow '{}' completed: cost=${:.4}, {} turns",
-                        node.workflow, result.total_cost, result.total_turns,
+                    tracing::info!(
+                        "Sub-workflow '{}' completed: cost=${:.4}, {} turns",
+                        node.workflow,
+                        result.total_cost,
+                        result.total_turns,
                     );
 
                     // Bubble up the child's final step output (markers + context)
@@ -1789,12 +1782,7 @@ fn execute_call_workflow(
                     return Ok(());
                 } else {
                     let msg = format!("Sub-workflow '{}' failed", node.workflow);
-                    eprintln!(
-                        "[workflow] {} (attempt {}/{})",
-                        msg,
-                        attempt + 1,
-                        max_attempts,
-                    );
+                    tracing::warn!("{} (attempt {}/{})", msg, attempt + 1, max_attempts,);
                     state.wf_mgr.update_step_status(
                         &step_id,
                         WorkflowStepStatus::Failed,
@@ -1810,12 +1798,7 @@ fn execute_call_workflow(
             }
             Err(e) => {
                 let msg = format!("Sub-workflow '{}' error: {e}", node.workflow);
-                eprintln!(
-                    "[workflow] {} (attempt {}/{})",
-                    msg,
-                    attempt + 1,
-                    max_attempts,
-                );
+                tracing::warn!("{} (attempt {}/{})", msg, attempt + 1, max_attempts,);
                 state.wf_mgr.update_step_status(
                     &step_id,
                     WorkflowStepStatus::Failed,
@@ -1854,8 +1837,8 @@ fn fetch_child_final_output(
     let steps = match wf_mgr.get_workflow_steps(workflow_run_id) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!(
-                "[workflow] Failed to fetch steps for child workflow run '{}': {e}",
+            tracing::warn!(
+                "Failed to fetch steps for child workflow run '{}': {e}",
                 workflow_run_id,
             );
             return (Vec::new(), String::new());
@@ -1875,8 +1858,8 @@ fn fetch_child_final_output(
                 .as_deref()
                 .map(|m| {
                     serde_json::from_str(m).unwrap_or_else(|e| {
-                        eprintln!(
-                            "[workflow] Malformed markers_out JSON in step '{}': {e}",
+                        tracing::warn!(
+                            "Malformed markers_out JSON in step '{}': {e}",
                             step.step_name,
                         );
                         Vec::new()
@@ -1898,15 +1881,17 @@ fn execute_if(state: &mut ExecutionState<'_>, node: &IfNode) -> Result<()> {
         .unwrap_or(false);
 
     if has_marker {
-        eprintln!(
-            "[workflow] if {}.{} — condition met, executing body",
-            node.step, node.marker
+        tracing::info!(
+            "if {}.{} — condition met, executing body",
+            node.step,
+            node.marker
         );
         execute_nodes(state, &node.body)?;
     } else {
-        eprintln!(
-            "[workflow] if {}.{} — condition not met, skipping",
-            node.step, node.marker
+        tracing::info!(
+            "if {}.{} — condition not met, skipping",
+            node.step,
+            node.marker
         );
     }
 
@@ -1921,15 +1906,17 @@ fn execute_unless(state: &mut ExecutionState<'_>, node: &UnlessNode) -> Result<(
         .unwrap_or(false);
 
     if !has_marker {
-        eprintln!(
-            "[workflow] unless {}.{} — marker absent, executing body",
-            node.step, node.marker
+        tracing::info!(
+            "unless {}.{} — marker absent, executing body",
+            node.step,
+            node.marker
         );
         execute_nodes(state, &node.body)?;
     } else {
-        eprintln!(
-            "[workflow] unless {}.{} — marker present, skipping",
-            node.step, node.marker
+        tracing::info!(
+            "unless {}.{} — marker present, skipping",
+            node.step,
+            node.marker
         );
     }
 
@@ -1949,17 +1936,21 @@ fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) -> Result<()>
             .unwrap_or(false);
 
         if !has_marker {
-            eprintln!(
-                "[workflow] while {}.{} — condition no longer met after {} iterations",
-                node.step, node.marker, iteration
+            tracing::info!(
+                "while {}.{} — condition no longer met after {} iterations",
+                node.step,
+                node.marker,
+                iteration
             );
             break;
         }
 
         if iteration >= node.max_iterations {
-            eprintln!(
-                "[workflow] while {}.{} — reached max_iterations ({})",
-                node.step, node.marker, node.max_iterations
+            tracing::warn!(
+                "while {}.{} — reached max_iterations ({})",
+                node.step,
+                node.marker,
+                node.max_iterations
             );
             match node.on_max_iter {
                 OnMaxIter::Fail => {
@@ -1973,8 +1964,8 @@ fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) -> Result<()>
             }
         }
 
-        eprintln!(
-            "[workflow] while {}.{} — iteration {}/{}",
+        tracing::info!(
+            "while {}.{} — iteration {}/{}",
             node.step,
             node.marker,
             iteration + 1,
@@ -2003,9 +1994,11 @@ fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) -> Result<()>
             if prev_marker_sets.len() >= stuck_after as usize {
                 let window = &prev_marker_sets[prev_marker_sets.len() - stuck_after as usize..];
                 if window.iter().all(|s| s == &current_markers) {
-                    eprintln!(
-                        "[workflow] while {}.{} — stuck: identical markers for {} consecutive iterations",
-                        node.step, node.marker, stuck_after
+                    tracing::warn!(
+                        "while {}.{} — stuck: identical markers for {} consecutive iterations",
+                        node.step,
+                        node.marker,
+                        stuck_after
                     );
                     state.all_succeeded = false;
                     return Err(ConductorError::Workflow(format!(
@@ -2030,8 +2023,8 @@ fn execute_parallel(
     let group_id = ulid::Ulid::new().to_string();
     let pos_base = state.position;
 
-    eprintln!(
-        "[workflow] parallel: spawning {} agents (fail_fast={}, min_success={:?})",
+    tracing::info!(
+        "parallel: spawning {} agents (fail_fast={}, min_success={:?})",
         node.calls.len(),
         node.fail_fast,
         node.min_success,
@@ -2128,7 +2121,7 @@ fn execute_parallel(
             step_model,
             &window_name,
         ) {
-            eprintln!("[workflow] Failed to spawn parallel agent '{agent_label}': {e}");
+            tracing::warn!("Failed to spawn parallel agent '{agent_label}': {e}");
             let _ = state
                 .agent_mgr
                 .update_run_failed(&child_run.id, &format!("spawn failed: {e}"));
@@ -2165,13 +2158,13 @@ fn execute_parallel(
             break;
         }
         if start.elapsed() > state.exec_config.step_timeout {
-            eprintln!("[workflow] parallel: timeout reached");
+            tracing::warn!("parallel: timeout reached");
             // Cancel remaining
             for (i, child) in children.iter().enumerate() {
                 if !completed.contains(&i) {
                     if let Err(e) = state.agent_mgr.update_run_cancelled(&child.child_run_id) {
-                        eprintln!(
-                            "[workflow] parallel: failed to cancel run for '{}': {e}",
+                        tracing::warn!(
+                            "parallel: failed to cancel run for '{}': {e}",
                             child.agent_name
                         );
                     }
@@ -2187,8 +2180,8 @@ fn execute_parallel(
                         None,
                         None,
                     ) {
-                        eprintln!(
-                            "[workflow] parallel: failed to update timed-out step for '{}': {e}",
+                        tracing::warn!(
+                            "parallel: failed to update timed-out step for '{}': {e}",
                             child.agent_name
                         );
                     }
@@ -2219,8 +2212,8 @@ fn execute_parallel(
                             succeeded,
                         )
                         .unwrap_or_else(|e| {
-                            eprintln!(
-                                "[workflow] parallel: '{}' schema validation failed, falling back: {e}",
+                            tracing::warn!(
+                                "parallel: '{}' schema validation failed, falling back: {e}",
                                 child.agent_name
                             );
                             let fb = run
@@ -2252,8 +2245,8 @@ fn execute_parallel(
                             None,
                             structured_json.as_deref(),
                         ) {
-                            eprintln!(
-                                "[workflow] parallel: failed to update step status for '{}': {e}",
+                            tracing::warn!(
+                                "parallel: failed to update step status for '{}': {e}",
                                 child.agent_name
                             );
                         }
@@ -2268,8 +2261,8 @@ fn execute_parallel(
                             state.total_duration_ms += dur;
                         }
 
-                        eprintln!(
-                            "[workflow] parallel: '{}' {} (cost=${:.4})",
+                        tracing::info!(
+                            "parallel: '{}' {} (cost=${:.4})",
                             child.agent_name,
                             if succeeded { "completed" } else { "failed" },
                             run.cost_usd.unwrap_or(0.0),
@@ -2277,14 +2270,14 @@ fn execute_parallel(
 
                         // fail_fast: cancel remaining on first failure
                         if !succeeded && node.fail_fast {
-                            eprintln!("[workflow] parallel: fail_fast — cancelling remaining");
+                            tracing::warn!("parallel: fail_fast — cancelling remaining");
                             for (j, other) in children.iter().enumerate() {
                                 if !completed.contains(&j) {
                                     if let Err(e) =
                                         state.agent_mgr.update_run_cancelled(&other.child_run_id)
                                     {
-                                        eprintln!(
-                                            "[workflow] parallel: failed to cancel run for '{}': {e}",
+                                        tracing::warn!(
+                                            "parallel: failed to cancel run for '{}': {e}",
                                             other.agent_name
                                         );
                                     }
@@ -2304,8 +2297,8 @@ fn execute_parallel(
                                         None,
                                         None,
                                     ) {
-                                        eprintln!(
-                                            "[workflow] parallel: failed to update step for '{}': {e}",
+                                        tracing::warn!(
+                                            "parallel: failed to update step for '{}': {e}",
                                             other.agent_name
                                         );
                                     }
@@ -2325,13 +2318,13 @@ fn execute_parallel(
 
     // Apply min_success policy
     let min_required = node.min_success.unwrap_or(children.len() as u32);
-    eprintln!(
-        "[workflow] parallel: {successes} succeeded, {failures} failed out of {} agents",
+    tracing::info!(
+        "parallel: {successes} succeeded, {failures} failed out of {} agents",
         children.len()
     );
     if successes < min_required {
-        eprintln!(
-            "[workflow] parallel: only {}/{} succeeded (min_success={})",
+        tracing::warn!(
+            "parallel: only {}/{} succeeded (min_success={})",
             successes,
             children.len(),
             min_required
@@ -2369,7 +2362,7 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
 
     // Dry-run: auto-approve all gates
     if state.exec_config.dry_run {
-        eprintln!("[workflow] gate '{}': dry-run auto-approved", node.name);
+        tracing::info!("gate '{}': dry-run auto-approved", node.name);
         let step_id = state.wf_mgr.insert_step(
             &state.workflow_run_id,
             &node.name,
@@ -2425,20 +2418,20 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
 
     match node.gate_type {
         GateType::HumanApproval | GateType::HumanReview => {
-            eprintln!("[workflow] Gate '{}' waiting for human action:", node.name);
+            tracing::info!("Gate '{}' waiting for human action:", node.name);
             if let Some(ref p) = node.prompt {
-                eprintln!("  Prompt: {p}");
+                tracing::info!("  Prompt: {p}");
             }
-            eprintln!(
+            tracing::info!(
                 "  Approve:  conductor workflow gate-approve {}",
                 state.workflow_run_id
             );
-            eprintln!(
+            tracing::info!(
                 "  Reject:   conductor workflow gate-reject {}",
                 state.workflow_run_id
             );
             if node.gate_type == GateType::HumanReview {
-                eprintln!(
+                tracing::info!(
                     "  Feedback: conductor workflow gate-feedback {} \"<text>\"",
                     state.workflow_run_id
                 );
@@ -2471,7 +2464,7 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                     if step.gate_approved_at.is_some()
                         || step.status == WorkflowStepStatus::Completed
                     {
-                        eprintln!("[workflow] Gate '{}' approved", node.name);
+                        tracing::info!("Gate '{}' approved", node.name);
                         if let Some(ref feedback) = step.gate_feedback {
                             state.last_gate_feedback = Some(feedback.clone());
                         }
@@ -2483,7 +2476,7 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                         return Ok(());
                     }
                     if step.status == WorkflowStepStatus::Failed {
-                        eprintln!("[workflow] Gate '{}' rejected", node.name);
+                        tracing::warn!("Gate '{}' rejected", node.name);
                         state.all_succeeded = false;
                         state.wf_mgr.update_workflow_status(
                             &state.workflow_run_id,
@@ -2501,10 +2494,7 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
             }
         }
         GateType::PrApproval => {
-            eprintln!(
-                "[workflow] Gate '{}' polling for PR approvals...",
-                node.name
-            );
+            tracing::info!("Gate '{}' polling for PR approvals...", node.name);
             let start = std::time::Instant::now();
             loop {
                 if start.elapsed() > Duration::from_secs(node.timeout_secs) {
@@ -2531,9 +2521,11 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                                 })
                                 .unwrap_or(0);
                             if approvals >= node.min_approvals {
-                                eprintln!(
-                                    "[workflow] Gate '{}': {} approvals (required {})",
-                                    node.name, approvals, node.min_approvals
+                                tracing::info!(
+                                    "Gate '{}': {} approvals (required {})",
+                                    node.name,
+                                    approvals,
+                                    node.min_approvals
                                 );
                                 state.wf_mgr.approve_gate(&step_id, "gh", None)?;
                                 state.wf_mgr.update_workflow_status(
@@ -2551,7 +2543,7 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
             }
         }
         GateType::PrChecks => {
-            eprintln!("[workflow] Gate '{}' polling for PR checks...", node.name);
+            tracing::info!("Gate '{}' polling for PR checks...", node.name);
             let start = std::time::Instant::now();
             loop {
                 if start.elapsed() > Duration::from_secs(node.timeout_secs) {
@@ -2574,10 +2566,7 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                                             || c["state"].as_str() == Some("SKIPPED")
                                     });
                                 if all_pass {
-                                    eprintln!(
-                                        "[workflow] Gate '{}': all checks passing",
-                                        node.name
-                                    );
+                                    tracing::info!("Gate '{}': all checks passing", node.name);
                                     state.wf_mgr.approve_gate(&step_id, "gh", None)?;
                                     state.wf_mgr.update_workflow_status(
                                         &state.workflow_run_id,
@@ -2602,7 +2591,7 @@ fn handle_gate_timeout(
     step_id: &str,
     node: &GateNode,
 ) -> Result<()> {
-    eprintln!("[workflow] Gate '{}' timed out", node.name);
+    tracing::warn!("Gate '{}' timed out", node.name);
     match node.on_timeout {
         OnTimeout::Fail => {
             state.wf_mgr.update_step_status(

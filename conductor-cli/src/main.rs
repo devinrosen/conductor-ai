@@ -461,6 +461,16 @@ enum TicketCommands {
 }
 
 fn main() -> Result<()> {
+    // Initialize tracing subscriber so workflow engine log events appear on
+    // stderr for CLI users.  Respects RUST_LOG; defaults to `info`.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_target(false)
+        .init();
+
     let cli = Cli::parse();
     let config = load_config()?;
     ensure_dirs(&config)?;
