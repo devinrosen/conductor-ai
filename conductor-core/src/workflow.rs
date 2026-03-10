@@ -2195,7 +2195,13 @@ fn execute_do(state: &mut ExecutionState<'_>, node: &DoNode) -> Result<()> {
     }
 
     for body_node in &node.body {
-        execute_single_node(state, body_node, 0)?;
+        if let Err(e) = execute_single_node(state, body_node, 0) {
+            // Restore block-level context before propagating so that
+            // always-blocks and subsequent nodes don't inherit do-block state.
+            state.block_output = saved_output;
+            state.block_with = saved_with;
+            return Err(e);
+        }
         if !state.all_succeeded && state.exec_config.fail_fast {
             break;
         }
@@ -4611,5 +4617,129 @@ And here is my actual output:
             !matches!(result, Err(ConductorError::WorkflowRunAlreadyActive { .. })),
             "child workflow should not be blocked by active parent run"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // execute_do tests (plain do {} block)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_execute_do_empty_body() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+
+        let node = DoNode {
+            output: None,
+            with: vec![],
+            body: vec![],
+        };
+
+        let result = execute_do(&mut state, &node);
+        assert!(result.is_ok());
+        assert!(state.all_succeeded);
+    }
+
+    #[test]
+    fn test_execute_do_sets_and_restores_block_state() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+        state.exec_config.dry_run = true;
+
+        // Set some outer block state that should be saved and restored
+        state.block_output = Some("outer-schema".into());
+        state.block_with = vec!["outer-snippet".into()];
+
+        let node = DoNode {
+            output: Some("inner-schema".into()),
+            with: vec!["inner-snippet".into()],
+            // Use a Gate in dry_run mode as a no-op body node
+            body: vec![WorkflowNode::Gate(GateNode {
+                name: "noop".into(),
+                gate_type: GateType::HumanApproval,
+                prompt: None,
+                min_approvals: 1,
+                timeout_secs: 1,
+                on_timeout: OnTimeout::Fail,
+            })],
+        };
+
+        let result = execute_do(&mut state, &node);
+        assert!(result.is_ok());
+
+        // After execute_do, outer state must be restored
+        assert_eq!(state.block_output.as_deref(), Some("outer-schema"));
+        assert_eq!(state.block_with, vec!["outer-snippet".to_string()]);
+    }
+
+    #[test]
+    fn test_execute_do_restores_state_on_error() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+
+        state.block_output = Some("outer-schema".into());
+        state.block_with = vec!["outer-snippet".into()];
+
+        // A call node without dry_run and no real agent will error
+        let node = DoNode {
+            output: Some("inner-schema".into()),
+            with: vec!["inner-snippet".into()],
+            body: vec![WorkflowNode::Call(CallNode {
+                agent: AgentRef::Name("nonexistent-agent".into()),
+                retries: 0,
+                on_fail: None,
+                output: None,
+                with: vec![],
+            })],
+        };
+
+        let result = execute_do(&mut state, &node);
+        assert!(result.is_err());
+
+        // Block state must be restored even after error
+        assert_eq!(state.block_output.as_deref(), Some("outer-schema"));
+        assert_eq!(state.block_with, vec!["outer-snippet".to_string()]);
+    }
+
+    #[test]
+    fn test_execute_do_fail_fast_exits_early() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+        state.exec_config.fail_fast = true;
+        state.exec_config.dry_run = true;
+        state.all_succeeded = false; // simulate prior failure
+
+        let initial_position = state.position;
+
+        let node = DoNode {
+            output: None,
+            with: vec![],
+            body: vec![
+                WorkflowNode::Gate(GateNode {
+                    name: "g1".into(),
+                    gate_type: GateType::HumanApproval,
+                    prompt: None,
+                    min_approvals: 1,
+                    timeout_secs: 1,
+                    on_timeout: OnTimeout::Fail,
+                }),
+                WorkflowNode::Gate(GateNode {
+                    name: "g2".into(),
+                    gate_type: GateType::HumanApproval,
+                    prompt: None,
+                    min_approvals: 1,
+                    timeout_secs: 1,
+                    on_timeout: OnTimeout::Fail,
+                }),
+            ],
+        };
+
+        let result = execute_do(&mut state, &node);
+        assert!(result.is_ok());
+        // fail_fast should skip after first node — only 1 position increment
+        assert_eq!(state.position - initial_position, 1);
     }
 }

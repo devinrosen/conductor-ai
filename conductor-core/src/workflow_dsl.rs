@@ -2975,6 +2975,69 @@ workflow parent {
     }
 
     #[test]
+    fn test_parse_plain_do_block() {
+        let input = r#"
+workflow test {
+    do {
+        output = "review-result"
+        with   = ["shared-context", "extra"]
+        call reviewer_a
+        call reviewer_b
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.body.len(), 1);
+        match &def.body[0] {
+            WorkflowNode::Do(n) => {
+                assert_eq!(n.output.as_deref(), Some("review-result"));
+                assert_eq!(n.with, vec!["shared-context", "extra"]);
+                assert_eq!(n.body.len(), 2);
+                // Verify body contains the expected calls
+                match &n.body[0] {
+                    WorkflowNode::Call(c) => {
+                        assert_eq!(c.agent, AgentRef::Name("reviewer_a".to_string()))
+                    }
+                    _ => panic!("Expected Call node"),
+                }
+            }
+            _ => panic!("Expected Do node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_plain_do_block_minimal() {
+        // Plain do block with no options — just grouping
+        let input = r#"workflow test { do { call build } }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.body.len(), 1);
+        match &def.body[0] {
+            WorkflowNode::Do(n) => {
+                assert!(n.output.is_none());
+                assert!(n.with.is_empty());
+                assert_eq!(n.body.len(), 1);
+            }
+            _ => panic!("Expected Do node"),
+        }
+    }
+
+    #[test]
+    fn test_collect_snippet_refs_inside_do_block() {
+        let input = r#"workflow test {
+            do {
+                with = ["block-snippet"]
+                call fix { with = ["call-snippet"] }
+            }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let refs = collect_snippet_refs(&def.body);
+        // Should include both the do-block's `with` and the inner call's `with`
+        assert!(refs.contains(&"block-snippet".to_string()));
+        assert!(refs.contains(&"call-snippet".to_string()));
+        assert_eq!(refs.len(), 2);
+    }
+
+    #[test]
     fn test_collect_all_snippet_refs_deduplicates_across_body_and_always() {
         let input = r#"workflow test {
             call plan { with = ["shared-context", "body-only"] }
