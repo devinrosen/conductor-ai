@@ -1124,10 +1124,13 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     };
 
     // Execute main body
+    let mut body_error: Option<String> = None;
     let body_result = execute_nodes(&mut state, &workflow.body);
     if let Err(ref e) = body_result {
-        tracing::error!("Body execution error: {e}");
+        let msg = e.to_string();
+        tracing::error!("Body execution error: {msg}");
         state.all_succeeded = false;
+        body_error = Some(msg);
     }
 
     // Execute always block regardless of outcome
@@ -1149,7 +1152,10 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     }
 
     // Build summary
-    let summary = build_workflow_summary(&state);
+    let mut summary = build_workflow_summary(&state);
+    if let Some(ref err) = body_error {
+        summary.push_str(&format!("\nError: {err}"));
+    }
 
     // Finalize
     if state.all_succeeded {

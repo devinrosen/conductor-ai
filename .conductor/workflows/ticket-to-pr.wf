@@ -16,7 +16,7 @@ workflow ticket-to-pr {
 
   call push-and-pr
 
-  do review-aggregator.has_review_issues {
+  do {
     max_iterations = 4
     stuck_after    = 2
     on_max_iter    = fail
@@ -26,5 +26,5 @@ workflow ticket-to-pr {
     if review-aggregator.has_review_issues {
       call address-reviews
     }
-  }
+  } while review-aggregator.has_review_issues
 }
