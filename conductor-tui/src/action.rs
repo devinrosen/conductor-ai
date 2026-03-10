@@ -206,6 +206,7 @@ pub enum Action {
 
     // Workflow actions
     RunWorkflow,
+    RunPrWorkflow,
     ResumeWorkflow,
     CancelWorkflow,
     ApproveGate,

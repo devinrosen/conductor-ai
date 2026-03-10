@@ -183,5 +183,18 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             *loading,
             error.as_deref(),
         ),
+        Modal::PrWorkflowPicker {
+            pr_number,
+            pr_title,
+            workflow_defs,
+            selected,
+        } => modal::render_pr_workflow_picker(
+            frame,
+            area,
+            *pr_number,
+            pr_title,
+            workflow_defs,
+            *selected,
+        ),
     }
 }

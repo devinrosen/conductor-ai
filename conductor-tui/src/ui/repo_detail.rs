@@ -237,12 +237,18 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             .collect()
     };
 
+    let pr_title = if pr_focused && !state.detail_prs.is_empty() {
+        " PRs  r:run workflow "
+    } else {
+        " PRs "
+    };
+
     let pr_list = List::new(pr_items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(pr_border)
-                .title(" PRs "),
+                .title(pr_title),
         )
         .highlight_style(
             Style::default()
