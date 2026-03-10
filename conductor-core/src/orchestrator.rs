@@ -135,7 +135,7 @@ pub fn orchestrate_run(
         // Create child run record
         let child_window = format!("{}-step-{}", worktree.slug, i + 1);
         let child_run = mgr.create_child_run(
-            worktree_id,
+            Some(worktree_id),
             &child_prompt,
             Some(&child_window),
             model,
@@ -556,7 +556,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "test", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
         mgr.update_run_completed(&run.id, None, Some("done"), Some(0.05), Some(3), Some(5000))
             .unwrap();
 
@@ -578,7 +578,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "test", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
         mgr.update_run_failed(&run.id, "something broke").unwrap();
 
         let result = agent_runtime::poll_child_completion(
@@ -598,7 +598,7 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "test", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
         mgr.update_run_cancelled(&run.id).unwrap();
 
         let result = agent_runtime::poll_child_completion(
@@ -637,7 +637,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         // Create a run that stays in "running" status
-        let run = mgr.create_run("w1", "test", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
         assert_eq!(run.status, AgentRunStatus::Running);
 
         let result = agent_runtime::poll_child_completion(
@@ -660,7 +660,7 @@ mod tests {
         let config = Config::default();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "test", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
 
         let result = orchestrate_run(
             &conn,

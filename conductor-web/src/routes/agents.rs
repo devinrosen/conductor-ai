@@ -116,14 +116,19 @@ pub async fn start_agent(
     // Create DB record (child or top-level)
     let run = if let Some(ref parent_id) = body.parent_run_id {
         agent_mgr.create_child_run(
-            &worktree_id,
+            Some(&worktree_id),
             &body.prompt,
             Some(&wt.slug),
             model.as_deref(),
             parent_id,
         )?
     } else {
-        agent_mgr.create_run(&worktree_id, &body.prompt, Some(&wt.slug), model.as_deref())?
+        agent_mgr.create_run(
+            Some(&worktree_id),
+            &body.prompt,
+            Some(&wt.slug),
+            model.as_deref(),
+        )?
     };
 
     // Build conductor agent run command
@@ -508,7 +513,12 @@ pub async fn orchestrate_agent(
         .map(str::to_string);
 
     // Create parent run record (this is the orchestrator run)
-    let run = agent_mgr.create_run(&worktree_id, &body.prompt, Some(&wt.slug), model.as_deref())?;
+    let run = agent_mgr.create_run(
+        Some(&worktree_id),
+        &body.prompt,
+        Some(&wt.slug),
+        model.as_deref(),
+    )?;
 
     // Build conductor agent orchestrate command
     let mut args = vec![

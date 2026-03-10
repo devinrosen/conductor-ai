@@ -315,7 +315,7 @@ mod tests {
         let conn = setup_db();
         let agent_mgr = AgentManager::new(&conn);
         // Create an ephemeral parent agent run (empty worktree_id → stored as NULL)
-        let parent = agent_mgr.create_run("", "workflow", None, None).unwrap();
+        let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
 
         let mgr = WorkflowManager::new(&conn);
         // Create an ephemeral workflow run with worktree_id = None and a definition snapshot
@@ -361,7 +361,7 @@ mod tests {
         let conn = setup_db();
         let agent_mgr = AgentManager::new(&conn);
         // Ephemeral runs pass "" as worktree_id to agent_runs (stored as NULL after migration 027)
-        let parent = agent_mgr.create_run("", "workflow", None, None).unwrap();
+        let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
 
         let mgr = WorkflowManager::new(&conn);
         let run = mgr

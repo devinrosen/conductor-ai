@@ -3587,7 +3587,7 @@ impl App {
         // Create DB record with tmux window name
         let mgr = AgentManager::new(&self.conn);
         let run = match mgr.create_run(
-            &worktree_id,
+            Some(&worktree_id),
             &prompt,
             Some(&worktree_slug),
             model.as_deref(),
@@ -3787,7 +3787,7 @@ impl App {
         // Create DB record with tmux window name
         let mgr = AgentManager::new(&self.conn);
         let run = match mgr.create_run(
-            &worktree_id,
+            Some(&worktree_id),
             &prompt,
             Some(&worktree_slug),
             model.as_deref(),

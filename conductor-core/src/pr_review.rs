@@ -154,7 +154,7 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
         pr_branch,
         roles.len()
     );
-    let parent_run = mgr.create_run(worktree_id, &parent_prompt, None, model)?;
+    let parent_run = mgr.create_run(Some(worktree_id), &parent_prompt, None, model)?;
 
     // Create plan steps — one per reviewer role
     let plan_steps: Vec<PlanStep> = roles
@@ -188,7 +188,7 @@ pub fn run_review_swarm(input: &ReviewSwarmInput<'_>) -> Result<ReviewSwarmResul
         }
 
         let child_run = mgr.create_child_run(
-            worktree_id,
+            Some(worktree_id),
             &child_prompt,
             Some(&child_window),
             model,
@@ -1354,12 +1354,12 @@ mod tests {
     fn setup_two_child_runs(
         mgr: &AgentManager,
     ) -> (AgentRun, AgentRun, Vec<(usize, AgentRun, ReviewerRole)>) {
-        let parent = mgr.create_run("w1", "parent", None, None).unwrap();
+        let parent = mgr.create_run(Some("w1"), "parent", None, None).unwrap();
         let r1 = mgr
-            .create_child_run("w1", "review1", None, None, &parent.id)
+            .create_child_run(Some("w1"), "review1", None, None, &parent.id)
             .unwrap();
         let r2 = mgr
-            .create_child_run("w1", "review2", None, None, &parent.id)
+            .create_child_run(Some("w1"), "review2", None, None, &parent.id)
             .unwrap();
         let roles = test_reviewer_roles();
         let child_runs: Vec<(usize, AgentRun, ReviewerRole)> = vec![
@@ -1855,7 +1855,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "test review", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "test review", None, None)
+            .unwrap();
         mgr.update_run_completed(
             &run.id,
             None,
@@ -1882,7 +1884,9 @@ mod tests {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
 
-        let run = mgr.create_run("w1", "test review", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "test review", None, None)
+            .unwrap();
 
         let result = poll_reviewer_completion(
             &conn,
@@ -1923,7 +1927,7 @@ mod tests {
         // that the merge queue manager correctly enqueues
         let mq = MergeQueueManager::new(&conn);
         let mgr = AgentManager::new(&conn);
-        let run = mgr.create_run("w1", "review", None, None).unwrap();
+        let run = mgr.create_run(Some("w1"), "review", None, None).unwrap();
         let entry = mq.enqueue("r1", "w1", Some(&run.id), None).unwrap();
         assert_eq!(entry.status, "queued");
 

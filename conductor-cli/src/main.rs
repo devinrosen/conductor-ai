@@ -736,7 +736,7 @@ fn main() -> Result<()> {
                                         .or(config.general.model.as_deref());
                                     let agent_mgr = AgentManager::new(&conn);
                                     let run = agent_mgr.create_run(
-                                        &wt.id,
+                                        Some(&wt.id),
                                         &prompt,
                                         Some(&wt.slug),
                                         model,
