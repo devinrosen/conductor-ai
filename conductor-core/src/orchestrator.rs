@@ -618,7 +618,10 @@ mod tests {
             None,
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("not found"));
+        assert!(matches!(
+            result.unwrap_err(),
+            agent_runtime::PollError::Other(_)
+        ));
     }
 
     #[test]
@@ -638,7 +641,10 @@ mod tests {
             None,
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("timed out"));
+        assert!(matches!(
+            result.unwrap_err(),
+            agent_runtime::PollError::Timeout(_)
+        ));
     }
 
     #[test]

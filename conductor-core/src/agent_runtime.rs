@@ -75,32 +75,52 @@ fn verify_tmux_window(window_name: &str) -> std::result::Result<(), String> {
     }
 }
 
+/// Typed error returned by [`poll_child_completion`].
+#[derive(Debug)]
+pub enum PollError {
+    /// The caller's shutdown flag was set; the poll was aborted early.
+    Shutdown,
+    /// The child run did not reach a terminal state within the allotted time.
+    Timeout(String),
+    /// Any other error (DB error, run not found, etc.).
+    Other(String),
+}
+
+impl std::fmt::Display for PollError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PollError::Shutdown => write!(f, "executor shutdown requested"),
+            PollError::Timeout(msg) | PollError::Other(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
 /// Poll the database for a child run to reach a terminal status.
 ///
 /// If `shutdown` is provided and the flag is set to `true` during polling,
-/// returns `Err("shutdown: workflow cancelled: TUI was closed")` immediately.
+/// returns [`PollError::Shutdown`] immediately.
 pub fn poll_child_completion(
     conn: &Connection,
     child_run_id: &str,
     poll_interval: Duration,
     timeout: Duration,
     shutdown: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
-) -> std::result::Result<AgentRun, String> {
+) -> std::result::Result<AgentRun, PollError> {
     let start = std::time::Instant::now();
 
     loop {
         if let Some(flag) = shutdown {
-            if flag.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err("shutdown: workflow cancelled: TUI was closed".to_string());
+            if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(PollError::Shutdown);
             }
         }
 
         if start.elapsed() > timeout {
-            return Err(format!(
+            return Err(PollError::Timeout(format!(
                 "Child run {} timed out after {:.0}s",
                 child_run_id,
                 timeout.as_secs_f64()
-            ));
+            )));
         }
 
         let mgr = AgentManager::new(conn);
@@ -112,10 +132,14 @@ pub fn poll_child_completion(
                 AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback => {}
             },
             Ok(None) => {
-                return Err(format!("Child run {child_run_id} not found in database"));
+                return Err(PollError::Other(format!(
+                    "Child run {child_run_id} not found in database"
+                )));
             }
             Err(e) => {
-                return Err(format!("Database error polling child run: {e}"));
+                return Err(PollError::Other(format!(
+                    "Database error polling child run: {e}"
+                )));
             }
         }
 

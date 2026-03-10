@@ -796,43 +796,41 @@ impl<'a> WorkflowManager<'a> {
     /// Recover steps stuck in `running` status whose child agent run has
     /// already reached a terminal state (completed, failed, or cancelled).
     ///
-    /// This handles the case where the TUI (or any executor) was killed before
-    /// the workflow thread could write the step's final status back to the DB.
+    /// This handles the case where the executor was killed before the workflow
+    /// thread could write the step's final status back to the DB.
     /// Returns the number of steps recovered.
     pub fn recover_stuck_steps(&self) -> Result<usize> {
-        let stuck: Vec<(String, String)> = query_collect(
+        // Single JOIN query: avoids N+1 per-step lookups and skips the
+        // per-run plan-step fetch that AgentManager::get_run() would do.
+        let stuck: Vec<(String, String, String, Option<String>)> = query_collect(
             self.conn,
-            "SELECT id, child_run_id FROM workflow_run_steps \
-             WHERE status = 'running' AND child_run_id IS NOT NULL",
+            "SELECT wrs.id, ar.id, ar.status, ar.result_text \
+             FROM workflow_run_steps wrs \
+             JOIN agent_runs ar ON ar.id = wrs.child_run_id \
+             WHERE wrs.status = 'running' \
+               AND ar.status IN ('completed', 'failed', 'cancelled')",
             params![],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
 
-        let agent_mgr = AgentManager::new(self.conn);
         let mut recovered = 0usize;
 
-        for (step_id, child_run_id) in stuck {
-            let run = match agent_mgr.get_run(&child_run_id) {
-                Ok(Some(r)) => r,
-                _ => continue,
+        for (step_id, child_run_id, ar_status, result_text) in stuck {
+            let step_status = match ar_status.as_str() {
+                "completed" => WorkflowStepStatus::Completed,
+                _ => WorkflowStepStatus::Failed,
             };
 
-            let step_status = match run.status {
-                AgentRunStatus::Completed => WorkflowStepStatus::Completed,
-                AgentRunStatus::Failed | AgentRunStatus::Cancelled => WorkflowStepStatus::Failed,
-                AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback => continue,
-            };
-
-            let _ = self.update_step_status_full(
+            self.update_step_status_full(
                 &step_id,
                 step_status,
                 Some(&child_run_id),
-                run.result_text.as_deref(),
+                result_text.as_deref(),
                 None,
                 None,
                 None,
                 None,
-            );
+            )?;
             recovered += 1;
         }
 
@@ -1723,12 +1721,7 @@ fn execute_call_with_schema(
             Err(e) => {
                 tracing::warn!("Step '{}' poll error: {e}", agent_label);
                 let _ = state.agent_mgr.update_run_cancelled(&child_run.id);
-                let is_shutdown = e.starts_with("shutdown:");
-                let cancel_msg = if is_shutdown {
-                    "workflow cancelled: TUI was closed".to_string()
-                } else {
-                    e.clone()
-                };
+                let cancel_msg = e.to_string();
                 state.wf_mgr.update_step_status(
                     &step_id,
                     WorkflowStepStatus::Failed,
@@ -1738,10 +1731,10 @@ fn execute_call_with_schema(
                     None,
                     Some(attempt as i64),
                 )?;
-                if is_shutdown {
+                if matches!(e, agent_runtime::PollError::Shutdown) {
                     return Err(ConductorError::Workflow(cancel_msg));
                 }
-                last_error = e;
+                last_error = cancel_msg;
                 continue;
             }
         }
@@ -3546,7 +3539,156 @@ And here is my actual output:
             None,
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("timed out"));
+        assert!(matches!(
+            result.unwrap_err(),
+            agent_runtime::PollError::Timeout(_)
+        ));
+    }
+
+    #[test]
+    fn test_poll_child_completion_shutdown() {
+        use std::sync::{atomic::AtomicBool, Arc};
+
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr.create_run("w1", "test", None, None).unwrap();
+        // run stays in Running; flag is already set
+        let flag = Arc::new(AtomicBool::new(true));
+
+        let result = agent_runtime::poll_child_completion(
+            &conn,
+            &run.id,
+            Duration::from_millis(10),
+            Duration::from_secs(5),
+            Some(&flag),
+        );
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            agent_runtime::PollError::Shutdown
+        ));
+    }
+
+    #[test]
+    fn test_recover_stuck_steps_syncs_completed() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let wf_mgr = WorkflowManager::new(&conn);
+
+        // Create a parent agent run and a workflow run
+        let parent = agent_mgr.create_run("w1", "wf", None, None).unwrap();
+        let wf_run = wf_mgr
+            .create_workflow_run("flow", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+
+        // Insert a step stuck in 'running' with a child_run_id
+        let step_id = wf_mgr
+            .insert_step(&wf_run.id, "agent-step", "actor", false, 0, 0)
+            .unwrap();
+        let child = agent_mgr
+            .create_run("w1", "child-agent", None, None)
+            .unwrap();
+        wf_mgr
+            .update_step_status(
+                &step_id,
+                WorkflowStepStatus::Running,
+                Some(&child.id),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        // Mark child run as completed
+        agent_mgr
+            .update_run_completed(&child.id, None, Some("great output"), None, None, None)
+            .unwrap();
+
+        let recovered = wf_mgr.recover_stuck_steps().unwrap();
+        assert_eq!(recovered, 1);
+
+        let steps = wf_mgr.get_workflow_steps(&wf_run.id).unwrap();
+        assert_eq!(steps[0].status, WorkflowStepStatus::Completed);
+        assert_eq!(steps[0].result_text.as_deref(), Some("great output"));
+    }
+
+    #[test]
+    fn test_recover_stuck_steps_skips_still_running() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let wf_mgr = WorkflowManager::new(&conn);
+
+        let parent = agent_mgr.create_run("w1", "wf", None, None).unwrap();
+        let wf_run = wf_mgr
+            .create_workflow_run("flow", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+
+        let step_id = wf_mgr
+            .insert_step(&wf_run.id, "agent-step", "actor", false, 0, 0)
+            .unwrap();
+        let child = agent_mgr
+            .create_run("w1", "child-agent", None, None)
+            .unwrap();
+        wf_mgr
+            .update_step_status(
+                &step_id,
+                WorkflowStepStatus::Running,
+                Some(&child.id),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        // child run stays in 'running' — should NOT be recovered
+
+        let recovered = wf_mgr.recover_stuck_steps().unwrap();
+        assert_eq!(recovered, 0);
+
+        let steps = wf_mgr.get_workflow_steps(&wf_run.id).unwrap();
+        assert_eq!(steps[0].status, WorkflowStepStatus::Running);
+    }
+
+    #[test]
+    fn test_recover_stuck_steps_failed_child_marks_step_failed() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let wf_mgr = WorkflowManager::new(&conn);
+
+        let parent = agent_mgr.create_run("w1", "wf", None, None).unwrap();
+        let wf_run = wf_mgr
+            .create_workflow_run("flow", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+
+        let step_id = wf_mgr
+            .insert_step(&wf_run.id, "agent-step", "actor", false, 0, 0)
+            .unwrap();
+        let child = agent_mgr
+            .create_run("w1", "child-agent", None, None)
+            .unwrap();
+        wf_mgr
+            .update_step_status(
+                &step_id,
+                WorkflowStepStatus::Running,
+                Some(&child.id),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        agent_mgr
+            .update_run_failed(&child.id, "agent crashed")
+            .unwrap();
+
+        let recovered = wf_mgr.recover_stuck_steps().unwrap();
+        assert_eq!(recovered, 1);
+
+        let steps = wf_mgr.get_workflow_steps(&wf_run.id).unwrap();
+        assert_eq!(steps[0].status, WorkflowStepStatus::Failed);
+        assert_eq!(steps[0].result_text.as_deref(), Some("agent crashed"));
     }
 
     #[test]
