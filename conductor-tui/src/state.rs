@@ -1005,6 +1005,32 @@ mod tests {
     }
 
     #[test]
+    fn repo_detail_focus_next_cycles_forward() {
+        assert_eq!(RepoDetailFocus::Worktrees.next(), RepoDetailFocus::Tickets);
+        assert_eq!(RepoDetailFocus::Tickets.next(), RepoDetailFocus::Prs);
+        assert_eq!(RepoDetailFocus::Prs.next(), RepoDetailFocus::Worktrees);
+    }
+
+    #[test]
+    fn repo_detail_focus_prev_cycles_backward() {
+        assert_eq!(RepoDetailFocus::Worktrees.prev(), RepoDetailFocus::Prs);
+        assert_eq!(RepoDetailFocus::Prs.prev(), RepoDetailFocus::Tickets);
+        assert_eq!(RepoDetailFocus::Tickets.prev(), RepoDetailFocus::Worktrees);
+    }
+
+    #[test]
+    fn repo_detail_focus_next_prev_are_inverses() {
+        for focus in [
+            RepoDetailFocus::Worktrees,
+            RepoDetailFocus::Tickets,
+            RepoDetailFocus::Prs,
+        ] {
+            assert_eq!(focus.next().prev(), focus);
+            assert_eq!(focus.prev().next(), focus);
+        }
+    }
+
+    #[test]
     fn agent_activity_len_empty() {
         let cache = DataCache::default();
         assert_eq!(cache.agent_activity_len(), 0);
