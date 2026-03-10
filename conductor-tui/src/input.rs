@@ -650,4 +650,141 @@ mod tests {
             Action::OrchestrateAgent
         ));
     }
+
+    // --- WorktreeDetail renamed bindings: y, o, l ---
+
+    #[test]
+    fn worktree_detail_y_maps_to_copy() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::InfoPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('y')), &state),
+            Action::WorktreeDetailCopy
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_o_maps_to_open() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::InfoPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('o')), &state),
+            Action::WorktreeDetailOpen
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_l_maps_to_view_agent_log_when_log_exists() {
+        let mut state = worktree_detail_state_with_run(AgentRunStatus::Completed);
+        // Give the run a log file so `has_log` is true
+        state
+            .data
+            .latest_agent_runs
+            .get_mut("wt1")
+            .unwrap()
+            .log_file = Some("/tmp/run.log".into());
+        assert!(matches!(
+            map_key(key(KeyCode::Char('l')), &state),
+            Action::ViewAgentLog
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_l_does_not_map_to_view_agent_log_when_no_log() {
+        let state = worktree_detail_state_with_run(AgentRunStatus::Completed);
+        // No log_file → falls through to global 'l' (ScrollRight in EventDetail, None here)
+        assert!(!matches!(
+            map_key(key(KeyCode::Char('l')), &state),
+            Action::ViewAgentLog
+        ));
+    }
+
+    // --- Removed global bindings (p, P, t, w, D) must not fire in Dashboard ---
+
+    fn dashboard_state() -> AppState {
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state
+    }
+
+    #[test]
+    fn removed_global_bindings_produce_no_action_in_dashboard() {
+        let state = dashboard_state();
+        // All of these were removed in the keybinding cleanup (#515)
+        for ch in ['p', 'P', 't', 'w', 'D'] {
+            assert!(
+                matches!(map_key(key(KeyCode::Char(ch)), &state), Action::None),
+                "key '{ch}' should map to Action::None after removal but did not"
+            );
+        }
+    }
+
+    #[test]
+    fn global_l_does_not_trigger_view_agent_log_outside_worktree_detail() {
+        // 'l' was a global key (LinkTicket) before; now it is only active in
+        // WorktreeDetail. Outside that view it must not fire ViewAgentLog.
+        let state = dashboard_state();
+        assert!(!matches!(
+            map_key(key(KeyCode::Char('l')), &state),
+            Action::ViewAgentLog
+        ));
+    }
+
+    // --- WorkflowRunDetail: y/Y fires ApproveGate when a gate step is waiting ---
+
+    fn workflow_run_detail_state_with_waiting_gate() -> AppState {
+        use conductor_core::workflow::{WorkflowRunStep, WorkflowStepStatus};
+        let mut state = AppState::new();
+        state.view = View::WorkflowRunDetail;
+        state.data.workflow_steps = vec![WorkflowRunStep {
+            id: "step-1".into(),
+            workflow_run_id: "run-1".into(),
+            step_name: "review".into(),
+            role: "reviewer".into(),
+            can_commit: false,
+            condition_expr: None,
+            status: WorkflowStepStatus::Waiting,
+            child_run_id: None,
+            position: 0,
+            started_at: None,
+            ended_at: None,
+            result_text: None,
+            condition_met: None,
+            iteration: 0,
+            parallel_group_id: None,
+            context_out: None,
+            markers_out: None,
+            retry_count: 0,
+            gate_type: Some("approval".into()),
+            gate_prompt: None,
+            gate_timeout: None,
+            gate_approved_by: None,
+            gate_approved_at: None,
+            gate_feedback: None,
+            structured_output: None,
+        }];
+        state
+    }
+
+    #[test]
+    fn workflow_run_detail_y_approves_waiting_gate() {
+        let state = workflow_run_detail_state_with_waiting_gate();
+        assert!(matches!(
+            map_key(key(KeyCode::Char('y')), &state),
+            Action::ApproveGate
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('Y')), &state),
+            Action::ApproveGate
+        ));
+    }
+
+    #[test]
+    fn workflow_run_detail_y_does_not_approve_when_no_gate() {
+        let mut state = AppState::new();
+        state.view = View::WorkflowRunDetail;
+        // No workflow steps → no waiting gate
+        assert!(!matches!(
+            map_key(key(KeyCode::Char('y')), &state),
+            Action::ApproveGate
+        ));
+    }
 }

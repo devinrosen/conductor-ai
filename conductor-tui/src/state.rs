@@ -184,6 +184,23 @@ impl WorktreeDetailFocus {
     }
 }
 
+/// Named row indices for the WorktreeDetail info panel.
+/// These constants must stay in sync with the row order rendered in
+/// `ui/worktree_detail.rs`. Centralising them here eliminates magic numbers
+/// in `app.rs` and makes row-order changes an explicit, single-site update.
+pub mod info_row {
+    pub const SLUG: usize = 0;
+    pub const REPO: usize = 1;
+    pub const BRANCH: usize = 2;
+    pub const BASE: usize = 3;
+    pub const PATH: usize = 4;
+    pub const STATUS: usize = 5;
+    pub const MODEL: usize = 6;
+    pub const CREATED: usize = 7;
+    /// Total number of navigable rows (used for bounds clamping).
+    pub const COUNT: usize = 8;
+}
+
 /// Choice offered in the post-worktree-creation picker.
 #[derive(Clone, Debug)]
 pub enum PostCreateChoice {

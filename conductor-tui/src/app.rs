@@ -22,7 +22,7 @@ use crate::background;
 use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
 use crate::state::{
-    AppState, ConfirmAction, DashboardFocus, FormAction, FormField, InputAction, Modal,
+    info_row, AppState, ConfirmAction, DashboardFocus, FormAction, FormField, InputAction, Modal,
     PostCreateChoice, RepoDetailFocus, View, WorkflowRunDetailFocus, WorkflowsFocus,
     WorktreeDetailFocus,
 };
@@ -1262,8 +1262,10 @@ impl App {
             View::WorktreeDetail
                 if self.state.worktree_detail_focus == WorktreeDetailFocus::InfoPanel =>
             {
-                // 8 fixed rows: Worktree, Repo, Branch, Base, Path, Status, Model, Created
-                clamp_increment(&mut self.state.worktree_detail_selected_row, 8);
+                clamp_increment(
+                    &mut self.state.worktree_detail_selected_row,
+                    info_row::COUNT,
+                );
             }
             _ => {}
         }
@@ -4038,17 +4040,17 @@ impl App {
                     .cloned()
                     .unwrap_or_else(|| "?".to_string());
                 let value = match row {
-                    0 => wt.slug.clone(),
-                    1 => repo_slug,
-                    2 => wt.branch.clone(),
-                    3 => wt
+                    info_row::SLUG => wt.slug.clone(),
+                    info_row::REPO => repo_slug,
+                    info_row::BRANCH => wt.branch.clone(),
+                    info_row::BASE => wt
                         .base_branch
                         .clone()
                         .unwrap_or_else(|| "(repo default)".to_string()),
-                    4 => wt.path.clone(),
-                    5 => wt.status.to_string(),
-                    6 => wt.model.clone().unwrap_or_else(|| "(not set)".to_string()),
-                    7 => wt.created_at.clone(),
+                    info_row::PATH => wt.path.clone(),
+                    info_row::STATUS => wt.status.to_string(),
+                    info_row::MODEL => wt.model.clone().unwrap_or_else(|| "(not set)".to_string()),
+                    info_row::CREATED => wt.created_at.clone(),
                     _ => {
                         self.state.status_message = Some("Nothing to copy on this row".to_string());
                         return;
@@ -4074,7 +4076,7 @@ impl App {
         };
         let row = self.state.worktree_detail_selected_row;
         match row {
-            4 => {
+            info_row::PATH => {
                 // Path row: open a new tmux window in the worktree directory
                 let path = wt.path.clone();
                 match Command::new("tmux")
@@ -4097,7 +4099,7 @@ impl App {
             }
             _ => {
                 self.state.status_message =
-                    Some("No action for this row (try Path row 4)".to_string());
+                    Some("No action for this row (try Path row)".to_string());
             }
         }
     }
