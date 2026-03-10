@@ -3601,8 +3601,8 @@ impl App {
         {
             Some(path) => path,
             None => {
-                eprintln!(
-                    "Warning: could not find repo with id {repo_id}; \
+                tracing::warn!(
+                    "could not find repo with id {repo_id}; \
                      falling back to empty repo_path for workflow discovery"
                 );
                 String::new()
@@ -3621,7 +3621,7 @@ impl App {
                     .filter(|d| d.trigger == WorkflowTrigger::Manual)
                     .collect(),
                 Err(e) => {
-                    eprintln!("Warning: failed to list workflow defs: {e}");
+                    tracing::warn!("failed to list workflow defs: {e}");
                     Vec::new()
                 }
             };
