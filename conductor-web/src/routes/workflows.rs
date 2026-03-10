@@ -8,9 +8,8 @@ use serde::{Deserialize, Serialize};
 use conductor_core::error::ConductorError;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
-    execute_workflow, resume_workflow, InputDecl, WorkflowDef, WorkflowExecConfig,
-    WorkflowExecInput, WorkflowManager, WorkflowResumeInput, WorkflowRun, WorkflowRunStatus,
-    WorkflowRunStep,
+    execute_workflow, InputDecl, WorkflowDef, WorkflowExecConfig, WorkflowExecInput,
+    WorkflowManager, WorkflowResumeStandalone, WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -299,29 +298,24 @@ pub async fn resume_workflow_endpoint(
         }
     }
 
-    let run_id = id.clone();
+    let config = state.config.read().await.clone();
     let model = req.model.clone();
     let from_step = req.from_step.clone();
     let restart = req.restart.unwrap_or(false);
 
-    // Spawn background task to resume the workflow
+    // Spawn blocking task with its own DB connection (same pattern as run_workflow)
     let state_clone = state.clone();
-    tokio::task::spawn(async move {
-        let result = {
-            let db = state_clone.db.lock().await;
-            let config = state_clone.config.read().await;
-
-            let input = WorkflowResumeInput {
-                conn: &db,
-                config: &config,
-                workflow_run_id: &run_id,
-                model: model.as_deref(),
-                from_step: from_step.as_deref(),
-                restart,
-            };
-
-            resume_workflow(&input)
+    let run_id = id.clone();
+    tokio::task::spawn_blocking(move || {
+        let params = WorkflowResumeStandalone {
+            config,
+            workflow_run_id: run_id,
+            model,
+            from_step,
+            restart,
         };
+
+        let result = conductor_core::workflow::resume_workflow_standalone(&params);
 
         match result {
             Ok(res) => {

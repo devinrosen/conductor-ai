@@ -1235,9 +1235,25 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         resume_steps: Vec::new(),
     };
 
+    run_workflow_engine(&mut state, workflow, &wf_run.id, &parent_run.id)
+}
+
+/// Shared orchestration: execute body → always block → build summary → finalize.
+///
+/// Both `execute_workflow` and `resume_workflow` delegate here after constructing
+/// their `ExecutionState`.
+fn run_workflow_engine(
+    state: &mut ExecutionState<'_>,
+    workflow: &WorkflowDef,
+    workflow_run_id: &str,
+    parent_run_id: &str,
+) -> Result<WorkflowResult> {
+    let agent_mgr = AgentManager::new(state.conn);
+    let wf_mgr = WorkflowManager::new(state.conn);
+
     // Execute main body
     let mut body_error: Option<String> = None;
-    let body_result = execute_nodes(&mut state, &workflow.body);
+    let body_result = execute_nodes(state, &workflow.body);
     if let Err(ref e) = body_result {
         let msg = e.to_string();
         tracing::error!("Body execution error: {msg}");
@@ -1252,19 +1268,17 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         } else {
             "failed"
         };
-        // Inject {{workflow_status}} into inputs for always steps
         state
             .inputs
             .insert("workflow_status".to_string(), workflow_status.to_string());
-        let always_result = execute_nodes(&mut state, &workflow.always);
+        let always_result = execute_nodes(state, &workflow.always);
         if let Err(ref e) = always_result {
             tracing::warn!("Always block error (non-fatal): {e}");
-            // Don't change all_succeeded for always failures
         }
     }
 
     // Build summary
-    let mut summary = build_workflow_summary(&state);
+    let mut summary = build_workflow_summary(state);
     if let Some(ref err) = body_error {
         summary.push_str(&format!("\nError: {err}"));
     }
@@ -1272,18 +1286,26 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     // Finalize
     if state.all_succeeded {
         agent_mgr.update_run_completed(
-            &parent_run.id,
+            parent_run_id,
             None,
             Some(&summary),
             Some(state.total_cost),
             Some(state.total_turns),
             Some(state.total_duration_ms),
         )?;
-        wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Completed, Some(&summary))?;
+        wf_mgr.update_workflow_status(
+            workflow_run_id,
+            WorkflowRunStatus::Completed,
+            Some(&summary),
+        )?;
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
     } else {
-        agent_mgr.update_run_failed(&parent_run.id, &summary)?;
-        wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Failed, Some(&summary))?;
+        agent_mgr.update_run_failed(parent_run_id, &summary)?;
+        wf_mgr.update_workflow_status(
+            workflow_run_id,
+            WorkflowRunStatus::Failed,
+            Some(&summary),
+        )?;
         tracing::warn!("Workflow '{}' finished with failures", workflow.name);
     }
 
@@ -1295,8 +1317,8 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     );
 
     Ok(WorkflowResult {
-        workflow_run_id: wf_run.id,
-        worktree_id: state.worktree_id,
+        workflow_run_id: workflow_run_id.to_string(),
+        worktree_id: state.worktree_id.clone(),
         workflow_name: workflow.name.clone(),
         all_succeeded: state.all_succeeded,
         total_cost: state.total_cost,
@@ -1391,7 +1413,6 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     let conn = input.conn;
     let config = input.config;
     let wf_mgr = WorkflowManager::new(conn);
-    let agent_mgr = AgentManager::new(conn);
     let wt_mgr = WorktreeManager::new(conn, config);
 
     // Load and validate the workflow run
@@ -1514,75 +1535,10 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         last_structured_output: None,
         skip_completed,
         // Re-fetch steps after resets so we have up-to-date records for restore
-        resume_steps: wf_mgr.get_workflow_steps(&wf_run.id).unwrap_or_default(),
+        resume_steps: wf_mgr.get_workflow_steps(&wf_run.id)?,
     };
 
-    // Execute main body
-    let body_result = execute_nodes(&mut state, &workflow.body);
-    if let Err(ref e) = body_result {
-        tracing::error!("Body execution error: {e}");
-        state.all_succeeded = false;
-    }
-
-    // Execute always block regardless of outcome
-    if !workflow.always.is_empty() {
-        let workflow_status = if state.all_succeeded {
-            "completed"
-        } else {
-            "failed"
-        };
-        state
-            .inputs
-            .insert("workflow_status".to_string(), workflow_status.to_string());
-        let always_result = execute_nodes(&mut state, &workflow.always);
-        if let Err(ref e) = always_result {
-            tracing::warn!("Always block error (non-fatal): {e}");
-        }
-    }
-
-    // Build summary
-    let summary = build_workflow_summary(&state);
-
-    // Finalize
-    if state.all_succeeded {
-        agent_mgr.update_run_completed(
-            &wf_run.parent_run_id,
-            None,
-            Some(&summary),
-            Some(state.total_cost),
-            Some(state.total_turns),
-            Some(state.total_duration_ms),
-        )?;
-        wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Completed, Some(&summary))?;
-        tracing::info!(
-            "Workflow '{}' resumed and completed successfully",
-            workflow.name
-        );
-    } else {
-        agent_mgr.update_run_failed(&wf_run.parent_run_id, &summary)?;
-        wf_mgr.update_workflow_status(&wf_run.id, WorkflowRunStatus::Failed, Some(&summary))?;
-        tracing::warn!(
-            "Workflow '{}' resumed but finished with failures",
-            workflow.name
-        );
-    }
-
-    tracing::info!(
-        "Total: ${:.4}, {} turns, {:.1}s",
-        state.total_cost,
-        state.total_turns,
-        state.total_duration_ms as f64 / 1000.0
-    );
-
-    Ok(WorkflowResult {
-        workflow_run_id: wf_run.id,
-        worktree_id: state.worktree_id,
-        workflow_name: workflow.name.clone(),
-        all_succeeded: state.all_succeeded,
-        total_cost: state.total_cost,
-        total_turns: state.total_turns,
-        total_duration_ms: state.total_duration_ms,
-    })
+    run_workflow_engine(&mut state, &workflow, &wf_run.id, &wf_run.parent_run_id)
 }
 
 /// Walk a list of workflow nodes, dispatching to the appropriate handler.
@@ -5795,5 +5751,250 @@ And here is my actual output:
 
         let result = bubble_up_child_step_results(&wf_mgr, &run_id);
         assert!(result.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // restore_completed_step_from_db tests
+    // -----------------------------------------------------------------------
+
+    /// Helper to build a WorkflowRunStep for testing without listing every field.
+    fn make_test_step(
+        step_name: &str,
+        status: WorkflowStepStatus,
+        result_text: Option<&str>,
+        context_out: Option<&str>,
+        markers_out: Option<&str>,
+        child_run_id: Option<&str>,
+        structured_output: Option<&str>,
+    ) -> WorkflowRunStep {
+        WorkflowRunStep {
+            id: "s1".to_string(),
+            workflow_run_id: "run1".to_string(),
+            step_name: step_name.to_string(),
+            role: "actor".to_string(),
+            can_commit: false,
+            condition_expr: None,
+            status,
+            child_run_id: child_run_id.map(String::from),
+            position: 0,
+            started_at: None,
+            ended_at: None,
+            result_text: result_text.map(String::from),
+            condition_met: None,
+            iteration: 0,
+            parallel_group_id: None,
+            context_out: context_out.map(String::from),
+            markers_out: markers_out.map(String::from),
+            retry_count: 0,
+            gate_type: None,
+            gate_prompt: None,
+            gate_timeout: None,
+            gate_approved_by: None,
+            gate_approved_at: None,
+            gate_feedback: None,
+            structured_output: structured_output.map(String::from),
+        }
+    }
+
+    #[test]
+    fn test_restore_completed_step_from_db_basic() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+
+        let steps = vec![make_test_step(
+            "review",
+            WorkflowStepStatus::Completed,
+            Some("looks good"),
+            Some("reviewed code"),
+            Some(r#"["approved"]"#),
+            None,
+            Some(r#"{"verdict":"approve"}"#),
+        )];
+
+        restore_completed_step_from_db(&mut state, &steps, "review", 0);
+
+        // Verify step_results populated
+        let result = state.step_results.get("review").unwrap();
+        assert_eq!(result.status, WorkflowStepStatus::Completed);
+        assert_eq!(result.result_text.as_deref(), Some("looks good"));
+        assert_eq!(result.markers, vec!["approved"]);
+        assert_eq!(result.context, "reviewed code");
+
+        // Verify contexts populated
+        assert_eq!(state.contexts.len(), 1);
+        assert_eq!(state.contexts[0].step, "review");
+        assert_eq!(state.contexts[0].context, "reviewed code");
+
+        // Verify structured output updated
+        assert_eq!(
+            state.last_structured_output.as_deref(),
+            Some(r#"{"verdict":"approve"}"#)
+        );
+    }
+
+    #[test]
+    fn test_restore_completed_step_from_db_not_found() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+
+        let steps: Vec<WorkflowRunStep> = vec![];
+        restore_completed_step_from_db(&mut state, &steps, "nonexistent", 0);
+
+        // Should be a no-op
+        assert!(state.step_results.is_empty());
+        assert!(state.contexts.is_empty());
+    }
+
+    #[test]
+    fn test_restore_completed_step_from_db_accumulates_costs() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+
+        // Create a child agent run with cost data
+        let child_run = agent_mgr
+            .create_run("w1", "test agent", None, None)
+            .unwrap();
+        agent_mgr
+            .update_run_completed(
+                &child_run.id,
+                None,
+                Some("done"),
+                Some(0.05),
+                Some(3),
+                Some(5000),
+            )
+            .unwrap();
+
+        let mut state = make_test_state(&conn);
+        state.total_cost = 0.10;
+        state.total_turns = 5;
+        state.total_duration_ms = 10000;
+
+        let steps = vec![make_test_step(
+            "build",
+            WorkflowStepStatus::Completed,
+            Some("built"),
+            Some("build output"),
+            None,
+            Some(&child_run.id),
+            None,
+        )];
+
+        restore_completed_step_from_db(&mut state, &steps, "build", 0);
+
+        // Costs should be accumulated from the child run
+        assert!((state.total_cost - 0.15).abs() < 0.001);
+        assert_eq!(state.total_turns, 8);
+        assert_eq!(state.total_duration_ms, 15000);
+    }
+
+    // -----------------------------------------------------------------------
+    // find_max_completed_while_iteration tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_find_max_completed_while_iteration_none_completed() {
+        let conn = setup_db();
+        let state = make_test_state(&conn);
+
+        let node = WhileNode {
+            step: "check".to_string(),
+            marker: "needs_work".to_string(),
+            max_iterations: 5,
+            stuck_after: None,
+            on_max_iter: crate::workflow_dsl::OnMaxIter::Fail,
+            body: vec![WorkflowNode::Call(CallNode {
+                agent: crate::workflow_dsl::AgentRef::Name("fixer".to_string()),
+                retries: 0,
+                on_fail: None,
+                output: None,
+                with: vec![],
+            })],
+        };
+
+        assert_eq!(find_max_completed_while_iteration(&state, &node), 0);
+    }
+
+    #[test]
+    fn test_find_max_completed_while_iteration_two_completed() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+
+        // Iterations 0 and 1 completed for "fixer"
+        state.skip_completed.insert("fixer:0".to_string());
+        state.skip_completed.insert("fixer:1".to_string());
+
+        let node = WhileNode {
+            step: "check".to_string(),
+            marker: "needs_work".to_string(),
+            max_iterations: 5,
+            stuck_after: None,
+            on_max_iter: crate::workflow_dsl::OnMaxIter::Fail,
+            body: vec![WorkflowNode::Call(CallNode {
+                agent: crate::workflow_dsl::AgentRef::Name("fixer".to_string()),
+                retries: 0,
+                on_fail: None,
+                output: None,
+                with: vec![],
+            })],
+        };
+
+        // Should return 2 (start from iteration 2)
+        assert_eq!(find_max_completed_while_iteration(&state, &node), 2);
+    }
+
+    #[test]
+    fn test_find_max_completed_while_iteration_empty_body() {
+        let conn = setup_db();
+        let state = make_test_state(&conn);
+
+        let node = WhileNode {
+            step: "check".to_string(),
+            marker: "needs_work".to_string(),
+            max_iterations: 5,
+            stuck_after: None,
+            on_max_iter: crate::workflow_dsl::OnMaxIter::Fail,
+            body: vec![], // no call nodes
+        };
+
+        // Empty body → returns 0
+        assert_eq!(find_max_completed_while_iteration(&state, &node), 0);
+    }
+
+    #[test]
+    fn test_find_max_completed_while_iteration_partial_body() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+
+        // Two body nodes, but only one completed for iteration 0
+        state.skip_completed.insert("step-a:0".to_string());
+        // step-b:0 is NOT in skip_completed
+
+        let node = WhileNode {
+            step: "check".to_string(),
+            marker: "needs_work".to_string(),
+            max_iterations: 5,
+            stuck_after: None,
+            on_max_iter: crate::workflow_dsl::OnMaxIter::Fail,
+            body: vec![
+                WorkflowNode::Call(CallNode {
+                    agent: crate::workflow_dsl::AgentRef::Name("step-a".to_string()),
+                    retries: 0,
+                    on_fail: None,
+                    output: None,
+                    with: vec![],
+                }),
+                WorkflowNode::Call(CallNode {
+                    agent: crate::workflow_dsl::AgentRef::Name("step-b".to_string()),
+                    retries: 0,
+                    on_fail: None,
+                    output: None,
+                    with: vec![],
+                }),
+            ],
+        };
+
+        // Only partial completion → start from 0
+        assert_eq!(find_max_completed_while_iteration(&state, &node), 0);
     }
 }
