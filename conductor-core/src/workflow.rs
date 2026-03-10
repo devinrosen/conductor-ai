@@ -1130,7 +1130,7 @@ struct ExecutionState<'a> {
     config: &'a Config,
     workflow_run_id: String,
     workflow_name: String,
-    worktree_id: String,
+    worktree_id: Option<String>,
     worktree_path: String,
     worktree_slug: String,
     repo_path: String,
@@ -1187,8 +1187,6 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     let config = input.config;
     let workflow = input.workflow;
 
-    // Resolve worktree slug for tmux window naming (empty for ephemeral PR runs).
-    let effective_worktree_id = input.worktree_id.unwrap_or("");
     let agent_mgr = AgentManager::new(conn);
     let wf_mgr = WorkflowManager::new(conn);
     let worktree_slug = if let Some(wt_id) = input.worktree_id {
@@ -1253,10 +1251,14 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         }
     }
 
-    // Create parent agent run (uses empty worktree_id for ephemeral runs).
+    // Create parent agent run (uses empty worktree_id for ephemeral PR runs).
     let parent_prompt = format!("Workflow: {} — {}", workflow.name, workflow.description);
-    let parent_run =
-        agent_mgr.create_run(effective_worktree_id, &parent_prompt, None, input.model)?;
+    let parent_run = agent_mgr.create_run(
+        input.worktree_id.unwrap_or(""),
+        &parent_prompt,
+        None,
+        input.model,
+    )?;
 
     // Create workflow run record with snapshot
     let wf_run = wf_mgr.create_workflow_run(
@@ -1281,7 +1283,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         config,
         workflow_run_id: wf_run.id.clone(),
         workflow_name: workflow.name.clone(),
-        worktree_id: effective_worktree_id.to_string(),
+        worktree_id: input.worktree_id.map(String::from),
         worktree_path: input.worktree_path.to_string(),
         worktree_slug,
         repo_path: input.repo_path.to_string(),
@@ -1388,11 +1390,7 @@ fn run_workflow_engine(
 
     Ok(WorkflowResult {
         workflow_run_id: wf_run_id,
-        worktree_id: if state.worktree_id.is_empty() {
-            None
-        } else {
-            Some(state.worktree_id.clone())
-        },
+        worktree_id: state.worktree_id.clone(),
         workflow_name: workflow.name.clone(),
         all_succeeded: state.all_succeeded,
         total_cost: state.total_cost,
@@ -1650,7 +1648,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         config,
         workflow_run_id: wf_run.id.clone(),
         workflow_name: workflow.name.clone(),
-        worktree_id: wf_run.worktree_id.clone().unwrap_or_default(),
+        worktree_id: wf_run.worktree_id.clone(),
         worktree_path: worktree.path.clone(),
         worktree_slug: worktree.slug.clone(),
         repo_path: repo.local_path.clone(),
@@ -1977,7 +1975,7 @@ fn execute_call_with_schema(
         let child_window =
             sanitize_tmux_name(&format!("{}-wf-{}", state.worktree_slug, agent_label));
         let child_run = state.agent_mgr.create_child_run(
-            &state.worktree_id,
+            state.worktree_id.as_deref().unwrap_or(""),
             &prompt,
             Some(&child_window),
             step_model,
@@ -2271,11 +2269,7 @@ fn execute_call_workflow(
             conn: state.conn,
             config: state.config,
             workflow: &child_def,
-            worktree_id: if state.worktree_id.is_empty() {
-                None
-            } else {
-                Some(state.worktree_id.as_str())
-            },
+            worktree_id: state.worktree_id.as_deref(),
             worktree_path: &state.worktree_path,
             repo_path: &state.repo_path,
             model: state.model.as_deref(),
@@ -2869,7 +2863,7 @@ fn execute_parallel(
         let window_name =
             sanitize_tmux_name(&format!("{}-wf-{}-{}", state.worktree_slug, agent_label, i));
         let child_run = state.agent_mgr.create_child_run(
-            &state.worktree_id,
+            state.worktree_id.as_deref().unwrap_or(""),
             &prompt,
             Some(&window_name),
             step_model,
@@ -3932,7 +3926,7 @@ mod tests {
             config,
             workflow_run_id: run_id.clone(),
             workflow_name: "test".to_string(),
-            worktree_id: "w1".to_string(),
+            worktree_id: Some("w1".to_string()),
             worktree_path: String::new(),
             worktree_slug: String::new(),
             repo_path: String::new(),
@@ -4740,7 +4734,7 @@ And here is my actual output:
             config,
             workflow_run_id: String::new(),
             workflow_name: String::new(),
-            worktree_id: String::new(),
+            worktree_id: None,
             worktree_path: String::new(),
             worktree_slug: String::new(),
             repo_path: String::new(),
@@ -5127,7 +5121,7 @@ And here is my actual output:
             config,
             workflow_run_id: run.id,
             workflow_name: "test".into(),
-            worktree_id: "w1".into(),
+            worktree_id: Some("w1".into()),
             worktree_path: "/tmp/test".into(),
             worktree_slug: "test".into(),
             repo_path: "/tmp/repo".into(),

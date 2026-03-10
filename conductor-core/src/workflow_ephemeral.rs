@@ -17,7 +17,7 @@ use tempfile::TempDir;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::workflow::{
-    execute_workflow, WorkflowExecConfig, WorkflowExecInput, WorkflowManager, WorkflowRun,
+    execute_workflow, WorkflowExecConfig, WorkflowExecInput, WorkflowManager, WorkflowResult,
 };
 
 /// A parsed GitHub PR reference.
@@ -92,7 +92,7 @@ pub fn parse_pr_ref(s: &str) -> Result<PrRef> {
         return Ok(PrRef {
             owner: parts[0].to_string(),
             repo: parts[1].to_string(),
-            number: number,
+            number,
         });
     }
 
@@ -115,16 +115,13 @@ pub fn parse_pr_ref(s: &str) -> Result<PrRef> {
 pub fn checkout_pr(pr: &PrRef, dir: &Path) -> Result<String> {
     let repo_slug = pr.repo_slug();
 
+    let dir_str = dir.to_str().ok_or_else(|| {
+        ConductorError::Workflow("Temp directory path is not valid UTF-8".to_string())
+    })?;
+
     // Step 1: clone the repo (shallow)
     let status = Command::new("gh")
-        .args([
-            "repo",
-            "clone",
-            &repo_slug,
-            dir.to_str().unwrap_or("."),
-            "--",
-            "--depth=1",
-        ])
+        .args(["repo", "clone", &repo_slug, dir_str, "--", "--depth=1"])
         .status()
         .map_err(|e| ConductorError::Workflow(format!("Failed to run 'gh repo clone': {e}")))?;
 
@@ -162,6 +159,13 @@ pub fn checkout_pr(pr: &PrRef, dir: &Path) -> Result<String> {
         .output()
         .map_err(|e| ConductorError::Workflow(format!("Failed to get branch name: {e}")))?;
 
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ConductorError::Workflow(format!(
+            "git rev-parse failed after checkout: {stderr}"
+        )));
+    }
+
     let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok(branch)
 }
@@ -173,8 +177,9 @@ pub fn checkout_pr(pr: &PrRef, dir: &Path) -> Result<String> {
 /// 2. Shallow-clone the PR branch via `gh`
 /// 3. Load the workflow from the cloned repo's `.conductor/workflows/` directory
 /// 4. Warn if the workflow's `targets` does not include `"pr"`
-/// 5. Execute the workflow with `worktree_id = None`
-/// 6. Return the final `WorkflowRun` record
+/// 5. Validate required inputs and apply defaults (same as the normal run path)
+/// 6. Execute the workflow with `worktree_id = None`
+/// 7. Return the `WorkflowResult`
 #[allow(clippy::too_many_arguments)]
 pub fn run_workflow_on_pr(
     conn: &Connection,
@@ -183,9 +188,9 @@ pub fn run_workflow_on_pr(
     workflow_name: &str,
     model: Option<&str>,
     exec_config: WorkflowExecConfig,
-    inputs: HashMap<String, String>,
+    mut inputs: HashMap<String, String>,
     dry_run: bool,
-) -> Result<WorkflowRun> {
+) -> Result<WorkflowResult> {
     // Create a temp directory; it will be cleaned up when `_temp_dir` is dropped.
     let temp_dir = TempDir::new()
         .map_err(|e| ConductorError::Workflow(format!("Failed to create temp directory: {e}")))?;
@@ -221,6 +226,21 @@ pub fn run_workflow_on_pr(
         );
     }
 
+    // Validate required inputs and apply defaults (mirrors normal run path validation)
+    for input_decl in &workflow.inputs {
+        if input_decl.required && !inputs.contains_key(&input_decl.name) {
+            return Err(ConductorError::Workflow(format!(
+                "Missing required input: '{}'. Use --input {}=<value>.",
+                input_decl.name, input_decl.name
+            )));
+        }
+        if let Some(ref default) = input_decl.default {
+            inputs
+                .entry(input_decl.name.clone())
+                .or_insert_with(|| default.clone());
+        }
+    }
+
     let exec_config = WorkflowExecConfig {
         dry_run,
         ..exec_config
@@ -239,21 +259,8 @@ pub fn run_workflow_on_pr(
         depth: 0,
     };
 
-    let result = execute_workflow(&input)?;
-
-    // Retrieve the final WorkflowRun record from the database
-    let wf_mgr = WorkflowManager::new(conn);
-    let wf_run = wf_mgr
-        .get_workflow_run(&result.workflow_run_id)?
-        .ok_or_else(|| {
-            ConductorError::Workflow(format!(
-                "Workflow run record not found after execution: {}",
-                result.workflow_run_id
-            ))
-        })?;
-
-    // `temp_dir` is dropped here, cleaning up the cloned repo.
-    Ok(wf_run)
+    // `temp_dir` is dropped after execute_workflow returns, cleaning up the cloned repo.
+    execute_workflow(&input)
 }
 
 #[cfg(test)]
@@ -297,5 +304,60 @@ mod tests {
         assert_eq!(pr.owner, "acme");
         assert_eq!(pr.repo, "my-repo");
         assert_eq!(pr.number, 99);
+    }
+
+    /// Verifies that `checkout_pr` returns an error when `git rev-parse` fails
+    /// (i.e. when the directory is not a real git repo), rather than silently
+    /// returning an empty branch name.
+    #[test]
+    fn test_checkout_pr_git_rev_parse_failure_returns_error() {
+        use tempfile::TempDir;
+
+        let pr = PrRef {
+            owner: "acme".to_string(),
+            repo: "my-repo".to_string(),
+            number: 1,
+        };
+        // Use an empty temp dir (not a git repo) to exercise the git rev-parse failure path.
+        // gh repo clone / gh pr checkout will also fail, so we only care that the error
+        // is propagated, not which step fails.
+        let dir = TempDir::new().unwrap();
+        let result = checkout_pr(&pr, dir.path());
+        assert!(
+            result.is_err(),
+            "checkout_pr should return an error for a non-git directory"
+        );
+    }
+
+    /// Verifies that `create_workflow_run` with `worktree_id = None` stores and
+    /// retrieves NULL correctly (the ephemeral PR run path).
+    #[test]
+    fn test_create_workflow_run_nullable_worktree_id() {
+        use crate::agent::AgentManager;
+        use crate::test_helpers::setup_db;
+        use crate::workflow::WorkflowManager;
+
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        // Ephemeral runs pass "" as worktree_id to agent_runs (no FK constraint after migration 027)
+        let parent = agent_mgr.create_run("", "workflow", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("pr-flow", None, &parent.id, false, "pr", None)
+            .unwrap();
+
+        assert_eq!(run.workflow_name, "pr-flow");
+        assert!(
+            run.worktree_id.is_none(),
+            "worktree_id should be None for ephemeral PR runs"
+        );
+
+        // Fetch back from DB and confirm round-trip
+        let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert!(
+            fetched.worktree_id.is_none(),
+            "worktree_id should remain None after DB round-trip"
+        );
     }
 }

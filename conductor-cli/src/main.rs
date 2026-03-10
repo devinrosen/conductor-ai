@@ -1389,12 +1389,17 @@ fn main() -> Result<()> {
                         input_map,
                         dry_run,
                     ) {
-                        Ok(wf_run) => {
-                            println!("Workflow run {} finished: {}", wf_run.id, wf_run.status);
-                            if !matches!(
-                                wf_run.status,
-                                conductor_core::workflow::WorkflowRunStatus::Completed
-                            ) {
+                        Ok(result) => {
+                            println!(
+                                "\nTotal: ${:.4}, {} turns, {:.1}s",
+                                result.total_cost,
+                                result.total_turns,
+                                result.total_duration_ms as f64 / 1000.0
+                            );
+                            if result.all_succeeded {
+                                println!("Workflow completed successfully.");
+                            } else {
+                                eprintln!("Workflow finished with failures.");
                                 std::process::exit(1);
                             }
                         }
