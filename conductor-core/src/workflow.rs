@@ -734,6 +734,25 @@ impl<'a> WorkflowManager<'a> {
         }
     }
 
+    /// Return the first active (pending/running/waiting) top-level workflow run for a worktree,
+    /// or `None` if none exist.
+    pub fn get_active_run_for_worktree(&self, worktree_id: &str) -> Result<Option<WorkflowRun>> {
+        let result = self.conn.query_row(
+            &format!(
+                "SELECT {RUN_COLUMNS} FROM workflow_runs \
+                 WHERE worktree_id = ?1 AND status IN ('pending', 'running', 'waiting') \
+                 LIMIT 1"
+            ),
+            params![worktree_id],
+            row_to_workflow_run,
+        );
+        match result {
+            Ok(run) => Ok(Some(run)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub fn list_workflow_runs(&self, worktree_id: &str) -> Result<Vec<WorkflowRun>> {
         query_collect(
             self.conn,
@@ -1044,6 +1063,15 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     let snapshot_json = serde_json::to_string(workflow).map_err(|e| {
         ConductorError::Workflow(format!("Failed to serialize workflow definition: {e}"))
     })?;
+
+    // Guard: prevent multiple concurrent top-level runs on the same worktree
+    if input.depth == 0 {
+        if let Some(active) = wf_mgr.get_active_run_for_worktree(input.worktree_id)? {
+            return Err(ConductorError::WorkflowRunAlreadyActive {
+                name: active.workflow_name,
+            });
+        }
+    }
 
     // Create parent agent run
     let parent_prompt = format!("Workflow: {} — {}", workflow.name, workflow.description);
@@ -4326,5 +4354,74 @@ And here is my actual output:
         let result = execute_do_while(&mut state, &node);
         assert!(result.is_ok());
         assert!(!state.all_succeeded);
+    }
+
+    #[test]
+    fn test_get_active_run_for_worktree_none_when_empty() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let active = mgr.get_active_run_for_worktree("w1").unwrap();
+        assert!(active.is_none());
+    }
+
+    #[test]
+    fn test_get_active_run_for_worktree_returns_active() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("my-flow", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+        // Set status to running
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        let active = mgr.get_active_run_for_worktree("w1").unwrap();
+        assert!(active.is_some());
+        assert_eq!(active.unwrap().workflow_name, "my-flow");
+    }
+
+    #[test]
+    fn test_get_active_run_for_worktree_none_after_completion() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("my-flow", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"))
+            .unwrap();
+
+        let active = mgr.get_active_run_for_worktree("w1").unwrap();
+        assert!(active.is_none());
+    }
+
+    #[test]
+    fn test_get_active_run_for_worktree_ignores_other_worktree() {
+        let conn = setup_db();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w2', 'r1', 'feat-other', 'feat/other', '/tmp/ws/other', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w2", "workflow", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("other-flow", "w2", &parent.id, false, "manual", None)
+            .unwrap();
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        // w1 should see no active runs
+        let active = mgr.get_active_run_for_worktree("w1").unwrap();
+        assert!(active.is_none());
     }
 }

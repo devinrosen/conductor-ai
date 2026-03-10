@@ -4277,6 +4277,27 @@ impl App {
             .map(|r| r.local_path.clone())
             .unwrap_or_default();
 
+        // Block if a workflow run is already active on this worktree
+        {
+            use conductor_core::workflow::WorkflowManager;
+            let wf_mgr = WorkflowManager::new(&self.conn);
+            match wf_mgr.get_active_run_for_worktree(&wt.id) {
+                Ok(Some(active)) => {
+                    self.state.status_message = Some(format!(
+                        "Workflow '{}' is already running — cancel it before starting another",
+                        active.workflow_name
+                    ));
+                    return;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    self.state.status_message =
+                        Some(format!("Failed to check active workflow run: {e}"));
+                    return;
+                }
+            }
+        }
+
         self.spawn_workflow_in_background(
             def,
             wt.id,

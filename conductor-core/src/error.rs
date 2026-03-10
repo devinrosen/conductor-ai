@@ -55,6 +55,9 @@ pub enum ConductorError {
 
     #[error("schema error: {0}")]
     Schema(String),
+
+    #[error("worktree already has an active workflow run (\"{name}\") — wait for it to finish or cancel it before starting another")]
+    WorkflowRunAlreadyActive { name: String },
 }
 
 pub type Result<T> = std::result::Result<T, ConductorError>;
