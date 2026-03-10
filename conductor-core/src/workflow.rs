@@ -440,6 +440,7 @@ impl Default for WorkflowExecConfig {
 #[derive(Debug, Clone)]
 pub struct WorkflowResult {
     pub workflow_run_id: String,
+    pub worktree_id: String,
     pub workflow_name: String,
     pub all_succeeded: bool,
     pub total_cost: f64,
@@ -887,6 +888,34 @@ impl<'a> WorkflowManager<'a> {
         Ok(count as u64)
     }
 
+    /// Reset all completed steps for a workflow run back to `pending`.
+    ///
+    /// Used for full restart (--restart) to re-run from scratch.
+    pub fn reset_completed_steps(&self, workflow_run_id: &str) -> Result<u64> {
+        let count = self.conn.execute(
+            "UPDATE workflow_run_steps SET status = 'pending', started_at = NULL, ended_at = NULL, \
+             result_text = NULL, context_out = NULL, markers_out = NULL, structured_output = NULL, \
+             child_run_id = NULL \
+             WHERE workflow_run_id = ?1 AND status = 'completed'",
+            params![workflow_run_id],
+        )?;
+        Ok(count as u64)
+    }
+
+    /// Reset all steps at or after a given position back to `pending`.
+    ///
+    /// Used for --from-step to re-run from a specific step onwards.
+    pub fn reset_steps_from_position(&self, workflow_run_id: &str, position: i64) -> Result<u64> {
+        let count = self.conn.execute(
+            "UPDATE workflow_run_steps SET status = 'pending', started_at = NULL, ended_at = NULL, \
+             result_text = NULL, context_out = NULL, markers_out = NULL, structured_output = NULL, \
+             child_run_id = NULL \
+             WHERE workflow_run_id = ?1 AND position >= ?2",
+            params![workflow_run_id, position],
+        )?;
+        Ok(count as u64)
+    }
+
     /// Return the set of completed step keys (as `step_name:iteration`) for a run.
     ///
     /// Used to build the skip set for resume.
@@ -1072,6 +1101,8 @@ struct ExecutionState<'a> {
     block_with: Vec<String>,
     /// Step keys to skip on resume (empty for fresh runs).
     skip_completed: HashSet<String>,
+    /// Pre-loaded step records for resume (avoids N+1 DB queries).
+    resume_steps: Vec<WorkflowRunStep>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1201,6 +1232,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         block_output: None,
         block_with: Vec::new(),
         skip_completed: HashSet::new(),
+        resume_steps: Vec::new(),
     };
 
     // Execute main body
@@ -1264,6 +1296,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
 
     Ok(WorkflowResult {
         workflow_run_id: wf_run.id,
+        worktree_id: state.worktree_id,
         workflow_name: workflow.name.clone(),
         all_succeeded: state.all_succeeded,
         total_cost: state.total_cost,
@@ -1306,6 +1339,34 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
     };
 
     execute_workflow(&input)
+}
+
+/// Owned inputs for [`resume_workflow_standalone`], avoiding lifetime issues
+/// when spawning background threads.
+pub struct WorkflowResumeStandalone {
+    pub config: Config,
+    pub workflow_run_id: String,
+    pub model: Option<String>,
+    pub from_step: Option<String>,
+    pub restart: bool,
+}
+
+/// Resume a workflow in a self-contained manner: opens its own database
+/// connection. Designed for use in background threads.
+pub fn resume_workflow_standalone(params: &WorkflowResumeStandalone) -> Result<WorkflowResult> {
+    let db = crate::config::db_path();
+    let conn = crate::db::open_database(&db)?;
+
+    let input = WorkflowResumeInput {
+        conn: &conn,
+        config: &params.config,
+        workflow_run_id: &params.workflow_run_id,
+        model: params.model.as_deref(),
+        from_step: params.from_step.as_deref(),
+        restart: params.restart,
+    };
+
+    resume_workflow(&input)
 }
 
 /// Input parameters for resuming a workflow run.
@@ -1366,47 +1427,48 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     let worktree = wt_mgr.get_by_id(&wf_run.worktree_id)?;
     let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&worktree.repo_id)?;
 
+    // Load all steps once (avoids N+1 queries later)
+    let all_steps = wf_mgr.get_workflow_steps(&wf_run.id)?;
+
     // Build the skip set
     let skip_completed = if input.restart {
         // Restart: clear all step results — skip nothing
         wf_mgr.reset_failed_steps(&wf_run.id)?;
-        // Also reset completed steps for full restart
-        conn.execute(
-            "UPDATE workflow_run_steps SET status = 'pending', started_at = NULL, ended_at = NULL, \
-             result_text = NULL, context_out = NULL, markers_out = NULL, structured_output = NULL, \
-             child_run_id = NULL \
-             WHERE workflow_run_id = ?1 AND status = 'completed'",
-            params![wf_run.id],
-        )?;
+        wf_mgr.reset_completed_steps(&wf_run.id)?;
         HashSet::new()
     } else {
-        let mut keys = wf_mgr.get_completed_step_keys(&wf_run.id)?;
+        let mut keys: HashSet<String> = all_steps
+            .iter()
+            .filter(|s| s.status == WorkflowStepStatus::Completed)
+            .map(|s| format!("{}:{}", s.step_name, s.iteration))
+            .collect();
 
         // Handle --from-step: remove completed keys at or after the specified step
         if let Some(from_step) = input.from_step {
-            let steps = wf_mgr.get_workflow_steps(&wf_run.id)?;
-            let from_pos = steps
+            let from_pos = all_steps
                 .iter()
                 .find(|s| s.step_name == from_step)
                 .map(|s| s.position);
-            if let Some(pos) = from_pos {
-                // Remove all keys at position >= from_step's position
-                let to_remove: Vec<String> = steps
-                    .iter()
-                    .filter(|s| s.position >= pos && s.status == WorkflowStepStatus::Completed)
-                    .map(|s| format!("{}:{}", s.step_name, s.iteration))
-                    .collect();
-                for key in to_remove {
-                    keys.remove(&key);
+            match from_pos {
+                Some(pos) => {
+                    // Remove all keys at position >= from_step's position
+                    let to_remove: Vec<String> = all_steps
+                        .iter()
+                        .filter(|s| s.position >= pos && s.status == WorkflowStepStatus::Completed)
+                        .map(|s| format!("{}:{}", s.step_name, s.iteration))
+                        .collect();
+                    for key in to_remove {
+                        keys.remove(&key);
+                    }
+                    // Reset those steps in DB
+                    wf_mgr.reset_steps_from_position(&wf_run.id, pos)?;
                 }
-                // Reset those steps in DB
-                conn.execute(
-                    "UPDATE workflow_run_steps SET status = 'pending', started_at = NULL, \
-                     ended_at = NULL, result_text = NULL, context_out = NULL, markers_out = NULL, \
-                     structured_output = NULL, child_run_id = NULL \
-                     WHERE workflow_run_id = ?1 AND position >= ?2",
-                    params![wf_run.id, pos],
-                )?;
+                None => {
+                    return Err(ConductorError::Workflow(format!(
+                        "Step '{}' not found in workflow run",
+                        from_step
+                    )));
+                }
             }
         }
 
@@ -1451,6 +1513,8 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         last_gate_feedback: None,
         last_structured_output: None,
         skip_completed,
+        // Re-fetch steps after resets so we have up-to-date records for restore
+        resume_steps: wf_mgr.get_workflow_steps(&wf_run.id).unwrap_or_default(),
     };
 
     // Execute main body
@@ -1512,6 +1576,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
 
     Ok(WorkflowResult {
         workflow_run_id: wf_run.id,
+        worktree_id: state.worktree_id,
         workflow_name: workflow.name.clone(),
         all_succeeded: state.all_succeeded,
         total_cost: state.total_cost,
@@ -1774,7 +1839,9 @@ fn execute_call_with_schema(
             iteration
         );
         // Restore results from DB step records so downstream steps can reference them
-        restore_completed_step_from_db(state, &step_key_check, iteration);
+        let steps = std::mem::take(&mut state.resume_steps);
+        restore_completed_step_from_db(state, &steps, &step_key_check, iteration);
+        state.resume_steps = steps;
         return Ok(());
     }
 
@@ -2023,7 +2090,14 @@ fn execute_call_workflow(
     let skip_key = format!("workflow:{}:{}", node.workflow, iteration);
     if state.skip_completed.contains(&skip_key) {
         tracing::info!("Skipping completed sub-workflow '{}'", node.workflow);
-        restore_completed_step_from_db(state, &format!("workflow:{}", node.workflow), iteration);
+        let steps = std::mem::take(&mut state.resume_steps);
+        restore_completed_step_from_db(
+            state,
+            &steps,
+            &format!("workflow:{}", node.workflow),
+            iteration,
+        );
+        state.resume_steps = steps;
         return Ok(());
     }
 
@@ -2662,7 +2736,9 @@ fn execute_parallel(
         let skip_key = format!("{}:{}", agent_step_key, iteration);
         if state.skip_completed.contains(&skip_key) {
             tracing::info!("parallel: skipping completed agent '{}'", agent_label);
-            restore_completed_step_from_db(state, &agent_step_key, iteration);
+            let steps = std::mem::take(&mut state.resume_steps);
+            restore_completed_step_from_db(state, &steps, &agent_step_key, iteration);
+            state.resume_steps = steps;
             skipped_count += 1;
             continue;
         }
@@ -3369,17 +3445,18 @@ fn find_max_completed_while_iteration(state: &ExecutionState<'_>, node: &WhileNo
 
 /// Restore a completed step's results from DB into the execution state.
 ///
+/// Accepts a pre-loaded slice of steps to avoid repeated DB queries.
 /// Used during resume to rebuild `step_results` and `contexts` for completed
 /// steps so that downstream variable substitution (e.g. `{{prior_context}}`)
 /// works correctly.
-fn restore_completed_step_from_db(state: &mut ExecutionState<'_>, step_key: &str, iteration: u32) {
-    let steps = state
-        .wf_mgr
-        .get_workflow_steps(&state.workflow_run_id)
-        .unwrap_or_default();
-
+fn restore_completed_step_from_db(
+    state: &mut ExecutionState<'_>,
+    all_steps: &[WorkflowRunStep],
+    step_key: &str,
+    iteration: u32,
+) {
     // Find the most recent completed step with this name
-    let completed_step = steps
+    let completed_step = all_steps
         .iter()
         .rfind(|s| s.step_name == step_key && s.status == WorkflowStepStatus::Completed);
 
@@ -3731,6 +3808,7 @@ mod tests {
             block_output: None,
             block_with: Vec::new(),
             skip_completed: HashSet::new(),
+            resume_steps: Vec::new(),
         };
         (state, run_id)
     }
@@ -4525,6 +4603,7 @@ And here is my actual output:
             block_output: None,
             block_with: Vec::new(),
             skip_completed: HashSet::new(),
+            resume_steps: Vec::new(),
         }
     }
 

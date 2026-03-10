@@ -1509,31 +1509,41 @@ impl App {
                 }
             }
             ConfirmAction::ResumeWorkflow { workflow_run_id } => {
-                use conductor_core::workflow::{resume_workflow, WorkflowResumeInput};
-                let resume_input = WorkflowResumeInput {
-                    conn: &self.conn,
-                    config: &self.config,
-                    workflow_run_id: &workflow_run_id,
-                    model: None,
-                    from_step: None,
-                    restart: false,
-                };
-                match resume_workflow(&resume_input) {
-                    Ok(result) => {
-                        let msg = if result.all_succeeded {
-                            "Workflow resumed and completed successfully".to_string()
-                        } else {
-                            "Workflow resumed but finished with failures".to_string()
+                let config = self.config.clone();
+                let bg_tx = self.bg_tx.clone();
+                let run_id = workflow_run_id.clone();
+
+                std::thread::spawn(move || {
+                    use conductor_core::workflow::{
+                        resume_workflow_standalone, WorkflowResumeStandalone,
+                    };
+
+                    let params = WorkflowResumeStandalone {
+                        config,
+                        workflow_run_id: run_id,
+                        model: None,
+                        from_step: None,
+                        restart: false,
+                    };
+
+                    let result = resume_workflow_standalone(&params);
+
+                    if let Some(ref tx) = bg_tx {
+                        let msg = match result {
+                            Ok(res) => {
+                                if res.all_succeeded {
+                                    "Workflow resumed and completed successfully".to_string()
+                                } else {
+                                    "Workflow resumed but finished with failures".to_string()
+                                }
+                            }
+                            Err(e) => format!("Resume failed: {e}"),
                         };
-                        self.state.status_message = Some(msg);
-                        self.reload_workflow_data();
+                        let _ = tx.send(Action::BackgroundSuccess { message: msg });
                     }
-                    Err(e) => {
-                        self.state.modal = Modal::Error {
-                            message: format!("Resume failed: {e}"),
-                        };
-                    }
-                }
+                });
+
+                self.state.status_message = Some("Resuming workflow…".to_string());
             }
             ConfirmAction::DeleteIssueSource {
                 source_id,
