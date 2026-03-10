@@ -20,7 +20,7 @@ workflow ticket-to-pr {
   call push-and-pr
 
   do {
-    max_iterations = 4
+    max_iterations = 10
     on_max_iter    = fail
 
     call workflow review-pr
