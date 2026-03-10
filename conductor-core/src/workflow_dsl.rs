@@ -2879,6 +2879,38 @@ workflow test {
     }
 
     #[test]
+    fn test_collect_agent_names_inside_do_while() {
+        let input = r#"workflow test {
+            do check.has_issues {
+                max_iterations = 2
+                call fix
+                call verify
+            }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let refs = collect_agent_names(&def.body);
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0], AgentRef::Name("fix".to_string()));
+        assert_eq!(refs[1], AgentRef::Name("verify".to_string()));
+    }
+
+    #[test]
+    fn test_collect_workflow_refs_in_do_while() {
+        let input = r#"
+workflow parent {
+    call analyze
+    do analyze.needs_fixes {
+        max_iterations = 3
+        call workflow lint-fix
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let refs = collect_workflow_refs(&def.body);
+        assert_eq!(refs, vec!["lint-fix"]);
+    }
+
+    #[test]
     fn test_collect_all_snippet_refs_deduplicates_across_body_and_always() {
         let input = r#"workflow test {
             call plan { with = ["shared-context", "body-only"] }
