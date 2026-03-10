@@ -1,3 +1,4 @@
+use dirs;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -209,8 +210,10 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
             .and_then(|tid| state.data.ticket_map.get(tid))
     });
 
-    // Header height: 3 base lines + branch line + optional ticket line + 1 border
-    let header_height = 3 + 1 + if run_ticket.is_some() { 1 } else { 0 } + 1;
+    // Header height: 3 base lines + optional worktree lines (branch + path) + optional ticket line + 1 border
+    let worktree_extra = if run_worktree.is_some() { 2 } else { 0 };
+    let ticket_extra = if run_ticket.is_some() { 1 } else { 0 };
+    let header_height = 3 + worktree_extra + ticket_extra + 1;
 
     // Header area + body
     let chunks = Layout::default()
@@ -244,6 +247,14 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
             header_lines.push(Line::from(vec![
                 Span::styled(" Branch:   ", Style::default().fg(Color::DarkGray)),
                 Span::raw(wt.branch.clone()),
+            ]));
+            let display_path = match dirs::home_dir() {
+                Some(home) => wt.path.replacen(home.to_string_lossy().as_ref(), "~", 1),
+                None => wt.path.clone(),
+            };
+            header_lines.push(Line::from(vec![
+                Span::styled(" Path:     ", Style::default().fg(Color::DarkGray)),
+                Span::raw(display_path),
             ]));
         }
 
