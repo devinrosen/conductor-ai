@@ -14,6 +14,8 @@ workflow ticket-to-pr {
     retries = 2
   }
 
+  call workflow lint-fix
+
   call push-and-pr
 
   do {
@@ -23,8 +25,8 @@ workflow ticket-to-pr {
 
     call workflow review-pr
 
-    if review-aggregator.has_review_issues {
+    if review-pr.has_review_issues {
       call address-reviews
     }
-  } while review-aggregator.has_review_issues
+  } while review-pr.has_review_issues
 }
