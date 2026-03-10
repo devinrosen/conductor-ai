@@ -4424,4 +4424,129 @@ And here is my actual output:
         let active = mgr.get_active_run_for_worktree("w1").unwrap();
         assert!(active.is_none());
     }
+
+    // -----------------------------------------------------------------------
+    // execute_workflow guard tests (depth == 0 only)
+    // -----------------------------------------------------------------------
+
+    /// Minimal workflow with no agents or steps — used to exercise the
+    /// execute_workflow guard without touching real agent infrastructure.
+    fn make_empty_workflow() -> WorkflowDef {
+        WorkflowDef {
+            name: "test-wf".into(),
+            description: "test".into(),
+            trigger: WorkflowTrigger::Manual,
+            inputs: vec![],
+            body: vec![],
+            always: vec![],
+            source_path: "test.wf".into(),
+        }
+    }
+
+    #[test]
+    fn test_cannot_start_workflow_run_when_active() {
+        let conn = setup_db();
+        let config = Config::default();
+        let exec_config = WorkflowExecConfig::default();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("running-wf", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+        wf_mgr
+            .update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        let workflow = make_empty_workflow();
+        let input = WorkflowExecInput {
+            conn: &conn,
+            config: &config,
+            workflow: &workflow,
+            worktree_id: "w1",
+            worktree_path: "/tmp/ws/feat-test",
+            repo_path: "/tmp/repo",
+            model: None,
+            exec_config: &exec_config,
+            inputs: HashMap::new(),
+            depth: 0,
+        };
+        let err = execute_workflow(&input).unwrap_err();
+        assert!(
+            matches!(err, ConductorError::WorkflowRunAlreadyActive { .. }),
+            "expected WorkflowRunAlreadyActive, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_can_start_workflow_run_after_completion() {
+        let conn = setup_db();
+        let config = Config::default();
+        let exec_config = WorkflowExecConfig::default();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("done-wf", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+        wf_mgr
+            .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"))
+            .unwrap();
+
+        let workflow = make_empty_workflow();
+        let input = WorkflowExecInput {
+            conn: &conn,
+            config: &config,
+            workflow: &workflow,
+            worktree_id: "w1",
+            worktree_path: "/tmp/ws/feat-test",
+            repo_path: "/tmp/repo",
+            model: None,
+            exec_config: &exec_config,
+            inputs: HashMap::new(),
+            depth: 0,
+        };
+        // Guard should pass; empty workflow completes successfully.
+        let result = execute_workflow(&input);
+        assert!(
+            !matches!(result, Err(ConductorError::WorkflowRunAlreadyActive { .. })),
+            "should not be blocked by completed run"
+        );
+    }
+
+    #[test]
+    fn test_child_workflow_not_blocked_by_parent() {
+        let conn = setup_db();
+        let config = Config::default();
+        let exec_config = WorkflowExecConfig::default();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("parent-wf", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+        wf_mgr
+            .update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        let workflow = make_empty_workflow();
+        // depth = 1 means this is a child workflow — guard must be skipped.
+        let input = WorkflowExecInput {
+            conn: &conn,
+            config: &config,
+            workflow: &workflow,
+            worktree_id: "w1",
+            worktree_path: "/tmp/ws/feat-test",
+            repo_path: "/tmp/repo",
+            model: None,
+            exec_config: &exec_config,
+            inputs: HashMap::new(),
+            depth: 1,
+        };
+        let result = execute_workflow(&input);
+        assert!(
+            !matches!(result, Err(ConductorError::WorkflowRunAlreadyActive { .. })),
+            "child workflow should not be blocked by active parent run"
+        );
+    }
 }
