@@ -114,6 +114,7 @@ pub enum WorkflowNode {
     If(IfNode),
     Unless(UnlessNode),
     While(WhileNode),
+    DoWhile(DoWhileNode),
     Parallel(ParallelNode),
     Gate(GateNode),
     Always(AlwaysNode),
@@ -203,6 +204,16 @@ pub struct UnlessNode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhileNode {
+    pub step: String,
+    pub marker: String,
+    pub max_iterations: u32,
+    pub stuck_after: Option<u32>,
+    pub on_max_iter: OnMaxIter,
+    pub body: Vec<WorkflowNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DoWhileNode {
     pub step: String,
     pub marker: String,
     pub max_iterations: u32,
@@ -302,6 +313,7 @@ enum Token {
     If,
     Unless,
     While,
+    Do,
     Parallel,
     Gate,
     Always,
@@ -473,6 +485,7 @@ impl Lexer {
             "if" => Token::If,
             "unless" => Token::Unless,
             "while" => Token::While,
+            "do" => Token::Do,
             "parallel" => Token::Parallel,
             "gate" => Token::Gate,
             "always" => Token::Always,
@@ -800,11 +813,12 @@ impl Parser {
             Token::If => self.parse_if().map(WorkflowNode::If),
             Token::Unless => self.parse_unless().map(WorkflowNode::Unless),
             Token::While => self.parse_while().map(WorkflowNode::While),
+            Token::Do => self.parse_do_while().map(WorkflowNode::DoWhile),
             Token::Parallel => self.parse_parallel().map(WorkflowNode::Parallel),
             Token::Gate => self.parse_gate().map(WorkflowNode::Gate),
             Token::Always => self.parse_always().map(WorkflowNode::Always),
             other => Err(format!(
-                "Expected a workflow node (call, if, unless, while, parallel, gate, always), got {other:?}"
+                "Expected a workflow node (call, if, unless, while, do, parallel, gate, always), got {other:?}"
             )),
         }
     }
@@ -936,16 +950,15 @@ impl Parser {
         Ok(UnlessNode { step, marker, body })
     }
 
-    fn parse_while(&mut self) -> std::result::Result<WhileNode, String> {
-        self.expect(&Token::While)?;
-        let (step, marker) = self.parse_condition()?;
-        self.expect(&Token::LBrace)?;
-
-        let kvs = self.parse_kvs()?;
-
+    /// Extract the common loop KV options (`max_iterations`, `stuck_after`, `on_max_iter`)
+    /// shared by `while` and `do` loops.
+    fn parse_loop_options(
+        kvs: &HashMap<String, KvValue>,
+        loop_kind: &str,
+    ) -> std::result::Result<(u32, Option<u32>, OnMaxIter), String> {
         let max_iterations = kvs
             .get("max_iterations")
-            .ok_or("while loop requires max_iterations")?
+            .ok_or(format!("{loop_kind} loop requires max_iterations"))?
             .as_str()
             .parse::<u32>()
             .map_err(|e| format!("Invalid max_iterations: {e}"))?;
@@ -962,6 +975,17 @@ impl Parser {
             Some(other) => return Err(format!("Invalid on_max_iter: {other}")),
         };
 
+        Ok((max_iterations, stuck_after, on_max_iter))
+    }
+
+    fn parse_while(&mut self) -> std::result::Result<WhileNode, String> {
+        self.expect(&Token::While)?;
+        let (step, marker) = self.parse_condition()?;
+        self.expect(&Token::LBrace)?;
+
+        let kvs = self.parse_kvs()?;
+        let (max_iterations, stuck_after, on_max_iter) = Self::parse_loop_options(&kvs, "while")?;
+
         let mut body = Vec::new();
         while self.peek() != &Token::RBrace && self.peek() != &Token::Eof {
             body.push(self.parse_node()?);
@@ -969,6 +993,30 @@ impl Parser {
         self.expect(&Token::RBrace)?;
 
         Ok(WhileNode {
+            step,
+            marker,
+            max_iterations,
+            stuck_after,
+            on_max_iter,
+            body,
+        })
+    }
+
+    fn parse_do_while(&mut self) -> std::result::Result<DoWhileNode, String> {
+        self.expect(&Token::Do)?;
+        let (step, marker) = self.parse_condition()?;
+        self.expect(&Token::LBrace)?;
+
+        let kvs = self.parse_kvs()?;
+        let (max_iterations, stuck_after, on_max_iter) = Self::parse_loop_options(&kvs, "do")?;
+
+        let mut body = Vec::new();
+        while self.peek() != &Token::RBrace && self.peek() != &Token::Eof {
+            body.push(self.parse_node()?);
+        }
+        self.expect(&Token::RBrace)?;
+
+        Ok(DoWhileNode {
             step,
             marker,
             max_iterations,
@@ -1253,6 +1301,7 @@ fn count_nodes(nodes: &[WorkflowNode]) -> usize {
             WorkflowNode::If(n) => count += count_nodes(&n.body),
             WorkflowNode::Unless(n) => count += count_nodes(&n.body),
             WorkflowNode::While(n) => count += count_nodes(&n.body),
+            WorkflowNode::DoWhile(n) => count += count_nodes(&n.body),
             WorkflowNode::Parallel(n) => count += n.calls.len(),
             WorkflowNode::Gate(_) => {}
             WorkflowNode::Always(n) => count += count_nodes(&n.body),
@@ -1281,6 +1330,7 @@ pub fn collect_agent_names(nodes: &[WorkflowNode]) -> Vec<AgentRef> {
             WorkflowNode::If(n) => refs.extend(collect_agent_names(&n.body)),
             WorkflowNode::Unless(n) => refs.extend(collect_agent_names(&n.body)),
             WorkflowNode::While(n) => refs.extend(collect_agent_names(&n.body)),
+            WorkflowNode::DoWhile(n) => refs.extend(collect_agent_names(&n.body)),
             WorkflowNode::Parallel(n) => refs.extend(n.calls.iter().cloned()),
             WorkflowNode::Gate(_) => {}
             WorkflowNode::Always(n) => refs.extend(collect_agent_names(&n.body)),
@@ -1304,6 +1354,7 @@ pub fn collect_snippet_refs(nodes: &[WorkflowNode]) -> Vec<String> {
             WorkflowNode::If(n) => refs.extend(collect_snippet_refs(&n.body)),
             WorkflowNode::Unless(n) => refs.extend(collect_snippet_refs(&n.body)),
             WorkflowNode::While(n) => refs.extend(collect_snippet_refs(&n.body)),
+            WorkflowNode::DoWhile(n) => refs.extend(collect_snippet_refs(&n.body)),
             WorkflowNode::Always(n) => refs.extend(collect_snippet_refs(&n.body)),
             WorkflowNode::CallWorkflow(_) | WorkflowNode::Gate(_) => {}
         }
@@ -1321,6 +1372,7 @@ pub fn collect_workflow_refs(nodes: &[WorkflowNode]) -> Vec<String> {
             WorkflowNode::If(n) => refs.extend(collect_workflow_refs(&n.body)),
             WorkflowNode::Unless(n) => refs.extend(collect_workflow_refs(&n.body)),
             WorkflowNode::While(n) => refs.extend(collect_workflow_refs(&n.body)),
+            WorkflowNode::DoWhile(n) => refs.extend(collect_workflow_refs(&n.body)),
             WorkflowNode::Parallel(_) => {} // parallel only contains agent calls
             WorkflowNode::Always(n) => refs.extend(collect_workflow_refs(&n.body)),
         }
@@ -2747,6 +2799,126 @@ workflow parent {
         let def = parse_workflow_str(input, "test.wf").unwrap();
         let refs = collect_snippet_refs(&def.always);
         assert_eq!(refs, vec!["always-context".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_do_while() {
+        let input = r#"
+workflow test {
+    call analyze
+    do analyze.needs_retry {
+        max_iterations = 3
+        stuck_after    = 2
+        on_max_iter    = continue
+        call diagnose
+        call fix
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.body.len(), 2);
+        match &def.body[1] {
+            WorkflowNode::DoWhile(n) => {
+                assert_eq!(n.step, "analyze");
+                assert_eq!(n.marker, "needs_retry");
+                assert_eq!(n.max_iterations, 3);
+                assert_eq!(n.stuck_after, Some(2));
+                assert_eq!(n.on_max_iter, OnMaxIter::Continue);
+                assert_eq!(n.body.len(), 2);
+            }
+            _ => panic!("Expected DoWhile node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_do_while_requires_max_iterations() {
+        let input = r#"workflow test { do foo.bar { call baz } }"#;
+        let result = parse_workflow_str(input, "test.wf");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("max_iterations"));
+    }
+
+    #[test]
+    fn test_parse_do_while_invalid_on_max_iter() {
+        let input = r#"workflow test { do foo.bar { max_iterations = 3  on_max_iter = explode  call baz } }"#;
+        let result = parse_workflow_str(input, "test.wf");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid on_max_iter"));
+    }
+
+    #[test]
+    fn test_parse_do_while_serde_roundtrip() {
+        let input = r#"
+workflow test {
+    call check
+    do check.has_issues {
+        max_iterations = 2
+        call fix
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let json = serde_json::to_string(&def).unwrap();
+        assert!(json.contains("\"type\":\"do_while\""));
+        // Deserialize and verify round-trip
+        let def2: WorkflowDef = serde_json::from_str(&json).unwrap();
+        assert_eq!(def2.body.len(), def.body.len());
+        match &def2.body[1] {
+            WorkflowNode::DoWhile(n) => {
+                assert_eq!(n.step, "check");
+                assert_eq!(n.marker, "has_issues");
+                assert_eq!(n.max_iterations, 2);
+            }
+            _ => panic!("Expected DoWhile node after roundtrip"),
+        }
+    }
+
+    #[test]
+    fn test_collect_snippet_refs_inside_do_while() {
+        let input = r#"workflow test {
+            do check.has_issues {
+                max_iterations = 2
+                call fix { with = ["do-while-context"] }
+            }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let refs = collect_snippet_refs(&def.body);
+        assert_eq!(refs, vec!["do-while-context".to_string()]);
+    }
+
+    #[test]
+    fn test_collect_agent_names_inside_do_while() {
+        let input = r#"workflow test {
+            do check.has_issues {
+                max_iterations = 2
+                call fix
+                call verify
+            }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let refs = collect_agent_names(&def.body);
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0], AgentRef::Name("fix".to_string()));
+        assert_eq!(refs[1], AgentRef::Name("verify".to_string()));
+    }
+
+    #[test]
+    fn test_collect_workflow_refs_in_do_while() {
+        let input = r#"
+workflow parent {
+    call analyze
+    do analyze.needs_fixes {
+        max_iterations = 3
+        call workflow lint-fix
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let refs = collect_workflow_refs(&def.body);
+        assert_eq!(refs, vec!["lint-fix"]);
     }
 
     #[test]

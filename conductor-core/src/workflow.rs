@@ -21,8 +21,8 @@ use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::prompt_config;
 use crate::workflow_dsl::{
-    self, CallNode, CallWorkflowNode, GateNode, GateType, IfNode, OnMaxIter, OnTimeout,
-    ParallelNode, UnlessNode, WhileNode, WorkflowNode,
+    self, CallNode, CallWorkflowNode, DoWhileNode, GateNode, GateType, IfNode, OnMaxIter,
+    OnTimeout, ParallelNode, UnlessNode, WhileNode, WorkflowNode,
 };
 
 // Re-export DSL types so consumers go through `workflow::` instead of `workflow_dsl::` directly.
@@ -1200,6 +1200,7 @@ fn execute_single_node(
         WorkflowNode::If(n) => execute_if(state, n)?,
         WorkflowNode::Unless(n) => execute_unless(state, n)?,
         WorkflowNode::While(n) => execute_while(state, n)?,
+        WorkflowNode::DoWhile(n) => execute_do_while(state, n)?,
         WorkflowNode::Parallel(n) => execute_parallel(state, n, iteration)?,
         WorkflowNode::Gate(n) => execute_gate(state, n, iteration)?,
         WorkflowNode::Always(n) => {
@@ -1923,6 +1924,67 @@ fn execute_unless(state: &mut ExecutionState<'_>, node: &UnlessNode) -> Result<(
     Ok(())
 }
 
+/// Check whether the loop is stuck (identical marker sets for `stuck_after` consecutive
+/// iterations). Returns `Err` if stuck, `Ok(())` otherwise.
+fn check_stuck(
+    state: &mut ExecutionState<'_>,
+    prev_marker_sets: &mut Vec<HashSet<String>>,
+    step: &str,
+    marker: &str,
+    stuck_after: u32,
+    loop_kind: &str,
+) -> Result<()> {
+    let current_markers: HashSet<String> = state
+        .step_results
+        .get(step)
+        .map(|r| r.markers.iter().cloned().collect())
+        .unwrap_or_default();
+
+    prev_marker_sets.push(current_markers.clone());
+
+    if prev_marker_sets.len() >= stuck_after as usize {
+        let window = &prev_marker_sets[prev_marker_sets.len() - stuck_after as usize..];
+        if window.iter().all(|s| s == &current_markers) {
+            tracing::warn!(
+                "{loop_kind} {step}.{marker} — stuck: identical markers for {stuck_after} consecutive iterations",
+            );
+            state.all_succeeded = false;
+            return Err(ConductorError::Workflow(format!(
+                "{loop_kind} {step}.{marker} stuck after {stuck_after} iterations with identical markers",
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Check whether the loop has exceeded `max_iterations`. Returns `Ok(true)` if the caller
+/// should break out of the loop (`on_max_iter = continue`), `Ok(false)` to keep going,
+/// or `Err` if `on_max_iter = fail`.
+fn check_max_iterations(
+    state: &mut ExecutionState<'_>,
+    iteration: u32,
+    max_iterations: u32,
+    on_max_iter: &OnMaxIter,
+    step: &str,
+    marker: &str,
+    loop_kind: &str,
+) -> Result<bool> {
+    if iteration >= max_iterations {
+        tracing::warn!("{loop_kind} {step}.{marker} — reached max_iterations ({max_iterations})",);
+        match on_max_iter {
+            OnMaxIter::Fail => {
+                state.all_succeeded = false;
+                return Err(ConductorError::Workflow(format!(
+                    "{loop_kind} {step}.{marker} reached max_iterations ({max_iterations})",
+                )));
+            }
+            OnMaxIter::Continue => return Ok(true),
+        }
+    }
+    Ok(false)
+}
+
 fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) -> Result<()> {
     let mut iteration = 0u32;
     let mut prev_marker_sets: Vec<HashSet<String>> = Vec::new();
@@ -1945,23 +2007,16 @@ fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) -> Result<()>
             break;
         }
 
-        if iteration >= node.max_iterations {
-            tracing::warn!(
-                "while {}.{} — reached max_iterations ({})",
-                node.step,
-                node.marker,
-                node.max_iterations
-            );
-            match node.on_max_iter {
-                OnMaxIter::Fail => {
-                    state.all_succeeded = false;
-                    return Err(ConductorError::Workflow(format!(
-                        "while {}.{} reached max_iterations ({})",
-                        node.step, node.marker, node.max_iterations
-                    )));
-                }
-                OnMaxIter::Continue => break,
-            }
+        if check_max_iterations(
+            state,
+            iteration,
+            node.max_iterations,
+            &node.on_max_iter,
+            &node.step,
+            &node.marker,
+            "while",
+        )? {
+            break;
         }
 
         tracing::info!(
@@ -1983,30 +2038,83 @@ fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) -> Result<()>
 
         // Stuck detection
         if let Some(stuck_after) = node.stuck_after {
-            let current_markers: HashSet<String> = state
-                .step_results
-                .get(&node.step)
-                .map(|r| r.markers.iter().cloned().collect())
-                .unwrap_or_default();
+            check_stuck(
+                state,
+                &mut prev_marker_sets,
+                &node.step,
+                &node.marker,
+                stuck_after,
+                "while",
+            )?;
+        }
 
-            prev_marker_sets.push(current_markers.clone());
+        iteration += 1;
+    }
 
-            if prev_marker_sets.len() >= stuck_after as usize {
-                let window = &prev_marker_sets[prev_marker_sets.len() - stuck_after as usize..];
-                if window.iter().all(|s| s == &current_markers) {
-                    tracing::warn!(
-                        "while {}.{} — stuck: identical markers for {} consecutive iterations",
-                        node.step,
-                        node.marker,
-                        stuck_after
-                    );
-                    state.all_succeeded = false;
-                    return Err(ConductorError::Workflow(format!(
-                        "while {}.{} stuck after {} iterations with identical markers",
-                        node.step, node.marker, stuck_after
-                    )));
-                }
+    Ok(())
+}
+
+fn execute_do_while(state: &mut ExecutionState<'_>, node: &DoWhileNode) -> Result<()> {
+    let mut iteration = 0u32;
+    let mut prev_marker_sets: Vec<HashSet<String>> = Vec::new();
+
+    loop {
+        if check_max_iterations(
+            state,
+            iteration,
+            node.max_iterations,
+            &node.on_max_iter,
+            &node.step,
+            &node.marker,
+            "do",
+        )? {
+            break;
+        }
+
+        tracing::info!(
+            "do {}.{} — iteration {}/{}",
+            node.step,
+            node.marker,
+            iteration + 1,
+            node.max_iterations
+        );
+
+        // Execute body first (do-while: body always runs before condition check)
+        for body_node in &node.body {
+            execute_single_node(state, body_node, iteration)?;
+
+            if !state.all_succeeded && state.exec_config.fail_fast {
+                return Ok(());
             }
+        }
+
+        // Check condition after body
+        let has_marker = state
+            .step_results
+            .get(&node.step)
+            .map(|r| r.markers.iter().any(|m| m == &node.marker))
+            .unwrap_or(false);
+
+        // Stuck detection
+        if let Some(stuck_after) = node.stuck_after {
+            check_stuck(
+                state,
+                &mut prev_marker_sets,
+                &node.step,
+                &node.marker,
+                stuck_after,
+                "do",
+            )?;
+        }
+
+        if !has_marker {
+            tracing::info!(
+                "do {}.{} — condition no longer met after {} iterations",
+                node.step,
+                node.marker,
+                iteration + 1
+            );
+            break;
         }
 
         iteration += 1;
@@ -3974,5 +4082,249 @@ And here is my actual output:
         assert!(markers.is_empty());
         assert!(context.is_empty());
         assert!(json.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // execute_do_while tests
+    // -----------------------------------------------------------------------
+
+    fn make_step_result(step_name: &str, markers: Vec<&str>) -> StepResult {
+        StepResult {
+            step_name: step_name.into(),
+            status: WorkflowStepStatus::Completed,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            markers: markers.into_iter().map(String::from).collect(),
+            context: String::new(),
+            child_run_id: None,
+            structured_output: None,
+        }
+    }
+
+    /// Helper to build an `ExecutionState` suitable for testing loop functions
+    /// (no real agents or worktrees needed).
+    fn make_loop_test_state<'a>(conn: &'a Connection, config: &'a Config) -> ExecutionState<'a> {
+        let agent_mgr = AgentManager::new(conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+        let wf_mgr = WorkflowManager::new(conn);
+        let run = wf_mgr
+            .create_workflow_run("test", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+
+        ExecutionState {
+            conn,
+            config,
+            workflow_run_id: run.id,
+            workflow_name: "test".into(),
+            worktree_id: "w1".into(),
+            worktree_path: "/tmp/test".into(),
+            worktree_slug: "test".into(),
+            repo_path: "/tmp/repo".into(),
+            model: None,
+            exec_config: WorkflowExecConfig::default(),
+            inputs: HashMap::new(),
+            agent_mgr: AgentManager::new(conn),
+            wf_mgr: WorkflowManager::new(conn),
+            parent_run_id: parent.id,
+            depth: 0,
+            step_results: HashMap::new(),
+            contexts: Vec::new(),
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            last_gate_feedback: None,
+            last_structured_output: None,
+        }
+    }
+
+    #[test]
+    fn test_do_while_body_runs_once_when_condition_absent() {
+        // The defining semantic: body executes before condition check,
+        // so even with no marker set the body runs once.
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+
+        let node = DoWhileNode {
+            step: "check".into(),
+            marker: "needs_work".into(),
+            max_iterations: 3,
+            stuck_after: None,
+            on_max_iter: OnMaxIter::Fail,
+            body: vec![], // empty body — still runs the loop once
+        };
+
+        // No step_results set → marker absent → loop exits after 1 iteration
+        let result = execute_do_while(&mut state, &node);
+        assert!(result.is_ok());
+        assert!(state.all_succeeded);
+    }
+
+    #[test]
+    fn test_do_while_max_iterations_fail() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+
+        // Pre-set a marker that stays true forever (body is empty so nothing clears it)
+        state.step_results.insert(
+            "check".into(),
+            make_step_result("check", vec!["needs_work"]),
+        );
+
+        let node = DoWhileNode {
+            step: "check".into(),
+            marker: "needs_work".into(),
+            max_iterations: 2,
+            stuck_after: None,
+            on_max_iter: OnMaxIter::Fail,
+            body: vec![],
+        };
+
+        let result = execute_do_while(&mut state, &node);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("max_iterations"));
+        assert!(!state.all_succeeded);
+    }
+
+    #[test]
+    fn test_do_while_max_iterations_continue() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+
+        state.step_results.insert(
+            "check".into(),
+            make_step_result("check", vec!["needs_work"]),
+        );
+
+        let node = DoWhileNode {
+            step: "check".into(),
+            marker: "needs_work".into(),
+            max_iterations: 2,
+            stuck_after: None,
+            on_max_iter: OnMaxIter::Continue,
+            body: vec![],
+        };
+
+        let result = execute_do_while(&mut state, &node);
+        assert!(result.is_ok());
+        assert!(state.all_succeeded);
+    }
+
+    #[test]
+    fn test_do_while_stuck_detection() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+
+        // Marker stays the same every iteration → stuck after 2
+        state.step_results.insert(
+            "check".into(),
+            make_step_result("check", vec!["needs_work"]),
+        );
+
+        let node = DoWhileNode {
+            step: "check".into(),
+            marker: "needs_work".into(),
+            max_iterations: 10,
+            stuck_after: Some(2),
+            on_max_iter: OnMaxIter::Fail,
+            body: vec![],
+        };
+
+        let result = execute_do_while(&mut state, &node);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("stuck"));
+        assert!(!state.all_succeeded);
+    }
+
+    #[test]
+    fn test_do_while_iterates_body_multiple_times() {
+        // Verify the body actually executes on each iteration by tracking
+        // state.position, which Gate nodes increment in dry_run mode.
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+        state.exec_config.dry_run = true;
+
+        // Marker present → loop keeps iterating until max_iterations
+        state.step_results.insert(
+            "check".into(),
+            make_step_result("check", vec!["needs_work"]),
+        );
+
+        let initial_position = state.position;
+
+        let node = DoWhileNode {
+            step: "check".into(),
+            marker: "needs_work".into(),
+            max_iterations: 3,
+            stuck_after: None,
+            on_max_iter: OnMaxIter::Continue,
+            body: vec![WorkflowNode::Gate(GateNode {
+                name: "counter".into(),
+                gate_type: GateType::HumanApproval,
+                prompt: None,
+                min_approvals: 1,
+                timeout_secs: 1,
+                on_timeout: OnTimeout::Fail,
+            })],
+        };
+
+        let result = execute_do_while(&mut state, &node);
+        assert!(result.is_ok());
+        // Gate node increments position once per iteration; 3 iterations expected
+        assert_eq!(state.position - initial_position, 3);
+    }
+
+    // NOTE: Testing the natural-exit path (marker transitions from true→false
+    // mid-loop) is not feasible in a unit test because no WorkflowNode type
+    // modifies step_results without running a real agent. The `!has_marker → break`
+    // branch after body execution IS covered when the marker is absent from the
+    // start (see test_do_while_body_runs_once_when_condition_absent). The
+    // transition case (marker present → body clears marker → loop exits) requires
+    // integration testing with actual agent execution.
+
+    #[test]
+    fn test_do_while_fail_fast_exits_early() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+        state.exec_config.fail_fast = true;
+
+        // Marker is set so the loop would keep iterating if not for fail_fast
+        state.step_results.insert(
+            "check".into(),
+            make_step_result("check", vec!["needs_work"]),
+        );
+
+        // Simulate a prior failure — all_succeeded is already false
+        state.all_succeeded = false;
+
+        // Body has a no-op If node (condition never true → body skipped, returns Ok)
+        let node = DoWhileNode {
+            step: "check".into(),
+            marker: "needs_work".into(),
+            max_iterations: 10,
+            stuck_after: None,
+            on_max_iter: OnMaxIter::Fail,
+            body: vec![WorkflowNode::If(IfNode {
+                step: "nonexistent".into(),
+                marker: "nope".into(),
+                body: vec![],
+            })],
+        };
+
+        // fail_fast should cause early exit with Ok(()) instead of looping to max_iterations
+        let result = execute_do_while(&mut state, &node);
+        assert!(result.is_ok());
+        assert!(!state.all_succeeded);
     }
 }
