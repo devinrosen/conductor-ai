@@ -195,10 +195,27 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         .as_ref()
         .and_then(|id| state.data.workflow_runs.iter().find(|r| &r.id == id));
 
-    // Header area (3 lines) + body
+    // Resolve worktree and ticket for the selected run (if any).
+    let run_worktree = run_info.and_then(|run| {
+        state
+            .data
+            .worktrees
+            .iter()
+            .find(|wt| wt.id == run.worktree_id)
+    });
+    let run_ticket = run_worktree.and_then(|wt| {
+        wt.ticket_id
+            .as_ref()
+            .and_then(|tid| state.data.ticket_map.get(tid))
+    });
+
+    // Header height: 3 base lines + branch line + optional ticket line + 1 border
+    let header_height = 3 + 1 + if run_ticket.is_some() { 1 } else { 0 } + 1;
+
+    // Header area + body
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(4), Constraint::Min(0)])
+        .constraints([Constraint::Length(header_height as u16), Constraint::Min(0)])
         .split(area);
 
     // Header
@@ -210,32 +227,50 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
             .unwrap_or(&run.started_at)
             .replace('T', " ");
         let summary_display = run.result_summary.as_deref().unwrap_or("—").to_string();
-        let header_lines = vec![
-            Line::from(vec![
-                Span::styled(" Workflow: ", Style::default().fg(Color::DarkGray)),
+
+        let mut header_lines = vec![Line::from(vec![
+            Span::styled(" Workflow: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                run.workflow_name.clone(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(status_symbol, Style::default().fg(status_color)),
+        ])];
+
+        if let Some(wt) = run_worktree {
+            header_lines.push(Line::from(vec![
+                Span::styled(" Branch:   ", Style::default().fg(Color::DarkGray)),
+                Span::raw(wt.branch.clone()),
+            ]));
+        }
+
+        if let Some(ticket) = run_ticket {
+            header_lines.push(Line::from(vec![
+                Span::styled(" Ticket:   ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
-                    run.workflow_name.clone(),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    format!("#{} — {}", ticket.source_id, ticket.title),
+                    Style::default().fg(Color::Yellow),
                 ),
-                Span::raw("  "),
-                Span::styled(status_symbol, Style::default().fg(status_color)),
-            ]),
-            Line::from(vec![
-                Span::styled(" Started:  ", Style::default().fg(Color::DarkGray)),
-                Span::raw(started_display),
-                if run.dry_run {
-                    Span::styled("  [dry-run]", Style::default().fg(Color::Yellow))
-                } else {
-                    Span::raw("")
-                },
-            ]),
-            Line::from(vec![
-                Span::styled(" Summary:  ", Style::default().fg(Color::DarkGray)),
-                Span::raw(summary_display),
-            ]),
-        ];
+            ]));
+        }
+
+        header_lines.push(Line::from(vec![
+            Span::styled(" Started:  ", Style::default().fg(Color::DarkGray)),
+            Span::raw(started_display),
+            if run.dry_run {
+                Span::styled("  [dry-run]", Style::default().fg(Color::Yellow))
+            } else {
+                Span::raw("")
+            },
+        ]));
+        header_lines.push(Line::from(vec![
+            Span::styled(" Summary:  ", Style::default().fg(Color::DarkGray)),
+            Span::raw(summary_display),
+        ]));
+
         let header_block = Block::default()
             .borders(Borders::BOTTOM)
             .border_style(Style::default().fg(Color::DarkGray));
