@@ -588,6 +588,7 @@ impl App {
 
             // Workflow actions
             Action::RunWorkflow => self.handle_run_workflow(),
+            Action::RunPrWorkflow => self.handle_run_pr_workflow(),
             Action::ResumeWorkflow => self.handle_resume_workflow(),
             Action::CancelWorkflow => self.handle_cancel_workflow(),
             Action::ApproveGate => self.handle_approve_gate(),
@@ -1012,6 +1013,14 @@ impl App {
                 wrap_decrement(selected, sources.len());
                 return;
             }
+            Modal::PrWorkflowPicker {
+                ref workflow_defs,
+                ref mut selected,
+                ..
+            } => {
+                wrap_decrement(selected, workflow_defs.len());
+                return;
+            }
             Modal::GithubDiscoverOrgs {
                 ref orgs,
                 ref mut cursor,
@@ -1131,6 +1140,14 @@ impl App {
                 ..
             } => {
                 wrap_increment(selected, sources.len());
+                return;
+            }
+            Modal::PrWorkflowPicker {
+                ref workflow_defs,
+                ref mut selected,
+                ..
+            } => {
+                wrap_increment(selected, workflow_defs.len());
                 return;
             }
             Modal::GithubDiscoverOrgs {
@@ -1633,6 +1650,12 @@ impl App {
     }
 
     fn handle_input_submit(&mut self) {
+        // PrWorkflowPicker: confirm the selected workflow
+        if matches!(self.state.modal, Modal::PrWorkflowPicker { .. }) {
+            self.handle_pr_workflow_picker_confirm();
+            return;
+        }
+
         // ConfirmByName: only proceed if typed value matches expected slug
         if let Modal::ConfirmByName {
             ref expected,
@@ -4478,6 +4501,171 @@ impl App {
 
         self.workflow_threads.push(handle);
         self.state.status_message = Some(format!("Starting workflow '{workflow_name}'…"));
+    }
+
+    fn handle_run_pr_workflow(&mut self) {
+        let pr = match self.state.detail_prs.get(self.state.detail_pr_index) {
+            Some(pr) => pr.clone(),
+            None => {
+                self.state.status_message = Some("No PR selected".to_string());
+                return;
+            }
+        };
+
+        let pr_defs: Vec<conductor_core::workflow::WorkflowDef> = self
+            .state
+            .data
+            .workflow_defs
+            .iter()
+            .filter(|d| d.targets.iter().any(|t| t == "pr"))
+            .cloned()
+            .collect();
+
+        if pr_defs.is_empty() {
+            self.state.modal = Modal::Error {
+                message:
+                    "No PR-compatible workflows found.\nAdd targets: [pr] to a workflow definition."
+                        .to_string(),
+            };
+            return;
+        }
+
+        self.state.modal = Modal::PrWorkflowPicker {
+            pr_number: pr.number,
+            pr_title: pr.title.clone(),
+            workflow_defs: pr_defs,
+            selected: 0,
+        };
+    }
+
+    fn handle_pr_workflow_picker_confirm(&mut self) {
+        let (pr_number, def) = if let Modal::PrWorkflowPicker {
+            pr_number,
+            ref workflow_defs,
+            selected,
+            ..
+        } = self.state.modal
+        {
+            let def = match workflow_defs.get(selected) {
+                Some(d) => d.clone(),
+                None => return,
+            };
+            (pr_number, def)
+        } else {
+            return;
+        };
+
+        // Get owner/repo from selected repo's remote_url
+        let remote_url = match self
+            .state
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
+            .map(|r| r.remote_url.clone())
+        {
+            Some(url) => url,
+            None => {
+                self.state.modal = Modal::Error {
+                    message: "No repo selected".to_string(),
+                };
+                return;
+            }
+        };
+
+        let (owner, repo) = match conductor_core::github::parse_github_remote(&remote_url) {
+            Some(pair) => pair,
+            None => {
+                self.state.modal = Modal::Error {
+                    message: format!(
+                        "Could not parse GitHub owner/repo from remote URL: {remote_url}"
+                    ),
+                };
+                return;
+            }
+        };
+
+        let pr_ref = conductor_core::workflow_ephemeral::PrRef {
+            owner,
+            repo,
+            number: pr_number as u64,
+        };
+
+        self.state.modal = Modal::None;
+        self.spawn_pr_workflow_in_background(pr_ref, def);
+    }
+
+    /// Spawn an ephemeral PR workflow execution in a background thread.
+    fn spawn_pr_workflow_in_background(
+        &mut self,
+        pr_ref: conductor_core::workflow_ephemeral::PrRef,
+        def: conductor_core::workflow::WorkflowDef,
+    ) {
+        use conductor_core::config::db_path;
+        use conductor_core::db::open_database;
+
+        let config = self.config.clone();
+        let bg_tx = self.bg_tx.clone();
+        let workflow_name = def.name.clone();
+        let pr_label = format!("{}#{}", pr_ref.repo_slug(), pr_ref.number);
+        let shutdown = Arc::clone(&self.workflow_shutdown);
+
+        self.state.status_message = Some(format!(
+            "Starting workflow '{workflow_name}' on {pr_label}…"
+        ));
+
+        let handle = std::thread::spawn(move || {
+            use conductor_core::workflow::{WorkflowExecConfig, WorkflowResult};
+            use conductor_core::workflow_ephemeral::run_workflow_on_pr;
+
+            let db = db_path();
+            let conn = match open_database(&db) {
+                Ok(c) => c,
+                Err(e) => {
+                    if let Some(ref tx) = bg_tx {
+                        let _ = tx.send(Action::BackgroundError {
+                            message: format!("Failed to open database: {e}"),
+                        });
+                    }
+                    return;
+                }
+            };
+
+            let exec_config = WorkflowExecConfig {
+                shutdown: Some(shutdown),
+                ..WorkflowExecConfig::default()
+            };
+
+            let result = run_workflow_on_pr(
+                &conn,
+                &config,
+                &pr_ref,
+                &def.name,
+                None,
+                exec_config,
+                std::collections::HashMap::new(),
+                false,
+            );
+
+            if let Some(ref tx) = bg_tx {
+                let msg = match result {
+                    Ok(WorkflowResult { all_succeeded, .. }) => {
+                        if all_succeeded {
+                            format!(
+                                "Workflow '{workflow_name}' on {pr_label} completed successfully"
+                            )
+                        } else {
+                            format!(
+                                "Workflow '{workflow_name}' on {pr_label} completed with failures"
+                            )
+                        }
+                    }
+                    Err(e) => format!("Workflow '{workflow_name}' on {pr_label} failed: {e}"),
+                };
+                let _ = tx.send(Action::BackgroundSuccess { message: msg });
+            }
+        });
+
+        self.workflow_threads.push(handle);
     }
 
     fn handle_resume_workflow(&mut self) {

@@ -310,6 +310,13 @@ pub enum Modal {
         ticket_id: String,
         repo_path: String,
     },
+    /// Workflow picker for running a PR-targeted workflow against a selected PR.
+    PrWorkflowPicker {
+        pr_number: i64,
+        pr_title: String,
+        workflow_defs: Vec<WorkflowDef>,
+        selected: usize,
+    },
 }
 
 impl fmt::Debug for Modal {
@@ -351,6 +358,11 @@ impl fmt::Debug for Modal {
                 )
             }
             Modal::PostCreatePicker { .. } => write!(f, "Modal::PostCreatePicker"),
+            Modal::PrWorkflowPicker {
+                pr_number,
+                pr_title,
+                ..
+            } => write!(f, "Modal::PrWorkflowPicker(#{pr_number} {pr_title:?})"),
         }
     }
 }

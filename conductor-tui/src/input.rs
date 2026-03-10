@@ -229,6 +229,15 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::PrWorkflowPicker { .. } => {
+            return match key.code {
+                KeyCode::Esc => Action::DismissModal,
+                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
+                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
+                KeyCode::Enter => Action::InputSubmit,
+                _ => Action::None,
+            };
+        }
         Modal::None => {}
     }
 
@@ -323,6 +332,11 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
     // View-specific keybindings (RepoDetail)
     if state.view == View::RepoDetail {
+        if state.repo_detail_focus == crate::state::RepoDetailFocus::Prs {
+            if let KeyCode::Char('r') = key.code {
+                return Action::RunPrWorkflow;
+            }
+        }
         match key.code {
             KeyCode::Char('m') => return Action::SetModel,
             KeyCode::Char('I') => return Action::ToggleAgentIssues,
