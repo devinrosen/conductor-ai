@@ -4065,20 +4065,19 @@ impl App {
         if self.state.worktree_detail_focus != WorktreeDetailFocus::InfoPanel {
             return;
         }
-        let wt = self
-            .state
-            .selected_worktree_id
-            .as_ref()
-            .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
-            .cloned();
-        let Some(wt) = wt else {
-            return;
-        };
         let row = self.state.worktree_detail_selected_row;
         match row {
             info_row::PATH => {
                 // Path row: open a new tmux window in the worktree directory
-                let path = wt.path.clone();
+                let Some(path) = self
+                    .state
+                    .selected_worktree_id
+                    .as_ref()
+                    .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
+                    .map(|wt| wt.path.clone())
+                else {
+                    return;
+                };
                 match Command::new("tmux")
                     .args(["new-window", "-c", &path])
                     .output()
@@ -4126,7 +4125,10 @@ impl App {
             Ok(mut child) => {
                 use std::io::Write;
                 if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(text.as_bytes());
+                    if stdin.write_all(text.as_bytes()).is_err() {
+                        self.state.status_message = Some("Clipboard write failed".to_string());
+                        return;
+                    }
                     drop(stdin);
                 }
                 match child.wait() {

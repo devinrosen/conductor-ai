@@ -633,6 +633,24 @@ mod tests {
     }
 
     #[test]
+    fn worktree_detail_enter_expands_agent_event_when_log_panel_focused() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::LogPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::ExpandAgentEvent
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_enter_does_not_expand_when_info_panel_focused() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::InfoPanel);
+        assert!(!matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::ExpandAgentEvent
+        ));
+    }
+
+    #[test]
     fn worktree_detail_orchestrate_agent_bound_to_shift_o_when_inactive() {
         // OrchestrateAgent is only available when no agent is active
         let state = worktree_detail_state_with_run(AgentRunStatus::Completed);
