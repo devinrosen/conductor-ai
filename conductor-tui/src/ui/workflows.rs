@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
+use conductor_core::workflow::WorkflowRunStatus;
 use conductor_core::worktree::Worktree;
 
 use super::common::truncate;
@@ -157,6 +158,17 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                 format!("  {duration}"),
                 Style::default().fg(Color::Yellow),
             ));
+
+            if run.status == WorkflowRunStatus::Failed {
+                if let Some(ref summary) = run.result_summary {
+                    let snippet = truncate(summary.lines().next().unwrap_or(""), 50);
+                    spans.push(Span::styled(
+                        format!("  {snippet}"),
+                        Style::default().fg(Color::Red),
+                    ));
+                }
+            }
+
             ListItem::new(Line::from(spans))
         })
         .collect();
@@ -276,10 +288,17 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
                 Span::raw("")
             },
         ]));
-        header_lines.push(Line::from(vec![
-            Span::styled(" Summary:  ", Style::default().fg(Color::DarkGray)),
-            Span::raw(summary_display),
-        ]));
+        if run.status == WorkflowRunStatus::Failed {
+            header_lines.push(Line::from(vec![
+                Span::styled(" Error:    ", Style::default().fg(Color::Red)),
+                Span::styled(summary_display, Style::default().fg(Color::Red)),
+            ]));
+        } else {
+            header_lines.push(Line::from(vec![
+                Span::styled(" Summary:  ", Style::default().fg(Color::DarkGray)),
+                Span::raw(summary_display),
+            ]));
+        }
 
         let header_block = Block::default()
             .borders(Borders::BOTTOM)
