@@ -40,8 +40,6 @@ pub struct Config {
     #[serde(default)]
     pub defaults: DefaultsConfig,
     #[serde(default)]
-    pub post_run: PostRunConfig,
-    #[serde(default)]
     pub github: GitHubSettings,
 }
 
@@ -75,64 +73,6 @@ pub struct GitHubAppConfig {
     pub client_id: Option<String>,
     pub private_key_path: String,
     pub installation_id: u64,
-}
-
-/// Configuration for the automated post-agent lifecycle
-/// (commit, PR, review loop, merge).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PostRunConfig {
-    /// Maximum review → fix iterations before giving up (default: 3).
-    #[serde(default = "default_review_loop_max")]
-    pub review_loop_max: u32,
-    /// Model to use for commit message / PR description generation.
-    #[serde(default = "default_commit_model")]
-    pub commit_model: String,
-    /// Commit message style: "conventional" or "free-form".
-    #[serde(default = "default_commit_style")]
-    pub commit_style: String,
-    /// Issue labels that qualify for auto-merge (default: ["bug", "chore", "fix"]).
-    #[serde(default = "default_auto_merge_labels")]
-    pub auto_merge_labels: Vec<String>,
-    /// Issue labels that require manual approval (default: ["enhancement", "feature"]).
-    #[serde(default = "default_manual_merge_labels")]
-    pub manual_merge_labels: Vec<String>,
-    /// Allow `--dangerously-skip-permissions` when spawning fix agents (default: false).
-    /// Only enable this if you trust all PR reviewers, as review comments drive the fix agent.
-    #[serde(default)]
-    pub dangerous_skip_permissions: bool,
-}
-
-impl Default for PostRunConfig {
-    fn default() -> Self {
-        Self {
-            review_loop_max: default_review_loop_max(),
-            commit_model: default_commit_model(),
-            commit_style: default_commit_style(),
-            auto_merge_labels: default_auto_merge_labels(),
-            manual_merge_labels: default_manual_merge_labels(),
-            dangerous_skip_permissions: false,
-        }
-    }
-}
-
-fn default_review_loop_max() -> u32 {
-    3
-}
-
-fn default_commit_model() -> String {
-    "claude-haiku-4-5-20251001".to_string()
-}
-
-fn default_commit_style() -> String {
-    "conventional".to_string()
-}
-
-fn default_auto_merge_labels() -> Vec<String> {
-    vec!["bug".to_string(), "chore".to_string(), "fix".to_string()]
-}
-
-fn default_manual_merge_labels() -> Vec<String> {
-    vec!["enhancement".to_string(), "feature".to_string()]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -387,42 +327,6 @@ mod tests {
         )
         .unwrap();
         assert!(!config.general.inject_startup_context);
-    }
-
-    #[test]
-    fn test_post_run_defaults() {
-        let config: Config = toml::from_str("").unwrap();
-        assert_eq!(config.post_run.review_loop_max, 3);
-        assert_eq!(config.post_run.commit_model, "claude-haiku-4-5-20251001");
-        assert_eq!(config.post_run.commit_style, "conventional");
-        assert_eq!(
-            config.post_run.auto_merge_labels,
-            vec!["bug", "chore", "fix"]
-        );
-        assert_eq!(
-            config.post_run.manual_merge_labels,
-            vec!["enhancement", "feature"]
-        );
-    }
-
-    #[test]
-    fn test_post_run_custom() {
-        let config: Config = toml::from_str(
-            r#"
-            [post_run]
-            review_loop_max = 5
-            commit_model = "claude-sonnet-4-6"
-            commit_style = "free-form"
-            auto_merge_labels = ["bug"]
-            manual_merge_labels = ["feature", "epic"]
-        "#,
-        )
-        .unwrap();
-        assert_eq!(config.post_run.review_loop_max, 5);
-        assert_eq!(config.post_run.commit_model, "claude-sonnet-4-6");
-        assert_eq!(config.post_run.commit_style, "free-form");
-        assert_eq!(config.post_run.auto_merge_labels, vec!["bug"]);
-        assert_eq!(config.post_run.manual_merge_labels, vec!["feature", "epic"]);
     }
 
     #[test]

@@ -11,8 +11,6 @@ use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 
 /// Prefix used for the parent run prompt when launching a PR review swarm.
-/// Lives here (data layer) so that `pr_review.rs` (orchestration layer) can
-/// import it upward, keeping the dependency flow unidirectional.
 pub const PR_REVIEW_SWARM_PROMPT_PREFIX: &str = "PR review swarm";
 
 /// Default error message used when the agent reports an error without a message.

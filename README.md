@@ -148,7 +148,7 @@ Both settings default to `true` — the file is optional.
 
 ### Lookup order
 
-When a review runs, Conductor looks for `.conductor/reviewers/` in the PR branch worktree first, then falls back to the main repo checkout. This lets you develop and test new reviewer roles in a branch before merging them. See the trust model note in `conductor-core/src/review_config.rs` if your repo has untrusted external contributors.
+When a review runs, Conductor looks for `.conductor/reviewers/` in the PR branch worktree first, then falls back to the main repo checkout. This lets you develop and test new reviewer roles in a branch before merging them.
 
 ## Architecture
 

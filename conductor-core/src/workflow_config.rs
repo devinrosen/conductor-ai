@@ -1,8 +1,7 @@
 //! File-based workflow definitions for multi-step agent orchestration.
 //!
 //! Reads `.conductor/workflows/*.md` from the repo root (or worktree).
-//! Each workflow file uses YAML frontmatter + sectioned markdown body,
-//! consistent with the reviewer roles format from `review_config.rs`.
+//! Each workflow file uses YAML frontmatter + sectioned markdown body.
 
 use std::collections::HashMap;
 use std::fs;
