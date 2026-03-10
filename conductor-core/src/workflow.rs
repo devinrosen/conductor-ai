@@ -4075,6 +4075,21 @@ And here is my actual output:
     // execute_do_while tests
     // -----------------------------------------------------------------------
 
+    fn make_step_result(step_name: &str, markers: Vec<&str>) -> StepResult {
+        StepResult {
+            step_name: step_name.into(),
+            status: WorkflowStepStatus::Completed,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            markers: markers.into_iter().map(String::from).collect(),
+            context: String::new(),
+            child_run_id: None,
+            structured_output: None,
+        }
+    }
+
     /// Helper to build an `ExecutionState` suitable for testing loop functions
     /// (no real agents or worktrees needed).
     fn make_loop_test_state<'a>(conn: &'a Connection, config: &'a Config) -> ExecutionState<'a> {
@@ -4145,18 +4160,7 @@ And here is my actual output:
         // Pre-set a marker that stays true forever (body is empty so nothing clears it)
         state.step_results.insert(
             "check".into(),
-            StepResult {
-                step_name: "check".into(),
-                status: WorkflowStepStatus::Completed,
-                result_text: None,
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
-                markers: vec!["needs_work".into()],
-                context: String::new(),
-                child_run_id: None,
-                structured_output: None,
-            },
+            make_step_result("check", vec!["needs_work"]),
         );
 
         let node = DoWhileNode {
@@ -4183,18 +4187,7 @@ And here is my actual output:
 
         state.step_results.insert(
             "check".into(),
-            StepResult {
-                step_name: "check".into(),
-                status: WorkflowStepStatus::Completed,
-                result_text: None,
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
-                markers: vec!["needs_work".into()],
-                context: String::new(),
-                child_run_id: None,
-                structured_output: None,
-            },
+            make_step_result("check", vec!["needs_work"]),
         );
 
         let node = DoWhileNode {
@@ -4220,18 +4213,7 @@ And here is my actual output:
         // Marker stays the same every iteration → stuck after 2
         state.step_results.insert(
             "check".into(),
-            StepResult {
-                step_name: "check".into(),
-                status: WorkflowStepStatus::Completed,
-                result_text: None,
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
-                markers: vec!["needs_work".into()],
-                context: String::new(),
-                child_run_id: None,
-                structured_output: None,
-            },
+            make_step_result("check", vec!["needs_work"]),
         );
 
         let node = DoWhileNode {
@@ -4259,18 +4241,7 @@ And here is my actual output:
         // Start with marker set
         state.step_results.insert(
             "check".into(),
-            StepResult {
-                step_name: "check".into(),
-                status: WorkflowStepStatus::Completed,
-                result_text: None,
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
-                markers: vec!["needs_work".into()],
-                context: String::new(),
-                child_run_id: None,
-                structured_output: None,
-            },
+            make_step_result("check", vec!["needs_work"]),
         );
 
         // Use an `If` node in the body that clears the marker on the 2nd iteration
@@ -4301,5 +4272,41 @@ And here is my actual output:
         let result = execute_do_while(&mut state, &node);
         assert!(result.is_ok());
         assert!(state.all_succeeded);
+    }
+
+    #[test]
+    fn test_do_while_fail_fast_exits_early() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mut state = make_loop_test_state(&conn, &config);
+        state.exec_config.fail_fast = true;
+
+        // Marker is set so the loop would keep iterating if not for fail_fast
+        state.step_results.insert(
+            "check".into(),
+            make_step_result("check", vec!["needs_work"]),
+        );
+
+        // Simulate a prior failure — all_succeeded is already false
+        state.all_succeeded = false;
+
+        // Body has a no-op If node (condition never true → body skipped, returns Ok)
+        let node = DoWhileNode {
+            step: "check".into(),
+            marker: "needs_work".into(),
+            max_iterations: 10,
+            stuck_after: None,
+            on_max_iter: OnMaxIter::Fail,
+            body: vec![WorkflowNode::If(IfNode {
+                step: "nonexistent".into(),
+                marker: "nope".into(),
+                body: vec![],
+            })],
+        };
+
+        // fail_fast should cause early exit with Ok(()) instead of looping to max_iterations
+        let result = execute_do_while(&mut state, &node);
+        assert!(result.is_ok());
+        assert!(!state.all_succeeded);
     }
 }
