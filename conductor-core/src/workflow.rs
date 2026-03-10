@@ -874,17 +874,20 @@ impl<'a> WorkflowManager<'a> {
         workflow_dsl::load_workflow_by_name(worktree_path, repo_path, name)
     }
 
+    /// Shared SQL SET clause for resetting step fields back to pending.
+    const RESET_STEP_SET: &'static str = "SET status = 'pending', started_at = NULL, \
+         ended_at = NULL, result_text = NULL, context_out = NULL, markers_out = NULL, \
+         structured_output = NULL, child_run_id = NULL";
+
     /// Reset all non-completed steps for a workflow run back to `pending`.
     ///
     /// Used before resuming so that failed/running/timed_out steps get re-executed.
     pub fn reset_failed_steps(&self, workflow_run_id: &str) -> Result<u64> {
-        let count = self.conn.execute(
-            "UPDATE workflow_run_steps SET status = 'pending', started_at = NULL, ended_at = NULL, \
-             result_text = NULL, context_out = NULL, markers_out = NULL, structured_output = NULL, \
-             child_run_id = NULL \
-             WHERE workflow_run_id = ?1 AND status IN ('failed', 'running', 'timed_out')",
-            params![workflow_run_id],
-        )?;
+        let sql = format!(
+            "UPDATE workflow_run_steps {} WHERE workflow_run_id = ?1 AND status IN ('failed', 'running', 'timed_out')",
+            Self::RESET_STEP_SET
+        );
+        let count = self.conn.execute(&sql, params![workflow_run_id])?;
         Ok(count as u64)
     }
 
@@ -892,13 +895,11 @@ impl<'a> WorkflowManager<'a> {
     ///
     /// Used for full restart (--restart) to re-run from scratch.
     pub fn reset_completed_steps(&self, workflow_run_id: &str) -> Result<u64> {
-        let count = self.conn.execute(
-            "UPDATE workflow_run_steps SET status = 'pending', started_at = NULL, ended_at = NULL, \
-             result_text = NULL, context_out = NULL, markers_out = NULL, structured_output = NULL, \
-             child_run_id = NULL \
-             WHERE workflow_run_id = ?1 AND status = 'completed'",
-            params![workflow_run_id],
-        )?;
+        let sql = format!(
+            "UPDATE workflow_run_steps {} WHERE workflow_run_id = ?1 AND status = 'completed'",
+            Self::RESET_STEP_SET
+        );
+        let count = self.conn.execute(&sql, params![workflow_run_id])?;
         Ok(count as u64)
     }
 
@@ -906,13 +907,13 @@ impl<'a> WorkflowManager<'a> {
     ///
     /// Used for --from-step to re-run from a specific step onwards.
     pub fn reset_steps_from_position(&self, workflow_run_id: &str, position: i64) -> Result<u64> {
-        let count = self.conn.execute(
-            "UPDATE workflow_run_steps SET status = 'pending', started_at = NULL, ended_at = NULL, \
-             result_text = NULL, context_out = NULL, markers_out = NULL, structured_output = NULL, \
-             child_run_id = NULL \
-             WHERE workflow_run_id = ?1 AND position >= ?2",
-            params![workflow_run_id, position],
-        )?;
+        let sql = format!(
+            "UPDATE workflow_run_steps {} WHERE workflow_run_id = ?1 AND position >= ?2",
+            Self::RESET_STEP_SET
+        );
+        let count = self
+            .conn
+            .execute(&sql, params![workflow_run_id, position])?;
         Ok(count as u64)
     }
 
@@ -1101,8 +1102,9 @@ struct ExecutionState<'a> {
     block_with: Vec<String>,
     /// Step keys to skip on resume (empty for fresh runs).
     skip_completed: HashSet<String>,
-    /// Pre-loaded step records for resume (avoids N+1 DB queries).
-    resume_steps: Vec<WorkflowRunStep>,
+    /// Pre-loaded completed step records for resume, keyed by `"step_name:iteration"`.
+    /// Avoids repeated O(n) scans — built once, looked up in O(1).
+    resume_step_map: HashMap<String, WorkflowRunStep>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1232,7 +1234,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         block_output: None,
         block_with: Vec::new(),
         skip_completed: HashSet::new(),
-        resume_steps: Vec::new(),
+        resume_step_map: HashMap::new(),
     };
 
     run_workflow_engine(&mut state, workflow, &wf_run.id, &parent_run.id)
@@ -1248,9 +1250,6 @@ fn run_workflow_engine(
     workflow_run_id: &str,
     parent_run_id: &str,
 ) -> Result<WorkflowResult> {
-    let agent_mgr = AgentManager::new(state.conn);
-    let wf_mgr = WorkflowManager::new(state.conn);
-
     // Execute main body
     let mut body_error: Option<String> = None;
     let body_result = execute_nodes(state, &workflow.body);
@@ -1285,7 +1284,7 @@ fn run_workflow_engine(
 
     // Finalize
     if state.all_succeeded {
-        agent_mgr.update_run_completed(
+        state.agent_mgr.update_run_completed(
             parent_run_id,
             None,
             Some(&summary),
@@ -1293,15 +1292,15 @@ fn run_workflow_engine(
             Some(state.total_turns),
             Some(state.total_duration_ms),
         )?;
-        wf_mgr.update_workflow_status(
+        state.wf_mgr.update_workflow_status(
             workflow_run_id,
             WorkflowRunStatus::Completed,
             Some(&summary),
         )?;
         tracing::info!("Workflow '{}' completed successfully", workflow.name);
     } else {
-        agent_mgr.update_run_failed(parent_run_id, &summary)?;
-        wf_mgr.update_workflow_status(
+        state.agent_mgr.update_run_failed(parent_run_id, &summary)?;
+        state.wf_mgr.update_workflow_status(
             workflow_run_id,
             WorkflowRunStatus::Failed,
             Some(&summary),
@@ -1534,8 +1533,13 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         last_gate_feedback: None,
         last_structured_output: None,
         skip_completed,
-        // Re-fetch steps after resets so we have up-to-date records for restore
-        resume_steps: wf_mgr.get_workflow_steps(&wf_run.id)?,
+        // Re-fetch steps after resets and build lookup map for O(1) restore
+        resume_step_map: wf_mgr
+            .get_workflow_steps(&wf_run.id)?
+            .into_iter()
+            .filter(|s| s.status == WorkflowStepStatus::Completed)
+            .map(|s| (format!("{}:{}", s.step_name, s.iteration), s))
+            .collect(),
     };
 
     run_workflow_engine(&mut state, &workflow, &wf_run.id, &wf_run.parent_run_id)
@@ -1794,10 +1798,7 @@ fn execute_call_with_schema(
             step_key_check,
             iteration
         );
-        // Restore results from DB step records so downstream steps can reference them
-        let steps = std::mem::take(&mut state.resume_steps);
-        restore_completed_step_from_db(state, &steps, &step_key_check, iteration);
-        state.resume_steps = steps;
+        restore_step(state, &step_key_check, iteration);
         return Ok(());
     }
 
@@ -2046,14 +2047,7 @@ fn execute_call_workflow(
     let skip_key = format!("workflow:{}:{}", node.workflow, iteration);
     if state.skip_completed.contains(&skip_key) {
         tracing::info!("Skipping completed sub-workflow '{}'", node.workflow);
-        let steps = std::mem::take(&mut state.resume_steps);
-        restore_completed_step_from_db(
-            state,
-            &steps,
-            &format!("workflow:{}", node.workflow),
-            iteration,
-        );
-        state.resume_steps = steps;
+        restore_step(state, &format!("workflow:{}", node.workflow), iteration);
         return Ok(());
     }
 
@@ -2692,9 +2686,7 @@ fn execute_parallel(
         let skip_key = format!("{}:{}", agent_step_key, iteration);
         if state.skip_completed.contains(&skip_key) {
             tracing::info!("parallel: skipping completed agent '{}'", agent_label);
-            let steps = std::mem::take(&mut state.resume_steps);
-            restore_completed_step_from_db(state, &steps, &agent_step_key, iteration);
-            state.resume_steps = steps;
+            restore_step(state, &agent_step_key, iteration);
             skipped_count += 1;
             continue;
         }
@@ -3399,42 +3391,71 @@ fn find_max_completed_while_iteration(state: &ExecutionState<'_>, node: &WhileNo
     iter
 }
 
-/// Restore a completed step's results from DB into the execution state.
+/// Convenience wrapper: temporarily moves the resume step map out of `state`
+/// so `restore_completed_step_from_db` can borrow `state` mutably while
+/// reading from the map.
+fn restore_step(state: &mut ExecutionState<'_>, key: &str, iteration: u32) {
+    let map = std::mem::take(&mut state.resume_step_map);
+    restore_completed_step_from_db(state, &map, key, iteration);
+    state.resume_step_map = map;
+}
+
+/// Restore a completed step's results from the pre-built map into the
+/// execution state.
 ///
-/// Accepts a pre-loaded slice of steps to avoid repeated DB queries.
 /// Used during resume to rebuild `step_results` and `contexts` for completed
 /// steps so that downstream variable substitution (e.g. `{{prior_context}}`)
 /// works correctly.
 fn restore_completed_step_from_db(
     state: &mut ExecutionState<'_>,
-    all_steps: &[WorkflowRunStep],
+    step_map: &HashMap<String, WorkflowRunStep>,
     step_key: &str,
     iteration: u32,
 ) {
-    // Find the most recent completed step with this name
-    let completed_step = all_steps
-        .iter()
-        .rfind(|s| s.step_name == step_key && s.status == WorkflowStepStatus::Completed);
+    let lookup_key = format!("{}:{}", step_key, iteration);
+    let completed_step = step_map.get(&lookup_key);
 
     if let Some(step) = completed_step {
         let markers: Vec<String> = step
             .markers_out
             .as_deref()
-            .and_then(|m| serde_json::from_str(m).ok())
+            .and_then(|m| {
+                serde_json::from_str(m)
+                    .map_err(|e| {
+                        tracing::warn!(
+                            "resume: failed to deserialize markers for step '{}': {e}",
+                            step_key
+                        );
+                        e
+                    })
+                    .ok()
+            })
             .unwrap_or_default();
         let context = step.context_out.clone().unwrap_or_default();
 
         // Accumulate costs from the child agent run if present
         if let Some(ref child_run_id) = step.child_run_id {
-            if let Ok(Some(run)) = state.agent_mgr.get_run(child_run_id) {
-                if let Some(cost) = run.cost_usd {
-                    state.total_cost += cost;
+            match state.agent_mgr.get_run(child_run_id) {
+                Ok(Some(run)) => {
+                    if let Some(cost) = run.cost_usd {
+                        state.total_cost += cost;
+                    }
+                    if let Some(turns) = run.num_turns {
+                        state.total_turns += turns;
+                    }
+                    if let Some(dur) = run.duration_ms {
+                        state.total_duration_ms += dur;
+                    }
                 }
-                if let Some(turns) = run.num_turns {
-                    state.total_turns += turns;
+                Ok(None) => {
+                    tracing::warn!(
+                        "resume: child run '{child_run_id}' not found in DB, costs not accumulated for step '{step_key}'"
+                    );
                 }
-                if let Some(dur) = run.duration_ms {
-                    state.total_duration_ms += dur;
+                Err(e) => {
+                    tracing::warn!(
+                        "resume: failed to load child run '{child_run_id}': {e}, costs not accumulated for step '{step_key}'"
+                    );
                 }
             }
         }
@@ -3764,7 +3785,7 @@ mod tests {
             block_output: None,
             block_with: Vec::new(),
             skip_completed: HashSet::new(),
-            resume_steps: Vec::new(),
+            resume_step_map: HashMap::new(),
         };
         (state, run_id)
     }
@@ -4559,7 +4580,7 @@ And here is my actual output:
             block_output: None,
             block_with: Vec::new(),
             skip_completed: HashSet::new(),
-            resume_steps: Vec::new(),
+            resume_step_map: HashMap::new(),
         }
     }
 
@@ -5801,7 +5822,7 @@ And here is my actual output:
         let conn = setup_db();
         let mut state = make_test_state(&conn);
 
-        let steps = vec![make_test_step(
+        let step = make_test_step(
             "review",
             WorkflowStepStatus::Completed,
             Some("looks good"),
@@ -5809,7 +5830,9 @@ And here is my actual output:
             Some(r#"["approved"]"#),
             None,
             Some(r#"{"verdict":"approve"}"#),
-        )];
+        );
+        let steps: HashMap<String, WorkflowRunStep> =
+            [("review:0".to_string(), step)].into_iter().collect();
 
         restore_completed_step_from_db(&mut state, &steps, "review", 0);
 
@@ -5837,7 +5860,7 @@ And here is my actual output:
         let conn = setup_db();
         let mut state = make_test_state(&conn);
 
-        let steps: Vec<WorkflowRunStep> = vec![];
+        let steps: HashMap<String, WorkflowRunStep> = HashMap::new();
         restore_completed_step_from_db(&mut state, &steps, "nonexistent", 0);
 
         // Should be a no-op
@@ -5870,7 +5893,7 @@ And here is my actual output:
         state.total_turns = 5;
         state.total_duration_ms = 10000;
 
-        let steps = vec![make_test_step(
+        let step = make_test_step(
             "build",
             WorkflowStepStatus::Completed,
             Some("built"),
@@ -5878,7 +5901,9 @@ And here is my actual output:
             None,
             Some(&child_run.id),
             None,
-        )];
+        );
+        let steps: HashMap<String, WorkflowRunStep> =
+            [("build:0".to_string(), step)].into_iter().collect();
 
         restore_completed_step_from_db(&mut state, &steps, "build", 0);
 
@@ -5996,5 +6021,121 @@ And here is my actual output:
 
         // Only partial completion → start from 0
         assert_eq!(find_max_completed_while_iteration(&state, &node), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // resume_workflow validation tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: create a Config suitable for resume tests.
+    fn make_resume_config() -> &'static Config {
+        Box::leak(Box::new(Config::default()))
+    }
+
+    #[test]
+    fn test_resume_rejects_completed_run() {
+        let conn = setup_db();
+        let config = make_resume_config();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", Some("{}"))
+            .unwrap();
+        wf_mgr
+            .update_workflow_status(&run.id, WorkflowRunStatus::Completed, Some("done"))
+            .unwrap();
+
+        let input = WorkflowResumeInput {
+            conn: &conn,
+            config,
+            workflow_run_id: &run.id,
+            model: None,
+            from_step: None,
+            restart: false,
+        };
+        let err = resume_workflow(&input).unwrap_err();
+        assert!(
+            err.to_string().contains("Cannot resume a completed"),
+            "Expected completed-run error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_resume_rejects_cancelled_run() {
+        let conn = setup_db();
+        let config = make_resume_config();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", Some("{}"))
+            .unwrap();
+        wf_mgr
+            .update_workflow_status(&run.id, WorkflowRunStatus::Cancelled, None)
+            .unwrap();
+
+        let input = WorkflowResumeInput {
+            conn: &conn,
+            config,
+            workflow_run_id: &run.id,
+            model: None,
+            from_step: None,
+            restart: false,
+        };
+        let err = resume_workflow(&input).unwrap_err();
+        assert!(
+            err.to_string().contains("Cannot resume a cancelled"),
+            "Expected cancelled-run error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_resume_rejects_missing_snapshot() {
+        let conn = setup_db();
+        let config = make_resume_config();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run("w1", "workflow", None, None).unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        // Create run with no definition_snapshot
+        let run = wf_mgr
+            .create_workflow_run("test-wf", "w1", &parent.id, false, "manual", None)
+            .unwrap();
+        wf_mgr
+            .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("error"))
+            .unwrap();
+
+        let input = WorkflowResumeInput {
+            conn: &conn,
+            config,
+            workflow_run_id: &run.id,
+            model: None,
+            from_step: None,
+            restart: false,
+        };
+        let err = resume_workflow(&input).unwrap_err();
+        assert!(
+            err.to_string().contains("no definition snapshot"),
+            "Expected missing-snapshot error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_resume_rejects_nonexistent_run() {
+        let conn = setup_db();
+        let config = make_resume_config();
+        let input = WorkflowResumeInput {
+            conn: &conn,
+            config,
+            workflow_run_id: "nonexistent-id",
+            model: None,
+            from_step: None,
+            restart: false,
+        };
+        let err = resume_workflow(&input).unwrap_err();
+        assert!(
+            err.to_string().contains("not found"),
+            "Expected not-found error, got: {err}"
+        );
     }
 }
