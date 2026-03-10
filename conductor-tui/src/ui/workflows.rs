@@ -9,6 +9,7 @@ use conductor_core::worktree::Worktree;
 use super::common::truncate;
 use super::helpers::shorten_paths;
 use crate::state::AppState;
+use crate::state::WorkflowRunDetailFocus;
 use crate::state::WorkflowsFocus;
 
 /// Return the slug of the worktree matching `predicate`, or `"?"` if not found.
@@ -254,15 +255,29 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
             .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
             .split(chunks[1]);
 
-        render_step_list(frame, body_chunks[0], state);
-        render_step_agent_activity(frame, body_chunks[1], state);
+        let focus = state.workflow_run_detail_focus;
+        render_step_list(frame, body_chunks[0], state, focus);
+        render_step_agent_activity(frame, body_chunks[1], state, focus);
     } else {
-        // Full-width step list when no agent activity to show
-        render_step_list(frame, chunks[1], state);
+        // Full-width step list when no agent activity to show —
+        // force Steps focus since agent pane is hidden.
+        render_step_list(frame, chunks[1], state, WorkflowRunDetailFocus::Steps);
     }
 }
 
-fn render_step_list(frame: &mut Frame, area: Rect, state: &AppState) {
+fn render_step_list(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    focus: WorkflowRunDetailFocus,
+) {
+    let focused = focus == WorkflowRunDetailFocus::Steps;
+    let border_color = if focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+
     let items: Vec<ListItem> = state
         .data
         .workflow_steps
@@ -341,12 +356,18 @@ fn render_step_list(frame: &mut Frame, area: Rect, state: &AppState) {
         })
         .collect();
 
+    let title = if focused {
+        " Steps (Enter=detail, Tab=switch) "
+    } else {
+        " Steps "
+    };
+
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
-                .title(" Steps (Enter=detail) "),
+                .border_style(Style::default().fg(border_color))
+                .title(title),
         )
         .highlight_style(
             Style::default()
@@ -363,21 +384,38 @@ fn render_step_list(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 /// Render agent activity for the selected workflow step's child run.
-fn render_step_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
+fn render_step_agent_activity(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    focus: WorkflowRunDetailFocus,
+) {
+    let focused = focus == WorkflowRunDetailFocus::AgentActivity;
+    let border_color = if focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
     let events = &state.data.step_agent_events;
     let agent_run = &state.data.step_agent_run;
 
     // Title with run status
     let title = if let Some(ref run) = agent_run {
         let model = run.model.as_deref().unwrap_or("default");
-        format!(" Agent: {model} ({}) ", run.status)
+        if focused {
+            format!(" Agent: {model} ({}) (Tab=switch) ", run.status)
+        } else {
+            format!(" Agent: {model} ({}) ", run.status)
+        }
+    } else if focused {
+        " Agent Activity (Tab=switch) ".to_string()
     } else {
         " Agent Activity ".to_string()
     };
 
     let activity_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(border_color))
         .title(title);
 
     if events.is_empty() {
@@ -433,8 +471,24 @@ fn render_step_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
         })
         .collect();
 
-    let list = List::new(items).block(activity_block);
-    frame.render_widget(list, area);
+    if focused {
+        let list = List::new(items)
+            .block(activity_block)
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("> ");
+        let mut list_state = ListState::default();
+        if !events.is_empty() {
+            list_state.select(Some(state.step_agent_event_index));
+        }
+        frame.render_stateful_widget(list, area, &mut list_state);
+    } else {
+        let list = List::new(items).block(activity_block);
+        frame.render_widget(list, area);
+    }
 }
 
 fn event_kind_style(kind: &str) -> Style {

@@ -23,7 +23,7 @@ use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
 use crate::state::{
     AppState, ConfirmAction, DashboardFocus, FormAction, FormField, InputAction, Modal,
-    RepoDetailFocus, View, WorkflowsFocus,
+    RepoDetailFocus, View, WorkflowRunDetailFocus, WorkflowsFocus,
 };
 use crate::ui;
 
@@ -851,6 +851,20 @@ impl App {
             View::Workflows => {
                 self.state.workflows_focus = self.state.workflows_focus.toggle();
             }
+            View::WorkflowRunDetail => {
+                // Only toggle if the selected step has agent activity
+                let has_agent = self
+                    .state
+                    .data
+                    .workflow_steps
+                    .get(self.state.workflow_step_index)
+                    .map(|s| s.child_run_id.is_some())
+                    .unwrap_or(false);
+                if has_agent {
+                    self.state.workflow_run_detail_focus =
+                        self.state.workflow_run_detail_focus.toggle();
+                }
+            }
             _ => {}
         }
     }
@@ -865,6 +879,19 @@ impl App {
             }
             View::Workflows => {
                 self.state.workflows_focus = self.state.workflows_focus.toggle();
+            }
+            View::WorkflowRunDetail => {
+                let has_agent = self
+                    .state
+                    .data
+                    .workflow_steps
+                    .get(self.state.workflow_step_index)
+                    .map(|s| s.child_run_id.is_some())
+                    .unwrap_or(false);
+                if has_agent {
+                    self.state.workflow_run_detail_focus =
+                        self.state.workflow_run_detail_focus.toggle();
+                }
             }
             _ => {}
         }
@@ -961,13 +988,20 @@ impl App {
                     self.state.workflow_run_index = self.state.workflow_run_index.saturating_sub(1);
                 }
             },
-            View::WorkflowRunDetail => {
-                let old = self.state.workflow_step_index;
-                self.state.workflow_step_index = old.saturating_sub(1);
-                if self.state.workflow_step_index != old {
-                    self.poll_workflow_data_async();
+            View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
+                WorkflowRunDetailFocus::Steps => {
+                    let old = self.state.workflow_step_index;
+                    self.state.workflow_step_index = old.saturating_sub(1);
+                    if self.state.workflow_step_index != old {
+                        self.state.step_agent_event_index = 0;
+                        self.poll_workflow_data_async();
+                    }
                 }
-            }
+                WorkflowRunDetailFocus::AgentActivity => {
+                    self.state.step_agent_event_index =
+                        self.state.step_agent_event_index.saturating_sub(1);
+                }
+            },
             _ => {}
         }
     }
@@ -1084,16 +1118,25 @@ impl App {
                     );
                 }
             },
-            View::WorkflowRunDetail => {
-                let old = self.state.workflow_step_index;
-                clamp_increment(
-                    &mut self.state.workflow_step_index,
-                    self.state.data.workflow_steps.len(),
-                );
-                if self.state.workflow_step_index != old {
-                    self.poll_workflow_data_async();
+            View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
+                WorkflowRunDetailFocus::Steps => {
+                    let old = self.state.workflow_step_index;
+                    clamp_increment(
+                        &mut self.state.workflow_step_index,
+                        self.state.data.workflow_steps.len(),
+                    );
+                    if self.state.workflow_step_index != old {
+                        self.state.step_agent_event_index = 0;
+                        self.poll_workflow_data_async();
+                    }
                 }
-            }
+                WorkflowRunDetailFocus::AgentActivity => {
+                    clamp_increment(
+                        &mut self.state.step_agent_event_index,
+                        self.state.data.step_agent_events.len(),
+                    );
+                }
+            },
             _ => {}
         }
     }
@@ -1197,6 +1240,8 @@ impl App {
                             self.state.selected_workflow_run_id = Some(run_id);
                             self.state.view = View::WorkflowRunDetail;
                             self.state.workflow_step_index = 0;
+                            self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
+                            self.state.step_agent_event_index = 0;
                             self.reload_workflow_steps();
                         }
                     }
@@ -4053,6 +4098,21 @@ impl App {
         let step_len = self.state.data.workflow_steps.len();
         if step_len > 0 && self.state.workflow_step_index >= step_len {
             self.state.workflow_step_index = step_len - 1;
+        }
+        let event_len = self.state.data.step_agent_events.len();
+        if event_len > 0 && self.state.step_agent_event_index >= event_len {
+            self.state.step_agent_event_index = event_len - 1;
+        }
+        // Auto-reset focus to Steps if current step has no agent activity
+        let has_agent = self
+            .state
+            .data
+            .workflow_steps
+            .get(self.state.workflow_step_index)
+            .map(|s| s.child_run_id.is_some())
+            .unwrap_or(false);
+        if !has_agent {
+            self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
         }
     }
 

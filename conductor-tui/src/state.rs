@@ -143,6 +143,21 @@ impl WorkflowsFocus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowRunDetailFocus {
+    Steps,
+    AgentActivity,
+}
+
+impl WorkflowRunDetailFocus {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Steps => Self::AgentActivity,
+            Self::AgentActivity => Self::Steps,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub enum Modal {
     None,
@@ -598,6 +613,8 @@ pub struct AppState {
     pub workflow_def_index: usize,
     pub workflow_run_index: usize,
     pub workflow_step_index: usize,
+    pub workflow_run_detail_focus: WorkflowRunDetailFocus,
+    pub step_agent_event_index: usize,
     /// Currently selected workflow run ID (for detail view)
     pub selected_workflow_run_id: Option<String>,
 
@@ -644,6 +661,8 @@ impl AppState {
             workflow_def_index: 0,
             workflow_run_index: 0,
             workflow_step_index: 0,
+            workflow_run_detail_focus: WorkflowRunDetailFocus::Steps,
+            step_agent_event_index: 0,
             selected_workflow_run_id: None,
             should_quit: false,
             show_closed_tickets: false,
@@ -825,7 +844,15 @@ impl AppState {
                 WorkflowsFocus::Defs => (self.workflow_def_index, self.data.workflow_defs.len()),
                 WorkflowsFocus::Runs => (self.workflow_run_index, self.data.workflow_runs.len()),
             },
-            View::WorkflowRunDetail => (self.workflow_step_index, self.data.workflow_steps.len()),
+            View::WorkflowRunDetail => match self.workflow_run_detail_focus {
+                WorkflowRunDetailFocus::Steps => {
+                    (self.workflow_step_index, self.data.workflow_steps.len())
+                }
+                WorkflowRunDetailFocus::AgentActivity => (
+                    self.step_agent_event_index,
+                    self.data.step_agent_events.len(),
+                ),
+            },
         }
     }
 
@@ -849,7 +876,10 @@ impl AppState {
                 WorkflowsFocus::Defs => self.workflow_def_index = index,
                 WorkflowsFocus::Runs => self.workflow_run_index = index,
             },
-            View::WorkflowRunDetail => self.workflow_step_index = index,
+            View::WorkflowRunDetail => match self.workflow_run_detail_focus {
+                WorkflowRunDetailFocus::Steps => self.workflow_step_index = index,
+                WorkflowRunDetailFocus::AgentActivity => self.step_agent_event_index = index,
+            },
         }
     }
 
