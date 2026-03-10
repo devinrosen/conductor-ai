@@ -18,18 +18,41 @@ If the diff exceeds ~50KB, focus on files most relevant to your review area.
 
 ## Output format
 
-For each issue found, report:
-- **Issue**: one-line description
-- **Severity**: critical | warning | suggestion
-- **Location**: file:line reference
-- **Details**: explanation and recommended fix
-
 Severity guide:
 - **critical**: Bugs, security holes, data loss — blocks merge
 - **warning**: Design or correctness concern — should be addressed
 - **suggestion**: Style, minor improvement — non-blocking
 
-If you find **critical** or **warning** issues, include `has_review_issues` in your CONDUCTOR_OUTPUT markers.
-If you find only **suggestion** issues or no issues, do NOT include that marker.
+Your `CONDUCTOR_OUTPUT` `context` field must be a **JSON object** (not plain text) so the aggregator can parse it. Use this structure:
 
-Include a brief summary of your findings (or "No issues found") in your CONDUCTOR_OUTPUT context.
+```json
+{
+  "approved": true,
+  "findings": [
+    {
+      "file": "src/foo.rs",
+      "line": 42,
+      "severity": "warning",
+      "message": "One-line description",
+      "suggestion": "How to fix it"
+    }
+  ],
+  "off_diff_findings": [
+    {
+      "file": "src/bar.rs",
+      "line": 10,
+      "title": "Short issue title",
+      "severity": "warning",
+      "body": "Detailed description of the pre-existing issue"
+    }
+  ],
+  "summary": "One-sentence summary of your review"
+}
+```
+
+- `findings`: issues in code **added or modified by this PR** — set `approved: false` if any are `critical` or `warning`
+- `off_diff_findings`: issues in **unchanged/removed code** — never affect `approved`, filed as separate GitHub issues
+- Omit `off_diff_findings` entirely if there are none
+
+If you find **critical** or **warning** `findings`, include `has_review_issues` in your CONDUCTOR_OUTPUT markers.
+If you find only `suggestion` findings or no findings, do NOT include that marker.
