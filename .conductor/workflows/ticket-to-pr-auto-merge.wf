@@ -1,0 +1,30 @@
+workflow ticket-to-pr-auto-merge {
+  meta {
+    description = "Full development cycle through auto-merge and ticket close"
+    trigger     = "manual"
+    targets     = ["worktree"]
+  }
+
+  inputs {
+    ticket_id required
+  }
+
+  call workflow ticket-to-pr {
+    inputs {
+      ticket_id = "{{ticket_id}}"
+    }
+  }
+
+  gate pr_checks {
+    timeout    = "2h"
+    on_timeout = fail
+  }
+
+  gate pr_approval {
+    min_approvals = 1
+    timeout       = "72h"
+    on_timeout    = fail
+  }
+
+  call merge-and-close
+}
