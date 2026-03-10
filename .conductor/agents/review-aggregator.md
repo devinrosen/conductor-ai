@@ -55,7 +55,35 @@ Steps:
    - ...
    ```
 
-5. Produce your CONDUCTOR_OUTPUT:
+5. Collect and file off-diff findings:
+
+   a. For each reviewer entry in prior_contexts, attempt to parse the context string as JSON and extract the `off_diff_findings` array (if present).
+   b. Collect all findings across all reviewers into a single list.
+   c. Deduplicate by `(file, line)`: when two entries share the same file and line, keep the one with the highest severity (`critical > warning > suggestion`).
+   d. For each deduplicated finding:
+      - First check for existing open issues to avoid duplicates:
+        ```
+        gh issue list --label conductor-off-diff --state open --json title,url
+        ```
+        Skip filing if an existing issue title already contains the `file:line` reference.
+      - If not already filed, ensure the label exists (create if needed):
+        ```
+        gh label create conductor-off-diff --color "0075ca" --description "Finding in unchanged/removed code, not blocking the PR" 2>/dev/null || true
+        ```
+      - File a new issue:
+        ```
+        gh issue create \
+          --title "<title>" \
+          --label "conductor-off-diff" \
+          --body "**Severity:** <severity>\n**Location:** <file>:<line>\n**Found by:** <reviewer agent>\n**PR branch:** <branch>\n\n<body>"
+        ```
+   e. If any off-diff issues were filed, append the following section to the PR comment posted in step 4:
+      ```markdown
+      ### Off-diff findings (filed as issues, not blocking this PR)
+      - [#<number> — <title>](<url>) — `<file>:<line>` (<severity>)
+      ```
+
+6. Produce your CONDUCTOR_OUTPUT:
 
 If ANY reviewer reported critical or warning issues, include `has_review_issues` in your CONDUCTOR_OUTPUT markers and list the blocking findings in your context.
 
