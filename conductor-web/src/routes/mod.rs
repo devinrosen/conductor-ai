@@ -1,7 +1,6 @@
 pub mod agents;
 pub mod events;
 pub mod issue_sources;
-pub mod merge_queue;
 pub mod repos;
 pub mod tickets;
 pub mod work_targets;
@@ -159,32 +158,6 @@ pub fn api_router() -> Router<AppState> {
             "/api/repos/{id}/sources/{source_id}",
             delete(issue_sources::delete_issue_source),
         )
-        // Merge Queue
-        .route(
-            "/api/repos/{id}/merge-queue",
-            get(merge_queue::list_entries).post(merge_queue::enqueue),
-        )
-        .route(
-            "/api/repos/{id}/merge-queue/pending",
-            get(merge_queue::list_pending),
-        )
-        .route(
-            "/api/repos/{id}/merge-queue/pop",
-            post(merge_queue::pop_next),
-        )
-        .route(
-            "/api/repos/{id}/merge-queue/stats",
-            get(merge_queue::queue_stats),
-        )
-        .route(
-            "/api/merge-queue/{id}/merged",
-            post(merge_queue::mark_merged),
-        )
-        .route(
-            "/api/merge-queue/{id}/failed",
-            post(merge_queue::mark_failed),
-        )
-        .route("/api/merge-queue/{id}", delete(merge_queue::remove_entry))
         // Work Targets
         .route(
             "/api/config/model",
