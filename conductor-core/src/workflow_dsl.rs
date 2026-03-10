@@ -1728,9 +1728,9 @@ workflow ticket-to-pr {
     call review-db-migrations
   }
 
-  call review-triage { output = "review-triage" }
+  call review-aggregator { output = "review-aggregator" }
 
-  while review-triage.has_review_issues {
+  while review-aggregator.has_review_issues {
     max_iterations = 3
     stuck_after    = 2
     on_max_iter    = fail
@@ -1750,7 +1750,7 @@ workflow ticket-to-pr {
       call review-db-migrations
     }
 
-    call review-triage { output = "review-triage" }
+    call review-aggregator { output = "review-aggregator" }
   }
 }
 "#;
@@ -1759,7 +1759,7 @@ workflow ticket-to-pr {
         assert_eq!(def.trigger, WorkflowTrigger::Manual);
         assert_eq!(def.inputs.len(), 1);
         assert!(def.inputs[0].required);
-        // call plan, call implement, call push-and-pr, parallel, call review-triage, while
+        // call plan, call implement, call push-and-pr, parallel, call review-aggregator, while
         assert_eq!(def.body.len(), 6);
 
         match &def.body[0] {
@@ -1790,19 +1790,19 @@ workflow ticket-to-pr {
 
         match &def.body[4] {
             WorkflowNode::Call(c) => {
-                assert_eq!(c.agent, AgentRef::Name("review-triage".to_string()));
-                assert_eq!(c.output.as_deref(), Some("review-triage"));
+                assert_eq!(c.agent, AgentRef::Name("review-aggregator".to_string()));
+                assert_eq!(c.output.as_deref(), Some("review-aggregator"));
             }
-            _ => panic!("Expected Call node for review-triage"),
+            _ => panic!("Expected Call node for review-aggregator"),
         }
 
         match &def.body[5] {
             WorkflowNode::While(w) => {
-                assert_eq!(w.step, "review-triage");
+                assert_eq!(w.step, "review-aggregator");
                 assert_eq!(w.marker, "has_review_issues");
                 assert_eq!(w.max_iterations, 3);
                 assert_eq!(w.stuck_after, Some(2));
-                // address-reviews, parallel, review-triage
+                // address-reviews, parallel, review-aggregator
                 assert_eq!(w.body.len(), 3);
             }
             _ => panic!("Expected While node"),

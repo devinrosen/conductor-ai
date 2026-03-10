@@ -29,9 +29,9 @@ workflow ticket-to-pr {
     call review-db-migrations
   }
 
-  call review-triage { output = "review-triage" }
+  call review-aggregator { output = "review-aggregator" }
 
-  while review-triage.has_review_issues {
+  while review-aggregator.has_review_issues {
     max_iterations = 3
     stuck_after    = 2
     on_max_iter    = fail
@@ -51,6 +51,6 @@ workflow ticket-to-pr {
       call review-db-migrations
     }
 
-    call review-triage { output = "review-triage" }
+    call review-aggregator { output = "review-aggregator" }
   }
 }
