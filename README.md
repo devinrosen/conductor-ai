@@ -74,9 +74,30 @@ conductor-web                        # After install
 cargo run --bin conductor-web        # Without installing
 ```
 
+## Workflows
+
+Conductor includes a workflow engine that orchestrates multi-step AI agent pipelines. Workflows are defined in `.wf` files using a minimal custom DSL.
+
+```bash
+conductor workflow list                              # list available workflows
+conductor workflow show <name>                       # ASCII step graph
+conductor workflow validate <name>                   # check agents, inputs, cycles, snippets
+conductor workflow run <name> [--input k=v] [--dry-run]
+conductor workflow cancel <run-id>
+conductor workflow runs [--worktree id]              # run history
+conductor workflow run-show <run-id>                 # per-step detail
+conductor workflow gate-approve  <run-id>
+conductor workflow gate-reject   <run-id>
+conductor workflow gate-feedback <run-id> "<text>"
+```
+
+Workflow files live in `.conductor/workflows/<name>.wf`. Agent prompts live in `.conductor/agents/<name>.md`. The DSL supports sequential steps, `parallel` blocks, `if`/`unless`/`while`/`do-while` control flow, `gate` steps for human or automated approvals, `always` cleanup blocks, and `call workflow` for shallow composition.
+
+For full details on the DSL grammar, constructs, structured output, and design tradeoffs, see [docs/workflow/engine.md](docs/workflow/engine.md).
+
 ## PR Review Swarm
 
-Conductor can run a multi-agent review swarm against a PR — spawning one AI reviewer per role and aggregating the results into a single PR comment.
+Conductor ships a built-in `review-pr` workflow that runs a multi-agent review swarm against a PR — spawning one AI reviewer per role and aggregating the results into a single PR comment.
 
 ### Reviewer roles
 
