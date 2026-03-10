@@ -1301,7 +1301,7 @@ mod tests {
     fn make_run(status: AgentRunStatus, result_text: Option<&str>) -> AgentRun {
         AgentRun {
             id: "test-run".to_string(),
-            worktree_id: "w1".to_string(),
+            worktree_id: Some("w1".to_string()),
             claude_session_id: None,
             prompt: "test".to_string(),
             status,

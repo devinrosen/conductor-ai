@@ -510,7 +510,7 @@ fn render_step_agent_activity(
                     .data
                     .worktrees
                     .iter()
-                    .find(|w| w.id == run.worktree_id)
+                    .find(|w| run.worktree_id.as_deref() == Some(w.id.as_str()))
             })
         })
         .map(|wt| wt.path.as_str())

@@ -676,7 +676,7 @@ fn verify_feedback_ownership(
     let run = mgr
         .get_run(&fb.run_id)?
         .ok_or_else(|| ApiError(ConductorError::Agent("agent run not found".into())))?;
-    if run.worktree_id != worktree_id {
+    if run.worktree_id.as_deref() != Some(worktree_id) {
         return Err(ApiError(ConductorError::Agent(
             "feedback request does not belong to this worktree".into(),
         )));

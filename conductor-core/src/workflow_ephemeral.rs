@@ -17,7 +17,8 @@ use tempfile::TempDir;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::workflow::{
-    execute_workflow, WorkflowExecConfig, WorkflowExecInput, WorkflowManager, WorkflowResult,
+    apply_workflow_input_defaults, execute_workflow, WorkflowExecConfig, WorkflowExecInput,
+    WorkflowManager, WorkflowResult,
 };
 
 /// A parsed GitHub PR reference.
@@ -196,12 +197,6 @@ pub fn run_workflow_on_pr(
         .map_err(|e| ConductorError::Workflow(format!("Failed to create temp directory: {e}")))?;
     let clone_path = temp_dir.path();
 
-    eprintln!(
-        "Cloning PR #{} from {} into temp directory...",
-        pr_ref.number,
-        pr_ref.repo_slug()
-    );
-
     checkout_pr(pr_ref, clone_path)?;
 
     let clone_path_str = clone_path.to_str().ok_or_else(|| {
@@ -217,29 +212,8 @@ pub fn run_workflow_on_pr(
             ))
         })?;
 
-    // Warn if the workflow doesn't list "pr" as a target
-    if !workflow.targets.iter().any(|t| t == "pr") {
-        eprintln!(
-            "Warning: workflow '{}' does not list 'pr' in its targets field. \
-             It may not be designed for PR runs.",
-            workflow_name
-        );
-    }
-
-    // Validate required inputs and apply defaults (mirrors normal run path validation)
-    for input_decl in &workflow.inputs {
-        if input_decl.required && !inputs.contains_key(&input_decl.name) {
-            return Err(ConductorError::Workflow(format!(
-                "Missing required input: '{}'. Use --input {}=<value>.",
-                input_decl.name, input_decl.name
-            )));
-        }
-        if let Some(ref default) = input_decl.default {
-            inputs
-                .entry(input_decl.name.clone())
-                .or_insert_with(|| default.clone());
-        }
-    }
+    // Validate required inputs and apply defaults (shared helper)
+    apply_workflow_input_defaults(&workflow, &mut inputs)?;
 
     let exec_config = WorkflowExecConfig {
         dry_run,
@@ -329,6 +303,53 @@ mod tests {
         );
     }
 
+    /// Verifies that `resume_workflow` cleanly rejects attempts to resume an ephemeral
+    /// PR run (worktree_id = None), returning an error rather than panicking.
+    #[test]
+    fn test_resume_ephemeral_workflow_run_rejected() {
+        use crate::agent::AgentManager;
+        use crate::config::Config;
+        use crate::test_helpers::setup_db;
+        use crate::workflow::{resume_workflow, WorkflowManager, WorkflowResumeInput};
+
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        // Create an ephemeral parent agent run (empty worktree_id → stored as NULL)
+        let parent = agent_mgr.create_run("", "workflow", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        // Create an ephemeral workflow run with worktree_id = None and a definition snapshot
+        let snapshot = r#"{"name":"test","description":"t","trigger":"manual","targets":["pr"],"inputs":[],"steps":[]}"#;
+        let run = mgr
+            .create_workflow_run("pr-flow", None, &parent.id, false, "pr", Some(snapshot))
+            .unwrap();
+
+        // Mark the run as failed so resume_workflow passes the status check
+        mgr.update_workflow_status(
+            &run.id,
+            crate::workflow::WorkflowRunStatus::Failed,
+            Some("error"),
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let input = WorkflowResumeInput {
+            conn: &conn,
+            config: &config,
+            workflow_run_id: &run.id,
+            restart: false,
+            from_step: None,
+            model: None,
+        };
+
+        let err = resume_workflow(&input).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ephemeral") || msg.contains("no registered worktree"),
+            "Expected ephemeral rejection message, got: {msg}"
+        );
+    }
+
     /// Verifies that `create_workflow_run` with `worktree_id = None` stores and
     /// retrieves NULL correctly (the ephemeral PR run path).
     #[test]
@@ -339,7 +360,7 @@ mod tests {
 
         let conn = setup_db();
         let agent_mgr = AgentManager::new(&conn);
-        // Ephemeral runs pass "" as worktree_id to agent_runs (no FK constraint after migration 027)
+        // Ephemeral runs pass "" as worktree_id to agent_runs (stored as NULL after migration 027)
         let parent = agent_mgr.create_run("", "workflow", None, None).unwrap();
 
         let mgr = WorkflowManager::new(&conn);

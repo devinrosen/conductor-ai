@@ -86,7 +86,7 @@ pub fn orchestrate_run(
 
     // Get the worktree info for tmux window naming
     let wt_mgr = WorktreeManager::new(conn, config);
-    let worktree = wt_mgr.get_by_id(&parent_run.worktree_id)?;
+    let worktree = wt_mgr.get_by_id(parent_run.worktree_id.as_deref().unwrap_or(""))?;
 
     let steps = mgr.get_run_steps(parent_run_id)?;
     if steps.is_empty() {
@@ -128,7 +128,7 @@ pub fn orchestrate_run(
         // Create child run record
         let child_window = format!("{}-step-{}", worktree.slug, i + 1);
         let child_run = mgr.create_child_run(
-            &parent_run.worktree_id,
+            parent_run.worktree_id.as_deref().unwrap_or(""),
             &child_prompt,
             Some(&child_window),
             model,
@@ -381,7 +381,7 @@ mod tests {
     fn make_parent_run(prompt: &str) -> AgentRun {
         AgentRun {
             id: "parent-1".to_string(),
-            worktree_id: "w1".to_string(),
+            worktree_id: Some("w1".to_string()),
             claude_session_id: None,
             prompt: prompt.to_string(),
             status: AgentRunStatus::Running,

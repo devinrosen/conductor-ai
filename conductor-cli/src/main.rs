@@ -482,6 +482,21 @@ enum TicketCommands {
     },
 }
 
+fn report_workflow_result(result: conductor_core::workflow::WorkflowResult) {
+    println!(
+        "\nTotal: ${:.4}, {} turns, {:.1}s",
+        result.total_cost,
+        result.total_turns,
+        result.total_duration_ms as f64 / 1000.0
+    );
+    if result.all_succeeded {
+        println!("Workflow completed successfully.");
+    } else {
+        eprintln!("Workflow finished with failures.");
+        std::process::exit(1);
+    }
+}
+
 fn main() -> Result<()> {
     // Initialize tracing subscriber so workflow engine log events appear on
     // stderr for CLI users.  Respects RUST_LOG; defaults to `info`.
@@ -866,7 +881,10 @@ fn main() -> Result<()> {
                             |row| Ok((row.get(0)?, row.get(1)?)),
                         )
                         .map_err(|_| {
-                            anyhow::anyhow!("Could not find repo for worktree {}", run.worktree_id)
+                            anyhow::anyhow!(
+                                "Could not find repo for worktree {}",
+                                run.worktree_id.as_deref().unwrap_or("")
+                            )
                         })?;
 
                     // Check per-repo opt-in
@@ -1389,20 +1407,7 @@ fn main() -> Result<()> {
                         input_map,
                         dry_run,
                     ) {
-                        Ok(result) => {
-                            println!(
-                                "\nTotal: ${:.4}, {} turns, {:.1}s",
-                                result.total_cost,
-                                result.total_turns,
-                                result.total_duration_ms as f64 / 1000.0
-                            );
-                            if result.all_succeeded {
-                                println!("Workflow completed successfully.");
-                            } else {
-                                eprintln!("Workflow finished with failures.");
-                                std::process::exit(1);
-                            }
-                        }
+                        Ok(result) => report_workflow_result(result),
                         Err(e) => {
                             eprintln!("Workflow execution failed: {e}");
                             std::process::exit(1);
@@ -1422,22 +1427,11 @@ fn main() -> Result<()> {
                     let workflow =
                         WorkflowManager::load_def_by_name(&wt.path, &r.local_path, &name)?;
 
-                    // Validate required inputs
-                    for input_decl in &workflow.inputs {
-                        if input_decl.required && !input_map.contains_key(&input_decl.name) {
-                            anyhow::bail!(
-                                "Missing required input: '{}'. Use --input {}=<value>.",
-                                input_decl.name,
-                                input_decl.name
-                            );
-                        }
-                        // Set defaults for missing optional inputs
-                        if let Some(ref default) = input_decl.default {
-                            input_map
-                                .entry(input_decl.name.clone())
-                                .or_insert_with(|| default.clone());
-                        }
-                    }
+                    // Validate required inputs and apply defaults
+                    conductor_core::workflow::apply_workflow_input_defaults(
+                        &workflow,
+                        &mut input_map,
+                    )?;
 
                     let node_count = workflow.total_nodes();
                     println!(
@@ -1459,20 +1453,7 @@ fn main() -> Result<()> {
                             depth: 0,
                         },
                     ) {
-                        Ok(result) => {
-                            println!(
-                                "\nTotal: ${:.4}, {} turns, {:.1}s",
-                                result.total_cost,
-                                result.total_turns,
-                                result.total_duration_ms as f64 / 1000.0
-                            );
-                            if result.all_succeeded {
-                                println!("Workflow completed successfully.");
-                            } else {
-                                eprintln!("Workflow finished with failures.");
-                                std::process::exit(1);
-                            }
-                        }
+                        Ok(result) => report_workflow_result(result),
                         Err(e) => {
                             eprintln!("Workflow execution failed: {e}");
                             std::process::exit(1);
@@ -1880,7 +1861,12 @@ fn run_agent(
     // Build effective prompt with optional startup context
     let config = load_config().unwrap_or_default();
     let effective_prompt = if config.general.inject_startup_context {
-        let context = build_startup_context(conn, &run.worktree_id, run_id, worktree_path);
+        let context = build_startup_context(
+            conn,
+            run.worktree_id.as_deref().unwrap_or(""),
+            run_id,
+            worktree_path,
+        );
         eprintln!("[conductor] Injecting session context into prompt");
         format!("{context}\n\n---\n\n{prompt}")
     } else {
@@ -1908,7 +1894,7 @@ fn run_agent(
     } else {
         // Resuming: carry forward the plan from the previous run
         // Look up the previous run that owns this session_id
-        if let Ok(prev_runs) = mgr.list_for_worktree(&run.worktree_id) {
+        if let Ok(prev_runs) = mgr.list_for_worktree(run.worktree_id.as_deref().unwrap_or("")) {
             let prev_run = prev_runs
                 .iter()
                 .find(|r| r.claude_session_id.as_deref() == resume_session_id && r.id != run_id);
@@ -2242,7 +2228,12 @@ fn run_orchestrate(
 
     // Build effective prompt with startup context
     let effective_prompt = if config.general.inject_startup_context {
-        let context = build_startup_context(conn, &run.worktree_id, run_id, worktree_path);
+        let context = build_startup_context(
+            conn,
+            run.worktree_id.as_deref().unwrap_or(""),
+            run_id,
+            worktree_path,
+        );
         eprintln!("[orchestrator] Injecting session context into prompt");
         format!("{context}\n\n---\n\n{}", run.prompt)
     } else {

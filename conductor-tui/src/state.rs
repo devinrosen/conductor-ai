@@ -751,7 +751,7 @@ impl AppState {
                 _ => {}
             }
             if run.is_active() {
-                let worktree_slug = resolve_slug(run.worktree_id.as_str());
+                let worktree_slug = resolve_slug(run.worktree_id.as_deref().unwrap_or(""));
                 let elapsed_secs = chrono::DateTime::parse_from_rfc3339(&run.started_at)
                     .ok()
                     .map(|dt| {
@@ -1082,7 +1082,7 @@ mod tests {
     ) -> conductor_core::agent::AgentRun {
         conductor_core::agent::AgentRun {
             id: "run-1".into(),
-            worktree_id: worktree_id.into(),
+            worktree_id: Some(worktree_id.to_string()),
             claude_session_id: None,
             prompt: "do stuff".into(),
             status,

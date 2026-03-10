@@ -1165,6 +1165,29 @@ struct ExecutionState<'a> {
 // Execution engine
 // ---------------------------------------------------------------------------
 
+/// Validate required workflow inputs are present and apply default values.
+///
+/// Returns an error if a required input is missing.
+pub fn apply_workflow_input_defaults(
+    workflow: &WorkflowDef,
+    inputs: &mut HashMap<String, String>,
+) -> Result<()> {
+    for input_decl in &workflow.inputs {
+        if input_decl.required && !inputs.contains_key(&input_decl.name) {
+            return Err(ConductorError::Workflow(format!(
+                "Missing required input: '{}'. Use --input {}=<value>.",
+                input_decl.name, input_decl.name
+            )));
+        }
+        if let Some(ref default) = input_decl.default {
+            inputs
+                .entry(input_decl.name.clone())
+                .or_insert_with(|| default.clone());
+        }
+    }
+    Ok(())
+}
+
 /// Input parameters for workflow execution.
 pub struct WorkflowExecInput<'a> {
     pub conn: &'a Connection,
@@ -1545,6 +1568,14 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         }
     }
 
+    // Reject ephemeral PR runs early (no registered worktree — cannot resume).
+    let wt_id = wf_run.worktree_id.as_deref().ok_or_else(|| {
+        ConductorError::Workflow(format!(
+            "Workflow run '{}' was an ephemeral PR run with no registered worktree — cannot resume.",
+            wf_run.id
+        ))
+    })?;
+
     // Deserialize definition from snapshot
     let snapshot = wf_run.definition_snapshot.as_deref().ok_or_else(|| {
         ConductorError::Workflow(format!(
@@ -1554,14 +1585,6 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     })?;
     let workflow: WorkflowDef = serde_json::from_str(snapshot).map_err(|e| {
         ConductorError::Workflow(format!("Failed to deserialize workflow snapshot: {e}"))
-    })?;
-
-    // Resolve worktree info — ephemeral PR runs have no registered worktree and cannot be resumed.
-    let wt_id = wf_run.worktree_id.as_deref().ok_or_else(|| {
-        ConductorError::Workflow(format!(
-            "Workflow run '{}' was an ephemeral PR run with no registered worktree — cannot resume.",
-            wf_run.id
-        ))
     })?;
     let worktree = wt_mgr.get_by_id(wt_id)?;
     let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&worktree.repo_id)?;

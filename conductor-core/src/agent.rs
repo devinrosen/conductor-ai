@@ -286,7 +286,7 @@ impl Default for PlanStep {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRun {
     pub id: String,
-    pub worktree_id: String,
+    pub worktree_id: Option<String>,
     pub claude_session_id: Option<String>,
     pub prompt: String,
     pub status: AgentRunStatus,
@@ -683,7 +683,11 @@ impl<'a> AgentManager<'a> {
 
         let run = AgentRun {
             id: id.clone(),
-            worktree_id: worktree_id.to_string(),
+            worktree_id: if worktree_id.is_empty() {
+                None
+            } else {
+                Some(worktree_id.to_string())
+            },
             claude_session_id: None,
             prompt: prompt.to_string(),
             status: AgentRunStatus::Running,
@@ -1290,7 +1294,9 @@ impl<'a> AgentManager<'a> {
         self.populate_plans(&mut runs)?;
         let mut map = HashMap::new();
         for run in runs {
-            map.insert(run.worktree_id.clone(), run);
+            if let Some(ref wt_id) = run.worktree_id {
+                map.insert(wt_id.clone(), run);
+            }
         }
         Ok(map)
     }
@@ -3067,7 +3073,7 @@ mod tests {
     fn test_build_resume_prompt() {
         let run = AgentRun {
             id: "test".to_string(),
-            worktree_id: "w1".to_string(),
+            worktree_id: Some("w1".to_string()),
             claude_session_id: Some("sess-abc".to_string()),
             prompt: "Fix the bug".to_string(),
             status: AgentRunStatus::Failed,

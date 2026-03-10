@@ -493,8 +493,8 @@ pub fn run(conn: &Connection) -> Result<()> {
     }
 
     // Migration 027: make workflow_runs.worktree_id nullable (for ephemeral PR runs),
-    // and drop the FK constraint on agent_runs.worktree_id (to allow ephemeral agent runs
-    // with an empty-string worktree_id when no registered worktree exists).
+    // and make agent_runs.worktree_id nullable with FK preserved (for ephemeral PR runs
+    // that have no registered worktree).
     if version < 27 {
         conn.pragma_update(None, "foreign_keys", "off")?;
 
@@ -527,7 +527,7 @@ pub fn run(conn: &Connection) -> Result<()> {
             "BEGIN;
             CREATE TABLE agent_runs_new (
                 id                TEXT PRIMARY KEY,
-                worktree_id       TEXT NOT NULL DEFAULT '',
+                worktree_id       TEXT REFERENCES worktrees(id) ON DELETE CASCADE,
                 claude_session_id TEXT,
                 prompt            TEXT NOT NULL,
                 status            TEXT NOT NULL DEFAULT 'running'
