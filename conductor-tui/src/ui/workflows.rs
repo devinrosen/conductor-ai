@@ -1,4 +1,3 @@
-use dirs;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -248,8 +247,8 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
                 Span::styled(" Branch:   ", Style::default().fg(Color::DarkGray)),
                 Span::raw(wt.branch.clone()),
             ]));
-            let display_path = match dirs::home_dir() {
-                Some(home) => wt.path.replacen(home.to_string_lossy().as_ref(), "~", 1),
+            let display_path = match state.home_dir.as_deref() {
+                Some(home) => wt.path.replacen(home, "~", 1),
                 None => wt.path.clone(),
             };
             header_lines.push(Line::from(vec![
@@ -505,7 +504,10 @@ fn render_step_agent_activity(
                 .map(|ms| format!(" ({:.1}s)", ms as f64 / 1000.0))
                 .unwrap_or_default();
             let ts = ev.started_at.get(11..19).unwrap_or(&ev.started_at);
-            let summary = truncate(&shorten_paths(&ev.summary, worktree_path), 80);
+            let summary = truncate(
+                &shorten_paths(&ev.summary, worktree_path, state.home_dir.as_deref()),
+                80,
+            );
             let spans = vec![
                 Span::styled(format!("{ts} "), Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("{:<10}", ev.kind), style),

@@ -652,6 +652,9 @@ pub struct AppState {
     /// When true, force the global status bar detail line to expand even when
     /// there are 4+ active items (which default to the collapsed 1-line view).
     pub status_bar_expanded: bool,
+
+    /// Cached home directory path for `~` substitution in path display. Never changes.
+    pub home_dir: Option<String>,
 }
 
 impl AppState {
@@ -691,6 +694,7 @@ impl AppState {
             show_closed_tickets: false,
             ticket_sync_in_progress: false,
             status_bar_expanded: false,
+            home_dir: dirs::home_dir().map(|p| p.to_string_lossy().into_owned()),
         }
     }
 

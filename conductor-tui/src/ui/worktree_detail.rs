@@ -284,8 +284,9 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
                 let (display_text, effective_style) = if ev.kind == "prompt" {
                     let step_label = extract_step_label(&ev.summary);
                     let is_step = step_label.is_some();
-                    let label =
-                        step_label.unwrap_or_else(|| shorten_paths(&ev.summary, worktree_path));
+                    let label = step_label.unwrap_or_else(|| {
+                        shorten_paths(&ev.summary, worktree_path, state.home_dir.as_deref())
+                    });
                     let s = if is_step {
                         Style::default().fg(Color::Magenta)
                     } else {
@@ -294,11 +295,14 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
                     (label, s)
                 } else if conductor_core::agent::parse_feedback_marker(&ev.summary).is_some() {
                     (
-                        shorten_paths(&ev.summary, worktree_path),
+                        shorten_paths(&ev.summary, worktree_path, state.home_dir.as_deref()),
                         Style::default().fg(Color::Magenta),
                     )
                 } else {
-                    (shorten_paths(&ev.summary, worktree_path), style)
+                    (
+                        shorten_paths(&ev.summary, worktree_path, state.home_dir.as_deref()),
+                        style,
+                    )
                 };
                 let mut spans = vec![Span::styled(display_text, effective_style)];
                 if let Some(dur) = ev.duration_ms() {
