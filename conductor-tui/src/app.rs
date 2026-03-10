@@ -4079,10 +4079,15 @@ impl App {
                 let path = wt.path.clone();
                 match Command::new("tmux")
                     .args(["new-window", "-c", &path])
-                    .spawn()
+                    .output()
                 {
-                    Ok(_) => {
+                    Ok(out) if out.status.success() => {
                         self.state.status_message = Some(format!("Opened tmux window at {path}"));
+                    }
+                    Ok(out) => {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        self.state.status_message =
+                            Some(format!("Failed to open tmux window: {}", stderr.trim()));
                     }
                     Err(e) => {
                         self.state.status_message =

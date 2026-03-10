@@ -595,4 +595,59 @@ mod tests {
             Action::None
         ));
     }
+
+    // --- WorktreeDetail focus-conditional j/k routing ---
+
+    fn worktree_detail_state_with_focus(focus: WorktreeDetailFocus) -> AppState {
+        let mut state = AppState::new();
+        state.view = View::WorktreeDetail;
+        state.worktree_detail_focus = focus;
+        state.selected_worktree_id = Some("wt1".into());
+        state
+    }
+
+    #[test]
+    fn worktree_detail_jk_routes_to_move_when_info_panel_focused() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::InfoPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('j')), &state),
+            Action::MoveDown
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('k')), &state),
+            Action::MoveUp
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_jk_routes_to_scroll_when_log_panel_focused() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::LogPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('j')), &state),
+            Action::AgentActivityDown
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('k')), &state),
+            Action::AgentActivityUp
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_orchestrate_agent_bound_to_shift_o_when_inactive() {
+        // OrchestrateAgent is only available when no agent is active
+        let state = worktree_detail_state_with_run(AgentRunStatus::Completed);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('O')), &state),
+            Action::OrchestrateAgent
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_orchestrate_agent_not_available_when_active() {
+        let state = worktree_detail_state_with_run(AgentRunStatus::Running);
+        assert!(!matches!(
+            map_key(key(KeyCode::Char('O')), &state),
+            Action::OrchestrateAgent
+        ));
+    }
 }
