@@ -1991,7 +1991,10 @@ fn execute_call_with_schema(
         )?;
 
         let window_prefix = if state.worktree_slug.is_empty() {
-            &state.workflow_run_id[..8]
+            state
+                .workflow_run_id
+                .get(..8)
+                .unwrap_or(&state.workflow_run_id)
         } else {
             state.worktree_slug.as_str()
         };
@@ -2883,7 +2886,10 @@ fn execute_parallel(
         state.wf_mgr.set_step_parallel_group(&step_id, &group_id)?;
 
         let window_prefix = if state.worktree_slug.is_empty() {
-            &state.workflow_run_id[..8]
+            state
+                .workflow_run_id
+                .get(..8)
+                .unwrap_or(&state.workflow_run_id)
         } else {
             state.worktree_slug.as_str()
         };
@@ -4422,6 +4428,35 @@ And here is my actual output:
         let mgr = WorkflowManager::new(&conn);
         let runs = mgr.list_all_workflow_runs(50).unwrap();
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn test_list_all_workflow_runs_includes_ephemeral() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        // Create a normal run (with worktree)
+        let parent1 = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        mgr.create_workflow_run("normal-wf", Some("w1"), &parent1.id, false, "manual", None)
+            .unwrap();
+
+        // Create an ephemeral run (no worktree)
+        let parent2 = agent_mgr
+            .create_run(None, "ephemeral workflow", None, None)
+            .unwrap();
+        let ephemeral = mgr
+            .create_workflow_run("ephemeral-wf", None, &parent2.id, false, "manual", None)
+            .unwrap();
+
+        let all = mgr.list_all_workflow_runs(100).unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Verify the ephemeral run has None worktree_id
+        let found = all.iter().find(|r| r.id == ephemeral.id).unwrap();
+        assert!(found.worktree_id.is_none());
     }
 
     #[test]

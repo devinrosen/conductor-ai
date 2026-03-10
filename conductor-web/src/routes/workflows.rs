@@ -187,7 +187,7 @@ pub async fn run_workflow(
                     .events
                     .emit(ConductorEvent::WorkflowRunStatusChanged {
                         run_id: res.workflow_run_id,
-                        worktree_id: res.worktree_id.unwrap_or_default(),
+                        worktree_id: res.worktree_id,
                         status: status.to_string(),
                     });
             }
@@ -262,7 +262,7 @@ pub async fn cancel_workflow(
 
     state.events.emit(ConductorEvent::WorkflowRunStatusChanged {
         run_id: id.clone(),
-        worktree_id: run.worktree_id.clone().unwrap_or_default(),
+        worktree_id: run.worktree_id.clone(),
         status: "cancelled".to_string(),
     });
 
@@ -320,7 +320,7 @@ pub async fn resume_workflow_endpoint(
                     .events
                     .emit(ConductorEvent::WorkflowRunStatusChanged {
                         run_id: res.workflow_run_id,
-                        worktree_id: res.worktree_id.unwrap_or_default(),
+                        worktree_id: res.worktree_id,
                         status: status.to_string(),
                     });
             }

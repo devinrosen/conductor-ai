@@ -871,20 +871,24 @@ fn main() -> Result<()> {
                         .get_run(&run_id)?
                         .ok_or_else(|| anyhow::anyhow!("Agent run not found: {run_id}"))?;
 
+                    let worktree_id = run.worktree_id.as_deref().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Cannot create issues from ephemeral workflow runs \
+                             (run {run_id} has no registered worktree)"
+                        )
+                    })?;
+
                     let (repo_id, remote_url): (String, String) = conn
                         .query_row(
                             "SELECT r.id, r.remote_url \
                          FROM worktrees w \
                          JOIN repos r ON w.repo_id = r.id \
                          WHERE w.id = ?1",
-                            rusqlite::params![run.worktree_id],
+                            rusqlite::params![worktree_id],
                             |row| Ok((row.get(0)?, row.get(1)?)),
                         )
                         .map_err(|_| {
-                            anyhow::anyhow!(
-                                "Could not find repo for worktree {}",
-                                run.worktree_id.as_deref().unwrap_or("")
-                            )
+                            anyhow::anyhow!("Could not find repo for worktree {worktree_id}")
                         })?;
 
                     // Check per-repo opt-in
@@ -1861,12 +1865,8 @@ fn run_agent(
     // Build effective prompt with optional startup context
     let config = load_config().unwrap_or_default();
     let effective_prompt = if config.general.inject_startup_context {
-        let context = build_startup_context(
-            conn,
-            run.worktree_id.as_deref().unwrap_or(""),
-            run_id,
-            worktree_path,
-        );
+        let context =
+            build_startup_context(conn, run.worktree_id.as_deref(), run_id, worktree_path);
         eprintln!("[conductor] Injecting session context into prompt");
         format!("{context}\n\n---\n\n{prompt}")
     } else {
@@ -2228,12 +2228,8 @@ fn run_orchestrate(
 
     // Build effective prompt with startup context
     let effective_prompt = if config.general.inject_startup_context {
-        let context = build_startup_context(
-            conn,
-            run.worktree_id.as_deref().unwrap_or(""),
-            run_id,
-            worktree_path,
-        );
+        let context =
+            build_startup_context(conn, run.worktree_id.as_deref(), run_id, worktree_path);
         eprintln!("[orchestrator] Injecting session context into prompt");
         format!("{context}\n\n---\n\n{}", run.prompt)
     } else {

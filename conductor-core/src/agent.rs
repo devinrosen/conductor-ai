@@ -1660,17 +1660,43 @@ pub(crate) fn list_live_tmux_windows() -> std::collections::HashSet<String> {
 /// protocol so agents know how to request human input mid-run.
 pub fn build_startup_context(
     conn: &Connection,
-    worktree_id: &str,
+    worktree_id: Option<&str>,
     current_run_id: &str,
     worktree_path: &str,
 ) -> String {
     let mut sections = Vec::new();
 
+    // For ephemeral runs (no worktree), skip worktree-specific context
+    let Some(wt_id) = worktree_id else {
+        // Still include commits + feedback protocol below
+        let commits = Command::new("git")
+            .args(["log", "--oneline", "-10"])
+            .current_dir(worktree_path)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if !commits.is_empty() {
+            sections.push(format!("**Recent commits:**\n{commits}"));
+        }
+        sections.push(
+            "**Feedback protocol:** If you need human input to continue \
+             (e.g. a decision, clarification, or approval), output \
+             `[NEEDS_FEEDBACK] <your question>` as a standalone line. \
+             The conductor will pause your run and surface the question \
+             to the user. When they respond, your run will resume with \
+             their answer."
+                .to_string(),
+        );
+        return sections.join("\n\n---\n\n");
+    };
+
     // 1. Worktree branch
     let branch: Option<String> = conn
         .query_row(
             "SELECT branch FROM worktrees WHERE id = ?1",
-            params![worktree_id],
+            params![wt_id],
             |row| row.get(0),
         )
         .ok();
@@ -1685,7 +1711,7 @@ pub fn build_startup_context(
             "SELECT t.source_id, t.title FROM tickets t \
              JOIN worktrees w ON w.ticket_id = t.id \
              WHERE w.id = ?1",
-            params![worktree_id],
+            params![wt_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .ok();
@@ -1696,7 +1722,7 @@ pub fn build_startup_context(
 
     // 3. Prior runs (excluding the current run being started)
     let mgr = AgentManager::new(conn);
-    if let Ok(runs) = mgr.list_for_worktree(worktree_id) {
+    if let Ok(runs) = mgr.list_for_worktree(wt_id) {
         let prior_runs: Vec<&AgentRun> = runs.iter().filter(|r| r.id != current_run_id).collect();
 
         // Plan steps from the most recent run that has a plan
@@ -2830,7 +2856,7 @@ mod tests {
         let current = mgr.create_run(Some("w1"), "Do stuff", None, None).unwrap();
 
         // worktree_path is /tmp which has no git repo → commits section will be empty
-        let text = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let text = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(text.contains("**Worktree:** feat/test"));
         assert!(text.contains("**Feedback protocol:**"));
         assert!(text.contains("[NEEDS_FEEDBACK]"));
@@ -2856,7 +2882,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
         let current = mgr.create_run(Some("w1"), "Fix it", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Ticket:** #42 — Fix payment bug"));
     }
 
@@ -2896,7 +2922,7 @@ mod tests {
             .create_run(Some("w1"), "Continue work", None, None)
             .unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Plan steps (from prior run):**"));
         assert!(ctx.contains("1. ✅ Read the code"));
         assert!(ctx.contains("2. ✅ Write tests"));
@@ -2925,7 +2951,7 @@ mod tests {
         // Create current run
         let current = mgr.create_run(Some("w1"), "Next task", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Prior run outcome (completed):**"));
         assert!(ctx.contains("Successfully implemented the payment module"));
     }
@@ -2938,7 +2964,7 @@ mod tests {
         // Only the current run exists (no prior runs)
         let current = mgr.create_run(Some("w1"), "My prompt", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         // Should NOT include any prior run info
         assert!(!ctx.contains("**Plan steps"));
         assert!(!ctx.contains("**Prior run outcome"));
@@ -2959,7 +2985,7 @@ mod tests {
 
         let current = mgr.create_run(Some("w1"), "Next", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Prior run outcome (completed):**"));
         // Should be truncated to 500 chars + ellipsis
         assert!(ctx.contains(&"x".repeat(500)));
@@ -2982,7 +3008,7 @@ mod tests {
 
         let current = mgr.create_run(Some("w1"), "Next", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains('…'));
         // Extract the truncated 'é' portion before the ellipsis
         let ellipsis_pos = ctx.find('…').unwrap();
@@ -3027,7 +3053,7 @@ mod tests {
         // Create current run
         let current = mgr.create_run(Some("w1"), "Next task", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Feedback from prior run:**"));
         assert!(ctx.contains("Should I close this as false positive?"));
         assert!(ctx.contains("Yes, close it"));
@@ -3049,7 +3075,7 @@ mod tests {
 
         let current = mgr.create_run(Some("w1"), "Next task", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, "w1", &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
         assert!(!ctx.contains("**Feedback from prior run:**"));
     }
 

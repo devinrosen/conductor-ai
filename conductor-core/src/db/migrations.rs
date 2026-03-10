@@ -500,6 +500,8 @@ pub fn run(conn: &Connection) -> Result<()> {
 
         conn.execute_batch(
             "BEGIN;
+
+            -- Recreate workflow_runs with nullable worktree_id
             CREATE TABLE workflow_runs_new (
                 id                  TEXT PRIMARY KEY,
                 workflow_name       TEXT NOT NULL,
@@ -520,11 +522,8 @@ pub fn run(conn: &Connection) -> Result<()> {
             ALTER TABLE workflow_runs_new RENAME TO workflow_runs;
             CREATE INDEX IF NOT EXISTS idx_workflow_runs_worktree ON workflow_runs(worktree_id);
             CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent ON workflow_runs(parent_run_id);
-            COMMIT;",
-        )?;
 
-        conn.execute_batch(
-            "BEGIN;
+            -- Recreate agent_runs with nullable worktree_id
             CREATE TABLE agent_runs_new (
                 id                TEXT PRIMARY KEY,
                 worktree_id       TEXT REFERENCES worktrees(id) ON DELETE CASCADE,
@@ -549,6 +548,7 @@ pub fn run(conn: &Connection) -> Result<()> {
             ALTER TABLE agent_runs_new RENAME TO agent_runs;
             CREATE INDEX IF NOT EXISTS idx_agent_runs_parent ON agent_runs(parent_run_id);
             CREATE INDEX IF NOT EXISTS idx_agent_runs_worktree ON agent_runs(worktree_id);
+
             COMMIT;",
         )?;
 
