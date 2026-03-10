@@ -259,9 +259,11 @@ fn poll_workflow_data(
     let db = db_path();
     let conn = open_database(&db).ok()?;
 
-    // Load defs: scoped to one worktree, or aggregated across all worktrees in global mode.
-    let defs = if let Some(wt_path) = worktree_path {
-        WorkflowManager::list_defs(wt_path, repo_path.unwrap_or("")).unwrap_or_default()
+    // Skip FS scan when a run is selected — defs don't change during a run.
+    let defs: Option<Vec<_>> = if selected_run_id.is_some() {
+        None
+    } else if let Some(wt_path) = worktree_path {
+        Some(WorkflowManager::list_defs(wt_path, repo_path.unwrap_or("")).unwrap_or_default())
     } else {
         // Global mode: scan every registered worktree for workflow definitions.
         let mut all_defs = Vec::new();
@@ -283,7 +285,7 @@ fn poll_workflow_data(
                 all_defs.append(&mut wt_defs);
             }
         }
-        all_defs
+        Some(all_defs)
     };
     let wf_mgr = WorkflowManager::new(&conn);
     let runs = wf_mgr
