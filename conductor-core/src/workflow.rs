@@ -4246,46 +4246,51 @@ And here is my actual output:
     }
 
     #[test]
-    fn test_do_while_exits_when_marker_cleared() {
+    fn test_do_while_iterates_body_multiple_times() {
+        // Verify the body actually executes on each iteration by tracking
+        // state.position, which Gate nodes increment in dry_run mode.
         let conn = setup_db();
         let config = Config::default();
         let mut state = make_loop_test_state(&conn, &config);
+        state.exec_config.dry_run = true;
 
-        // Start with marker set
+        // Marker present → loop keeps iterating until max_iterations
         state.step_results.insert(
             "check".into(),
             make_step_result("check", vec!["needs_work"]),
         );
 
-        // Use an `If` node in the body that clears the marker on the 2nd iteration
-        // (when iteration == 1). Since we can't easily detect iteration inside a
-        // static If node, we instead directly clear the marker after 1 loop.
-        // Simpler: just remove the marker before the 2nd condition check by using
-        // an `If` node with a never-true condition (no-op body), then manually
-        // clearing the marker outside. But execute_do_while doesn't yield control.
-        //
-        // Instead, test with empty body: after iteration 0's body runs, condition is
-        // checked and marker is still present → loops. After iteration 1's body,
-        // condition checked again. We want it to eventually exit.
-        // With a persistent marker and max_iterations=5 and stuck_after=None,
-        // it would hit max_iterations. So let's test the simpler case: marker is
-        // absent from the start, body runs once, then exits.
-        state.step_results.remove("check");
+        let initial_position = state.position;
 
         let node = DoWhileNode {
             step: "check".into(),
             marker: "needs_work".into(),
-            max_iterations: 5,
+            max_iterations: 3,
             stuck_after: None,
-            on_max_iter: OnMaxIter::Fail,
-            body: vec![],
+            on_max_iter: OnMaxIter::Continue,
+            body: vec![WorkflowNode::Gate(GateNode {
+                name: "counter".into(),
+                gate_type: GateType::HumanApproval,
+                prompt: None,
+                min_approvals: 1,
+                timeout_secs: 1,
+                on_timeout: OnTimeout::Fail,
+            })],
         };
 
-        // With no marker, body runs once (do-while semantic), then condition is false → exit
         let result = execute_do_while(&mut state, &node);
         assert!(result.is_ok());
-        assert!(state.all_succeeded);
+        // Gate node increments position once per iteration; 3 iterations expected
+        assert_eq!(state.position - initial_position, 3);
     }
+
+    // NOTE: Testing the natural-exit path (marker transitions from true→false
+    // mid-loop) is not feasible in a unit test because no WorkflowNode type
+    // modifies step_results without running a real agent. The `!has_marker → break`
+    // branch after body execution IS covered when the marker is absent from the
+    // start (see test_do_while_body_runs_once_when_condition_absent). The
+    // transition case (marker present → body clears marker → loop exits) requires
+    // integration testing with actual agent execution.
 
     #[test]
     fn test_do_while_fail_fast_exits_early() {

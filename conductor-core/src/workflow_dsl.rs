@@ -2839,6 +2839,17 @@ workflow test {
     }
 
     #[test]
+    fn test_parse_do_while_invalid_on_max_iter() {
+        let input = r#"workflow test { do foo.bar { max_iterations = 3  on_max_iter = explode  call baz } }"#;
+        let result = parse_workflow_str(input, "test.wf");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid on_max_iter"));
+    }
+
+    #[test]
     fn test_parse_do_while_serde_roundtrip() {
         let input = r#"
 workflow test {
