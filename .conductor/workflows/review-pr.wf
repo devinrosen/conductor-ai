@@ -1,0 +1,21 @@
+workflow review-pr {
+  meta {
+    description = "Run review swarm and aggregate findings"
+    trigger     = "manual"
+  }
+
+  parallel {
+    output    = "review-findings"
+    with      = ["review-diff-scope"]
+    fail_fast = false
+    call review-architecture
+    call review-security
+    call review-performance
+    call review-dry-abstraction
+    call review-error-handling
+    call review-test-coverage
+    call review-db-migrations
+  }
+
+  call review-aggregator { output = "review-aggregator" }
+}
