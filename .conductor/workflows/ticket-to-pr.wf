@@ -15,18 +15,7 @@ workflow ticket-to-pr {
     retries = 2
   }
 
-  call workflow lint-fix
-
   call push-and-pr
 
-  do {
-    max_iterations = 10
-    on_max_iter    = fail
-
-    call workflow review-pr
-
-    if review-aggregator.has_review_issues {
-      call address-reviews
-    }
-  } while review-aggregator.has_review_issues
+  call workflow iterate-pr
 }
