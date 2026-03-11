@@ -4,7 +4,7 @@ use conductor_core::agent::{AgentRun, AgentRunEvent, TicketAgentTotals};
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::Ticket;
-use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStep};
+use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStep, WorkflowStepSummary};
 use conductor_core::worktree::Worktree;
 use crossterm::event::KeyEvent;
 
@@ -40,6 +40,8 @@ pub struct DataRefreshedPayload {
     pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
     /// Most recent workflow run per worktree (for inline indicators in the Worktrees panel).
     pub latest_workflow_runs_by_worktree: HashMap<String, WorkflowRun>,
+    /// Currently-running step summary per workflow_run_id (for inline step indicators).
+    pub workflow_step_summaries: HashMap<String, WorkflowStepSummary>,
 }
 
 /// Every user intent or background result flows through this enum.
