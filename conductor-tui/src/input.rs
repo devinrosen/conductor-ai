@@ -329,6 +329,12 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Enter if focus == WorktreeDetailFocus::LogPanel => {
                 return Action::ExpandAgentEvent
             }
+            KeyCode::Enter
+                if focus == WorktreeDetailFocus::InfoPanel
+                    && state.worktree_detail_selected_row == crate::state::info_row::MODEL =>
+            {
+                return Action::SetModel
+            }
             KeyCode::Char('m') => return Action::SetModel,
             _ => {}
         }
