@@ -1698,6 +1698,10 @@ fn run_workflow_engine(
             Some(state.total_cost),
             Some(state.total_turns),
             Some(state.total_duration_ms),
+            None,
+            None,
+            None,
+            None,
         )?;
         state.wf_mgr.update_workflow_status(
             &wf_run_id,
@@ -4606,8 +4610,19 @@ And here is my actual output:
         let mgr = AgentManager::new(&conn);
 
         let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
-        mgr.update_run_completed(&run.id, None, Some("done"), Some(0.05), Some(3), Some(5000))
-            .unwrap();
+        mgr.update_run_completed(
+            &run.id,
+            None,
+            Some("done"),
+            Some(0.05),
+            Some(3),
+            Some(5000),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let result = agent_runtime::poll_child_completion(
             &conn,
@@ -4699,7 +4714,18 @@ And here is my actual output:
 
         // Mark child run as completed
         agent_mgr
-            .update_run_completed(&child.id, None, Some("great output"), None, None, None)
+            .update_run_completed(
+                &child.id,
+                None,
+                Some("great output"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
             .unwrap();
 
         let recovered = wf_mgr.recover_stuck_steps().unwrap();
@@ -6931,6 +6957,10 @@ And here is my actual output:
                 Some(0.05),
                 Some(3),
                 Some(5000),
+                None,
+                None,
+                None,
+                None,
             )
             .unwrap();
 

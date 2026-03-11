@@ -296,6 +296,10 @@ pub fn orchestrate_run(
             Some(total_cost),
             Some(total_turns),
             Some(total_duration_ms),
+            None,
+            None,
+            None,
+            None,
         )?;
         mgr.mark_plan_done(parent_run_id)?;
         eprintln!("[orchestrator] All steps completed successfully");
@@ -403,6 +407,10 @@ mod tests {
             model: None,
             plan: None,
             parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         }
     }
 
@@ -557,8 +565,19 @@ mod tests {
         let mgr = AgentManager::new(&conn);
 
         let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
-        mgr.update_run_completed(&run.id, None, Some("done"), Some(0.05), Some(3), Some(5000))
-            .unwrap();
+        mgr.update_run_completed(
+            &run.id,
+            None,
+            Some("done"),
+            Some(0.05),
+            Some(3),
+            Some(5000),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let result = agent_runtime::poll_child_completion(
             &conn,

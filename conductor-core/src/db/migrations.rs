@@ -571,6 +571,17 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 31)?;
     }
 
+    // Migration 032: add token count columns to agent_runs.
+    let has_input_tokens: bool = conn
+        .prepare("SELECT input_tokens FROM agent_runs LIMIT 0")
+        .is_ok();
+    if !has_input_tokens {
+        conn.execute_batch(include_str!("migrations/032_agent_run_token_counts.sql"))?;
+    }
+    if version < 32 {
+        bump_version(conn, 32)?;
+    }
+
     Ok(())
 }
 

@@ -1751,6 +1751,10 @@ fn run_agent(
     let mut num_turns: Option<i64> = None;
     let mut duration_ms: Option<i64> = None;
     let mut is_error = false;
+    let mut input_tokens: Option<i64> = None;
+    let mut output_tokens: Option<i64> = None;
+    let mut cache_read_input_tokens: Option<i64> = None;
+    let mut cache_creation_input_tokens: Option<i64> = None;
     let mut db_updated_eagerly = false;
 
     // Track the last persisted event span so we can fill its ended_at
@@ -1790,6 +1794,10 @@ fn run_agent(
                 num_turns = parsed.num_turns;
                 duration_ms = parsed.duration_ms;
                 is_error = parsed.is_error;
+                input_tokens = parsed.input_tokens;
+                output_tokens = parsed.output_tokens;
+                cache_read_input_tokens = parsed.cache_read_input_tokens;
+                cache_creation_input_tokens = parsed.cache_creation_input_tokens;
 
                 // Eagerly persist completion/failure so the consumer sees it
                 // even if this process is killed before child.wait() returns.
@@ -1811,6 +1819,10 @@ fn run_agent(
                     cost_usd,
                     num_turns,
                     duration_ms,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
                 ) {
                     eprintln!("[conductor] Warning: eager DB update failed: {e}");
                 }
@@ -1893,6 +1905,10 @@ fn run_agent(
                     cost_usd,
                     num_turns,
                     duration_ms,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
                 )?;
             }
             // Mark all plan steps done now that the run succeeded
@@ -1901,12 +1917,25 @@ fn run_agent(
             }
             eprintln!("[conductor] Agent completed successfully");
             if let Some(cost) = cost_usd {
-                eprintln!(
+                let mut summary = format!(
                     "[conductor] Cost: ${:.4}  Turns: {}  Duration: {:.1}s",
                     cost,
                     num_turns.unwrap_or(0),
                     duration_ms.map(|ms| ms as f64 / 1000.0).unwrap_or(0.0)
                 );
+                if let Some(in_tok) = input_tokens {
+                    summary.push_str(&format!("  in: {:.1}k", in_tok as f64 / 1000.0));
+                }
+                if let Some(out_tok) = output_tokens {
+                    summary.push_str(&format!("  out: {out_tok}"));
+                }
+                if let Some(cr_tok) = cache_read_input_tokens {
+                    summary.push_str(&format!("  cache_r: {:.1}k", cr_tok as f64 / 1000.0));
+                }
+                if let Some(cw_tok) = cache_creation_input_tokens {
+                    summary.push_str(&format!("  cache_w: {:.1}k", cw_tok as f64 / 1000.0));
+                }
+                eprintln!("{summary}");
             }
         }
         Ok(_) if is_error => {
