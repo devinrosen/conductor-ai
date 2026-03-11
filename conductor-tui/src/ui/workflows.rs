@@ -24,25 +24,21 @@ fn worktree_slug(worktrees: &[Worktree], predicate: impl Fn(&Worktree) -> bool) 
 
 /// Render the Workflows split-pane view: defs (left) + runs (right).
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
-    // When a worktree is selected, show a 1-line context bar at the top so
-    // the user always knows which worktree's workflows they are viewing.
+    // Always show a 1-line context bar so the user knows which worktree's
+    // workflows they are viewing (or that they are in global mode).
     let selected_wt = state
         .selected_worktree_id
         .as_ref()
         .and_then(|id| state.data.worktrees.iter().find(|w| &w.id == id));
 
-    let (area, header_area) = if let Some(wt) = selected_wt {
-        let v = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Min(0)])
-            .split(area);
-        (v[1], Some((v[0], wt)))
-    } else {
-        (area, None)
-    };
+    let v = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+    let (header_area, area) = (v[0], v[1]);
 
-    if let Some((header_area, wt)) = header_area {
-        let line = Line::from(vec![
+    let header_line = if let Some(wt) = selected_wt {
+        Line::from(vec![
             Span::styled("Worktree: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 wt.slug.clone(),
@@ -52,9 +48,14 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             ),
             Span::styled("  Branch: ", Style::default().fg(Color::DarkGray)),
             Span::raw(wt.branch.clone()),
-        ]);
-        frame.render_widget(Paragraph::new(line), header_area);
-    }
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("Worktree: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("global", Style::default().fg(Color::DarkGray)),
+        ])
+    };
+    frame.render_widget(Paragraph::new(header_line), header_area);
 
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
