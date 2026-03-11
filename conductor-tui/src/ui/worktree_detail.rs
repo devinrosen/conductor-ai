@@ -208,7 +208,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         if has_waiting {
             "Tab=switch panel  y=copy  o=act  p=prompt  f=respond  F=dismiss  x=stop  w=workflow  d=del  Esc=back"
         } else {
-            "Tab=switch panel  y=copy  o=act  p=prompt  x=stop  w=workflow  d=del  Esc=back"
+            "Tab=switch panel  y=copy  o=act  p=prompt  O=orchestrate  x=stop  w=workflow  d=del  Esc=back"
         }
     } else {
         "Tab=switch panel  y=copy  o=act  Esc=back  (archived)"
