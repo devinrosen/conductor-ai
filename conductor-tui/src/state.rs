@@ -420,6 +420,7 @@ impl fmt::Debug for Modal {
 
 /// Target context for the generic workflow picker.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum WorkflowPickerTarget {
     Worktree {
         worktree_id: String,
@@ -429,6 +430,17 @@ pub enum WorkflowPickerTarget {
     Pr {
         pr_number: i64,
         pr_title: String,
+    },
+    Ticket {
+        ticket_id: String,
+        ticket_title: String,
+        ticket_url: String,
+        repo_id: String,
+    },
+    Repo {
+        repo_id: String,
+        repo_path: String,
+        repo_name: String,
     },
 }
 
@@ -1216,6 +1228,8 @@ mod tests {
             result_summary: None,
             definition_snapshot: None,
             inputs: std::collections::HashMap::new(),
+            ticket_id: None,
+            repo_id: None,
         }
     }
 

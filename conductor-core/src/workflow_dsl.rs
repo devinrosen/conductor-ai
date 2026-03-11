@@ -1542,6 +1542,26 @@ where
     let mut always_produced = produced.clone();
     validate_nodes(&def.always, &mut always_produced, &mut errors, loader);
 
+    // Validate target values
+    const VALID_TARGETS: &[&str] = &["worktree", "ticket", "repo", "pr"];
+    for target in &def.targets {
+        if !VALID_TARGETS.contains(&target.as_str()) {
+            errors.push(ValidationError {
+                message: format!(
+                    "Unknown target '{}' in workflow '{}'. Valid targets: {}",
+                    target,
+                    def.name,
+                    VALID_TARGETS.join(", ")
+                ),
+                hint: Some(format!(
+                    "Change '{}' to one of: {}",
+                    target,
+                    VALID_TARGETS.join(", ")
+                )),
+            });
+        }
+    }
+
     ValidationReport { errors }
 }
 

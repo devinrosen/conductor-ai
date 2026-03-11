@@ -556,6 +556,18 @@ pub fn render_workflow_picker(
             " Run Workflow on PR ".to_string(),
             format!("  PR #{pr_number}: {pr_title}"),
         ),
+        WorkflowPickerTarget::Ticket {
+            ticket_title,
+            ticket_id,
+            ..
+        } => (
+            " Run Workflow on Ticket ".to_string(),
+            format!("  {ticket_title} ({ticket_id})"),
+        ),
+        WorkflowPickerTarget::Repo { repo_name, .. } => (
+            " Run Workflow on Repo ".to_string(),
+            format!("  {repo_name}"),
+        ),
     };
 
     let height = (workflow_defs.len() as u16 + 7).min(25);

@@ -559,6 +559,12 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 29)?;
     }
 
+    // Migration 030: add ticket_id and repo_id to workflow_runs for workflow targets.
+    if version < 30 {
+        conn.execute_batch(include_str!("migrations/030_workflow_targets.sql"))?;
+        bump_version(conn, 30)?;
+    }
+
     Ok(())
 }
 
@@ -592,6 +598,14 @@ mod tests {
                 id TEXT PRIMARY KEY, repo_id TEXT NOT NULL,
                 slug TEXT NOT NULL, branch TEXT NOT NULL, path TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL
+            );
+            CREATE TABLE tickets (
+                id TEXT PRIMARY KEY, repo_id TEXT NOT NULL,
+                source_type TEXT NOT NULL, source_id TEXT NOT NULL,
+                title TEXT NOT NULL, body TEXT, url TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open', priority TEXT,
+                labels TEXT, assignee TEXT, created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             );
             -- agent_runs at version 26: worktree_id NOT NULL, columns in order
             CREATE TABLE agent_runs (

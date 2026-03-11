@@ -62,7 +62,7 @@ const STEP_COLUMNS: &str =
 /// Column list for `workflow_runs` SELECT queries (used by `row_to_workflow_run`).
 const RUN_COLUMNS: &str =
     "id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
-     started_at, ended_at, result_summary, definition_snapshot, inputs";
+     started_at, ended_at, result_summary, definition_snapshot, inputs, ticket_id, repo_id";
 
 /// Instruction appended to every agent prompt for structured output.
 pub const CONDUCTOR_OUTPUT_INSTRUCTION: &str = r#"
@@ -295,6 +295,8 @@ pub struct WorkflowRun {
     pub result_summary: Option<String>,
     pub definition_snapshot: Option<String>,
     pub inputs: HashMap<String, String>,
+    pub ticket_id: Option<String>,
+    pub repo_id: Option<String>,
 }
 
 /// A workflow step execution record from the database.
@@ -523,6 +525,8 @@ impl<'a> WorkflowManager<'a> {
             result_summary: None,
             definition_snapshot: definition_snapshot.map(String::from),
             inputs: HashMap::new(),
+            ticket_id: None,
+            repo_id: None,
         })
     }
 
@@ -1021,6 +1025,8 @@ fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
             })
         })
         .unwrap_or_default();
+    let ticket_id: Option<String> = row.get(12)?;
+    let repo_id: Option<String> = row.get(13)?;
     Ok(WorkflowRun {
         id: row.get(0)?,
         workflow_name: row.get(1)?,
@@ -1034,6 +1040,8 @@ fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
         result_summary: row.get(9)?,
         definition_snapshot: row.get(10)?,
         inputs,
+        ticket_id,
+        repo_id,
     })
 }
 
@@ -1195,6 +1203,8 @@ struct ExecutionState<'a> {
     worktree_path: String,
     worktree_slug: String,
     repo_path: String,
+    ticket_id: Option<String>,
+    repo_id: Option<String>,
     model: Option<String>,
     exec_config: WorkflowExecConfig,
     inputs: HashMap<String, String>,
@@ -1256,11 +1266,13 @@ pub struct WorkflowExecInput<'a> {
     pub workflow: &'a WorkflowDef,
     /// `None` for ephemeral PR runs with no registered worktree.
     pub worktree_id: Option<&'a str>,
-    pub worktree_path: &'a str,
+    pub working_dir: &'a str,
     pub repo_path: &'a str,
     pub model: Option<&'a str>,
     pub exec_config: &'a WorkflowExecConfig,
     pub inputs: HashMap<String, String>,
+    pub ticket_id: Option<&'a str>,
+    pub repo_id: Option<&'a str>,
     /// Current nesting depth for sub-workflow calls (0 = top-level).
     pub depth: u32,
 }
@@ -1288,7 +1300,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
 
     let specs: Vec<AgentSpec> = all_agents.iter().map(AgentSpec::from).collect();
     let missing_agents = agent_config::find_missing_agents(
-        input.worktree_path,
+        input.working_dir,
         input.repo_path,
         &specs,
         Some(&workflow.name),
@@ -1305,7 +1317,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
 
     if !all_snippets.is_empty() {
         let missing_snippets = prompt_config::find_missing_snippets(
-            input.worktree_path,
+            input.working_dir,
             input.repo_path,
             &all_snippets,
             Some(&workflow.name),
@@ -1349,9 +1361,46 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         Some(&snapshot_json),
     )?;
 
+    // Write target FKs to DB
+    if input.ticket_id.is_some() || input.repo_id.is_some() {
+        conn.execute(
+            "UPDATE workflow_runs SET ticket_id = ?1, repo_id = ?2 WHERE id = ?3",
+            params![input.ticket_id, input.repo_id, wf_run.id],
+        )?;
+    }
+
+    // Build inputs map, injecting implicit ticket/repo variables
+    let mut merged_inputs = input.inputs.clone();
+    if let Some(tid) = input.ticket_id {
+        if let Ok(ticket) = crate::tickets::TicketSyncer::new(conn).get_by_id(tid) {
+            merged_inputs
+                .entry("ticket_id".to_string())
+                .or_insert_with(|| ticket.id.clone());
+            merged_inputs
+                .entry("ticket_title".to_string())
+                .or_insert_with(|| ticket.title.clone());
+            merged_inputs
+                .entry("ticket_url".to_string())
+                .or_insert_with(|| ticket.url.clone());
+        }
+    }
+    if let Some(rid) = input.repo_id {
+        if let Ok(repo) = crate::repo::RepoManager::new(conn, config).get_by_id(rid) {
+            merged_inputs
+                .entry("repo_id".to_string())
+                .or_insert_with(|| repo.id.clone());
+            merged_inputs
+                .entry("repo_path".to_string())
+                .or_insert_with(|| repo.local_path.clone());
+            merged_inputs
+                .entry("repo_name".to_string())
+                .or_insert_with(|| repo.slug.clone());
+        }
+    }
+
     // Persist inputs so they can be restored on resume
-    if !input.inputs.is_empty() {
-        wf_mgr.set_workflow_run_inputs(&wf_run.id, &input.inputs)?;
+    if !merged_inputs.is_empty() {
+        wf_mgr.set_workflow_run_inputs(&wf_run.id, &merged_inputs)?;
     }
 
     // Mark as running
@@ -1363,12 +1412,14 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         workflow_run_id: wf_run.id.clone(),
         workflow_name: workflow.name.clone(),
         worktree_id: input.worktree_id.map(String::from),
-        worktree_path: input.worktree_path.to_string(),
+        worktree_path: input.working_dir.to_string(),
         worktree_slug,
         repo_path: input.repo_path.to_string(),
+        ticket_id: input.ticket_id.map(String::from),
+        repo_id: input.repo_id.map(String::from),
         model: input.model.map(String::from),
         exec_config: input.exec_config.clone(),
-        inputs: input.inputs.clone(),
+        inputs: merged_inputs,
         agent_mgr: AgentManager::new(conn),
         wf_mgr: WorkflowManager::new(conn),
         parent_run_id: parent_run.id.clone(),
@@ -1485,8 +1536,10 @@ pub struct WorkflowExecStandalone {
     pub workflow: WorkflowDef,
     /// `None` for ephemeral PR runs with no registered worktree.
     pub worktree_id: Option<String>,
-    pub worktree_path: String,
+    pub working_dir: String,
     pub repo_path: String,
+    pub ticket_id: Option<String>,
+    pub repo_id: Option<String>,
     pub model: Option<String>,
     pub exec_config: WorkflowExecConfig,
     pub inputs: HashMap<String, String>,
@@ -1504,8 +1557,10 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         config: &params.config,
         workflow: &params.workflow,
         worktree_id: params.worktree_id.as_deref(),
-        worktree_path: &params.worktree_path,
+        working_dir: &params.working_dir,
         repo_path: &params.repo_path,
+        ticket_id: params.ticket_id.as_deref(),
+        repo_id: params.repo_id.as_deref(),
         model: params.model.as_deref(),
         exec_config: &params.exec_config,
         inputs: params.inputs.clone(),
@@ -1731,6 +1786,8 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         worktree_path: worktree.path.clone(),
         worktree_slug: worktree.slug.clone(),
         repo_path: repo.local_path.clone(),
+        ticket_id: wf_run.ticket_id.clone(),
+        repo_id: wf_run.repo_id.clone(),
         model: input.model.map(String::from),
         exec_config: WorkflowExecConfig::default(),
         inputs: wf_run.inputs.clone(),
@@ -2356,8 +2413,10 @@ fn execute_call_workflow(
             config: state.config,
             workflow: &child_def,
             worktree_id: state.worktree_id.as_deref(),
-            worktree_path: &state.worktree_path,
+            working_dir: &state.worktree_path,
             repo_path: &state.repo_path,
+            ticket_id: state.ticket_id.as_deref(),
+            repo_id: state.repo_id.as_deref(),
             model: state.model.as_deref(),
             exec_config: &state.exec_config,
             inputs: child_inputs,
@@ -4042,6 +4101,8 @@ mod tests {
             worktree_path: String::new(),
             worktree_slug: String::new(),
             repo_path: String::new(),
+            ticket_id: None,
+            repo_id: None,
             model: None,
             exec_config: WorkflowExecConfig::default(),
             inputs: HashMap::new(),
@@ -4887,6 +4948,8 @@ And here is my actual output:
             worktree_path: String::new(),
             worktree_slug: String::new(),
             repo_path: String::new(),
+            ticket_id: None,
+            repo_id: None,
             model: None,
             exec_config: WorkflowExecConfig::default(),
             inputs: HashMap::new(),
@@ -5276,6 +5339,8 @@ And here is my actual output:
             worktree_path: "/tmp/test".into(),
             worktree_slug: "test".into(),
             repo_path: "/tmp/repo".into(),
+            ticket_id: None,
+            repo_id: None,
             model: None,
             exec_config: WorkflowExecConfig::default(),
             inputs: HashMap::new(),
@@ -5638,8 +5703,10 @@ And here is my actual output:
             config: &config,
             workflow: &workflow,
             worktree_id: Some("w1"),
-            worktree_path: "/tmp/ws/feat-test",
+            working_dir: "/tmp/ws/feat-test",
             repo_path: "/tmp/repo",
+            ticket_id: None,
+            repo_id: None,
             model: None,
             exec_config: &exec_config,
             inputs: HashMap::new(),
@@ -5675,8 +5742,10 @@ And here is my actual output:
             config: &config,
             workflow: &workflow,
             worktree_id: Some("w1"),
-            worktree_path: "/tmp/ws/feat-test",
+            working_dir: "/tmp/ws/feat-test",
             repo_path: "/tmp/repo",
+            ticket_id: None,
+            repo_id: None,
             model: None,
             exec_config: &exec_config,
             inputs: HashMap::new(),
@@ -5714,8 +5783,10 @@ And here is my actual output:
             config: &config,
             workflow: &workflow,
             worktree_id: Some("w1"),
-            worktree_path: "/tmp/ws/feat-test",
+            working_dir: "/tmp/ws/feat-test",
             repo_path: "/tmp/repo",
+            ticket_id: None,
+            repo_id: None,
             model: None,
             exec_config: &exec_config,
             inputs: HashMap::new(),
@@ -7344,8 +7415,10 @@ And here is my actual output:
             config: &config,
             workflow: &workflow,
             worktree_id: None,
-            worktree_path: "",
+            working_dir: "",
             repo_path: "",
+            ticket_id: None,
+            repo_id: None,
             model: None,
             exec_config: &exec_config,
             inputs: HashMap::new(),
@@ -7368,8 +7441,10 @@ And here is my actual output:
             config: &config,
             workflow: &workflow,
             worktree_id: None,
-            worktree_path: "",
+            working_dir: "",
             repo_path: "",
+            ticket_id: None,
+            repo_id: None,
             model: None,
             exec_config: &exec_config,
             inputs: HashMap::new(),
