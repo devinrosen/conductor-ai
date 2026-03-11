@@ -335,10 +335,8 @@ pub struct WorkflowRunStep {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowStepSummary {
     pub step_name: String,
-    /// 1-indexed current step position (converted from the 0-indexed DB value).
-    pub position: i64,
-    /// Total number of steps in this run.
-    pub total: i64,
+    /// Loop iteration count (0-indexed; 0 = first pass, 1+ = subsequent loop iterations).
+    pub iteration: i64,
 }
 
 /// A single entry in a step's metadata, either a key-value field or a
@@ -1042,8 +1040,7 @@ impl<'a> WorkflowManager<'a> {
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
-            "SELECT ws.workflow_run_id, ws.step_name, ws.position, \
-             (SELECT COUNT(*) FROM workflow_run_steps t WHERE t.workflow_run_id = ws.workflow_run_id) AS total \
+            "SELECT ws.workflow_run_id, ws.step_name, ws.iteration \
              FROM workflow_run_steps ws \
              WHERE ws.workflow_run_id IN ({placeholders}) \
                AND ws.status = 'running' \
@@ -1063,14 +1060,11 @@ impl<'a> WorkflowManager<'a> {
             if map.contains_key(&run_id) {
                 continue;
             }
-            let db_position: i64 = row.get(2)?;
-            let total: i64 = row.get(3)?;
             map.insert(
                 run_id,
                 WorkflowStepSummary {
                     step_name: row.get(1)?,
-                    position: db_position + 1, // convert 0-indexed to 1-indexed
-                    total,
+                    iteration: row.get(2)?,
                 },
             );
         }
