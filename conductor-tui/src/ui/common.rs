@@ -219,24 +219,28 @@ fn render_header_detail(
                 status,
                 elapsed_secs,
                 current_step,
-                ..
+                workflow_chain,
             } => {
                 let (symbol, color) = match status {
                     WorkflowRunStatus::Waiting => ("⏸", Color::Magenta),
                     WorkflowRunStatus::Running => ("⚙", Color::Cyan),
                     _ => ("○", Color::DarkGray),
                 };
-                let label = match (current_step.as_deref(), status) {
-                    (Some(step), WorkflowRunStatus::Running) if *elapsed_secs > 0 => {
-                        let elapsed_str = if *elapsed_secs < 60 {
-                            format!("{}s", elapsed_secs)
-                        } else {
-                            format!("{}m", elapsed_secs / 60)
-                        };
-                        format!("{symbol} {worktree_slug} > {step} ({elapsed_str})")
-                    }
-                    (Some(step), _) => format!("{symbol} {worktree_slug} > {step}"),
-                    (None, _) => format!("{symbol} {worktree_slug}"),
+                // For running/waiting workflows, build the full chain breadcrumb.
+                let label = if matches!(
+                    status,
+                    WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
+                ) {
+                    build_workflow_breadcrumb(
+                        worktree_slug,
+                        workflow_chain,
+                        current_step.as_deref(),
+                        0,
+                        *elapsed_secs,
+                        symbol,
+                    )
+                } else {
+                    format!("{symbol} {worktree_slug}")
                 };
                 spans.push(Span::styled(label, Style::default().fg(color)));
             }
@@ -402,106 +406,150 @@ pub fn worktree_list_item(
         };
         if !symbol.is_empty() {
             // For running/waiting runs, append step progress if available.
-            let step_suffix = if matches!(
+            let label = if matches!(
                 wf_run.status,
                 WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
             ) {
-                state.data.workflow_step_summaries.get(&wf_run.id).map(|s| {
-                    let iter_prefix = if s.iteration > 0 {
-                        format!("(iter {}) ", s.iteration)
-                    } else {
-                        String::new()
-                    };
-
-                    // Build the full breadcrumb from workflow_chain + step_name.
-                    // workflow_chain is empty for single-level workflows (no sub-workflows).
-                    // For nested workflows it contains [root, ...parents] (leaf omitted).
-                    const MAX_LABEL: usize = 80;
-
-                    // Assemble all workflow-name parts followed by the step name.
-                    // The step_name is always the last segment.
-                    let all_names: Vec<&str> = s
-                        .workflow_chain
-                        .iter()
-                        .map(String::as_str)
-                        .chain(std::iter::once(s.step_name.as_str()))
-                        .collect();
-
-                    // "{symbol} name1 > name2 > … > {iter_prefix}step_name"
-                    let symbol_prefix = format!("{symbol} ");
-
-                    // First try the full chain.
-                    if !s.workflow_chain.is_empty() {
-                        let mut remaining = all_names.as_slice();
-                        // Drop leading workflow names one-by-one until it fits,
-                        // replacing with "..." prefix.
-                        loop {
-                            // Rebuild with current remaining names.
-                            let (prefix_part, step_part) = remaining.split_at(remaining.len() - 1);
-                            let step_str = format!("{iter_prefix}{}", step_part[0]);
-                            let joined_names: Vec<&str> = prefix_part
-                                .iter()
-                                .copied()
-                                .chain(std::iter::once(step_str.as_str()))
-                                .collect();
-                            let omitted = all_names.len() - remaining.len();
-                            let candidate = if omitted > 0 {
-                                format!("{symbol_prefix}... > {}", joined_names.join(" > "))
-                            } else {
-                                format!("{symbol_prefix}{}", joined_names.join(" > "))
-                            };
-                            if candidate.chars().count() <= MAX_LABEL || remaining.len() <= 1 {
-                                // Fits, or we've dropped everything except the step — use it.
-                                // If the step name alone is still too wide, truncate it.
-                                if candidate.chars().count() <= MAX_LABEL {
-                                    break candidate;
-                                }
-                                // Truncate step name.
-                                let overhead = candidate.chars().count() - step_str.chars().count();
-                                let available = MAX_LABEL.saturating_sub(overhead + 1);
-                                let truncated: String = step_str.chars().take(available).collect();
-                                let base = if omitted > 0 {
-                                    format!(
-                                        "{symbol_prefix}... > {}",
-                                        joined_names[..joined_names.len() - 1].join(" > ")
-                                    )
-                                } else if joined_names.len() > 1 {
-                                    format!(
-                                        "{symbol_prefix}{}",
-                                        joined_names[..joined_names.len() - 1].join(" > ")
-                                    )
-                                } else {
-                                    symbol_prefix.clone()
-                                };
-                                let sep = if base.ends_with(' ') { "" } else { " > " };
-                                break format!("{base}{sep}{truncated}…");
-                            }
-                            remaining = &remaining[1..];
-                        }
-                    } else {
-                        // Single-level workflow: keep original format.
-                        let base = format!("{symbol} {} > {iter_prefix}", wf_run.workflow_name);
-                        let base_chars = base.chars().count();
-                        let step_chars = s.step_name.chars().count();
-                        if base_chars + step_chars <= MAX_LABEL {
-                            format!("{base}{}", s.step_name)
-                        } else {
-                            let available = MAX_LABEL.saturating_sub(base_chars + 1);
-                            let truncated: String = s.step_name.chars().take(available).collect();
-                            format!("{base}{truncated}…")
-                        }
-                    }
-                })
+                state
+                    .data
+                    .workflow_step_summaries
+                    .get(&wf_run.id)
+                    .map(|s| {
+                        build_workflow_breadcrumb(
+                            &wf_run.workflow_name,
+                            &s.workflow_chain,
+                            Some(&s.step_name),
+                            s.iteration,
+                            0,
+                            symbol,
+                        )
+                    })
+                    .unwrap_or_else(|| format!("{symbol} {}", wf_run.workflow_name))
             } else {
-                None
+                format!("{symbol} {}", wf_run.workflow_name)
             };
-            let label = step_suffix.unwrap_or_else(|| format!("{symbol} {}", wf_run.workflow_name));
             spans.push(Span::raw("  "));
             spans.push(Span::styled(label, Style::default().fg(color)));
         }
     }
 
     ListItem::new(Line::from(spans))
+}
+
+/// Build a workflow step breadcrumb label string.
+///
+/// Produces a string of the form:
+/// `"{symbol} name1 > name2 > … > {iter_prefix}step_name ({elapsed}s)"`.
+///
+/// The result is capped at `MAX_LABEL` (80) characters; leading workflow names
+/// are dropped one-by-one with a `"..."` prefix when needed, and the step name
+/// itself is truncated as a last resort.
+///
+/// - `worktree_slug` — label prefix used when `workflow_chain` is empty (single-level
+///   workflow), and also as the fallback when no `step_name` is available.
+/// - `workflow_chain` — ordered parent workflow names (root → immediate parent).
+///   Empty for single-level (non-nested) workflows.
+/// - `step_name` — currently-running step name; `None` if unknown (returns
+///   `"{symbol} {worktree_slug}"`).
+/// - `iteration` — loop iteration count (0 = first pass, omit prefix when 0).
+/// - `elapsed_secs` — seconds since the current step started (0 = omit elapsed).
+/// - `symbol` — prefix symbol (e.g. `"⚙"`, `"⏸"`).
+pub fn build_workflow_breadcrumb(
+    worktree_slug: &str,
+    workflow_chain: &[String],
+    step_name: Option<&str>,
+    iteration: i64,
+    elapsed_secs: u64,
+    symbol: &str,
+) -> String {
+    let Some(step) = step_name else {
+        return format!("{symbol} {worktree_slug}");
+    };
+
+    const MAX_LABEL: usize = 80;
+
+    let iter_prefix = if iteration > 0 {
+        format!("(iter {}) ", iteration)
+    } else {
+        String::new()
+    };
+
+    let elapsed_suffix = if elapsed_secs > 0 {
+        let elapsed_str = if elapsed_secs < 60 {
+            format!("{}s", elapsed_secs)
+        } else {
+            format!("{}m", elapsed_secs / 60)
+        };
+        format!(" ({elapsed_str})")
+    } else {
+        String::new()
+    };
+
+    let symbol_prefix = format!("{symbol} ");
+
+    if !workflow_chain.is_empty() {
+        // Assemble all workflow-name parts followed by the step name.
+        // workflow_chain holds [root, …parents]; step is the final segment.
+        let all_names: Vec<&str> = workflow_chain
+            .iter()
+            .map(String::as_str)
+            .chain(std::iter::once(step))
+            .collect();
+
+        let mut remaining = all_names.as_slice();
+        loop {
+            let (prefix_part, step_part) = remaining.split_at(remaining.len() - 1);
+            let step_str = format!("{iter_prefix}{}{elapsed_suffix}", step_part[0]);
+            let joined_names: Vec<&str> = prefix_part
+                .iter()
+                .copied()
+                .chain(std::iter::once(step_str.as_str()))
+                .collect();
+            let omitted = all_names.len() - remaining.len();
+            let candidate = if omitted > 0 {
+                format!("{symbol_prefix}... > {}", joined_names.join(" > "))
+            } else {
+                format!("{symbol_prefix}{}", joined_names.join(" > "))
+            };
+            if candidate.chars().count() <= MAX_LABEL || remaining.len() <= 1 {
+                if candidate.chars().count() <= MAX_LABEL {
+                    return candidate;
+                }
+                // Truncate step name.
+                let overhead = candidate.chars().count() - step_str.chars().count();
+                let available = MAX_LABEL.saturating_sub(overhead + 1);
+                let truncated: String = step_str.chars().take(available).collect();
+                let base = if omitted > 0 {
+                    format!(
+                        "{symbol_prefix}... > {}",
+                        joined_names[..joined_names.len() - 1].join(" > ")
+                    )
+                } else if joined_names.len() > 1 {
+                    format!(
+                        "{symbol_prefix}{}",
+                        joined_names[..joined_names.len() - 1].join(" > ")
+                    )
+                } else {
+                    symbol_prefix.clone()
+                };
+                let sep = if base.ends_with(' ') { "" } else { " > " };
+                return format!("{base}{sep}{truncated}…");
+            }
+            remaining = &remaining[1..];
+        }
+    } else {
+        // Single-level workflow: "{symbol} {worktree_slug} > {iter_prefix}step_name{elapsed_suffix}"
+        let base = format!("{symbol_prefix}{worktree_slug} > {iter_prefix}");
+        let base_chars = base.chars().count();
+        let step_with_elapsed = format!("{step}{elapsed_suffix}");
+        if base_chars + step_with_elapsed.chars().count() <= MAX_LABEL {
+            format!("{base}{step_with_elapsed}")
+        } else {
+            let available = MAX_LABEL.saturating_sub(base_chars + 1);
+            let truncated: String = step.chars().take(available).collect();
+            format!("{base}{truncated}…")
+        }
+    }
 }
 
 /// Build optional worktree-indicator spans for a ticket row.
