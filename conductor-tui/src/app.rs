@@ -1499,12 +1499,16 @@ impl App {
                 .and_then(|tid| self.state.data.ticket_map.get(tid))
                 .map(|t| t.url.clone());
         }
-        // Ticket list views: Dashboard Tickets pane and the standalone Tickets view
+        // Ticket list views: Dashboard Tickets pane, standalone Tickets view, RepoDetail Tickets pane
         let ticket = match self.state.view {
             View::Dashboard if self.state.dashboard_focus == DashboardFocus::Tickets => {
                 self.state.filtered_tickets.get(self.state.ticket_index)
             }
             View::Tickets => self.state.filtered_tickets.get(self.state.ticket_index),
+            View::RepoDetail if self.state.repo_detail_focus == RepoDetailFocus::Tickets => self
+                .state
+                .filtered_detail_tickets
+                .get(self.state.detail_ticket_index),
             _ => None,
         };
         ticket.map(|t| t.url.clone())

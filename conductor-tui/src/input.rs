@@ -272,7 +272,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
     // View-specific keybindings (ticket list — Dashboard Tickets pane and Tickets view)
     let in_ticket_list = (state.view == View::Dashboard
         && state.dashboard_focus == crate::state::DashboardFocus::Tickets)
-        || state.view == View::Tickets;
+        || state.view == View::Tickets
+        || (state.view == View::RepoDetail
+            && state.repo_detail_focus == crate::state::RepoDetailFocus::Tickets);
     if in_ticket_list {
         match key.code {
             KeyCode::Char('o') => return Action::OpenTicketUrl,
