@@ -4190,7 +4190,6 @@ impl App {
         let row = self.state.worktree_detail_selected_row;
         match row {
             info_row::PATH => {
-                // Path row: open a new tmux window in the worktree directory
                 let Some(path) = self
                     .state
                     .selected_worktree_id
@@ -4200,23 +4199,7 @@ impl App {
                 else {
                     return;
                 };
-                match Command::new("tmux")
-                    .args(["new-window", "-c", &path])
-                    .output()
-                {
-                    Ok(out) if out.status.success() => {
-                        self.state.status_message = Some(format!("Opened tmux window at {path}"));
-                    }
-                    Ok(out) => {
-                        let stderr = String::from_utf8_lossy(&out.stderr);
-                        self.state.status_message =
-                            Some(format!("Failed to open tmux window: {}", stderr.trim()));
-                    }
-                    Err(e) => {
-                        self.state.status_message =
-                            Some(format!("Failed to open tmux window: {e}"));
-                    }
-                }
+                self.open_terminal_at_path(&path);
             }
             info_row::TICKET => {
                 // Ticket row: open the ticket URL in the default browser
@@ -4254,6 +4237,84 @@ impl App {
                 self.state.status_message =
                     Some("No action for this row (try Path or Ticket row)".to_string());
             }
+        }
+    }
+
+    /// Open a new terminal window/tab at `path`, using the best available method:
+    /// 1. Inside tmux → `tmux new-window -c {path}`
+    /// 2. TERM_PROGRAM=Apple_Terminal → AppleScript `do script "cd {path}"`
+    /// 3. TERM_PROGRAM=iTerm.app → AppleScript create iTerm2 window at path
+    /// 4. Fallback → status message with hint
+    fn open_terminal_at_path(&mut self, path: &str) {
+        // 1. tmux: preferred when the TUI is already running inside a tmux session
+        if std::env::var("TMUX").is_ok() {
+            match Command::new("tmux")
+                .args(["new-window", "-c", path])
+                .output()
+            {
+                Ok(out) if out.status.success() => {
+                    self.state.status_message = Some(format!("Opened tmux window at {path}"));
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    self.state.status_message = Some(format!("tmux error: {}", stderr.trim()));
+                }
+                Err(e) => {
+                    self.state.status_message = Some(format!("Failed to open tmux window: {e}"));
+                }
+            }
+            return;
+        }
+
+        // 2 & 3. AppleScript for macOS terminal apps.
+        // Embed the path via an AppleScript variable so `quoted form of` handles
+        // all shell-special characters without manual escaping.
+        let term = std::env::var("TERM_PROGRAM").unwrap_or_default();
+        let script: Option<String> = match term.as_str() {
+            "Apple_Terminal" => Some(format!(
+                "set p to \"{path}\"\n\
+                 tell application \"Terminal\"\n\
+                 \tdo script \"cd \" & quoted form of p\n\
+                 \tactivate\n\
+                 end tell",
+                path = path.replace('\\', "\\\\").replace('"', "\\\"")
+            )),
+            "iTerm.app" | "iTerm2" => Some(format!(
+                "set p to \"{path}\"\n\
+                 tell application \"iTerm\"\n\
+                 \tactivate\n\
+                 \tcreate window with default profile\n\
+                 \ttell current session of current window\n\
+                 \t\twrite text \"cd \" & quoted form of p\n\
+                 \tend tell\n\
+                 end tell",
+                path = path.replace('\\', "\\\\").replace('"', "\\\"")
+            )),
+            _ => None,
+        };
+
+        if let Some(script) = script {
+            match Command::new("osascript").args(["-e", &script]).output() {
+                Ok(out) if out.status.success() => {
+                    self.state.status_message = Some(format!("Opened {} at {path}", term));
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    self.state.status_message =
+                        Some(format!("Failed to open terminal: {}", stderr.trim()));
+                }
+                Err(e) => {
+                    self.state.status_message = Some(format!("Failed to open terminal: {e}"));
+                }
+            }
+        } else {
+            // 4. Unknown environment — guide the user
+            let hint = if term.is_empty() {
+                "Run inside tmux or set TERM_PROGRAM".to_string()
+            } else {
+                format!("Terminal '{term}' not supported — run inside tmux")
+            };
+            self.state.status_message = Some(hint);
         }
     }
 
