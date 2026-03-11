@@ -112,7 +112,7 @@ pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
 fn resolve_schema(state: &ExecutionState<'_>, name: &str) -> Result<OutputSchema> {
     let schema_ref = schema_config::SchemaRef::from_str_value(name);
     schema_config::load_schema(
-        &state.worktree_path,
+        &state.working_dir,
         &state.repo_path,
         &schema_ref,
         Some(&state.workflow_name),
@@ -527,6 +527,59 @@ impl<'a> WorkflowManager<'a> {
             inputs: HashMap::new(),
             ticket_id: None,
             repo_id: None,
+        })
+    }
+
+    /// Create a workflow run record with ticket and repo target IDs in a single INSERT.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_workflow_run_with_targets(
+        &self,
+        workflow_name: &str,
+        worktree_id: Option<&str>,
+        ticket_id: Option<&str>,
+        repo_id: Option<&str>,
+        parent_run_id: &str,
+        dry_run: bool,
+        trigger: &str,
+        definition_snapshot: Option<&str>,
+    ) -> Result<WorkflowRun> {
+        let id = ulid::Ulid::new().to_string();
+        let now = Utc::now().to_rfc3339();
+
+        self.conn.execute(
+            "INSERT INTO workflow_runs (id, workflow_name, worktree_id, ticket_id, repo_id, \
+             parent_run_id, status, dry_run, trigger, started_at, definition_snapshot) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                id,
+                workflow_name,
+                worktree_id,
+                ticket_id,
+                repo_id,
+                parent_run_id,
+                "pending",
+                dry_run as i64,
+                trigger,
+                now,
+                definition_snapshot,
+            ],
+        )?;
+
+        Ok(WorkflowRun {
+            id,
+            workflow_name: workflow_name.to_string(),
+            worktree_id: worktree_id.map(String::from),
+            parent_run_id: parent_run_id.to_string(),
+            status: WorkflowRunStatus::Pending,
+            dry_run,
+            trigger: trigger.to_string(),
+            started_at: now,
+            ended_at: None,
+            result_summary: None,
+            definition_snapshot: definition_snapshot.map(String::from),
+            inputs: HashMap::new(),
+            ticket_id: ticket_id.map(String::from),
+            repo_id: repo_id.map(String::from),
         })
     }
 
@@ -1200,7 +1253,7 @@ struct ExecutionState<'a> {
     workflow_run_id: String,
     workflow_name: String,
     worktree_id: Option<String>,
-    worktree_path: String,
+    working_dir: String,
     worktree_slug: String,
     repo_path: String,
     ticket_id: Option<String>,
@@ -1351,23 +1404,17 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     let parent_prompt = format!("Workflow: {} — {}", workflow.name, workflow.description);
     let parent_run = agent_mgr.create_run(input.worktree_id, &parent_prompt, None, input.model)?;
 
-    // Create workflow run record with snapshot
-    let wf_run = wf_mgr.create_workflow_run(
+    // Create workflow run record with snapshot and target FKs in a single INSERT
+    let wf_run = wf_mgr.create_workflow_run_with_targets(
         &workflow.name,
         input.worktree_id,
+        input.ticket_id,
+        input.repo_id,
         &parent_run.id,
         input.exec_config.dry_run,
         &workflow.trigger.to_string(),
         Some(&snapshot_json),
     )?;
-
-    // Write target FKs to DB
-    if input.ticket_id.is_some() || input.repo_id.is_some() {
-        conn.execute(
-            "UPDATE workflow_runs SET ticket_id = ?1, repo_id = ?2 WHERE id = ?3",
-            params![input.ticket_id, input.repo_id, wf_run.id],
-        )?;
-    }
 
     // Build inputs map, injecting implicit ticket/repo variables
     let mut merged_inputs = input.inputs.clone();
@@ -1410,7 +1457,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         workflow_run_id: wf_run.id.clone(),
         workflow_name: workflow.name.clone(),
         worktree_id: input.worktree_id.map(String::from),
-        worktree_path: input.working_dir.to_string(),
+        working_dir: input.working_dir.to_string(),
         worktree_slug,
         repo_path: input.repo_path.to_string(),
         ticket_id: input.ticket_id.map(String::from),
@@ -1813,7 +1860,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         workflow_run_id: wf_run.id.clone(),
         workflow_name: workflow.name.clone(),
         worktree_id: wf_run.worktree_id.clone(),
-        worktree_path,
+        working_dir: worktree_path,
         worktree_slug,
         repo_path,
         ticket_id: wf_run.ticket_id.clone(),
@@ -2100,7 +2147,7 @@ fn execute_call_with_schema(
 
     // Load agent definition
     let agent_def = agent_config::load_agent(
-        &state.worktree_path,
+        &state.working_dir,
         &state.repo_path,
         &AgentSpec::from(&node.agent),
         Some(&state.workflow_name),
@@ -2115,7 +2162,7 @@ fn execute_call_with_schema(
 
     // Load and concatenate prompt snippets
     let snippet_text = prompt_config::load_and_concat_snippets(
-        &state.worktree_path,
+        &state.working_dir,
         &state.repo_path,
         with_refs,
         Some(&state.workflow_name),
@@ -2176,7 +2223,7 @@ fn execute_call_with_schema(
         // Spawn in tmux
         if let Err(e) = agent_runtime::spawn_child_tmux(
             &child_run.id,
-            &state.worktree_path,
+            &state.working_dir,
             &prompt,
             step_model,
             &child_window,
@@ -2374,13 +2421,13 @@ fn execute_call_workflow(
 
     // Load the child workflow definition once (it won't change between retries)
     let child_def =
-        workflow_dsl::load_workflow_by_name(&state.worktree_path, &state.repo_path, &node.workflow)
+        workflow_dsl::load_workflow_by_name(&state.working_dir, &state.repo_path, &node.workflow)
             .map_err(|e| {
-                ConductorError::Workflow(format!(
-                    "Failed to load sub-workflow '{}': {e}",
-                    node.workflow
-                ))
-            })?;
+            ConductorError::Workflow(format!(
+                "Failed to load sub-workflow '{}': {e}",
+                node.workflow
+            ))
+        })?;
 
     // Retry loop
     let max_attempts = 1 + node.retries;
@@ -2443,7 +2490,7 @@ fn execute_call_workflow(
             config: state.config,
             workflow: &child_def,
             worktree_id: state.worktree_id.as_deref(),
-            working_dir: &state.worktree_path,
+            working_dir: &state.working_dir,
             repo_path: &state.repo_path,
             ticket_id: state.ticket_id.as_deref(),
             repo_id: state.repo_id.as_deref(),
@@ -2996,7 +3043,7 @@ fn execute_parallel(
         }
 
         let agent_def = agent_config::load_agent(
-            &state.worktree_path,
+            &state.working_dir,
             &state.repo_path,
             &AgentSpec::from(agent_ref),
             Some(&state.workflow_name),
@@ -3017,7 +3064,7 @@ fn execute_parallel(
         }
 
         let snippet_text = prompt_config::load_and_concat_snippets(
-            &state.worktree_path,
+            &state.working_dir,
             &state.repo_path,
             &effective_with,
             Some(&state.workflow_name),
@@ -3065,7 +3112,7 @@ fn execute_parallel(
 
         if let Err(e) = agent_runtime::spawn_child_tmux(
             &child_run.id,
-            &state.worktree_path,
+            &state.working_dir,
             &prompt,
             step_model,
             &window_name,
@@ -3467,7 +3514,7 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                 // Poll gh pr view for approvals
                 let output = Command::new("gh")
                     .args(["pr", "view", "--json", "reviews"])
-                    .current_dir(&state.worktree_path)
+                    .current_dir(&state.working_dir)
                     .output();
 
                 if let Ok(out) = output {
@@ -3515,7 +3562,7 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
 
                 let output = Command::new("gh")
                     .args(["pr", "checks", "--json", "state"])
-                    .current_dir(&state.worktree_path)
+                    .current_dir(&state.working_dir)
                     .output();
 
                 if let Ok(out) = output {
@@ -4128,7 +4175,7 @@ mod tests {
             workflow_run_id: run_id.clone(),
             workflow_name: "test".to_string(),
             worktree_id: Some("w1".to_string()),
-            worktree_path: String::new(),
+            working_dir: String::new(),
             worktree_slug: String::new(),
             repo_path: String::new(),
             ticket_id: None,
@@ -4975,7 +5022,7 @@ And here is my actual output:
             workflow_run_id: String::new(),
             workflow_name: String::new(),
             worktree_id: None,
-            worktree_path: String::new(),
+            working_dir: String::new(),
             worktree_slug: String::new(),
             repo_path: String::new(),
             ticket_id: None,
@@ -5366,7 +5413,7 @@ And here is my actual output:
             workflow_run_id: run.id,
             workflow_name: "test".into(),
             worktree_id: Some("w1".into()),
-            worktree_path: "/tmp/test".into(),
+            working_dir: "/tmp/test".into(),
             worktree_slug: "test".into(),
             repo_path: "/tmp/repo".into(),
             ticket_id: None,
@@ -7892,6 +7939,140 @@ And here is my actual output:
         assert!(
             execute_workflow(&input).is_err(),
             "referencing a nonexistent ticket_id must return an error"
+        );
+    }
+
+    #[test]
+    fn test_resume_workflow_ephemeral_run_rejected() {
+        let conn = setup_db();
+        let config = Config::default();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let snapshot = serde_json::to_string(&make_empty_workflow()).unwrap();
+        let run = wf_mgr
+            .create_workflow_run(
+                "ephemeral-wf",
+                None,
+                &parent.id,
+                false,
+                "manual",
+                Some(&snapshot),
+            )
+            .unwrap();
+        wf_mgr
+            .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("step failed"))
+            .unwrap();
+
+        let result = resume_workflow(&WorkflowResumeInput {
+            conn: &conn,
+            config: &config,
+            workflow_run_id: &run.id,
+            model: None,
+            from_step: None,
+            restart: false,
+        });
+        assert!(result.is_err(), "ephemeral run resume should be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("ephemeral PR run"),
+            "error should mention ephemeral PR run, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_resume_workflow_repo_target() {
+        let conn = setup_db();
+        let config = Config::default();
+        let exec_config = WorkflowExecConfig::default();
+        let workflow = make_empty_workflow();
+
+        let input = WorkflowExecInput {
+            conn: &conn,
+            config: &config,
+            workflow: &workflow,
+            worktree_id: None,
+            working_dir: "/tmp/repo",
+            repo_path: "/tmp/repo",
+            ticket_id: None,
+            repo_id: Some("r1"),
+            model: None,
+            exec_config: &exec_config,
+            inputs: HashMap::new(),
+            depth: 0,
+        };
+        let result = execute_workflow(&input).unwrap();
+
+        let wf_mgr = WorkflowManager::new(&conn);
+        wf_mgr
+            .update_workflow_status(
+                &result.workflow_run_id,
+                WorkflowRunStatus::Failed,
+                Some("step failed"),
+            )
+            .unwrap();
+
+        let resume_result = resume_workflow(&WorkflowResumeInput {
+            conn: &conn,
+            config: &config,
+            workflow_run_id: &result.workflow_run_id,
+            model: None,
+            from_step: None,
+            restart: false,
+        });
+        assert!(
+            resume_result.is_ok(),
+            "resume of repo-targeted run should succeed: {:?}",
+            resume_result.err()
+        );
+    }
+
+    #[test]
+    fn test_resume_workflow_ticket_target() {
+        let conn = setup_db();
+        let config = Config::default();
+        let exec_config = WorkflowExecConfig::default();
+        let workflow = make_empty_workflow();
+
+        insert_test_ticket(&conn, "tkt-1", "r1");
+
+        let input = WorkflowExecInput {
+            conn: &conn,
+            config: &config,
+            workflow: &workflow,
+            worktree_id: None,
+            working_dir: "/tmp/repo",
+            repo_path: "/tmp/repo",
+            ticket_id: Some("tkt-1"),
+            repo_id: None,
+            model: None,
+            exec_config: &exec_config,
+            inputs: HashMap::new(),
+            depth: 0,
+        };
+        let result = execute_workflow(&input).unwrap();
+
+        let wf_mgr = WorkflowManager::new(&conn);
+        wf_mgr
+            .update_workflow_status(
+                &result.workflow_run_id,
+                WorkflowRunStatus::Failed,
+                Some("step failed"),
+            )
+            .unwrap();
+
+        let resume_result = resume_workflow(&WorkflowResumeInput {
+            conn: &conn,
+            config: &config,
+            workflow_run_id: &result.workflow_run_id,
+            model: None,
+            from_step: None,
+            restart: false,
+        });
+        assert!(
+            resume_result.is_ok(),
+            "resume of ticket-targeted run should succeed: {:?}",
+            resume_result.err()
         );
     }
 }

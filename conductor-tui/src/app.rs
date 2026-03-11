@@ -131,6 +131,34 @@ fn derive_worktree_slug(source_id: &str, title: &str) -> String {
     format!("{}-{}", source_id, truncated)
 }
 
+/// Send a workflow execution result through the background channel.
+///
+/// Shared by all three `spawn_*_workflow_in_background` helpers to avoid
+/// duplicating the success/failure dispatch logic.
+fn send_workflow_result(
+    bg_tx: &Option<crate::event::BackgroundSender>,
+    workflow_name: &str,
+    result: conductor_core::error::Result<conductor_core::workflow::WorkflowResult>,
+) {
+    if let Some(ref tx) = bg_tx {
+        match result {
+            Ok(res) => {
+                let msg = if res.all_succeeded {
+                    format!("Workflow '{workflow_name}' completed successfully")
+                } else {
+                    format!("Workflow '{workflow_name}' completed with failures")
+                };
+                tx.send(Action::BackgroundSuccess { message: msg });
+            }
+            Err(e) => {
+                tx.send(Action::BackgroundError {
+                    message: format!("Workflow '{workflow_name}' failed: {e}"),
+                });
+            }
+        }
+    }
+}
+
 pub struct App {
     state: AppState,
     conn: Connection,
@@ -4541,18 +4569,26 @@ impl App {
                     return;
                 }
             };
+            let repo = self
+                .state
+                .data
+                .repos
+                .iter()
+                .find(|r| r.id == ticket.repo_id);
+            let repo_path = match repo {
+                Some(r) => r.local_path.clone(),
+                None => {
+                    self.state.modal = Modal::Error {
+                        message: "Cannot run workflow: ticket's repository is not registered in Conductor.".to_string(),
+                    };
+                    return;
+                }
+            };
             WorkflowPickerTarget::Ticket {
                 ticket_id: ticket.id.clone(),
                 ticket_title: ticket.title.clone(),
                 ticket_url: ticket.url.clone(),
-                repo_path: self
-                    .state
-                    .data
-                    .repos
-                    .iter()
-                    .find(|r| r.id == ticket.repo_id)
-                    .map(|r| r.local_path.clone())
-                    .unwrap_or_default(),
+                repo_path,
                 repo_id: ticket.repo_id.clone(),
             }
         };
@@ -4575,16 +4611,8 @@ impl App {
                 .filter(|d| d.targets.iter().any(|t| t == "worktree"))
                 .cloned()
                 .collect(),
-            WorkflowPickerTarget::Ticket { repo_id, .. } => {
-                let repo_path = self
-                    .state
-                    .data
-                    .repos
-                    .iter()
-                    .find(|r| &r.id == repo_id)
-                    .map(|r| r.local_path.clone())
-                    .unwrap_or_default();
-                conductor_core::workflow::WorkflowManager::list_defs("", &repo_path)
+            WorkflowPickerTarget::Ticket { repo_path, .. } => {
+                conductor_core::workflow::WorkflowManager::list_defs("", repo_path)
                     .unwrap_or_default()
                     .into_iter()
                     .filter(|d| d.targets.iter().any(|t| t == "ticket"))
@@ -4837,23 +4865,7 @@ impl App {
 
             let result = execute_workflow_standalone(&params);
 
-            if let Some(ref tx) = bg_tx {
-                match result {
-                    Ok(res) => {
-                        let msg = if res.all_succeeded {
-                            format!("Workflow '{}' completed successfully", def.name)
-                        } else {
-                            format!("Workflow '{}' completed with failures", def.name)
-                        };
-                        let _ = tx.send(Action::BackgroundSuccess { message: msg });
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Action::BackgroundError {
-                            message: format!("Workflow '{}' failed: {e}", def.name),
-                        });
-                    }
-                }
-            }
+            send_workflow_result(&bg_tx, &def.name, result);
         });
 
         self.workflow_threads.push(handle);
@@ -4922,23 +4934,7 @@ impl App {
 
             let result = execute_workflow_standalone(&params);
 
-            if let Some(ref tx) = bg_tx {
-                match result {
-                    Ok(res) => {
-                        let msg = if res.all_succeeded {
-                            format!("Workflow '{}' completed successfully", def.name)
-                        } else {
-                            format!("Workflow '{}' completed with failures", def.name)
-                        };
-                        let _ = tx.send(Action::BackgroundSuccess { message: msg });
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Action::BackgroundError {
-                            message: format!("Workflow '{}' failed: {e}", def.name),
-                        });
-                    }
-                }
-            }
+            send_workflow_result(&bg_tx, &def.name, result);
         });
 
         self.workflow_threads.push(handle);
@@ -4980,23 +4976,7 @@ impl App {
 
             let result = execute_workflow_standalone(&params);
 
-            if let Some(ref tx) = bg_tx {
-                match result {
-                    Ok(res) => {
-                        let msg = if res.all_succeeded {
-                            format!("Workflow '{}' completed successfully", def.name)
-                        } else {
-                            format!("Workflow '{}' completed with failures", def.name)
-                        };
-                        let _ = tx.send(Action::BackgroundSuccess { message: msg });
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Action::BackgroundError {
-                            message: format!("Workflow '{}' failed: {e}", def.name),
-                        });
-                    }
-                }
-            }
+            send_workflow_result(&bg_tx, &def.name, result);
         });
 
         self.workflow_threads.push(handle);
