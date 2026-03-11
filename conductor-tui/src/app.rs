@@ -4557,18 +4557,14 @@ impl App {
                     return;
                 }
             };
-            let repo_path = self
-                .state
-                .data
-                .repos
-                .iter()
-                .find(|r| r.id == wt.repo_id)
-                .map(|r| r.local_path.clone())
-                .unwrap_or_default();
+            let Some(repo) = self.state.data.repos.iter().find(|r| r.id == wt.repo_id) else {
+                self.state.status_message = Some("Repo not found for this worktree".to_string());
+                return;
+            };
             WorkflowPickerTarget::Worktree {
                 worktree_id: wt.id.clone(),
                 worktree_path: wt.path.clone(),
-                repo_path,
+                repo_path: repo.local_path.clone(),
             }
         } else if self.state.view == View::Dashboard
             && self.state.dashboard_focus == crate::state::DashboardFocus::Repos
