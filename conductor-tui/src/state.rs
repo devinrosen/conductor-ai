@@ -35,7 +35,6 @@ impl FilterState {
 use conductor_core::agent::{
     AgentCreatedIssue, AgentRun, AgentRunEvent, AgentRunStatus, FeedbackRequest, TicketAgentTotals,
 };
-use conductor_core::config::WorkTarget;
 use conductor_core::github::{DiscoveredRepo, GithubPr};
 use conductor_core::issue_source::IssueSource;
 use conductor_core::repo::Repo;
@@ -115,6 +114,7 @@ impl DashboardFocus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepoDetailFocus {
+    Info,
     Worktrees,
     Tickets,
     Prs,
@@ -123,15 +123,17 @@ pub enum RepoDetailFocus {
 impl RepoDetailFocus {
     pub fn next(self) -> Self {
         match self {
+            Self::Info => Self::Worktrees,
             Self::Worktrees => Self::Tickets,
             Self::Tickets => Self::Prs,
-            Self::Prs => Self::Worktrees,
+            Self::Prs => Self::Info,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Worktrees => Self::Prs,
+            Self::Info => Self::Prs,
+            Self::Worktrees => Self::Info,
             Self::Tickets => Self::Worktrees,
             Self::Prs => Self::Tickets,
         }
@@ -166,6 +168,56 @@ impl WorkflowRunDetailFocus {
             Self::AgentActivity => Self::Steps,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorktreeDetailFocus {
+    #[default]
+    InfoPanel,
+    LogPanel,
+}
+
+impl WorktreeDetailFocus {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::InfoPanel => Self::LogPanel,
+            Self::LogPanel => Self::InfoPanel,
+        }
+    }
+}
+
+/// Named row indices for the WorktreeDetail info panel.
+/// These constants must stay in sync with the row order rendered in
+/// `ui/worktree_detail.rs`. Centralising them here eliminates magic numbers
+/// in `app.rs` and makes row-order changes an explicit, single-site update.
+pub mod info_row {
+    pub const SLUG: usize = 0;
+    pub const REPO: usize = 1;
+    pub const BRANCH: usize = 2;
+    pub const BASE: usize = 3;
+    pub const PATH: usize = 4;
+    pub const STATUS: usize = 5;
+    pub const MODEL: usize = 6;
+    pub const CREATED: usize = 7;
+    pub const TICKET: usize = 8;
+    /// Total number of navigable rows (used for bounds clamping).
+    pub const COUNT: usize = 9;
+}
+
+/// Named row indices for the RepoDetail info panel.
+/// These constants must stay in sync with the row order rendered in
+/// `ui/repo_detail.rs`.
+pub mod repo_info_row {
+    pub const SLUG: usize = 0;
+    pub const REMOTE: usize = 1;
+    #[allow(dead_code)]
+    pub const BRANCH: usize = 2;
+    pub const PATH: usize = 3;
+    pub const WORKTREES_DIR: usize = 4;
+    pub const MODEL: usize = 5;
+    pub const AGENT_ISSUES: usize = 6;
+    /// Total number of navigable rows (used for bounds clamping).
+    pub const COUNT: usize = 7;
 }
 
 /// Choice offered in the post-worktree-creation picker.
@@ -218,14 +270,6 @@ pub enum Modal {
     },
     TicketInfo {
         ticket: Box<Ticket>,
-    },
-    WorkTargetPicker {
-        targets: Vec<WorkTarget>,
-        selected: usize,
-    },
-    WorkTargetManager {
-        targets: Vec<WorkTarget>,
-        selected: usize,
     },
     IssueSourceManager {
         repo_id: String,
@@ -317,6 +361,12 @@ pub enum Modal {
         workflow_defs: Vec<WorkflowDef>,
         selected: usize,
     },
+    /// Generic workflow picker — opened by `w` key in any context.
+    WorkflowPicker {
+        target: WorkflowPickerTarget,
+        workflow_defs: Vec<WorkflowDef>,
+        selected: usize,
+    },
 }
 
 impl fmt::Debug for Modal {
@@ -334,8 +384,6 @@ impl fmt::Debug for Modal {
             Modal::Form { title, .. } => f.debug_struct("Form").field("title", title).finish(),
             Modal::Error { message } => f.debug_struct("Error").field("message", message).finish(),
             Modal::TicketInfo { .. } => write!(f, "Modal::TicketInfo"),
-            Modal::WorkTargetPicker { .. } => write!(f, "Modal::WorkTargetPicker"),
-            Modal::WorkTargetManager { .. } => write!(f, "Modal::WorkTargetManager"),
             Modal::IssueSourceManager { .. } => write!(f, "Modal::IssueSourceManager"),
             Modal::ModelPicker {
                 ref context_label, ..
@@ -363,8 +411,25 @@ impl fmt::Debug for Modal {
                 pr_title,
                 ..
             } => write!(f, "Modal::PrWorkflowPicker(#{pr_number} {pr_title:?})"),
+            Modal::WorkflowPicker { ref target, .. } => {
+                write!(f, "Modal::WorkflowPicker(target={target:?})")
+            }
         }
     }
+}
+
+/// Target context for the generic workflow picker.
+#[derive(Debug, Clone)]
+pub enum WorkflowPickerTarget {
+    Worktree {
+        worktree_id: String,
+        worktree_path: String,
+        repo_path: String,
+    },
+    Pr {
+        pr_number: i64,
+        pr_title: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -375,9 +440,6 @@ pub enum ConfirmAction {
     },
     RemoveRepo {
         repo_slug: String,
-    },
-    DeleteWorkTarget {
-        index: usize,
     },
     DeleteIssueSource {
         source_id: String,
@@ -406,7 +468,6 @@ pub struct FormField {
 #[allow(clippy::enum_variant_names)]
 pub enum FormAction {
     AddRepo,
-    AddWorkTarget,
     AddIssueSource {
         repo_id: String,
         repo_slug: String,
@@ -648,6 +709,14 @@ pub struct AppState {
     /// Tracks pending `g` keypress for `gg` chord (go to top)
     pub pending_g: bool,
 
+    // WorktreeDetail two-panel focus model
+    pub worktree_detail_focus: WorktreeDetailFocus,
+    /// Selected row index in the WorktreeDetail info panel (for j/k navigation and y/o actions).
+    pub worktree_detail_selected_row: usize,
+
+    /// Selected row index in the RepoDetail info panel (for j/k navigation and o actions).
+    pub repo_detail_info_row: usize,
+
     // Filters
     pub filter: FilterState,
     pub detail_ticket_filter: FilterState,
@@ -710,6 +779,9 @@ impl AppState {
             filtered_detail_tickets: Vec::new(),
             agent_list_state: RefCell::new(ListState::default()),
             pending_g: false,
+            worktree_detail_focus: WorktreeDetailFocus::InfoPanel,
+            worktree_detail_selected_row: 0,
+            repo_detail_info_row: 0,
             filter: FilterState::default(),
             detail_ticket_filter: FilterState::default(),
             status_message: None,
@@ -897,6 +969,7 @@ impl AppState {
                 DashboardFocus::Tickets => (self.ticket_index, self.filtered_tickets.len()),
             },
             View::RepoDetail => match self.repo_detail_focus {
+                RepoDetailFocus::Info => (self.repo_detail_info_row, repo_info_row::COUNT),
                 RepoDetailFocus::Worktrees => (self.detail_wt_index, self.detail_worktrees.len()),
                 RepoDetailFocus::Tickets => {
                     (self.detail_ticket_index, self.filtered_detail_tickets.len())
@@ -933,6 +1006,7 @@ impl AppState {
                 DashboardFocus::Tickets => self.ticket_index = index,
             },
             View::RepoDetail => match self.repo_detail_focus {
+                RepoDetailFocus::Info => self.repo_detail_info_row = index,
                 RepoDetailFocus::Worktrees => self.detail_wt_index = index,
                 RepoDetailFocus::Tickets => self.detail_ticket_index = index,
                 RepoDetailFocus::Prs => self.detail_pr_index = index,
@@ -1018,14 +1092,16 @@ mod tests {
 
     #[test]
     fn repo_detail_focus_next_cycles_forward() {
+        assert_eq!(RepoDetailFocus::Info.next(), RepoDetailFocus::Worktrees);
         assert_eq!(RepoDetailFocus::Worktrees.next(), RepoDetailFocus::Tickets);
         assert_eq!(RepoDetailFocus::Tickets.next(), RepoDetailFocus::Prs);
-        assert_eq!(RepoDetailFocus::Prs.next(), RepoDetailFocus::Worktrees);
+        assert_eq!(RepoDetailFocus::Prs.next(), RepoDetailFocus::Info);
     }
 
     #[test]
     fn repo_detail_focus_prev_cycles_backward() {
-        assert_eq!(RepoDetailFocus::Worktrees.prev(), RepoDetailFocus::Prs);
+        assert_eq!(RepoDetailFocus::Info.prev(), RepoDetailFocus::Prs);
+        assert_eq!(RepoDetailFocus::Worktrees.prev(), RepoDetailFocus::Info);
         assert_eq!(RepoDetailFocus::Prs.prev(), RepoDetailFocus::Tickets);
         assert_eq!(RepoDetailFocus::Tickets.prev(), RepoDetailFocus::Worktrees);
     }
@@ -1033,6 +1109,7 @@ mod tests {
     #[test]
     fn repo_detail_focus_next_prev_are_inverses() {
         for focus in [
+            RepoDetailFocus::Info,
             RepoDetailFocus::Worktrees,
             RepoDetailFocus::Tickets,
             RepoDetailFocus::Prs,

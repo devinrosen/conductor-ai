@@ -62,22 +62,19 @@ pub enum Action {
     AddRepo,
     Create,
     Delete,
+    #[allow(dead_code)]
     Push,
+    #[allow(dead_code)]
     CreatePr,
     SyncTickets,
+    #[allow(dead_code)]
     LinkTicket,
-    StartWork,
-    SelectWorkTarget(usize),
-    ManageWorkTargets,
-    WorkTargetMoveUp,
-    WorkTargetMoveDown,
-    WorkTargetAdd,
-    WorkTargetDelete,
     ManageIssueSources,
     IssueSourceAdd,
     IssueSourceDelete,
 
     // GitHub repo discovery — org level
+    #[allow(dead_code)]
     DiscoverGithubOrgs,
     GithubOrgsLoaded {
         orgs: Vec<String>,
@@ -117,14 +114,21 @@ pub enum Action {
     LaunchAgent,
     OrchestrateAgent,
     StopAgent,
-    AttachAgent,
-    ViewAgentLog,
+    #[allow(dead_code)]
     CopyLastCodeBlock,
     ExpandAgentEvent,
     AgentActivityDown,
     AgentActivityUp,
     SubmitFeedback,
     DismissFeedback,
+    /// Copy context-dependent value: in InfoPanel copies selected row value; in LogPanel copies last code block.
+    WorktreeDetailCopy,
+    /// Act on the selected info panel row: Path → open tmux window, Ticket → show ticket modal, PR → open browser.
+    WorktreeDetailOpen,
+    /// Act on the selected row in the RepoDetail info pane.
+    RepoDetailInfoOpen,
+    /// Copy the value of the selected row in the RepoDetail info pane.
+    RepoDetailInfoCopy,
     ScrollLeft,
     ScrollRight,
 
@@ -145,6 +149,11 @@ pub enum Action {
     ShowHelp,
     DismissModal,
     OpenTicketUrl,
+    CopyTicketUrl,
+    OpenRepoUrl,
+    CopyRepoUrl,
+    OpenPrUrl,
+    CopyPrUrl,
     ConfirmYes,
     ConfirmNo,
     InputChar(char),
@@ -205,6 +214,8 @@ pub enum Action {
     },
 
     // Workflow actions
+    /// Open a workflow picker for the current context (worktree, PR, etc.)
+    PickWorkflow,
     RunWorkflow,
     RunPrWorkflow,
     ResumeWorkflow,

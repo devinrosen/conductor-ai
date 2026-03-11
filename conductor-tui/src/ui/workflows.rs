@@ -24,6 +24,39 @@ fn worktree_slug(worktrees: &[Worktree], predicate: impl Fn(&Worktree) -> bool) 
 
 /// Render the Workflows split-pane view: defs (left) + runs (right).
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
+    // Always show a 1-line context bar so the user knows which worktree's
+    // workflows they are viewing (or that they are in global mode).
+    let selected_wt = state
+        .selected_worktree_id
+        .as_ref()
+        .and_then(|id| state.data.worktrees.iter().find(|w| &w.id == id));
+
+    let v = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+    let (header_area, area) = (v[0], v[1]);
+
+    let header_line = if let Some(wt) = selected_wt {
+        Line::from(vec![
+            Span::styled("Worktree: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                wt.slug.clone(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  Branch: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(wt.branch.clone()),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("Worktree: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("global", Style::default().fg(Color::DarkGray)),
+        ])
+    };
+    frame.render_widget(Paragraph::new(header_line), header_area);
+
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])

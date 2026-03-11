@@ -86,9 +86,6 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             let worktrees = state.data.ticket_worktrees.get(&ticket.id);
             modal::render_ticket_info(frame, area, ticket, agent_totals, worktrees);
         }
-        Modal::WorkTargetPicker { targets, selected } => {
-            modal::render_work_target_picker(frame, area, targets, *selected)
-        }
         Modal::PostCreatePicker {
             items,
             selected,
@@ -102,9 +99,6 @@ pub fn render(frame: &mut Frame, state: &AppState) {
                 .map(|t| t.source_id.as_str())
                 .unwrap_or("?");
             modal::render_post_create_picker(frame, area, items, *selected, source_id)
-        }
-        Modal::WorkTargetManager { targets, selected } => {
-            modal::render_work_target_manager(frame, area, targets, *selected)
         }
         Modal::IssueSourceManager {
             repo_slug,
@@ -196,5 +190,10 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             workflow_defs,
             *selected,
         ),
+        Modal::WorkflowPicker {
+            target,
+            workflow_defs,
+            selected,
+        } => modal::render_workflow_picker(frame, area, target, workflow_defs, *selected),
     }
 }

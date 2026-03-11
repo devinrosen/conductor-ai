@@ -7,7 +7,7 @@ use ratatui::Frame;
 use conductor_core::worktree::WorktreeStatus;
 
 use super::helpers::shorten_paths;
-use crate::state::{AppState, VisualRow};
+use crate::state::{AppState, VisualRow, WorktreeDetailFocus};
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let wt = state
@@ -55,7 +55,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     } else {
         vec![
             Span::styled("Ticket: ", Style::default().fg(Color::DarkGray)),
-            Span::raw("None (press l to link)"),
+            Span::styled(
+                "None (press Enter to link)",
+                Style::default().fg(Color::DarkGray),
+            ),
         ]
     };
 
@@ -87,7 +90,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         ]),
         Line::from(vec![
             Span::styled("Path: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(&wt.path),
+            Span::raw(shorten_paths(
+                &wt.path,
+                "",
+                dirs::home_dir().as_deref().and_then(|p| p.to_str()),
+            )),
         ]),
         Line::from(vec![
             Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
@@ -97,16 +104,19 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             Span::styled("Model: ", Style::default().fg(Color::DarkGray)),
             match wt.model.as_deref() {
                 Some(m) => Span::raw(m.to_string()),
-                None => Span::styled(
-                    "(not set — press m to configure)",
-                    Style::default().fg(Color::DarkGray),
-                ),
+                None => Span::styled("(not set)", Style::default().fg(Color::DarkGray)),
             },
+            Span::styled(
+                " (press Enter to change)",
+                Style::default().fg(Color::DarkGray),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Created: ", Style::default().fg(Color::DarkGray)),
             Span::raw(&wt.created_at),
         ]),
+        // TICKET row — index 8, always present so navigation index stays stable
+        Line::from(ticket_line),
     ];
 
     if let Some(ref completed) = wt.completed_at {
@@ -117,7 +127,6 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 
     lines.push(Line::from(""));
-    lines.push(Line::from(ticket_line));
 
     // Agent status line and plan checklist from DB poll
     if let Some(run) = state.data.latest_agent_runs.get(&wt.id) {
@@ -196,20 +205,13 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         let has_waiting = state.data.latest_agent_runs.get(&wt.id).is_some_and(|run| {
             run.status == conductor_core::agent::AgentRunStatus::WaitingForFeedback
         });
-        let has_log = state
-            .data
-            .latest_agent_runs
-            .get(&wt.id)
-            .is_some_and(|run| run.log_file.is_some());
         if has_waiting {
-            "Actions: f=respond  F=dismiss  x=stop  r=agent  e=expand  m=model  j/k=scroll  w=work  p=push  P=PR  l=link  d=del  Esc=back"
-        } else if has_log {
-            "Actions: r=agent  x=stop  L=log  y=copy  e=expand  m=model  j/k=scroll  w=work  p=push  P=PR  l=link  d=del  Esc=back"
+            "Tab=switch panel  y=copy  o=act  p=prompt  f=respond  F=dismiss  x=stop  w=workflow  d=del  Esc=back"
         } else {
-            "Actions: r=agent  x=stop  e=expand  m=model  j/k=scroll  w=work  p=push  P=PR  l=link  d=del  Esc=back"
+            "Tab=switch panel  y=copy  o=act  p=prompt  O=orchestrate  x=stop  w=workflow  d=del  Esc=back"
         }
     } else {
-        "Actions: o=open ticket  Esc=back  (archived)"
+        "Tab=switch panel  y=copy  o=act  Esc=back  (archived)"
     };
     lines.push(Line::from(Span::styled(
         actions_text,
@@ -224,9 +226,24 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         Layout::vertical([Constraint::Length(info_height), Constraint::Min(3)]).split(area);
 
     // Top pane: worktree info
+    let info_focus = state.worktree_detail_focus == WorktreeDetailFocus::InfoPanel;
+    let info_border_color = if info_focus {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+    // Highlight the selected row when the info panel has focus
+    if info_focus {
+        let sel = state.worktree_detail_selected_row;
+        if sel < lines.len() {
+            let line = std::mem::take(&mut lines[sel]);
+            lines[sel] = line.patch_style(Style::default().add_modifier(Modifier::REVERSED));
+        }
+    }
+
     let info_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(info_border_color))
         .title(" Worktree Detail ");
     let info = Paragraph::new(lines).block(info_block);
     frame.render_widget(info, chunks[0]);
@@ -238,9 +255,15 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
     let events = &state.data.agent_events;
 
+    let log_focus = state.worktree_detail_focus == WorktreeDetailFocus::LogPanel;
+    let log_border_color = if log_focus {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
     let activity_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(log_border_color))
         .title(" Agent Activity ");
 
     if events.is_empty() {

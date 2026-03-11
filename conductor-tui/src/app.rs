@@ -9,7 +9,7 @@ use ratatui::DefaultTerminal;
 use rusqlite::Connection;
 
 use conductor_core::agent::{AgentManager, AgentRun, FeedbackRequest};
-use conductor_core::config::{save_config, AutoStartAgent, Config, WorkTarget};
+use conductor_core::config::{AutoStartAgent, Config};
 use conductor_core::github;
 use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
@@ -22,8 +22,9 @@ use crate::background;
 use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
 use crate::state::{
-    AppState, ConfirmAction, DashboardFocus, FormAction, FormField, InputAction, Modal,
-    PostCreateChoice, RepoDetailFocus, View, WorkflowRunDetailFocus, WorkflowsFocus,
+    info_row, repo_info_row, AppState, ConfirmAction, DashboardFocus, FormAction, FormField,
+    InputAction, Modal, PostCreateChoice, RepoDetailFocus, View, WorkflowRunDetailFocus,
+    WorkflowsFocus, WorktreeDetailFocus,
 };
 use crate::ui;
 
@@ -349,6 +350,11 @@ impl App {
                 self.state.modal = Modal::None;
             }
             Action::OpenTicketUrl => self.handle_open_ticket_url(),
+            Action::CopyTicketUrl => self.handle_copy_ticket_url(),
+            Action::OpenRepoUrl => self.handle_open_repo_url(),
+            Action::CopyRepoUrl => self.handle_copy_repo_url(),
+            Action::OpenPrUrl => self.handle_open_pr_url(),
+            Action::CopyPrUrl => self.handle_copy_pr_url(),
             Action::ConfirmYes => self.handle_confirm_yes(),
             Action::ConfirmNo => {
                 self.state.modal = Modal::None;
@@ -423,8 +429,6 @@ impl App {
             Action::CreatePr => self.handle_create_pr(),
             Action::SyncTickets => self.handle_sync_tickets(),
             Action::LinkTicket => self.handle_link_ticket(),
-            Action::StartWork => self.handle_start_work(),
-            Action::SelectWorkTarget(index) => self.handle_select_work_target(index),
             Action::SelectPostCreateChoice(index) => self.handle_post_create_pick(index),
             Action::PostCreatePickerReady {
                 items,
@@ -444,7 +448,6 @@ impl App {
                     repo_path,
                 };
             }
-            Action::ManageWorkTargets => self.handle_manage_work_targets(),
             Action::ManageIssueSources => self.handle_manage_issue_sources(),
             Action::IssueSourceAdd => self.handle_issue_source_add(),
             Action::IssueSourceDelete => self.handle_issue_source_delete(),
@@ -458,11 +461,6 @@ impl App {
             Action::GithubDiscoverToggle => self.handle_github_discover_toggle(),
             Action::GithubDiscoverSelectAll => self.handle_github_discover_select_all(),
             Action::GithubDiscoverImport => self.handle_github_discover_import(),
-            Action::WorkTargetMoveUp => self.handle_work_target_move_up(),
-            Action::WorkTargetMoveDown => self.handle_work_target_move_down(),
-            Action::WorkTargetAdd => self.handle_work_target_add(),
-            Action::WorkTargetDelete => self.handle_work_target_delete(),
-
             // Model configuration
             Action::SetModel => self.handle_set_model(),
 
@@ -483,14 +481,18 @@ impl App {
                 self.state.status_bar_expanded = !self.state.status_bar_expanded;
             }
 
+            // WorktreeDetail panel actions
+            Action::WorktreeDetailCopy => self.handle_worktree_detail_copy(),
+            Action::WorktreeDetailOpen => self.handle_worktree_detail_open(),
+            Action::RepoDetailInfoOpen => self.handle_repo_detail_info_open(),
+            Action::RepoDetailInfoCopy => self.handle_repo_detail_info_copy(),
+
             // Agent (tmux-based)
             Action::LaunchAgent => self.handle_launch_agent(),
             Action::OrchestrateAgent => self.handle_orchestrate_agent(),
             Action::StopAgent => self.handle_stop_agent(),
-            Action::AttachAgent => self.handle_attach_agent(),
             Action::SubmitFeedback => self.handle_submit_feedback(),
             Action::DismissFeedback => self.handle_dismiss_feedback(),
-            Action::ViewAgentLog => self.handle_view_agent_log(),
             Action::CopyLastCodeBlock => self.handle_copy_last_code_block(),
             Action::ExpandAgentEvent => self.handle_expand_agent_event(),
             Action::AgentActivityDown => {
@@ -587,6 +589,7 @@ impl App {
             }
 
             // Workflow actions
+            Action::PickWorkflow => self.handle_pick_workflow(),
             Action::RunWorkflow => self.handle_run_workflow(),
             Action::RunPrWorkflow => self.handle_run_pr_workflow(),
             Action::ResumeWorkflow => self.handle_resume_workflow(),
@@ -934,6 +937,9 @@ impl App {
             View::WorkflowRunDetail => {
                 self.toggle_workflow_run_detail_focus();
             }
+            View::WorktreeDetail => {
+                self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
+            }
             _ => {}
         }
     }
@@ -951,6 +957,9 @@ impl App {
             }
             View::WorkflowRunDetail => {
                 self.toggle_workflow_run_detail_focus();
+            }
+            View::WorktreeDetail => {
+                self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
             }
             _ => {}
         }
@@ -983,26 +992,12 @@ impl App {
                 wrap_decrement(selected, total);
                 return;
             }
-            Modal::WorkTargetPicker {
-                ref targets,
-                ref mut selected,
-            } => {
-                wrap_decrement(selected, targets.len());
-                return;
-            }
             Modal::PostCreatePicker {
                 ref items,
                 ref mut selected,
                 ..
             } => {
                 wrap_decrement(selected, items.len());
-                return;
-            }
-            Modal::WorkTargetManager {
-                ref targets,
-                ref mut selected,
-            } => {
-                wrap_decrement(selected, targets.len());
                 return;
             }
             Modal::IssueSourceManager {
@@ -1014,6 +1009,11 @@ impl App {
                 return;
             }
             Modal::PrWorkflowPicker {
+                ref workflow_defs,
+                ref mut selected,
+                ..
+            }
+            | Modal::WorkflowPicker {
                 ref workflow_defs,
                 ref mut selected,
                 ..
@@ -1052,6 +1052,10 @@ impl App {
                 }
             },
             View::RepoDetail => match self.state.repo_detail_focus {
+                RepoDetailFocus::Info => {
+                    self.state.repo_detail_info_row =
+                        self.state.repo_detail_info_row.saturating_sub(1);
+                }
                 RepoDetailFocus::Worktrees => {
                     self.state.detail_wt_index = self.state.detail_wt_index.saturating_sub(1);
                 }
@@ -1088,6 +1092,12 @@ impl App {
                         self.state.step_agent_event_index.saturating_sub(1);
                 }
             },
+            View::WorktreeDetail
+                if self.state.worktree_detail_focus == WorktreeDetailFocus::InfoPanel =>
+            {
+                self.state.worktree_detail_selected_row =
+                    self.state.worktree_detail_selected_row.saturating_sub(1);
+            }
             _ => {}
         }
     }
@@ -1112,26 +1122,12 @@ impl App {
                 wrap_increment(selected, total);
                 return;
             }
-            Modal::WorkTargetPicker {
-                ref targets,
-                ref mut selected,
-            } => {
-                wrap_increment(selected, targets.len());
-                return;
-            }
             Modal::PostCreatePicker {
                 ref items,
                 ref mut selected,
                 ..
             } => {
                 wrap_increment(selected, items.len());
-                return;
-            }
-            Modal::WorkTargetManager {
-                ref targets,
-                ref mut selected,
-            } => {
-                wrap_increment(selected, targets.len());
                 return;
             }
             Modal::IssueSourceManager {
@@ -1143,6 +1139,11 @@ impl App {
                 return;
             }
             Modal::PrWorkflowPicker {
+                ref workflow_defs,
+                ref mut selected,
+                ..
+            }
+            | Modal::WorkflowPicker {
                 ref workflow_defs,
                 ref mut selected,
                 ..
@@ -1187,6 +1188,9 @@ impl App {
                 }
             },
             View::RepoDetail => match self.state.repo_detail_focus {
+                RepoDetailFocus::Info => {
+                    clamp_increment(&mut self.state.repo_detail_info_row, repo_info_row::COUNT);
+                }
                 RepoDetailFocus::Worktrees => {
                     clamp_increment(
                         &mut self.state.detail_wt_index,
@@ -1242,6 +1246,14 @@ impl App {
                     );
                 }
             },
+            View::WorktreeDetail
+                if self.state.worktree_detail_focus == WorktreeDetailFocus::InfoPanel =>
+            {
+                clamp_increment(
+                    &mut self.state.worktree_detail_selected_row,
+                    info_row::COUNT,
+                );
+            }
             _ => {}
         }
     }
@@ -1307,6 +1319,10 @@ impl App {
                 }
             },
             View::RepoDetail => match self.state.repo_detail_focus {
+                RepoDetailFocus::Info => {
+                    // Delegate to info open handler
+                    self.handle_repo_detail_info_open();
+                }
                 RepoDetailFocus::Worktrees => {
                     if let Some(wt) = self.state.detail_worktrees.get(self.state.detail_wt_index) {
                         let wt_id = wt.id.clone();
@@ -1456,46 +1472,126 @@ impl App {
         }
     }
 
-    fn handle_open_ticket_url(&mut self) {
-        // Resolve the ticket URL from either the TicketInfo modal or the WorktreeDetail view
-        let url = if let Modal::TicketInfo { ref ticket } = self.state.modal {
-            Some(ticket.url.clone())
-        } else if self.state.view == View::WorktreeDetail {
-            self.state
+    /// Resolve the URL of the currently focused ticket, across all contexts.
+    fn selected_ticket_url(&self) -> Option<String> {
+        if let Modal::TicketInfo { ref ticket } = self.state.modal {
+            return Some(ticket.url.clone());
+        }
+        if self.state.view == View::WorktreeDetail {
+            return self
+                .state
                 .selected_worktree_id
                 .as_ref()
                 .and_then(|wt_id| self.state.data.worktrees.iter().find(|w| &w.id == wt_id))
                 .and_then(|wt| wt.ticket_id.as_ref())
                 .and_then(|tid| self.state.data.ticket_map.get(tid))
-                .map(|t| t.url.clone())
-        } else {
-            None
-        };
-
-        let Some(url) = url else {
-            if self.state.view == View::WorktreeDetail {
-                self.state.status_message = Some("No ticket linked to this worktree".to_string());
-            }
-            return;
-        };
-
-        if url.is_empty() {
-            self.state.status_message = Some("No URL available".to_string());
-            return;
+                .map(|t| t.url.clone());
         }
+        // Ticket list views: Dashboard Tickets pane, standalone Tickets view, RepoDetail Tickets pane
+        let ticket = match self.state.view {
+            View::Dashboard if self.state.dashboard_focus == DashboardFocus::Tickets => {
+                self.state.filtered_tickets.get(self.state.ticket_index)
+            }
+            View::Tickets => self.state.filtered_tickets.get(self.state.ticket_index),
+            View::RepoDetail if self.state.repo_detail_focus == RepoDetailFocus::Tickets => self
+                .state
+                .filtered_detail_tickets
+                .get(self.state.detail_ticket_index),
+            _ => None,
+        };
+        ticket.map(|t| t.url.clone())
+    }
 
-        let result = Command::new("open").arg(&url).output();
-        match result {
-            Ok(o) if o.status.success() => {
+    /// Open a URL in the default browser, checking the exit code.
+    fn open_url(&mut self, url: &str, label: &str) {
+        match Command::new("open")
+            .arg(url)
+            .output()
+            .or_else(|_| Command::new("xdg-open").arg(url).output())
+        {
+            Ok(output) if output.status.success() => {
                 self.state.status_message = Some(format!("Opened {url}"));
             }
-            Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                self.state.status_message = Some(format!("Failed to open URL: {stderr}"));
+            Ok(output) => {
+                let code = output
+                    .status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                self.state.status_message =
+                    Some(format!("Failed to open {label} URL (exit code {code})"));
             }
             Err(e) => {
-                self.state.status_message = Some(format!("Failed to open URL: {e}"));
+                self.state.status_message = Some(format!("Failed to open {label} URL: {e}"));
             }
+        }
+    }
+
+    fn handle_open_ticket_url(&mut self) {
+        match self.selected_ticket_url().filter(|u| !u.is_empty()) {
+            None => {
+                self.state.status_message = Some("No ticket URL available".to_string());
+            }
+            Some(url) => self.open_url(&url, "ticket"),
+        }
+    }
+
+    fn handle_copy_ticket_url(&mut self) {
+        match self.selected_ticket_url().filter(|u| !u.is_empty()) {
+            None => {
+                self.state.status_message = Some("No ticket URL available".to_string());
+            }
+            Some(url) => self.copy_text_to_clipboard(url),
+        }
+    }
+
+    /// Build a web URL from a repo's remote_url (SSH or HTTPS GitHub format).
+    fn repo_web_url(&self) -> Option<String> {
+        let remote_url = self.state.selected_repo().map(|r| r.remote_url.clone())?;
+        let (owner, repo) = conductor_core::github::parse_github_remote(&remote_url)?;
+        Some(format!("https://github.com/{owner}/{repo}"))
+    }
+
+    fn handle_open_repo_url(&mut self) {
+        match self.repo_web_url() {
+            Some(url) => self.open_url(&url, "repo"),
+            None => {
+                self.state.status_message = Some("No GitHub URL found for this repo".to_string());
+            }
+        }
+    }
+
+    fn handle_copy_repo_url(&mut self) {
+        match self.repo_web_url() {
+            Some(url) => self.copy_text_to_clipboard(url),
+            None => {
+                self.state.status_message = Some("No GitHub URL found for this repo".to_string());
+            }
+        }
+    }
+
+    /// Build the web URL for the currently selected PR in RepoDetail.
+    fn selected_pr_url(&self) -> Option<String> {
+        let pr = self.state.detail_prs.get(self.state.detail_pr_index)?;
+        let base = self.repo_web_url()?;
+        Some(format!("{base}/pull/{}", pr.number))
+    }
+
+    fn handle_open_pr_url(&mut self) {
+        match self.selected_pr_url() {
+            None => {
+                self.state.status_message = Some("No PR URL available".to_string());
+            }
+            Some(url) => self.open_url(&url, "PR"),
+        }
+    }
+
+    fn handle_copy_pr_url(&mut self) {
+        match self.selected_pr_url() {
+            None => {
+                self.state.status_message = Some("No PR URL available".to_string());
+            }
+            Some(url) => self.copy_text_to_clipboard(url),
         }
     }
 
@@ -1538,28 +1634,6 @@ impl App {
                         self.state.modal = Modal::Error {
                             message: format!("Remove failed: {e}"),
                         };
-                    }
-                }
-            }
-            ConfirmAction::DeleteWorkTarget { index } => {
-                if index < self.config.general.work_targets.len() {
-                    let removed = self.config.general.work_targets.remove(index);
-                    match save_config(&self.config) {
-                        Ok(()) => {
-                            let new_selected =
-                                index.min(self.config.general.work_targets.len().saturating_sub(1));
-                            self.state.modal = Modal::WorkTargetManager {
-                                targets: self.config.general.work_targets.clone(),
-                                selected: new_selected,
-                            };
-                            self.state.status_message =
-                                Some(format!("Deleted work target: {}", removed.name));
-                        }
-                        Err(e) => {
-                            self.state.modal = Modal::Error {
-                                message: format!("Failed to save config: {e}"),
-                            };
-                        }
                     }
                 }
             }
@@ -1653,6 +1727,12 @@ impl App {
         // PrWorkflowPicker: confirm the selected workflow
         if matches!(self.state.modal, Modal::PrWorkflowPicker { .. }) {
             self.handle_pr_workflow_picker_confirm();
+            return;
+        }
+
+        // WorkflowPicker: confirm the selected workflow
+        if matches!(self.state.modal, Modal::WorkflowPicker { .. }) {
+            self.handle_workflow_picker_confirm();
             return;
         }
 
@@ -2127,6 +2207,15 @@ impl App {
         // Fallback: repo-only path (no ticket context)
         match self.state.view {
             View::Dashboard | View::RepoDetail => {
+                // Creating a worktree from the Worktrees tab is ambiguous — no repo is selected
+                if self.state.view == View::Dashboard
+                    && self.state.dashboard_focus == DashboardFocus::Worktrees
+                {
+                    self.state.status_message =
+                        Some("Switch to the Repos tab to create a worktree".to_string());
+                    return;
+                }
+
                 let repo_slug = self
                     .state
                     .selected_repo_id
@@ -2213,7 +2302,7 @@ impl App {
                 FormAction::AddIssueSource { .. } if active_field == 0 => {
                     Self::sync_issue_source_form_fields(fields);
                 }
-                FormAction::AddWorkTarget | FormAction::AddIssueSource { .. } => {}
+                FormAction::AddIssueSource { .. } => {}
             }
         }
     }
@@ -2241,7 +2330,7 @@ impl App {
                 FormAction::AddIssueSource { .. } if active_field == 0 => {
                     Self::sync_issue_source_form_fields(fields);
                 }
-                FormAction::AddWorkTarget | FormAction::AddIssueSource { .. } => {}
+                FormAction::AddIssueSource { .. } => {}
             }
         }
     }
@@ -2337,7 +2426,6 @@ impl App {
         {
             match on_submit {
                 FormAction::AddRepo => self.submit_add_repo(fields),
-                FormAction::AddWorkTarget => self.submit_add_work_target(fields),
                 FormAction::AddIssueSource {
                     repo_id,
                     repo_slug,
@@ -2383,51 +2471,6 @@ impl App {
             Err(e) => {
                 self.state.modal = Modal::Error {
                     message: format!("Add repo failed: {e}"),
-                };
-            }
-        }
-    }
-
-    fn submit_add_work_target(&mut self, fields: Vec<FormField>) {
-        let name = fields
-            .first()
-            .map(|f| f.value.trim().to_string())
-            .unwrap_or_default();
-        let command = fields
-            .get(1)
-            .map(|f| f.value.trim().to_string())
-            .unwrap_or_default();
-        let target_type = fields
-            .get(2)
-            .map(|f| f.value.trim().to_string())
-            .unwrap_or_else(|| "editor".to_string());
-
-        if name.is_empty() || command.is_empty() {
-            self.state.modal = Modal::Error {
-                message: "Name and Command are required".to_string(),
-            };
-            return;
-        }
-
-        let target = WorkTarget {
-            name: name.clone(),
-            command,
-            target_type,
-        };
-        self.config.general.work_targets.push(target);
-
-        match save_config(&self.config) {
-            Ok(()) => {
-                let new_index = self.config.general.work_targets.len().saturating_sub(1);
-                self.state.modal = Modal::WorkTargetManager {
-                    targets: self.config.general.work_targets.clone(),
-                    selected: new_index,
-                };
-                self.state.status_message = Some(format!("Added work target: {name}"));
-            }
-            Err(e) => {
-                self.state.modal = Modal::Error {
-                    message: format!("Failed to save config: {e}"),
                 };
             }
         }
@@ -2883,65 +2926,6 @@ impl App {
         }
     }
 
-    fn handle_start_work(&mut self) {
-        // Resolve the selected worktree from the current view context
-        let wt = self.resolve_selected_worktree();
-
-        let Some(wt) = wt else {
-            self.state.status_message = Some("Select a worktree first".to_string());
-            return;
-        };
-
-        if !wt.is_active() {
-            self.state.status_message = Some("Cannot modify archived worktree".to_string());
-            return;
-        }
-
-        let targets = self.config.general.work_targets.clone();
-        if targets.is_empty() {
-            self.state.status_message =
-                Some("No work targets configured. Press W to manage.".to_string());
-            return;
-        }
-
-        if targets.len() == 1 {
-            self.open_work_target(&targets[0], &wt);
-        } else {
-            self.state.modal = Modal::WorkTargetPicker {
-                targets,
-                selected: 0,
-            };
-        }
-    }
-
-    fn handle_select_work_target(&mut self, index: usize) {
-        let (targets, selected) = if let Modal::WorkTargetPicker {
-            ref targets,
-            selected,
-        } = self.state.modal
-        {
-            (targets.clone(), selected)
-        } else {
-            return;
-        };
-
-        // usize::MAX is sentinel for "use current selected"
-        let actual_index = if index == usize::MAX { selected } else { index };
-        if actual_index >= targets.len() {
-            return;
-        }
-
-        self.state.modal = Modal::None;
-
-        let wt = self.resolve_selected_worktree();
-        let Some(wt) = wt else {
-            self.state.status_message = Some("Select a worktree first".to_string());
-            return;
-        };
-
-        self.open_work_target(&targets[actual_index], &wt);
-    }
-
     fn handle_post_create_pick(&mut self, index: usize) {
         // Resolve the selected index while borrowing the modal immutably
         let actual_index = if let Modal::PostCreatePicker {
@@ -3010,154 +2994,6 @@ impl App {
             PostCreateChoice::Skip => {
                 // No-op — modal already dismissed
             }
-        }
-    }
-
-    fn resolve_selected_worktree(&self) -> Option<conductor_core::worktree::Worktree> {
-        self.state
-            .selected_worktree_id
-            .as_ref()
-            .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
-            .cloned()
-            .or_else(|| match self.state.view {
-                View::Dashboard if self.state.dashboard_focus == DashboardFocus::Worktrees => self
-                    .state
-                    .data
-                    .worktrees
-                    .get(self.state.worktree_index)
-                    .cloned(),
-                View::RepoDetail => self
-                    .state
-                    .detail_worktrees
-                    .get(self.state.detail_wt_index)
-                    .cloned(),
-                _ => None,
-            })
-    }
-
-    fn open_work_target(&mut self, target: &WorkTarget, wt: &conductor_core::worktree::Worktree) {
-        let result = if target.command == "terminal" {
-            // Legacy special case: open Terminal.app and run claude
-            Command::new("osascript")
-                .args([
-                    "-e",
-                    &format!(
-                        "tell application \"Terminal\" to do script \"cd '{}' && claude\"",
-                        wt.path
-                    ),
-                ])
-                .spawn()
-        } else {
-            // Run through shell so multi-word commands like "open -a iTerm" work
-            let shell_cmd = format!("{} '{}'", target.command, wt.path);
-            Command::new("sh").args(["-c", &shell_cmd]).spawn()
-        };
-
-        match result {
-            Ok(_) => {
-                self.state.status_message = Some(format!("Opened {} at {}", target.name, wt.slug));
-            }
-            Err(e) => {
-                self.state.modal = Modal::Error {
-                    message: format!("Failed to open {}: {e}", target.name),
-                };
-            }
-        }
-    }
-
-    fn handle_manage_work_targets(&mut self) {
-        self.state.modal = Modal::WorkTargetManager {
-            targets: self.config.general.work_targets.clone(),
-            selected: 0,
-        };
-    }
-
-    fn handle_work_target_move_up(&mut self) {
-        if let Modal::WorkTargetManager {
-            ref mut targets,
-            ref mut selected,
-        } = self.state.modal
-        {
-            if *selected > 0 {
-                targets.swap(*selected, *selected - 1);
-                *selected -= 1;
-                self.config.general.work_targets = targets.clone();
-                if let Err(e) = save_config(&self.config) {
-                    self.state.status_message = Some(format!("Failed to save config: {e}"));
-                }
-            }
-        }
-    }
-
-    fn handle_work_target_move_down(&mut self) {
-        if let Modal::WorkTargetManager {
-            ref mut targets,
-            ref mut selected,
-        } = self.state.modal
-        {
-            if *selected + 1 < targets.len() {
-                targets.swap(*selected, *selected + 1);
-                *selected += 1;
-                self.config.general.work_targets = targets.clone();
-                if let Err(e) = save_config(&self.config) {
-                    self.state.status_message = Some(format!("Failed to save config: {e}"));
-                }
-            }
-        }
-    }
-
-    fn handle_work_target_add(&mut self) {
-        if matches!(self.state.modal, Modal::WorkTargetManager { .. }) {
-            self.state.modal = Modal::Form {
-                title: "Add Work Target".to_string(),
-                fields: vec![
-                    FormField {
-                        label: "Name".to_string(),
-                        value: String::new(),
-                        placeholder: "e.g., VS Code, Cursor, Terminal".to_string(),
-                        manually_edited: true,
-                        required: true,
-                    },
-                    FormField {
-                        label: "Command".to_string(),
-                        value: String::new(),
-                        placeholder: "e.g., code, cursor, terminal".to_string(),
-                        manually_edited: true,
-                        required: true,
-                    },
-                    FormField {
-                        label: "Type".to_string(),
-                        value: "editor".to_string(),
-                        placeholder: "editor or terminal".to_string(),
-                        manually_edited: true,
-                        required: true,
-                    },
-                ],
-                active_field: 0,
-                on_submit: FormAction::AddWorkTarget,
-            };
-        }
-    }
-
-    fn handle_work_target_delete(&mut self) {
-        if let Modal::WorkTargetManager {
-            ref targets,
-            selected,
-        } = self.state.modal
-        {
-            if targets.is_empty() {
-                return;
-            }
-            if targets.len() == 1 {
-                self.state.status_message = Some("Cannot delete the last work target".to_string());
-                return;
-            }
-            let target_name = targets[selected].name.clone();
-            self.state.modal = Modal::Confirm {
-                title: "Delete Work Target".to_string(),
-                message: format!("Delete work target '{}'?", target_name),
-                on_confirm: ConfirmAction::DeleteWorkTarget { index: selected },
-            };
         }
     }
 
@@ -3511,28 +3347,6 @@ impl App {
 
         self.state.status_message = Some("Agent cancelled".to_string());
         self.refresh_data();
-    }
-
-    fn handle_attach_agent(&mut self) {
-        let run = self.selected_worktree_run();
-
-        let tmux_window = run.and_then(|r| {
-            if r.is_active() {
-                r.tmux_window.as_deref()
-            } else {
-                None
-            }
-        });
-
-        let Some(window) = tmux_window else {
-            self.state.status_message = Some("No active agent to attach to".to_string());
-            return;
-        };
-
-        let mgr = AgentManager::new(&self.conn);
-        if let Err(e) = mgr.attach_agent_window(window) {
-            self.state.status_message = Some(format!("Failed to attach: {e}"));
-        }
     }
 
     fn require_pending_feedback(&mut self) -> Option<FeedbackRequest> {
@@ -3915,34 +3729,6 @@ impl App {
         }
     }
 
-    fn handle_view_agent_log(&mut self) {
-        let run = self.selected_worktree_run();
-
-        let log_path = run.and_then(|r| r.log_file.as_deref());
-        let Some(log_path) = log_path else {
-            self.state.status_message = Some("No agent log available".to_string());
-            return;
-        };
-
-        let viewer = std::env::var("EDITOR").unwrap_or_else(|_| "less".to_string());
-
-        let result = Command::new("tmux")
-            .args(["new-window", "--", &viewer, log_path])
-            .output();
-
-        match result {
-            Ok(o) if o.status.success() => {
-                self.state.status_message = Some("Opened agent log".to_string());
-            }
-            Ok(_) => {
-                self.state.status_message = Some("Failed to open log viewer".to_string());
-            }
-            Err(e) => {
-                self.state.status_message = Some(format!("Failed to open log: {e}"));
-            }
-        }
-    }
-
     fn handle_copy_last_code_block(&mut self) {
         let run = self.selected_worktree_run();
 
@@ -3966,44 +3752,7 @@ impl App {
             return;
         };
 
-        // Try pbcopy (macOS), then xclip, then xsel
-        let copy_result = Command::new("pbcopy")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .or_else(|_| {
-                Command::new("xclip")
-                    .args(["-selection", "clipboard"])
-                    .stdin(std::process::Stdio::piped())
-                    .spawn()
-            })
-            .or_else(|_| {
-                Command::new("xsel")
-                    .arg("--clipboard")
-                    .stdin(std::process::Stdio::piped())
-                    .spawn()
-            });
-
-        match copy_result {
-            Ok(mut child) => {
-                use std::io::Write;
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(code_block.as_bytes());
-                    drop(stdin); // Close stdin so clipboard tool sees EOF
-                }
-                match child.wait() {
-                    Ok(status) if status.success() => {
-                        self.state.status_message = Some("Copied to clipboard".to_string());
-                    }
-                    _ => {
-                        self.state.status_message = Some("Clipboard command failed".to_string());
-                    }
-                }
-            }
-            Err(_) => {
-                self.state.status_message =
-                    Some("No clipboard tool found (pbcopy/xclip/xsel)".to_string());
-            }
-        }
+        self.copy_text_to_clipboard(code_block);
     }
 
     fn handle_expand_agent_event(&mut self) {
@@ -4025,6 +3774,287 @@ impl App {
             scroll_offset: 0,
             horizontal_offset: 0,
         };
+    }
+
+    // ── WorktreeDetail panel copy/open ───────────────────────────────────────
+
+    fn handle_worktree_detail_copy(&mut self) {
+        match self.state.worktree_detail_focus {
+            WorktreeDetailFocus::LogPanel => {
+                self.handle_copy_last_code_block();
+            }
+            WorktreeDetailFocus::InfoPanel => {
+                let wt = self
+                    .state
+                    .selected_worktree_id
+                    .as_ref()
+                    .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id));
+                let Some(wt) = wt else {
+                    return;
+                };
+                let row = self.state.worktree_detail_selected_row;
+                let repo_slug = self
+                    .state
+                    .data
+                    .repo_slug_map
+                    .get(&wt.repo_id)
+                    .cloned()
+                    .unwrap_or_else(|| "?".to_string());
+                let value = match row {
+                    info_row::SLUG => wt.slug.clone(),
+                    info_row::REPO => repo_slug,
+                    info_row::BRANCH => wt.branch.clone(),
+                    info_row::BASE => wt
+                        .base_branch
+                        .clone()
+                        .unwrap_or_else(|| "(repo default)".to_string()),
+                    info_row::PATH => wt.path.clone(),
+                    info_row::STATUS => wt.status.to_string(),
+                    info_row::MODEL => wt.model.clone().unwrap_or_else(|| "(not set)".to_string()),
+                    info_row::CREATED => wt.created_at.clone(),
+                    info_row::TICKET => {
+                        let url = wt
+                            .ticket_id
+                            .as_ref()
+                            .and_then(|tid| self.state.data.ticket_map.get(tid))
+                            .map(|t| t.url.clone())
+                            .unwrap_or_default();
+                        if url.is_empty() {
+                            self.state.status_message =
+                                Some("No ticket linked to this worktree".to_string());
+                            return;
+                        }
+                        url
+                    }
+                    _ => {
+                        self.state.status_message = Some("Nothing to copy on this row".to_string());
+                        return;
+                    }
+                };
+                self.copy_text_to_clipboard(value);
+            }
+        }
+    }
+
+    fn handle_worktree_detail_open(&mut self) {
+        if self.state.worktree_detail_focus != WorktreeDetailFocus::InfoPanel {
+            return;
+        }
+        let row = self.state.worktree_detail_selected_row;
+        match row {
+            info_row::PATH => {
+                let Some(path) = self
+                    .state
+                    .selected_worktree_id
+                    .as_ref()
+                    .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
+                    .map(|wt| wt.path.clone())
+                else {
+                    return;
+                };
+                self.open_terminal_at_path(&path);
+            }
+            info_row::TICKET => {
+                // Ticket row: open the ticket URL in the default browser
+                let url = self
+                    .state
+                    .selected_worktree_id
+                    .as_ref()
+                    .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
+                    .and_then(|wt| wt.ticket_id.as_ref())
+                    .and_then(|tid| self.state.data.ticket_map.get(tid))
+                    .map(|t| t.url.clone());
+                match url {
+                    Some(ref u) if !u.is_empty() => {
+                        let u = u.clone();
+                        self.open_url(&u, "ticket");
+                    }
+                    _ => {
+                        self.state.status_message =
+                            Some("No ticket linked to this worktree".to_string());
+                    }
+                }
+            }
+            _ => {
+                self.state.status_message =
+                    Some("No action for this row (try Path or Ticket row)".to_string());
+            }
+        }
+    }
+
+    fn handle_repo_detail_info_open(&mut self) {
+        let row = self.state.repo_detail_info_row;
+        let repo = self
+            .state
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id));
+        let Some(repo) = repo else { return };
+        match row {
+            repo_info_row::SLUG | repo_info_row::REMOTE => match self.repo_web_url() {
+                Some(url) => self.open_url(&url, "repo"),
+                None => {
+                    self.state.status_message =
+                        Some("No GitHub URL found for this repo".to_string());
+                }
+            },
+            repo_info_row::PATH => {
+                let path = repo.local_path.clone();
+                self.open_terminal_at_path(&path);
+            }
+            repo_info_row::WORKTREES_DIR => {
+                let path = repo.workspace_dir.clone();
+                self.open_terminal_at_path(&path);
+            }
+            _ => {
+                self.state.status_message = Some("No action for this row".to_string());
+            }
+        }
+    }
+
+    fn handle_repo_detail_info_copy(&mut self) {
+        let row = self.state.repo_detail_info_row;
+        let repo = self
+            .state
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id));
+        let Some(repo) = repo else { return };
+        let text = match row {
+            repo_info_row::SLUG => repo.slug.clone(),
+            repo_info_row::REMOTE => repo.remote_url.clone(),
+            repo_info_row::BRANCH => repo.default_branch.clone(),
+            repo_info_row::PATH => repo.local_path.clone(),
+            repo_info_row::WORKTREES_DIR => repo.workspace_dir.clone(),
+            repo_info_row::MODEL => repo
+                .model
+                .clone()
+                .unwrap_or_else(|| "(not set)".to_string()),
+            _ => return,
+        };
+        self.copy_text_to_clipboard(text);
+    }
+
+    /// Open a new terminal window/tab at `path`, using the best available method:
+    /// 1. Inside tmux → `tmux new-window -c {path}`
+    /// 2. TERM_PROGRAM=Apple_Terminal → AppleScript `do script "cd {path}"`
+    /// 3. TERM_PROGRAM=iTerm.app → AppleScript create iTerm2 window at path
+    /// 4. Fallback → status message with hint
+    fn open_terminal_at_path(&mut self, path: &str) {
+        // 1. tmux: preferred when the TUI is already running inside a tmux session
+        if std::env::var("TMUX").is_ok() {
+            match Command::new("tmux")
+                .args(["new-window", "-c", path])
+                .output()
+            {
+                Ok(out) if out.status.success() => {
+                    self.state.status_message = Some(format!("Opened tmux window at {path}"));
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    self.state.status_message = Some(format!("tmux error: {}", stderr.trim()));
+                }
+                Err(e) => {
+                    self.state.status_message = Some(format!("Failed to open tmux window: {e}"));
+                }
+            }
+            return;
+        }
+
+        // 2 & 3. AppleScript for macOS terminal apps.
+        // Embed the path via an AppleScript variable so `quoted form of` handles
+        // all shell-special characters without manual escaping.
+        let term = std::env::var("TERM_PROGRAM").unwrap_or_default();
+        let script: Option<String> = match term.as_str() {
+            "Apple_Terminal" => Some(format!(
+                "set p to \"{path}\"\n\
+                 tell application \"Terminal\"\n\
+                 \tdo script \"cd \" & quoted form of p\n\
+                 \tactivate\n\
+                 end tell",
+                path = path.replace('\\', "\\\\").replace('"', "\\\"")
+            )),
+            "iTerm.app" | "iTerm2" => Some(format!(
+                "set p to \"{path}\"\n\
+                 tell application \"iTerm\"\n\
+                 \tactivate\n\
+                 \tcreate window with default profile\n\
+                 \ttell current session of current window\n\
+                 \t\twrite text \"cd \" & quoted form of p\n\
+                 \tend tell\n\
+                 end tell",
+                path = path.replace('\\', "\\\\").replace('"', "\\\"")
+            )),
+            _ => None,
+        };
+
+        if let Some(script) = script {
+            match Command::new("osascript").args(["-e", &script]).output() {
+                Ok(out) if out.status.success() => {
+                    self.state.status_message = Some(format!("Opened {} at {path}", term));
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    self.state.status_message =
+                        Some(format!("Failed to open terminal: {}", stderr.trim()));
+                }
+                Err(e) => {
+                    self.state.status_message = Some(format!("Failed to open terminal: {e}"));
+                }
+            }
+        } else {
+            // 4. Unknown environment — guide the user
+            let hint = if term.is_empty() {
+                "Run inside tmux or set TERM_PROGRAM".to_string()
+            } else {
+                format!("Terminal '{term}' not supported — run inside tmux")
+            };
+            self.state.status_message = Some(hint);
+        }
+    }
+
+    /// Copy arbitrary text to the system clipboard via pbcopy/xclip/xsel.
+    fn copy_text_to_clipboard(&mut self, text: String) {
+        let copy_result = Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .or_else(|_| {
+                Command::new("xclip")
+                    .args(["-selection", "clipboard"])
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+            })
+            .or_else(|_| {
+                Command::new("xsel")
+                    .arg("--clipboard")
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+            });
+
+        match copy_result {
+            Ok(mut child) => {
+                use std::io::Write;
+                if let Some(mut stdin) = child.stdin.take() {
+                    if stdin.write_all(text.as_bytes()).is_err() {
+                        self.state.status_message = Some("Clipboard write failed".to_string());
+                        return;
+                    }
+                    drop(stdin);
+                }
+                match child.wait() {
+                    Ok(status) if status.success() => {
+                        self.state.status_message = Some("Copied to clipboard".to_string());
+                    }
+                    _ => {
+                        self.state.status_message = Some("Clipboard command failed".to_string());
+                    }
+                }
+            }
+            Err(_) => {
+                self.state.status_message =
+                    Some("No clipboard tool found (pbcopy/xclip/xsel)".to_string());
+            }
+        }
     }
 
     // ── GitHub repo discovery ────────────────────────────────────────────────
@@ -4380,6 +4410,278 @@ impl App {
         // Auto-reset focus to Steps if current step has no agent activity
         if !self.state.selected_step_has_agent() {
             self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
+        }
+    }
+
+    /// Open a workflow picker appropriate for the current context.
+    fn handle_pick_workflow(&mut self) {
+        use crate::state::WorkflowPickerTarget;
+
+        // Determine the target based on current view/focus
+        let target = if self.state.view == View::WorktreeDetail {
+            // WorktreeDetail: target is the current worktree
+            let wt = match self
+                .state
+                .selected_worktree_id
+                .as_ref()
+                .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
+            {
+                Some(w) => w.clone(),
+                None => {
+                    self.state.status_message = Some("No worktree selected".to_string());
+                    return;
+                }
+            };
+            let repo_path = self
+                .state
+                .data
+                .repos
+                .iter()
+                .find(|r| r.id == wt.repo_id)
+                .map(|r| r.local_path.clone())
+                .unwrap_or_default();
+            WorkflowPickerTarget::Worktree {
+                worktree_id: wt.id.clone(),
+                worktree_path: wt.path.clone(),
+                repo_path,
+            }
+        } else if self.state.view == View::RepoDetail
+            && self.state.repo_detail_focus == crate::state::RepoDetailFocus::Prs
+        {
+            // RepoDetail PRs pane: target is the selected PR
+            let pr = match self.state.detail_prs.get(self.state.detail_pr_index) {
+                Some(pr) => pr.clone(),
+                None => {
+                    self.state.status_message = Some("No PR selected".to_string());
+                    return;
+                }
+            };
+            WorkflowPickerTarget::Pr {
+                pr_number: pr.number,
+                pr_title: pr.title.clone(),
+            }
+        } else if self.state.view == View::Dashboard
+            && self.state.dashboard_focus == crate::state::DashboardFocus::Repos
+        {
+            // Dashboard Repos pane: find the first worktree for selected repo
+            match self.resolve_worktree_for_selected_repo() {
+                Some((wt_id, wt_path, repo_path)) => WorkflowPickerTarget::Worktree {
+                    worktree_id: wt_id,
+                    worktree_path: wt_path,
+                    repo_path,
+                },
+                None => {
+                    self.state.status_message = Some("No worktree found for this repo".to_string());
+                    return;
+                }
+            }
+        } else {
+            // Ticket list contexts: find linked worktree for selected ticket
+            match self.resolve_worktree_for_selected_ticket() {
+                Some((wt_id, wt_path, repo_path)) => WorkflowPickerTarget::Worktree {
+                    worktree_id: wt_id,
+                    worktree_path: wt_path,
+                    repo_path,
+                },
+                None => {
+                    self.state.status_message =
+                        Some("No worktree linked to this ticket".to_string());
+                    return;
+                }
+            }
+        };
+
+        // Filter workflow defs based on target type
+        let defs: Vec<conductor_core::workflow::WorkflowDef> = match &target {
+            WorkflowPickerTarget::Pr { .. } => self
+                .state
+                .data
+                .workflow_defs
+                .iter()
+                .filter(|d| d.targets.iter().any(|t| t == "pr"))
+                .cloned()
+                .collect(),
+            WorkflowPickerTarget::Worktree { .. } => self
+                .state
+                .data
+                .workflow_defs
+                .iter()
+                .filter(|d| d.targets.iter().any(|t| t == "worktree"))
+                .cloned()
+                .collect(),
+        };
+
+        if defs.is_empty() {
+            let kind = match &target {
+                WorkflowPickerTarget::Pr { .. } => "PR",
+                WorkflowPickerTarget::Worktree { .. } => "worktree",
+            };
+            self.state.modal = Modal::Error {
+                message: format!(
+                    "No {kind}-compatible workflows found.\nAdd targets: [{kind}] to a workflow definition."
+                ),
+            };
+            return;
+        }
+
+        self.state.modal = Modal::WorkflowPicker {
+            target,
+            workflow_defs: defs,
+            selected: 0,
+        };
+    }
+
+    /// Resolve a worktree target from the currently selected repo (Dashboard Repos pane).
+    fn resolve_worktree_for_selected_repo(&self) -> Option<(String, String, String)> {
+        let repo = self
+            .state
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))?;
+        let repo_path = repo.local_path.clone();
+        let wt = self
+            .state
+            .data
+            .worktrees
+            .iter()
+            .find(|w| w.repo_id == repo.id)?;
+        Some((wt.id.clone(), wt.path.clone(), repo_path))
+    }
+
+    /// Resolve a worktree target from the currently selected ticket.
+    fn resolve_worktree_for_selected_ticket(&self) -> Option<(String, String, String)> {
+        // Get the selected ticket (uses filtered lists, matching selected_ticket_url pattern)
+        let ticket = match self.state.view {
+            View::Dashboard
+                if self.state.dashboard_focus == crate::state::DashboardFocus::Tickets =>
+            {
+                self.state.filtered_tickets.get(self.state.ticket_index)
+            }
+            View::Tickets => self.state.filtered_tickets.get(self.state.ticket_index),
+            View::RepoDetail
+                if self.state.repo_detail_focus == crate::state::RepoDetailFocus::Tickets =>
+            {
+                self.state
+                    .filtered_detail_tickets
+                    .get(self.state.detail_ticket_index)
+            }
+            _ => return None,
+        };
+        let ticket = ticket?;
+
+        // Find a worktree linked to this ticket
+        let wt = self
+            .state
+            .data
+            .worktrees
+            .iter()
+            .find(|w| w.ticket_id.as_deref() == Some(&ticket.id))?;
+        let repo_path = self
+            .state
+            .data
+            .repos
+            .iter()
+            .find(|r| r.id == wt.repo_id)
+            .map(|r| r.local_path.clone())
+            .unwrap_or_default();
+        Some((wt.id.clone(), wt.path.clone(), repo_path))
+    }
+
+    /// Confirm the workflow selection from the generic WorkflowPicker modal.
+    fn handle_workflow_picker_confirm(&mut self) {
+        use crate::state::WorkflowPickerTarget;
+
+        let (target, def) = if let Modal::WorkflowPicker {
+            ref target,
+            ref workflow_defs,
+            selected,
+            ..
+        } = self.state.modal
+        {
+            let def = match workflow_defs.get(selected) {
+                Some(d) => d.clone(),
+                None => return,
+            };
+            (target.clone(), def)
+        } else {
+            return;
+        };
+
+        self.state.modal = Modal::None;
+
+        match target {
+            WorkflowPickerTarget::Worktree {
+                worktree_id,
+                worktree_path,
+                repo_path,
+            } => {
+                // Block if a workflow run is already active on this worktree
+                {
+                    use conductor_core::workflow::WorkflowManager;
+                    let wf_mgr = WorkflowManager::new(&self.conn);
+                    match wf_mgr.get_active_run_for_worktree(&worktree_id) {
+                        Ok(Some(active)) => {
+                            self.state.status_message = Some(format!(
+                                "Workflow '{}' is already running — cancel it before starting another",
+                                active.workflow_name
+                            ));
+                            return;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            self.state.status_message =
+                                Some(format!("Failed to check active workflow run: {e}"));
+                            return;
+                        }
+                    }
+                }
+
+                self.spawn_workflow_in_background(
+                    def,
+                    worktree_id,
+                    worktree_path,
+                    repo_path,
+                    std::collections::HashMap::new(),
+                );
+            }
+            WorkflowPickerTarget::Pr { pr_number, .. } => {
+                // Get owner/repo from selected repo's remote_url
+                let remote_url = match self
+                    .state
+                    .selected_repo_id
+                    .as_ref()
+                    .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
+                    .map(|r| r.remote_url.clone())
+                {
+                    Some(url) => url,
+                    None => {
+                        self.state.modal = Modal::Error {
+                            message: "No repo selected".to_string(),
+                        };
+                        return;
+                    }
+                };
+
+                let (owner, repo) = match conductor_core::github::parse_github_remote(&remote_url) {
+                    Some(pair) => pair,
+                    None => {
+                        self.state.modal = Modal::Error {
+                            message: format!(
+                                "Could not parse GitHub owner/repo from remote URL: {remote_url}"
+                            ),
+                        };
+                        return;
+                    }
+                };
+
+                let pr_ref = conductor_core::workflow_ephemeral::PrRef {
+                    owner,
+                    repo,
+                    number: pr_number as u64,
+                };
+
+                self.spawn_pr_workflow_in_background(pr_ref, def);
+            }
         }
     }
 

@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::action::Action;
-use crate::state::{AppState, Modal, View};
+use crate::state::{AppState, Modal, View, WorktreeDetailFocus};
 
 /// Map a key event to an action based on the current app state.
 /// Priority: Modal > Filter > Normal keybindings.
@@ -72,6 +72,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             return match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => Action::DismissModal,
                 KeyCode::Char('o') => Action::OpenTicketUrl,
+                KeyCode::Char('y') => Action::CopyTicketUrl,
                 _ => Action::None,
             };
         }
@@ -106,35 +107,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
                 KeyCode::Enter => Action::InputSubmit,
                 KeyCode::Backspace => Action::InputBackspace,
-                _ => Action::None,
-            };
-        }
-        Modal::WorkTargetPicker { targets, .. } => {
-            return match key.code {
-                KeyCode::Esc => Action::DismissModal,
-                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
-                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
-                KeyCode::Enter => Action::SelectWorkTarget(usize::MAX), // sentinel: use selected
-                KeyCode::Char(c) if c.is_ascii_digit() => {
-                    let n = c.to_digit(10).unwrap() as usize;
-                    if n >= 1 && n <= targets.len() {
-                        Action::SelectWorkTarget(n - 1)
-                    } else {
-                        Action::None
-                    }
-                }
-                _ => Action::None,
-            };
-        }
-        Modal::WorkTargetManager { .. } => {
-            return match key.code {
-                KeyCode::Esc => Action::DismissModal,
-                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
-                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
-                KeyCode::Char('K') => Action::WorkTargetMoveUp,
-                KeyCode::Char('J') => Action::WorkTargetMoveDown,
-                KeyCode::Char('a') => Action::WorkTargetAdd,
-                KeyCode::Char('d') => Action::WorkTargetDelete,
                 _ => Action::None,
             };
         }
@@ -229,7 +201,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
-        Modal::PrWorkflowPicker { .. } => {
+        Modal::PrWorkflowPicker { .. } | Modal::WorkflowPicker { .. } => {
             return match key.code {
                 KeyCode::Esc => Action::DismissModal,
                 KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
@@ -268,6 +240,40 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         }
     }
 
+    // View-specific keybindings (ticket list — Dashboard Tickets pane and Tickets view)
+    let in_ticket_list = (state.view == View::Dashboard
+        && state.dashboard_focus == crate::state::DashboardFocus::Tickets)
+        || state.view == View::Tickets
+        || (state.view == View::RepoDetail
+            && state.repo_detail_focus == crate::state::RepoDetailFocus::Tickets);
+    if in_ticket_list {
+        match key.code {
+            KeyCode::Char('o') => return Action::OpenTicketUrl,
+            KeyCode::Char('y') => return Action::CopyTicketUrl,
+            KeyCode::Char('w') => return Action::PickWorkflow,
+            _ => {}
+        }
+    }
+
+    // View-specific keybindings (Dashboard Repos pane)
+    if state.view == View::Dashboard && state.dashboard_focus == crate::state::DashboardFocus::Repos
+    {
+        match key.code {
+            KeyCode::Char('o') => return Action::OpenRepoUrl,
+            KeyCode::Char('y') => return Action::CopyRepoUrl,
+            KeyCode::Char('w') => return Action::PickWorkflow,
+            _ => {}
+        }
+    }
+
+    // View-specific keybindings (Dashboard Worktrees pane)
+    if state.view == View::Dashboard
+        && state.dashboard_focus == crate::state::DashboardFocus::Worktrees
+        && key.code == KeyCode::Char('w')
+    {
+        return Action::PickWorkflow;
+    }
+
     // View-specific keybindings (WorktreeDetail agent controls)
     if state.view == View::WorktreeDetail {
         let agent_run = state
@@ -277,21 +283,43 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         let is_active = agent_run.is_some_and(|run| run.is_active());
         let is_waiting_for_feedback = agent_run.is_some_and(|run| run.is_waiting_for_feedback());
-        let has_log = agent_run.is_some_and(|run| run.log_file.is_some());
+
+        let focus = state.worktree_detail_focus;
 
         match key.code {
-            KeyCode::Char('r') => return Action::LaunchAgent,
-            KeyCode::Char('o') if !is_active => return Action::OrchestrateAgent,
+            KeyCode::Char('p') => return Action::LaunchAgent,
+            KeyCode::Char('O') if !is_active => return Action::OrchestrateAgent,
             KeyCode::Char('x') if is_active => return Action::StopAgent,
-            KeyCode::Char('a') if is_active => return Action::AttachAgent,
             KeyCode::Char('f') if is_waiting_for_feedback => return Action::SubmitFeedback,
             KeyCode::Char('F') if is_waiting_for_feedback => return Action::DismissFeedback,
-            KeyCode::Char('L') if has_log => return Action::ViewAgentLog,
-            KeyCode::Char('y') if has_log => return Action::CopyLastCodeBlock,
-            KeyCode::Char('e') => return Action::ExpandAgentEvent,
-            KeyCode::Char('j') => return Action::AgentActivityDown,
-            KeyCode::Char('k') => return Action::AgentActivityUp,
-            KeyCode::Char('m') => return Action::SetModel,
+            KeyCode::Char('w') => return Action::PickWorkflow,
+            KeyCode::Char('y') => return Action::WorktreeDetailCopy,
+            KeyCode::Char('o') => return Action::WorktreeDetailOpen,
+            KeyCode::Char('j') if focus == WorktreeDetailFocus::InfoPanel => {
+                return Action::MoveDown
+            }
+            KeyCode::Char('k') if focus == WorktreeDetailFocus::InfoPanel => return Action::MoveUp,
+            KeyCode::Char('j') if focus == WorktreeDetailFocus::LogPanel => {
+                return Action::AgentActivityDown
+            }
+            KeyCode::Char('k') if focus == WorktreeDetailFocus::LogPanel => {
+                return Action::AgentActivityUp
+            }
+            KeyCode::Enter if focus == WorktreeDetailFocus::LogPanel => {
+                return Action::ExpandAgentEvent
+            }
+            KeyCode::Enter
+                if focus == WorktreeDetailFocus::InfoPanel
+                    && state.worktree_detail_selected_row == crate::state::info_row::MODEL =>
+            {
+                return Action::SetModel
+            }
+            KeyCode::Enter
+                if focus == WorktreeDetailFocus::InfoPanel
+                    && state.worktree_detail_selected_row == crate::state::info_row::TICKET =>
+            {
+                return Action::LinkTicket
+            }
             _ => {}
         }
     }
@@ -299,7 +327,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
     // View-specific keybindings (Workflows)
     if state.view == View::Workflows {
         match key.code {
-            KeyCode::Char('r') => return Action::RunWorkflow,
+            KeyCode::Char('r') | KeyCode::Char('w') => return Action::RunWorkflow,
             KeyCode::Char('v') if state.workflows_focus == crate::state::WorkflowsFocus::Defs => {
                 return Action::ViewWorkflowDef;
             }
@@ -315,8 +343,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         match key.code {
             KeyCode::Char('x') => return Action::CancelWorkflow,
             KeyCode::Char('r') => return Action::ResumeWorkflow,
-            KeyCode::Char('g') if !state.pending_g => {
-                // Check for waiting gate
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                // Approve a waiting gate step if one exists
                 let has_gate = state
                     .data
                     .workflow_steps
@@ -332,28 +360,35 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
     // View-specific keybindings (RepoDetail)
     if state.view == View::RepoDetail {
+        if state.repo_detail_focus == crate::state::RepoDetailFocus::Info {
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => return Action::MoveDown,
+                KeyCode::Char('k') | KeyCode::Up => return Action::MoveUp,
+                KeyCode::Char('o') => return Action::RepoDetailInfoOpen,
+                KeyCode::Char('y') => return Action::RepoDetailInfoCopy,
+                KeyCode::Enter
+                    if state.repo_detail_info_row == crate::state::repo_info_row::MODEL =>
+                {
+                    return Action::SetModel
+                }
+                KeyCode::Enter
+                    if state.repo_detail_info_row == crate::state::repo_info_row::AGENT_ISSUES =>
+                {
+                    return Action::ToggleAgentIssues
+                }
+                _ => {}
+            }
+        }
         if state.repo_detail_focus == crate::state::RepoDetailFocus::Prs {
-            if let KeyCode::Char('r') = key.code {
-                return Action::RunPrWorkflow;
+            match key.code {
+                KeyCode::Char('o') => return Action::OpenPrUrl,
+                KeyCode::Char('y') => return Action::CopyPrUrl,
+                KeyCode::Char('r') | KeyCode::Char('w') => return Action::RunPrWorkflow,
+                _ => {}
             }
         }
-        match key.code {
-            KeyCode::Char('m') => return Action::SetModel,
-            KeyCode::Char('I') => return Action::ToggleAgentIssues,
-            _ => {}
-        }
-    }
-
-    // View-specific keybindings (Dashboard — Repos or Worktrees panel)
-    if state.view == View::Dashboard {
-        use crate::state::DashboardFocus;
-        if let KeyCode::Char('m') = key.code {
-            if matches!(
-                state.dashboard_focus,
-                DashboardFocus::Repos | DashboardFocus::Worktrees
-            ) {
-                return Action::SetModel;
-            }
+        if let KeyCode::Char('I') = key.code {
+            return Action::ToggleAgentIssues;
         }
     }
 
@@ -384,18 +419,11 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('a') => Action::AddRepo,
         KeyCode::Char('c') => Action::Create,
         KeyCode::Char('d') => Action::Delete,
-        KeyCode::Char('D') => Action::DiscoverGithubOrgs,
-        KeyCode::Char('p') => Action::Push,
-        KeyCode::Char('P') => Action::CreatePr,
         KeyCode::Char('s') => Action::SyncTickets,
-        KeyCode::Char('l') => Action::LinkTicket,
-        KeyCode::Char('w') => Action::StartWork,
-        KeyCode::Char('W') => Action::ManageWorkTargets,
         KeyCode::Char('S') => Action::ManageIssueSources,
         KeyCode::Char('o') => Action::OpenTicketUrl,
 
         // Direct view navigation
-        KeyCode::Char('t') => Action::GoToTickets,
         KeyCode::Char('1') => Action::GoToDashboard,
         KeyCode::Char('2') => Action::GoToTickets,
         KeyCode::Char('3') => Action::GoToWorkflows,
@@ -444,34 +472,6 @@ mod tests {
             .latest_agent_runs
             .insert("wt1".into(), make_agent_run("wt1", status));
         state
-    }
-
-    #[test]
-    fn attach_agent_key_when_active_maps_to_attach_agent() {
-        let state = worktree_detail_state_with_run(AgentRunStatus::Running);
-        assert!(matches!(
-            map_key(key(KeyCode::Char('a')), &state),
-            Action::AttachAgent
-        ));
-    }
-
-    #[test]
-    fn attach_agent_key_when_inactive_does_not_map_to_attach_agent() {
-        let state = worktree_detail_state_with_run(AgentRunStatus::Completed);
-        // 'a' falls through to the global binding (AddRepo), not AttachAgent
-        assert!(!matches!(
-            map_key(key(KeyCode::Char('a')), &state),
-            Action::AttachAgent
-        ));
-    }
-
-    #[test]
-    fn attach_agent_key_when_waiting_for_feedback_maps_to_attach_agent() {
-        let state = worktree_detail_state_with_run(AgentRunStatus::WaitingForFeedback);
-        assert!(matches!(
-            map_key(key(KeyCode::Char('a')), &state),
-            Action::AttachAgent
-        ));
     }
 
     // --- PostCreatePicker tests ---
@@ -586,6 +586,234 @@ mod tests {
         assert!(matches!(
             map_key(key(KeyCode::Char('x')), &state),
             Action::None
+        ));
+    }
+
+    // --- WorktreeDetail focus-conditional j/k routing ---
+
+    fn worktree_detail_state_with_focus(focus: WorktreeDetailFocus) -> AppState {
+        let mut state = AppState::new();
+        state.view = View::WorktreeDetail;
+        state.worktree_detail_focus = focus;
+        state.selected_worktree_id = Some("wt1".into());
+        state
+    }
+
+    #[test]
+    fn worktree_detail_jk_routes_to_move_when_info_panel_focused() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::InfoPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('j')), &state),
+            Action::MoveDown
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('k')), &state),
+            Action::MoveUp
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_jk_routes_to_scroll_when_log_panel_focused() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::LogPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('j')), &state),
+            Action::AgentActivityDown
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('k')), &state),
+            Action::AgentActivityUp
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_enter_expands_agent_event_when_log_panel_focused() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::LogPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::ExpandAgentEvent
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_enter_does_not_expand_when_info_panel_focused() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::InfoPanel);
+        assert!(!matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::ExpandAgentEvent
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_orchestrate_agent_bound_to_shift_o_when_inactive() {
+        // OrchestrateAgent is only available when no agent is active
+        let state = worktree_detail_state_with_run(AgentRunStatus::Completed);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('O')), &state),
+            Action::OrchestrateAgent
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_orchestrate_agent_not_available_when_active() {
+        let state = worktree_detail_state_with_run(AgentRunStatus::Running);
+        assert!(!matches!(
+            map_key(key(KeyCode::Char('O')), &state),
+            Action::OrchestrateAgent
+        ));
+    }
+
+    // --- WorktreeDetail renamed bindings: y, o, l ---
+
+    #[test]
+    fn worktree_detail_y_maps_to_copy() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::InfoPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('y')), &state),
+            Action::WorktreeDetailCopy
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_o_maps_to_open() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::InfoPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('o')), &state),
+            Action::WorktreeDetailOpen
+        ));
+    }
+
+    // --- Removed global bindings (p, P, t, w, D) must not fire in Dashboard ---
+
+    fn dashboard_state() -> AppState {
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state
+    }
+
+    #[test]
+    fn removed_global_bindings_produce_no_action_in_dashboard() {
+        let state = dashboard_state();
+        // All of these were removed in the keybinding cleanup (#515)
+        // Note: 'w' was re-added as PickWorkflow
+        for ch in ['p', 'P', 't', 'D'] {
+            assert!(
+                matches!(map_key(key(KeyCode::Char(ch)), &state), Action::None),
+                "key '{ch}' should map to Action::None after removal but did not"
+            );
+        }
+    }
+
+    // --- WorkflowRunDetail: y/Y fires ApproveGate when a gate step is waiting ---
+
+    fn workflow_run_detail_state_with_waiting_gate() -> AppState {
+        use conductor_core::workflow::{WorkflowRunStep, WorkflowStepStatus};
+        let mut state = AppState::new();
+        state.view = View::WorkflowRunDetail;
+        state.data.workflow_steps = vec![WorkflowRunStep {
+            id: "step-1".into(),
+            workflow_run_id: "run-1".into(),
+            step_name: "review".into(),
+            role: "reviewer".into(),
+            can_commit: false,
+            condition_expr: None,
+            status: WorkflowStepStatus::Waiting,
+            child_run_id: None,
+            position: 0,
+            started_at: None,
+            ended_at: None,
+            result_text: None,
+            condition_met: None,
+            iteration: 0,
+            parallel_group_id: None,
+            context_out: None,
+            markers_out: None,
+            retry_count: 0,
+            gate_type: Some("approval".into()),
+            gate_prompt: None,
+            gate_timeout: None,
+            gate_approved_by: None,
+            gate_approved_at: None,
+            gate_feedback: None,
+            structured_output: None,
+        }];
+        state
+    }
+
+    #[test]
+    fn workflow_run_detail_y_approves_waiting_gate() {
+        let state = workflow_run_detail_state_with_waiting_gate();
+        assert!(matches!(
+            map_key(key(KeyCode::Char('y')), &state),
+            Action::ApproveGate
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('Y')), &state),
+            Action::ApproveGate
+        ));
+    }
+
+    #[test]
+    fn workflow_run_detail_y_does_not_approve_when_no_gate() {
+        let mut state = AppState::new();
+        state.view = View::WorkflowRunDetail;
+        // No workflow steps → no waiting gate
+        assert!(!matches!(
+            map_key(key(KeyCode::Char('y')), &state),
+            Action::ApproveGate
+        ));
+    }
+
+    // --- `w` key: PickWorkflow / RunWorkflow bindings ---
+
+    #[test]
+    fn w_maps_to_pick_workflow_in_worktree_detail() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::InfoPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('w')), &state),
+            Action::PickWorkflow
+        ));
+    }
+
+    #[test]
+    fn w_maps_to_run_workflow_in_workflows_view() {
+        let mut state = AppState::new();
+        state.view = View::Workflows;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('w')), &state),
+            Action::RunWorkflow
+        ));
+    }
+
+    #[test]
+    fn w_maps_to_pick_workflow_in_dashboard_tickets() {
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state.dashboard_focus = crate::state::DashboardFocus::Tickets;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('w')), &state),
+            Action::PickWorkflow
+        ));
+    }
+
+    #[test]
+    fn w_maps_to_pick_workflow_in_dashboard_repos() {
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state.dashboard_focus = crate::state::DashboardFocus::Repos;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('w')), &state),
+            Action::PickWorkflow
+        ));
+    }
+
+    #[test]
+    fn w_maps_to_pick_workflow_in_dashboard_worktrees() {
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state.dashboard_focus = crate::state::DashboardFocus::Worktrees;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('w')), &state),
+            Action::PickWorkflow
         ));
     }
 }
