@@ -197,19 +197,35 @@ pub fn agent_log_path(run_id: &str) -> PathBuf {
 /// and `work_targets` was not explicitly set, migrates the editor value
 /// into a single work target.
 pub fn load_config() -> Result<Config> {
-    let path = config_path();
+    load_config_from(&config_path())
+}
+
+fn load_config_from(path: &std::path::Path) -> Result<Config> {
     if !path.exists() {
         return Ok(Config::default());
     }
-    let contents = std::fs::read_to_string(&path)?;
+    let contents = std::fs::read_to_string(path)?;
     let mut config: Config =
         toml::from_str(&contents).map_err(|e| ConductorError::Config(e.to_string()))?;
+
+    // Parse raw TOML once for migration checks and github.app validation.
+    let raw: toml::Value =
+        toml::from_str(&contents).map_err(|e| ConductorError::Config(e.to_string()))?;
+
+    // Guard: if [github.app] is present in the raw TOML but deserialized to None,
+    // serde silently swallowed a deserialization error. Re-attempt explicitly so
+    // the user gets a loud, actionable error instead of silent data loss.
+    let raw_has_github_app = raw.get("github").and_then(|g| g.get("app")).is_some();
+    if raw_has_github_app && config.github.app.is_none() {
+        let app_value = raw.get("github").unwrap().get("app").unwrap().clone();
+        let _: GitHubAppConfig = app_value.try_into().map_err(|e: toml::de::Error| {
+            ConductorError::Config(format!("[github.app] failed to deserialize: {e}"))
+        })?;
+    }
 
     // Backward compat: migrate old `editor` field to `work_targets`
     if let Some(ref editor) = config.general.editor {
         // Check if the raw TOML has work_targets explicitly set
-        let raw: toml::Value =
-            toml::from_str(&contents).map_err(|e| ConductorError::Config(e.to_string()))?;
         let has_work_targets = raw
             .get("general")
             .and_then(|g| g.get("work_targets"))
@@ -229,14 +245,59 @@ pub fn load_config() -> Result<Config> {
 }
 
 /// Save config to disk.
+///
+/// Performs a patch-write: reads the existing file as `toml::Value`, merges
+/// the serialized new config on top (known sections overwrite, unknown sections
+/// are preserved), and writes the result back. This prevents sections that are
+/// `None` in the Rust struct (e.g. `[github.app]`) from being erased when the
+/// config is saved.
 pub fn save_config(config: &Config) -> Result<()> {
-    let path = config_path();
+    save_config_to(config, &config_path())
+}
+
+/// Recursively merge `new` into `base`.
+///
+/// - When both values are Tables, new keys overwrite base keys and keys absent
+///   from `new` are preserved in `base` (so unknown/None sub-sections survive).
+/// - For all other value types the new value wins outright.
+fn merge_toml(base: &mut toml::Value, new: toml::Value) {
+    match (base, new) {
+        (toml::Value::Table(base_tbl), toml::Value::Table(new_tbl)) => {
+            for (key, new_val) in new_tbl {
+                match base_tbl.get_mut(&key) {
+                    Some(base_val) => merge_toml(base_val, new_val),
+                    None => {
+                        base_tbl.insert(key, new_val);
+                    }
+                }
+            }
+        }
+        (base, new) => *base = new,
+    }
+}
+
+fn save_config_to(config: &Config, path: &std::path::Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let contents = toml::to_string_pretty(config)
+
+    // Start with whatever is currently on disk (preserves unknown sections).
+    let mut merged: toml::Value = if path.exists() {
+        let existing = std::fs::read_to_string(path)?;
+        toml::from_str(&existing).unwrap_or_else(|_| toml::Value::Table(toml::map::Map::new()))
+    } else {
+        toml::Value::Table(toml::map::Map::new())
+    };
+
+    // Serialize the new config to a Value and merge recursively.
+    let new_value: toml::Value = toml::Value::try_from(config)
         .map_err(|e| ConductorError::Config(format!("serialize config: {e}")))?;
-    std::fs::write(&path, contents)?;
+
+    merge_toml(&mut merged, new_value);
+
+    let contents = toml::to_string_pretty(&merged)
+        .map_err(|e| ConductorError::Config(format!("serialize config: {e}")))?;
+    std::fs::write(path, contents)?;
     Ok(())
 }
 
@@ -379,5 +440,95 @@ mod tests {
         )
         .unwrap();
         assert!(config.github.app.is_none());
+    }
+
+    #[test]
+    fn test_load_config_fails_on_malformed_github_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // Missing required fields (private_key_path, installation_id)
+        std::fs::write(
+            &path,
+            r#"
+[github.app]
+app_id = 123456
+"#,
+        )
+        .unwrap();
+        let result = load_config_from(&path);
+        assert!(result.is_err(), "expected Err for malformed [github.app]");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("github.app"),
+            "error message should mention github.app, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_save_config_preserves_github_app_when_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // Write a valid config with [github.app]
+        std::fs::write(
+            &path,
+            r#"
+[github.app]
+app_id = 123456
+private_key_path = "~/.conductor/conductor-ai.pem"
+installation_id = 789012
+"#,
+        )
+        .unwrap();
+
+        // Load succeeds and app is populated
+        let mut config = load_config_from(&path).unwrap();
+        assert!(config.github.app.is_some());
+
+        // Simulate caller clearing app from memory (the bug scenario)
+        config.github.app = None;
+
+        // Save — patch-write should preserve the on-disk [github.app]
+        save_config_to(&config, &path).unwrap();
+
+        // Re-read raw TOML and verify [github.app] is still there
+        let raw_contents = std::fs::read_to_string(&path).unwrap();
+        let raw: toml::Value = toml::from_str(&raw_contents).unwrap();
+        assert!(
+            raw.get("github").and_then(|g| g.get("app")).is_some(),
+            "[github.app] should survive save when app is None in memory"
+        );
+    }
+
+    #[test]
+    fn test_save_config_preserves_unknown_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // Write a config with an unknown/future top-level section
+        std::fs::write(
+            &path,
+            r#"
+[future_feature]
+some_key = "some_value"
+"#,
+        )
+        .unwrap();
+
+        // Save a default config on top
+        let config = Config::default();
+        save_config_to(&config, &path).unwrap();
+
+        // Unknown section should survive
+        let raw_contents = std::fs::read_to_string(&path).unwrap();
+        let raw: toml::Value = toml::from_str(&raw_contents).unwrap();
+        assert!(
+            raw.get("future_feature").is_some(),
+            "[future_feature] should survive save"
+        );
+        assert_eq!(
+            raw.get("future_feature")
+                .and_then(|f| f.get("some_key"))
+                .and_then(|v| v.as_str()),
+            Some("some_value")
+        );
     }
 }
