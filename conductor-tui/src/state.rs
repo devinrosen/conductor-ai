@@ -53,7 +53,8 @@ pub enum GlobalStatusItem {
         elapsed_secs: u64,
     },
     Workflow {
-        worktree_slug: String,
+        /// Display label for the context: worktree slug, repo slug, or `#<source_id>` for tickets.
+        context_label: String,
         status: WorkflowRunStatus,
         /// Elapsed seconds since the agent run for the current step started (0 if unknown).
         elapsed_secs: u64,
@@ -579,6 +580,8 @@ pub struct DataCache {
     pub latest_workflow_runs_by_worktree: HashMap<String, WorkflowRun>,
     /// Currently-running step summary per workflow_run_id, for inline step indicators.
     pub workflow_step_summaries: HashMap<String, WorkflowStepSummary>,
+    /// Active root workflow runs with no associated worktree (repo/ticket-targeted).
+    pub active_non_worktree_workflow_runs: Vec<WorkflowRun>,
     /// Workflow definitions for the currently viewed worktree
     pub workflow_defs: Vec<WorkflowDef>,
     /// Workflow runs for the currently viewed worktree (or all worktrees in global mode)
@@ -903,7 +906,7 @@ impl AppState {
                     workflow_worktree_ids.insert(wt_key.as_str());
                 }
 
-                let worktree_slug = run
+                let context_label = run
                     .worktree_id
                     .as_deref()
                     .map(&resolve_slug)
@@ -933,9 +936,66 @@ impl AppState {
                     .unwrap_or((None, Vec::new()));
 
                 gs.active_items.push(GlobalStatusItem::Workflow {
-                    worktree_slug,
+                    context_label,
                     status: run.status.clone(),
                     elapsed_secs,
+                    current_step,
+                    workflow_chain,
+                });
+            }
+        }
+
+        // Third pass: build Workflow items for active non-worktree runs (repo/ticket-targeted).
+        // Build lookup maps for repo slug and ticket source_id.
+        let repo_slug_map: HashMap<&str, &str> = self
+            .data
+            .repos
+            .iter()
+            .map(|r| (r.id.as_str(), r.slug.as_str()))
+            .collect();
+        let ticket_source_map: HashMap<&str, &str> = self
+            .data
+            .tickets
+            .iter()
+            .map(|t| (t.id.as_str(), t.source_id.as_str()))
+            .collect();
+
+        for run in &self.data.active_non_worktree_workflow_runs {
+            match run.status {
+                WorkflowRunStatus::Running => gs.running_workflows += 1,
+                WorkflowRunStatus::Waiting => gs.waiting_workflows += 1,
+                _ => {}
+            }
+            if matches!(
+                run.status,
+                WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
+            ) {
+                // Derive a context label from repo or ticket, fallback to "(ephemeral)".
+                let context_label = if let Some(ref rid) = run.repo_id {
+                    repo_slug_map
+                        .get(rid.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "(ephemeral)".to_string())
+                } else if let Some(ref tid) = run.ticket_id {
+                    ticket_source_map
+                        .get(tid.as_str())
+                        .map(|s| format!("#{s}"))
+                        .unwrap_or_else(|| "(ephemeral)".to_string())
+                } else {
+                    "(ephemeral)".to_string()
+                };
+
+                let (current_step, workflow_chain) = self
+                    .data
+                    .workflow_step_summaries
+                    .get(&run.id)
+                    .map(|s| (Some(s.step_name.clone()), s.workflow_chain.clone()))
+                    .unwrap_or((None, Vec::new()));
+
+                gs.active_items.push(GlobalStatusItem::Workflow {
+                    context_label,
+                    status: run.status.clone(),
+                    elapsed_secs: 0,
                     current_step,
                     workflow_chain,
                 });

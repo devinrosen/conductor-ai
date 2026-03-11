@@ -868,6 +868,25 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// List active (running or waiting) root workflow runs that have no associated
+    /// worktree (`worktree_id IS NULL`).  These are repo- or ticket-targeted
+    /// workflows (e.g. `label-all-tickets`) that the TUI status bar would otherwise
+    /// never show.
+    pub fn list_active_non_worktree_workflow_runs(&self, limit: i64) -> Result<Vec<WorkflowRun>> {
+        query_collect(
+            self.conn,
+            &format!(
+                "SELECT {RUN_COLUMNS} FROM workflow_runs \
+                 WHERE parent_workflow_run_id IS NULL \
+                   AND worktree_id IS NULL \
+                   AND status IN ('running', 'waiting') \
+                 ORDER BY started_at DESC LIMIT ?1"
+            ),
+            params![limit],
+            row_to_workflow_run,
+        )
+    }
+
     /// Walk the active child chain starting from `root_run_id` and return the
     /// ordered list of `(id, workflow_name)` pairs below the root (the root is
     /// excluded — the caller already has it).

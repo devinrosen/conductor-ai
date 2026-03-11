@@ -43,6 +43,8 @@ pub struct DataRefreshedPayload {
     pub latest_workflow_runs_by_worktree: HashMap<String, WorkflowRun>,
     /// Currently-running step summary per workflow_run_id (for inline step indicators).
     pub workflow_step_summaries: HashMap<String, WorkflowStepSummary>,
+    /// Active root workflow runs with no associated worktree (repo/ticket-targeted).
+    pub active_non_worktree_workflow_runs: Vec<WorkflowRun>,
 }
 
 /// Every user intent or background result flows through this enum.

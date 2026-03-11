@@ -87,6 +87,11 @@ pub fn poll_data() -> Option<Action> {
         }
     }
 
+    // Fetch active non-worktree workflow runs (repo/ticket-targeted).
+    let active_non_worktree_workflow_runs = wf_mgr
+        .list_active_non_worktree_workflow_runs(50)
+        .unwrap_or_default();
+
     // Collect IDs of active runs to fetch current step summaries in a single batch query.
     let active_run_ids: Vec<String> = latest_workflow_runs_by_worktree
         .values()
@@ -97,6 +102,11 @@ pub fn poll_data() -> Option<Action> {
             )
         })
         .map(|r| r.id.clone())
+        .chain(
+            active_non_worktree_workflow_runs
+                .iter()
+                .map(|r| r.id.clone()),
+        )
         .collect();
     let active_run_id_refs: Vec<&str> = active_run_ids.iter().map(|s| s.as_str()).collect();
     let workflow_step_summaries = wf_mgr
@@ -112,6 +122,7 @@ pub fn poll_data() -> Option<Action> {
         ticket_agent_totals,
         latest_workflow_runs_by_worktree,
         workflow_step_summaries,
+        active_non_worktree_workflow_runs,
     })))
 }
 

@@ -684,6 +684,8 @@ impl App {
                 self.state.data.latest_workflow_runs_by_worktree =
                     payload.latest_workflow_runs_by_worktree;
                 self.state.data.workflow_step_summaries = payload.workflow_step_summaries;
+                self.state.data.active_non_worktree_workflow_runs =
+                    payload.active_non_worktree_workflow_runs;
                 self.refresh_pending_feedback();
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();
