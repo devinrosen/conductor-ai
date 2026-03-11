@@ -863,4 +863,46 @@ mod tests {
             Action::PickWorkflow
         ));
     }
+
+    // --- Progress modal key-swallowing ---
+
+    fn progress_modal_state() -> AppState {
+        let mut state = AppState::new();
+        state.modal = Modal::Progress {
+            message: "Creating worktree…".to_string(),
+        };
+        state
+    }
+
+    #[test]
+    fn progress_modal_swallows_esc() {
+        let state = progress_modal_state();
+        assert!(matches!(map_key(key(KeyCode::Esc), &state), Action::None));
+    }
+
+    #[test]
+    fn progress_modal_swallows_enter() {
+        let state = progress_modal_state();
+        assert!(matches!(map_key(key(KeyCode::Enter), &state), Action::None));
+    }
+
+    #[test]
+    fn progress_modal_swallows_char_keys() {
+        let state = progress_modal_state();
+        for c in ['q', 'j', 'k', 'w', 'n', ' '] {
+            assert!(
+                matches!(map_key(key(KeyCode::Char(c)), &state), Action::None),
+                "expected None for key '{c}' while Progress modal is active"
+            );
+        }
+    }
+
+    #[test]
+    fn progress_modal_swallows_navigation_keys() {
+        let state = progress_modal_state();
+        assert!(matches!(map_key(key(KeyCode::Up), &state), Action::None));
+        assert!(matches!(map_key(key(KeyCode::Down), &state), Action::None));
+        assert!(matches!(map_key(key(KeyCode::Left), &state), Action::None));
+        assert!(matches!(map_key(key(KeyCode::Right), &state), Action::None));
+    }
 }

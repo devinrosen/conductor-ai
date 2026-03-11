@@ -3652,19 +3652,29 @@ impl App {
             })();
             match result {
                 Ok((wt, warnings)) => {
-                    let _ = bg_tx.send(Action::WorktreeCreated {
+                    if !bg_tx.send(Action::WorktreeCreated {
                         wt_id: wt.id,
                         wt_path: wt.path,
                         wt_slug: wt.slug,
                         wt_repo_id: wt.repo_id,
                         warnings,
                         ticket_id,
-                    });
+                    }) {
+                        tracing::warn!(
+                            "worktree created but bg_tx.send failed; \
+                             Progress modal may remain visible until app exit"
+                        );
+                    }
                 }
                 Err(e) => {
-                    let _ = bg_tx.send(Action::WorktreeCreateFailed {
+                    if !bg_tx.send(Action::WorktreeCreateFailed {
                         message: format!("Create failed: {e}"),
-                    });
+                    }) {
+                        tracing::warn!(
+                            "worktree creation failed and bg_tx.send also failed; \
+                             Progress modal may remain visible until app exit"
+                        );
+                    }
                 }
             }
         });
