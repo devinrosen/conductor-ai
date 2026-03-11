@@ -284,7 +284,8 @@ fn save_config_to(config: &Config, path: &std::path::Path) -> Result<()> {
     // Start with whatever is currently on disk (preserves unknown sections).
     let mut merged: toml::Value = if path.exists() {
         let existing = std::fs::read_to_string(path)?;
-        toml::from_str(&existing).unwrap_or_else(|_| toml::Value::Table(toml::map::Map::new()))
+        toml::from_str(&existing)
+            .map_err(|e| ConductorError::Config(format!("existing config is malformed: {e}")))?
     } else {
         toml::Value::Table(toml::map::Map::new())
     };
@@ -496,6 +497,25 @@ installation_id = 789012
         assert!(
             raw.get("github").and_then(|g| g.get("app")).is_some(),
             "[github.app] should survive save when app is None in memory"
+        );
+    }
+
+    #[test]
+    fn test_save_config_fails_on_malformed_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // Write a syntactically invalid TOML file
+        std::fs::write(&path, "not valid toml = [ unclosed").unwrap();
+        let config = Config::default();
+        let result = save_config_to(&config, &path);
+        assert!(
+            result.is_err(),
+            "expected Err when existing config file is malformed"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("malformed"),
+            "error message should mention malformed, got: {msg}"
         );
     }
 
