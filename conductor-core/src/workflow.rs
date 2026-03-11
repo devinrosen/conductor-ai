@@ -492,42 +492,16 @@ impl<'a> WorkflowManager<'a> {
         trigger: &str,
         definition_snapshot: Option<&str>,
     ) -> Result<WorkflowRun> {
-        let id = ulid::Ulid::new().to_string();
-        let now = Utc::now().to_rfc3339();
-
-        self.conn.execute(
-            "INSERT INTO workflow_runs (id, workflow_name, worktree_id, parent_run_id, status, \
-             dry_run, trigger, started_at, definition_snapshot) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                id,
-                workflow_name,
-                worktree_id,
-                parent_run_id,
-                "pending",
-                dry_run as i64,
-                trigger,
-                now,
-                definition_snapshot,
-            ],
-        )?;
-
-        Ok(WorkflowRun {
-            id,
-            workflow_name: workflow_name.to_string(),
-            worktree_id: worktree_id.map(String::from),
-            parent_run_id: parent_run_id.to_string(),
-            status: WorkflowRunStatus::Pending,
+        self.create_workflow_run_with_targets(
+            workflow_name,
+            worktree_id,
+            None,
+            None,
+            parent_run_id,
             dry_run,
-            trigger: trigger.to_string(),
-            started_at: now,
-            ended_at: None,
-            result_summary: None,
-            definition_snapshot: definition_snapshot.map(String::from),
-            inputs: HashMap::new(),
-            ticket_id: None,
-            repo_id: None,
-        })
+            trigger,
+            definition_snapshot,
+        )
     }
 
     /// Create a workflow run record with ticket and repo target IDs in a single INSERT.
@@ -7939,6 +7913,33 @@ And here is my actual output:
         assert!(
             execute_workflow(&input).is_err(),
             "referencing a nonexistent ticket_id must return an error"
+        );
+    }
+
+    #[test]
+    fn test_execute_workflow_unknown_repo_id_returns_error() {
+        let conn = setup_db();
+        let config = Config::default();
+        let exec_config = WorkflowExecConfig::default();
+        let workflow = make_empty_workflow();
+
+        let input = WorkflowExecInput {
+            conn: &conn,
+            config: &config,
+            workflow: &workflow,
+            worktree_id: None,
+            working_dir: "",
+            repo_path: "",
+            ticket_id: None,
+            repo_id: Some("nonexistent-repo"),
+            model: None,
+            exec_config: &exec_config,
+            inputs: HashMap::new(),
+            depth: 0,
+        };
+        assert!(
+            execute_workflow(&input).is_err(),
+            "referencing a nonexistent repo_id must return an error"
         );
     }
 
