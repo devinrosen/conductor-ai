@@ -350,6 +350,7 @@ impl App {
                 self.state.modal = Modal::None;
             }
             Action::OpenTicketUrl => self.handle_open_ticket_url(),
+            Action::CopyTicketUrl => self.handle_copy_ticket_url(),
             Action::OpenRepoUrl => self.handle_open_repo_url(),
             Action::CopyRepoUrl => self.handle_copy_repo_url(),
             Action::ConfirmYes => self.handle_confirm_yes(),
@@ -1483,46 +1484,60 @@ impl App {
         }
     }
 
-    fn handle_open_ticket_url(&mut self) {
-        // Resolve the ticket URL from either the TicketInfo modal or the WorktreeDetail view
-        let url = if let Modal::TicketInfo { ref ticket } = self.state.modal {
-            Some(ticket.url.clone())
-        } else if self.state.view == View::WorktreeDetail {
-            self.state
+    /// Resolve the URL of the currently focused ticket, across all contexts.
+    fn selected_ticket_url(&self) -> Option<String> {
+        if let Modal::TicketInfo { ref ticket } = self.state.modal {
+            return Some(ticket.url.clone());
+        }
+        if self.state.view == View::WorktreeDetail {
+            return self
+                .state
                 .selected_worktree_id
                 .as_ref()
                 .and_then(|wt_id| self.state.data.worktrees.iter().find(|w| &w.id == wt_id))
                 .and_then(|wt| wt.ticket_id.as_ref())
                 .and_then(|tid| self.state.data.ticket_map.get(tid))
-                .map(|t| t.url.clone())
-        } else {
-            None
-        };
-
-        let Some(url) = url else {
-            if self.state.view == View::WorktreeDetail {
-                self.state.status_message = Some("No ticket linked to this worktree".to_string());
-            }
-            return;
-        };
-
-        if url.is_empty() {
-            self.state.status_message = Some("No URL available".to_string());
-            return;
+                .map(|t| t.url.clone());
         }
+        // Ticket list views: Dashboard Tickets pane and the standalone Tickets view
+        let ticket = match self.state.view {
+            View::Dashboard if self.state.dashboard_focus == DashboardFocus::Tickets => {
+                self.state.filtered_tickets.get(self.state.ticket_index)
+            }
+            View::Tickets => self.state.filtered_tickets.get(self.state.ticket_index),
+            _ => None,
+        };
+        ticket.map(|t| t.url.clone())
+    }
 
-        let result = Command::new("open").arg(&url).output();
-        match result {
-            Ok(o) if o.status.success() => {
-                self.state.status_message = Some(format!("Opened {url}"));
+    fn handle_open_ticket_url(&mut self) {
+        match self.selected_ticket_url().filter(|u| !u.is_empty()) {
+            None => {
+                self.state.status_message = Some("No ticket URL available".to_string());
             }
-            Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                self.state.status_message = Some(format!("Failed to open URL: {stderr}"));
+            Some(url) => {
+                match Command::new("open")
+                    .arg(&url)
+                    .output()
+                    .or_else(|_| Command::new("xdg-open").arg(&url).output())
+                {
+                    Ok(_) => {
+                        self.state.status_message = Some(format!("Opened {url}"));
+                    }
+                    Err(e) => {
+                        self.state.status_message = Some(format!("Failed to open ticket URL: {e}"));
+                    }
+                }
             }
-            Err(e) => {
-                self.state.status_message = Some(format!("Failed to open URL: {e}"));
+        }
+    }
+
+    fn handle_copy_ticket_url(&mut self) {
+        match self.selected_ticket_url().filter(|u| !u.is_empty()) {
+            None => {
+                self.state.status_message = Some("No ticket URL available".to_string());
             }
+            Some(url) => self.copy_text_to_clipboard(url),
         }
     }
 

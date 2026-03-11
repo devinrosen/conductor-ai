@@ -72,6 +72,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             return match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => Action::DismissModal,
                 KeyCode::Char('o') => Action::OpenTicketUrl,
+                KeyCode::Char('y') => Action::CopyTicketUrl,
                 _ => Action::None,
             };
         }
@@ -264,6 +265,18 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         match key.code {
             KeyCode::Char('d') => return Action::HalfPageDown,
             KeyCode::Char('u') => return Action::HalfPageUp,
+            _ => {}
+        }
+    }
+
+    // View-specific keybindings (ticket list — Dashboard Tickets pane and Tickets view)
+    let in_ticket_list = (state.view == View::Dashboard
+        && state.dashboard_focus == crate::state::DashboardFocus::Tickets)
+        || state.view == View::Tickets;
+    if in_ticket_list {
+        match key.code {
+            KeyCode::Char('o') => return Action::OpenTicketUrl,
+            KeyCode::Char('y') => return Action::CopyTicketUrl,
             _ => {}
         }
     }
