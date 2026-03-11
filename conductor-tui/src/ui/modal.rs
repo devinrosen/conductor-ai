@@ -282,10 +282,21 @@ pub fn render_ticket_info(
         let mins = (dur_secs / 60.0) as i64;
         let secs = (dur_secs % 60.0) as i64;
         lines.push(Line::from(Span::styled("  Agent Totals:", label_style)));
+        let fmt_k = |n: i64| -> String {
+            if n >= 1000 {
+                format!("{:.1}k", n as f64 / 1000.0)
+            } else {
+                n.to_string()
+            }
+        };
         lines.push(Line::from(vec![
-            Span::styled("    Cost:  ", dim_style),
+            Span::styled("    Tokens:  ", dim_style),
             Span::styled(
-                format!("${:.4}", totals.total_cost),
+                format!(
+                    "{}↓ {}↑",
+                    fmt_k(totals.total_input_tokens),
+                    fmt_k(totals.total_output_tokens)
+                ),
                 Style::default().fg(Color::Magenta),
             ),
             Span::styled("   Turns: ", dim_style),
