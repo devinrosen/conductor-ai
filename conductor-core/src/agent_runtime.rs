@@ -32,6 +32,9 @@ fn resolve_conductor_bin() -> String {
 /// `args` are the arguments passed to the `conductor` binary (e.g.
 /// `["agent", "run", "--run-id", …]`).  `window_name` is used as the tmux
 /// window name (`-n`) and for post-spawn verification.
+///
+/// If no tmux server is running, a detached session named `conductor` is
+/// created automatically so agents can run without a pre-existing tmux session.
 pub fn spawn_tmux_window(args: &[String], window_name: &str) -> std::result::Result<(), String> {
     let conductor_bin = resolve_conductor_bin();
 
@@ -41,7 +44,7 @@ pub fn spawn_tmux_window(args: &[String], window_name: &str) -> std::result::Res
         "-n".to_string(),
         window_name.to_string(),
         "--".to_string(),
-        conductor_bin,
+        conductor_bin.clone(),
     ];
     tmux_args.extend_from_slice(args);
 
@@ -51,11 +54,37 @@ pub fn spawn_tmux_window(args: &[String], window_name: &str) -> std::result::Res
         .map_err(|e| format!("Failed to spawn tmux: {e}"))?;
 
     if result.status.success() {
-        verify_tmux_window(window_name)
-    } else {
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        Err(format!("tmux failed: {stderr}"))
+        return verify_tmux_window(window_name);
     }
+
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    // No tmux server running — create a detached session and retry.
+    if stderr.contains("No such file or directory") || stderr.contains("error connecting to") {
+        let mut session_args = vec![
+            "new-session".to_string(),
+            "-d".to_string(),
+            "-s".to_string(),
+            "conductor".to_string(),
+            "-n".to_string(),
+            window_name.to_string(),
+            "--".to_string(),
+            conductor_bin,
+        ];
+        session_args.extend_from_slice(args);
+
+        let retry = Command::new("tmux")
+            .args(&session_args)
+            .output()
+            .map_err(|e| format!("Failed to start tmux session: {e}"))?;
+
+        if retry.status.success() {
+            return verify_tmux_window(window_name);
+        }
+        let retry_stderr = String::from_utf8_lossy(&retry.stderr);
+        return Err(format!("Failed to start tmux session: {retry_stderr}"));
+    }
+
+    Err(format!("tmux failed: {stderr}"))
 }
 
 /// After a successful `tmux new-window`, wait briefly and verify the window

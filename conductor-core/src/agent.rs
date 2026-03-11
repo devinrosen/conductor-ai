@@ -916,6 +916,13 @@ impl<'a> AgentManager<'a> {
             Err(ConductorError::Agent(
                 "tmux select-window failed".to_string(),
             ))
+        } else if stderr.contains("No such file or directory")
+            || stderr.contains("error connecting to")
+        {
+            Err(ConductorError::Agent(
+                "tmux is not running — start a tmux session first, then relaunch conductor"
+                    .to_string(),
+            ))
         } else {
             Err(ConductorError::Agent(format!(
                 "tmux select-window failed: {stderr}"
