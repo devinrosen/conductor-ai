@@ -83,7 +83,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        help_line("r", "Run Claude agent (tmux)"),
+        help_line("p", "Prompt Claude agent"),
         help_line("O", "Orchestrate (multi-step child agents)"),
         help_line("x", "Stop running agent"),
         help_line("f", "Submit feedback to agent"),

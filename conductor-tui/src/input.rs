@@ -308,7 +308,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         let focus = state.worktree_detail_focus;
 
         match key.code {
-            KeyCode::Char('r') => return Action::LaunchAgent,
+            KeyCode::Char('p') => return Action::LaunchAgent,
             KeyCode::Char('O') if !is_active => return Action::OrchestrateAgent,
             KeyCode::Char('x') if is_active => return Action::StopAgent,
             KeyCode::Char('f') if is_waiting_for_feedback => return Action::SubmitFeedback,
