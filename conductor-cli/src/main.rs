@@ -217,6 +217,18 @@ enum WorkflowCommands {
         /// Feedback text
         feedback: String,
     },
+    /// Delete completed, failed, and cancelled workflow runs
+    Purge {
+        /// Only purge runs for this repo slug
+        #[arg(long)]
+        repo: Option<String>,
+        /// Filter by status: completed, failed, cancelled, all (default: all terminal)
+        #[arg(long)]
+        status: Option<String>,
+        /// Print what would be deleted without deleting
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1461,6 +1473,43 @@ fn main() -> Result<()> {
                     None => {
                         println!("No waiting gate found for workflow run: {run_id}");
                     }
+                }
+            }
+            WorkflowCommands::Purge {
+                repo,
+                status,
+                dry_run,
+            } => {
+                const ALLOWED: &[&str] = &["completed", "failed", "cancelled"];
+                let statuses: Vec<&str> = match status.as_deref() {
+                    None | Some("all") => ALLOWED.to_vec(),
+                    Some(s) => {
+                        if ALLOWED.contains(&s) {
+                            vec![s]
+                        } else {
+                            eprintln!(
+                                "Unknown status '{s}'. Allowed values: completed, failed, cancelled, all"
+                            );
+                            std::process::exit(1);
+                        }
+                    }
+                };
+
+                let repo_id: Option<String> = if let Some(slug) = &repo {
+                    let repo_mgr = RepoManager::new(&conn, &config);
+                    let r = repo_mgr.get_by_slug(slug)?;
+                    Some(r.id)
+                } else {
+                    None
+                };
+
+                let wf_mgr = WorkflowManager::new(&conn);
+                if dry_run {
+                    let count = wf_mgr.purge_count(repo_id.as_deref(), &statuses)?;
+                    println!("Would purge {count} workflow run(s) (dry run).");
+                } else {
+                    let count = wf_mgr.purge(repo_id.as_deref(), &statuses)?;
+                    println!("Purged {count} workflow run(s).");
                 }
             }
         },

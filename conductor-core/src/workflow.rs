@@ -946,6 +946,85 @@ impl<'a> WorkflowManager<'a> {
         let steps = self.get_workflow_steps(workflow_run_id)?;
         Ok(completed_keys_from_steps(&steps))
     }
+
+    /// Delete workflow runs with the given statuses, optionally scoped to a repo.
+    ///
+    /// `statuses` should be a non-empty slice of terminal status strings
+    /// (`"completed"`, `"failed"`, `"cancelled"`). `workflow_run_steps` rows are
+    /// removed automatically via `ON DELETE CASCADE`.
+    ///
+    /// Returns the number of deleted rows.
+    pub fn purge(&self, repo_id: Option<&str>, statuses: &[&str]) -> Result<usize> {
+        if statuses.is_empty() {
+            return Ok(0);
+        }
+        let placeholders = statuses
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let count = if let Some(rid) = repo_id {
+            let sql = format!(
+                "DELETE FROM workflow_runs \
+                 WHERE status IN ({placeholders}) \
+                   AND (worktree_id IS NULL OR worktree_id IN \
+                        (SELECT id FROM worktrees WHERE repo_id = ?{}))",
+                statuses.len() + 1
+            );
+            let mut params_vec: Vec<&dyn rusqlite::ToSql> =
+                statuses.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            params_vec.push(&rid);
+            self.conn.execute(&sql, params_vec.as_slice())?
+        } else {
+            let sql = format!("DELETE FROM workflow_runs WHERE status IN ({placeholders})");
+            let params_vec: Vec<&dyn rusqlite::ToSql> =
+                statuses.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            self.conn.execute(&sql, params_vec.as_slice())?
+        };
+
+        Ok(count)
+    }
+
+    /// Count workflow runs that *would* be deleted by [`purge`] with the same arguments.
+    ///
+    /// Used by `--dry-run` to preview the deletion without modifying the database.
+    pub fn purge_count(&self, repo_id: Option<&str>, statuses: &[&str]) -> Result<usize> {
+        if statuses.is_empty() {
+            return Ok(0);
+        }
+        let placeholders = statuses
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let count: i64 = if let Some(rid) = repo_id {
+            let sql = format!(
+                "SELECT COUNT(*) FROM workflow_runs \
+                 WHERE status IN ({placeholders}) \
+                   AND (worktree_id IS NULL OR worktree_id IN \
+                        (SELECT id FROM worktrees WHERE repo_id = ?{}))",
+                statuses.len() + 1
+            );
+            let mut params_vec: Vec<&dyn rusqlite::ToSql> =
+                statuses.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            params_vec.push(&rid);
+            self.conn
+                .query_row(&sql, params_vec.as_slice(), |row| row.get(0))?
+        } else {
+            let sql =
+                format!("SELECT COUNT(*) FROM workflow_runs WHERE status IN ({placeholders})");
+            let params_vec: Vec<&dyn rusqlite::ToSql> =
+                statuses.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            self.conn
+                .query_row(&sql, params_vec.as_slice(), |row| row.get(0))?
+        };
+
+        Ok(count as usize)
+    }
 }
 
 fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
@@ -7322,5 +7401,208 @@ And here is my actual output:
             ),
             "second ephemeral call should not be blocked by the concurrent guard"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // purge / purge_count tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_purge_all_terminal_statuses() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let a1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+        let a2 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+        let a3 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+        let a4 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let r_completed = mgr
+            .create_workflow_run("t", Some("w1"), &a1.id, false, "manual", None)
+            .unwrap();
+        let r_failed = mgr
+            .create_workflow_run("t", Some("w1"), &a2.id, false, "manual", None)
+            .unwrap();
+        let r_cancelled = mgr
+            .create_workflow_run("t", Some("w1"), &a3.id, false, "manual", None)
+            .unwrap();
+        let r_running = mgr
+            .create_workflow_run("t", Some("w1"), &a4.id, false, "manual", None)
+            .unwrap();
+
+        mgr.update_workflow_status(&r_completed.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+        mgr.update_workflow_status(&r_failed.id, WorkflowRunStatus::Failed, None)
+            .unwrap();
+        mgr.update_workflow_status(&r_cancelled.id, WorkflowRunStatus::Cancelled, None)
+            .unwrap();
+        mgr.update_workflow_status(&r_running.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        let deleted = mgr
+            .purge(None, &["completed", "failed", "cancelled"])
+            .unwrap();
+        assert_eq!(deleted, 3);
+
+        // running run must still exist
+        assert!(mgr.get_workflow_run(&r_running.id).unwrap().is_some());
+        // terminal runs must be gone
+        assert!(mgr.get_workflow_run(&r_completed.id).unwrap().is_none());
+        assert!(mgr.get_workflow_run(&r_failed.id).unwrap().is_none());
+        assert!(mgr.get_workflow_run(&r_cancelled.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_purge_single_status_filter() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let a1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+        let a2 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let r_completed = mgr
+            .create_workflow_run("t", Some("w1"), &a1.id, false, "manual", None)
+            .unwrap();
+        let r_failed = mgr
+            .create_workflow_run("t", Some("w1"), &a2.id, false, "manual", None)
+            .unwrap();
+
+        mgr.update_workflow_status(&r_completed.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+        mgr.update_workflow_status(&r_failed.id, WorkflowRunStatus::Failed, None)
+            .unwrap();
+
+        // only purge completed
+        let deleted = mgr.purge(None, &["completed"]).unwrap();
+        assert_eq!(deleted, 1);
+
+        assert!(mgr.get_workflow_run(&r_completed.id).unwrap().is_none());
+        assert!(mgr.get_workflow_run(&r_failed.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn test_purge_repo_scoped() {
+        let conn = setup_db();
+        // Add a second repo + worktree
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+             VALUES ('r2', 'other-repo', '/tmp/r2', '', 'main', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w2', 'r2', 'feat-other', 'feat/other', '/tmp/ws2/feat-other', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let agent_mgr = AgentManager::new(&conn);
+        let a1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+        let a2 = agent_mgr.create_run(Some("w2"), "wf", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run_r1 = mgr
+            .create_workflow_run("t", Some("w1"), &a1.id, false, "manual", None)
+            .unwrap();
+        let run_r2 = mgr
+            .create_workflow_run("t", Some("w2"), &a2.id, false, "manual", None)
+            .unwrap();
+
+        mgr.update_workflow_status(&run_r1.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+        mgr.update_workflow_status(&run_r2.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+
+        // scope to r1 only
+        let deleted = mgr.purge(Some("r1"), &["completed"]).unwrap();
+        assert_eq!(deleted, 1);
+
+        assert!(mgr.get_workflow_run(&run_r1.id).unwrap().is_none());
+        assert!(mgr.get_workflow_run(&run_r2.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn test_purge_cascade_deletes_steps() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let a1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("t", Some("w1"), &a1.id, false, "manual", None)
+            .unwrap();
+        mgr.insert_step(&run.id, "step1", "actor", true, 0, 0)
+            .unwrap();
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+
+        let deleted = mgr.purge(None, &["completed"]).unwrap();
+        assert_eq!(deleted, 1);
+
+        // steps must be gone (cascade)
+        let steps = mgr.get_workflow_steps(&run.id).unwrap();
+        assert!(steps.is_empty());
+    }
+
+    #[test]
+    fn test_purge_count_matches_purge() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let a1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+        let a2 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let r1 = mgr
+            .create_workflow_run("t", Some("w1"), &a1.id, false, "manual", None)
+            .unwrap();
+        let r2 = mgr
+            .create_workflow_run("t", Some("w1"), &a2.id, false, "manual", None)
+            .unwrap();
+        mgr.update_workflow_status(&r1.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+        mgr.update_workflow_status(&r2.id, WorkflowRunStatus::Failed, None)
+            .unwrap();
+
+        let statuses = &["completed", "failed", "cancelled"];
+        let count = mgr.purge_count(None, statuses).unwrap();
+        assert_eq!(count, 2);
+
+        let deleted = mgr.purge(None, statuses).unwrap();
+        assert_eq!(deleted, count);
+    }
+
+    #[test]
+    fn test_purge_noop_when_no_matches() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let a1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("t", Some("w1"), &a1.id, false, "manual", None)
+            .unwrap();
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        let count = mgr
+            .purge_count(None, &["completed", "failed", "cancelled"])
+            .unwrap();
+        assert_eq!(count, 0);
+
+        let deleted = mgr
+            .purge(None, &["completed", "failed", "cancelled"])
+            .unwrap();
+        assert_eq!(deleted, 0);
+
+        assert!(mgr.get_workflow_run(&run.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn test_purge_empty_statuses_is_noop() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        assert_eq!(mgr.purge(None, &[]).unwrap(), 0);
+        assert_eq!(mgr.purge_count(None, &[]).unwrap(), 0);
     }
 }
