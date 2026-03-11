@@ -210,6 +210,10 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::Progress { .. } => {
+            // Non-dismissable: swallow all keys while operation is in progress.
+            return Action::None;
+        }
         Modal::None => {}
     }
 

@@ -175,6 +175,29 @@ pub fn render_error(frame: &mut Frame, area: Rect, message: &str) {
     frame.render_widget(content, popup);
 }
 
+pub fn render_progress(frame: &mut Frame, area: Rect, message: &str) {
+    let popup = centered_rect(50, 25, area);
+    frame.render_widget(Clear, popup);
+
+    let content = Paragraph::new(vec![
+        Line::from(""),
+        Line::from(Span::styled(message, Style::default().fg(Color::White))),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Please wait…",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ])
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .title(" In Progress "),
+    );
+
+    frame.render_widget(content, popup);
+}
+
 pub fn render_ticket_info(
     frame: &mut Frame,
     area: Rect,
