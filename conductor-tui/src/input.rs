@@ -110,35 +110,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
-        Modal::WorkTargetPicker { targets, .. } => {
-            return match key.code {
-                KeyCode::Esc => Action::DismissModal,
-                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
-                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
-                KeyCode::Enter => Action::SelectWorkTarget(usize::MAX), // sentinel: use selected
-                KeyCode::Char(c) if c.is_ascii_digit() => {
-                    let n = c.to_digit(10).unwrap() as usize;
-                    if n >= 1 && n <= targets.len() {
-                        Action::SelectWorkTarget(n - 1)
-                    } else {
-                        Action::None
-                    }
-                }
-                _ => Action::None,
-            };
-        }
-        Modal::WorkTargetManager { .. } => {
-            return match key.code {
-                KeyCode::Esc => Action::DismissModal,
-                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
-                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
-                KeyCode::Char('K') => Action::WorkTargetMoveUp,
-                KeyCode::Char('J') => Action::WorkTargetMoveDown,
-                KeyCode::Char('a') => Action::WorkTargetAdd,
-                KeyCode::Char('d') => Action::WorkTargetDelete,
-                _ => Action::None,
-            };
-        }
         Modal::IssueSourceManager { .. } => {
             return match key.code {
                 KeyCode::Esc => Action::DismissModal,
@@ -441,7 +412,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('c') => Action::Create,
         KeyCode::Char('d') => Action::Delete,
         KeyCode::Char('s') => Action::SyncTickets,
-        KeyCode::Char('W') => Action::ManageWorkTargets,
         KeyCode::Char('S') => Action::ManageIssueSources,
         KeyCode::Char('o') => Action::OpenTicketUrl,
 

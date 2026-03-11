@@ -35,7 +35,6 @@ impl FilterState {
 use conductor_core::agent::{
     AgentCreatedIssue, AgentRun, AgentRunEvent, AgentRunStatus, FeedbackRequest, TicketAgentTotals,
 };
-use conductor_core::config::WorkTarget;
 use conductor_core::github::{DiscoveredRepo, GithubPr};
 use conductor_core::issue_source::IssueSource;
 use conductor_core::repo::Repo;
@@ -272,14 +271,6 @@ pub enum Modal {
     TicketInfo {
         ticket: Box<Ticket>,
     },
-    WorkTargetPicker {
-        targets: Vec<WorkTarget>,
-        selected: usize,
-    },
-    WorkTargetManager {
-        targets: Vec<WorkTarget>,
-        selected: usize,
-    },
     IssueSourceManager {
         repo_id: String,
         repo_slug: String,
@@ -393,8 +384,6 @@ impl fmt::Debug for Modal {
             Modal::Form { title, .. } => f.debug_struct("Form").field("title", title).finish(),
             Modal::Error { message } => f.debug_struct("Error").field("message", message).finish(),
             Modal::TicketInfo { .. } => write!(f, "Modal::TicketInfo"),
-            Modal::WorkTargetPicker { .. } => write!(f, "Modal::WorkTargetPicker"),
-            Modal::WorkTargetManager { .. } => write!(f, "Modal::WorkTargetManager"),
             Modal::IssueSourceManager { .. } => write!(f, "Modal::IssueSourceManager"),
             Modal::ModelPicker {
                 ref context_label, ..
@@ -452,9 +441,6 @@ pub enum ConfirmAction {
     RemoveRepo {
         repo_slug: String,
     },
-    DeleteWorkTarget {
-        index: usize,
-    },
     DeleteIssueSource {
         source_id: String,
         repo_id: String,
@@ -482,7 +468,6 @@ pub struct FormField {
 #[allow(clippy::enum_variant_names)]
 pub enum FormAction {
     AddRepo,
-    AddWorkTarget,
     AddIssueSource {
         repo_id: String,
         repo_slug: String,

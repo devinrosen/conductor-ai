@@ -69,14 +69,6 @@ pub enum Action {
     SyncTickets,
     #[allow(dead_code)]
     LinkTicket,
-    #[allow(dead_code)]
-    StartWork,
-    SelectWorkTarget(usize),
-    ManageWorkTargets,
-    WorkTargetMoveUp,
-    WorkTargetMoveDown,
-    WorkTargetAdd,
-    WorkTargetDelete,
     ManageIssueSources,
     IssueSourceAdd,
     IssueSourceDelete,
