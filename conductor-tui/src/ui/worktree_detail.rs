@@ -205,17 +205,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         let has_waiting = state.data.latest_agent_runs.get(&wt.id).is_some_and(|run| {
             run.status == conductor_core::agent::AgentRunStatus::WaitingForFeedback
         });
-        let has_log = state
-            .data
-            .latest_agent_runs
-            .get(&wt.id)
-            .is_some_and(|run| run.log_file.is_some());
         if has_waiting {
-            "Tab=switch panel  y=copy  o=act  r=agent  f=respond  F=dismiss  x=stop  a=attach  d=del  Esc=back"
-        } else if has_log {
-            "Tab=switch panel  y=copy  o=act  r=agent  x=stop  a=attach  l=log  d=del  Esc=back"
+            "Tab=switch panel  y=copy  o=act  r=agent  f=respond  F=dismiss  x=stop  w=workflow  d=del  Esc=back"
         } else {
-            "Tab=switch panel  y=copy  o=act  r=agent  x=stop  a=attach  d=del  Esc=back"
+            "Tab=switch panel  y=copy  o=act  r=agent  x=stop  w=workflow  d=del  Esc=back"
         }
     } else {
         "Tab=switch panel  y=copy  o=act  Esc=back  (archived)"
