@@ -4525,6 +4525,51 @@ impl App {
                 pr_number: pr.number,
                 pr_title: pr.title.clone(),
             }
+        } else if self.state.view == View::RepoDetail
+            && self.state.repo_detail_focus == crate::state::RepoDetailFocus::Info
+        {
+            // RepoDetail Info pane: target is the current repo
+            let repo = match self
+                .state
+                .selected_repo_id
+                .as_ref()
+                .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
+            {
+                Some(r) => r.clone(),
+                None => {
+                    self.state.status_message = Some("No repo selected".to_string());
+                    return;
+                }
+            };
+            WorkflowPickerTarget::Repo {
+                repo_id: repo.id.clone(),
+                repo_path: repo.local_path.clone(),
+                repo_name: repo.slug.clone(),
+            }
+        } else if self.state.view == View::RepoDetail
+            && self.state.repo_detail_focus == crate::state::RepoDetailFocus::Worktrees
+        {
+            // RepoDetail Worktrees pane: target is the highlighted worktree
+            let wt = match self.state.detail_worktrees.get(self.state.detail_wt_index) {
+                Some(w) => w.clone(),
+                None => {
+                    self.state.status_message = Some("No worktree selected".to_string());
+                    return;
+                }
+            };
+            let repo_path = self
+                .state
+                .data
+                .repos
+                .iter()
+                .find(|r| r.id == wt.repo_id)
+                .map(|r| r.local_path.clone())
+                .unwrap_or_default();
+            WorkflowPickerTarget::Worktree {
+                worktree_id: wt.id.clone(),
+                worktree_path: wt.path.clone(),
+                repo_path,
+            }
         } else if self.state.view == View::Dashboard
             && self.state.dashboard_focus == crate::state::DashboardFocus::Repos
         {
