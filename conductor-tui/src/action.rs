@@ -158,6 +158,8 @@ pub enum Action {
     CopyTicketUrl,
     OpenRepoUrl,
     CopyRepoUrl,
+    OpenPrUrl,
+    CopyPrUrl,
     ConfirmYes,
     ConfirmNo,
     InputChar(char),

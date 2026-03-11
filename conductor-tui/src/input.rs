@@ -371,8 +371,11 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
     // View-specific keybindings (RepoDetail)
     if state.view == View::RepoDetail {
         if state.repo_detail_focus == crate::state::RepoDetailFocus::Prs {
-            if let KeyCode::Char('r') = key.code {
-                return Action::RunPrWorkflow;
+            match key.code {
+                KeyCode::Char('o') => return Action::OpenPrUrl,
+                KeyCode::Char('y') => return Action::CopyPrUrl,
+                KeyCode::Char('r') => return Action::RunPrWorkflow,
+                _ => {}
             }
         }
         match key.code {

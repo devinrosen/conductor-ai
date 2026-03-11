@@ -353,6 +353,8 @@ impl App {
             Action::CopyTicketUrl => self.handle_copy_ticket_url(),
             Action::OpenRepoUrl => self.handle_open_repo_url(),
             Action::CopyRepoUrl => self.handle_copy_repo_url(),
+            Action::OpenPrUrl => self.handle_open_pr_url(),
+            Action::CopyPrUrl => self.handle_copy_pr_url(),
             Action::ConfirmYes => self.handle_confirm_yes(),
             Action::ConfirmNo => {
                 self.state.modal = Modal::None;
@@ -1580,6 +1582,44 @@ impl App {
             None => {
                 self.state.status_message = Some("No GitHub URL found for this repo".to_string());
             }
+        }
+    }
+
+    /// Build the web URL for the currently selected PR in RepoDetail.
+    fn selected_pr_url(&self) -> Option<String> {
+        let pr = self.state.detail_prs.get(self.state.detail_pr_index)?;
+        let base = self.repo_web_url()?;
+        Some(format!("{base}/pull/{}", pr.number))
+    }
+
+    fn handle_open_pr_url(&mut self) {
+        match self.selected_pr_url() {
+            None => {
+                self.state.status_message = Some("No PR URL available".to_string());
+            }
+            Some(url) => {
+                match Command::new("open")
+                    .arg(&url)
+                    .output()
+                    .or_else(|_| Command::new("xdg-open").arg(&url).output())
+                {
+                    Ok(_) => {
+                        self.state.status_message = Some(format!("Opened {url}"));
+                    }
+                    Err(e) => {
+                        self.state.status_message = Some(format!("Failed to open PR URL: {e}"));
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_copy_pr_url(&mut self) {
+        match self.selected_pr_url() {
+            None => {
+                self.state.status_message = Some("No PR URL available".to_string());
+            }
+            Some(url) => self.copy_text_to_clipboard(url),
         }
     }
 
