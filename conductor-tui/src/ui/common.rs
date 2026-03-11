@@ -324,10 +324,12 @@ pub fn worktree_list_item(
                 WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
             ) {
                 state.data.workflow_step_summaries.get(&wf_run.id).map(|s| {
-                    let base = format!(
-                        "{symbol} {} ({}/{}) > ",
-                        wf_run.workflow_name, s.position, s.total
-                    );
+                    let iter_prefix = if s.iteration > 0 {
+                        format!("(iter {}) ", s.iteration)
+                    } else {
+                        String::new()
+                    };
+                    let base = format!("{symbol} {} > {iter_prefix}", wf_run.workflow_name);
                     // Truncate step name if it would overflow a reasonable column width.
                     // We use a heuristic max of 80 chars for the full label.
                     const MAX_LABEL: usize = 80;
