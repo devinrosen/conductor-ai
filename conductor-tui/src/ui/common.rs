@@ -146,15 +146,28 @@ fn render_header_detail(
             }
             GlobalStatusItem::Workflow {
                 worktree_slug,
-                workflow_name,
                 status,
+                elapsed_secs,
+                current_step,
+                ..
             } => {
                 let (symbol, color) = match status {
                     WorkflowRunStatus::Waiting => ("⏸", Color::Magenta),
                     WorkflowRunStatus::Running => ("⚙", Color::Cyan),
                     _ => ("○", Color::DarkGray),
                 };
-                let label = format!("{symbol} {worktree_slug}: {workflow_name}");
+                let label = match (current_step.as_deref(), status) {
+                    (Some(step), WorkflowRunStatus::Running) if *elapsed_secs > 0 => {
+                        let elapsed_str = if *elapsed_secs < 60 {
+                            format!("{}s", elapsed_secs)
+                        } else {
+                            format!("{}m", elapsed_secs / 60)
+                        };
+                        format!("{symbol} {worktree_slug} > {step} ({elapsed_str})")
+                    }
+                    (Some(step), _) => format!("{symbol} {worktree_slug} > {step}"),
+                    (None, _) => format!("{symbol} {worktree_slug}"),
+                };
                 spans.push(Span::styled(label, Style::default().fg(color)));
             }
         }
