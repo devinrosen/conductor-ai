@@ -266,6 +266,14 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         }
     }
 
+    // View-specific keybindings (Dashboard Worktrees pane)
+    if state.view == View::Dashboard
+        && state.dashboard_focus == crate::state::DashboardFocus::Worktrees
+        && key.code == KeyCode::Char('w')
+    {
+        return Action::PickWorkflow;
+    }
+
     // View-specific keybindings (WorktreeDetail agent controls)
     if state.view == View::WorktreeDetail {
         let agent_run = state
@@ -792,6 +800,17 @@ mod tests {
         let mut state = AppState::new();
         state.view = View::Dashboard;
         state.dashboard_focus = crate::state::DashboardFocus::Repos;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('w')), &state),
+            Action::PickWorkflow
+        ));
+    }
+
+    #[test]
+    fn w_maps_to_pick_workflow_in_dashboard_worktrees() {
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state.dashboard_focus = crate::state::DashboardFocus::Worktrees;
         assert!(matches!(
             map_key(key(KeyCode::Char('w')), &state),
             Action::PickWorkflow

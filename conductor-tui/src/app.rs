@@ -4506,7 +4506,7 @@ impl App {
                 .data
                 .workflow_defs
                 .iter()
-                .filter(|d| !d.targets.iter().any(|t| t == "pr"))
+                .filter(|d| d.targets.iter().any(|t| t == "worktree"))
                 .cloned()
                 .collect(),
         };
