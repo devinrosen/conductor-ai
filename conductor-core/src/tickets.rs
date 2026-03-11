@@ -82,11 +82,12 @@ impl<'a> TicketSyncer<'a> {
 
     /// Upsert a batch of tickets for a repo. Returns the number of tickets upserted.
     pub fn upsert_tickets(&self, repo_id: &str, tickets: &[TicketInput]) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
         let now = Utc::now().to_rfc3339();
 
         for ticket in tickets {
             let id = ulid::Ulid::new().to_string();
-            self.conn.execute(
+            tx.execute(
                 "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                  ON CONFLICT(repo_id, source_type, source_id) DO UPDATE SET
@@ -116,25 +117,24 @@ impl<'a> TicketSyncer<'a> {
                 ],
             )?;
 
-            if !ticket.label_details.is_empty() {
-                let ticket_id: String = self.conn.query_row(
-                    "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
-                    params![repo_id, ticket.source_type, ticket.source_id],
-                    |row| row.get(0),
+            let ticket_id: String = tx.query_row(
+                "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
+                params![repo_id, ticket.source_type, ticket.source_id],
+                |row| row.get(0),
+            )?;
+            tx.execute(
+                "DELETE FROM ticket_labels WHERE ticket_id = ?1",
+                params![ticket_id],
+            )?;
+            for ld in &ticket.label_details {
+                tx.execute(
+                    "INSERT OR REPLACE INTO ticket_labels (ticket_id, label, color) VALUES (?1, ?2, ?3)",
+                    params![ticket_id, ld.name, ld.color],
                 )?;
-                self.conn.execute(
-                    "DELETE FROM ticket_labels WHERE ticket_id = ?1",
-                    params![ticket_id],
-                )?;
-                for ld in &ticket.label_details {
-                    self.conn.execute(
-                        "INSERT OR REPLACE INTO ticket_labels (ticket_id, label, color) VALUES (?1, ?2, ?3)",
-                        params![ticket_id, ld.name, ld.color],
-                    )?;
-                }
             }
         }
 
+        tx.commit()?;
         Ok(tickets.len())
     }
 
