@@ -54,8 +54,11 @@ pub enum GlobalStatusItem {
     },
     Workflow {
         worktree_slug: String,
-        workflow_name: String,
         status: WorkflowRunStatus,
+        /// Elapsed seconds since the agent run for the current step started (0 if unknown).
+        elapsed_secs: u64,
+        /// Current step name, if known.
+        current_step: Option<String>,
     },
 }
 
@@ -72,7 +75,7 @@ pub struct GlobalStatus {
 
 impl GlobalStatus {
     pub fn total_active(&self) -> usize {
-        self.running_agents + self.waiting_agents + self.running_workflows + self.waiting_workflows
+        self.active_items.len()
     }
 }
 use conductor_core::worktree::Worktree;
@@ -873,7 +876,76 @@ impl AppState {
 
         let mut gs = GlobalStatus::default();
 
+        // Collect worktree IDs that have an active workflow run.  These take
+        // precedence over agent entries for the same worktree so we can avoid
+        // double-counting in the header bar.
+        let mut workflow_worktree_ids: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
+
+        // First pass: build Workflow items and collect their worktree IDs.
+        for (wt_key, run) in &self.data.latest_workflow_runs_by_worktree {
+            match run.status {
+                WorkflowRunStatus::Running => gs.running_workflows += 1,
+                WorkflowRunStatus::Waiting => gs.waiting_workflows += 1,
+                _ => {}
+            }
+            if matches!(
+                run.status,
+                WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
+            ) {
+                if let Some(wt_id) = run.worktree_id.as_deref() {
+                    workflow_worktree_ids.insert(wt_id);
+                } else {
+                    // No worktree_id — use the map key as the dedup key.
+                    workflow_worktree_ids.insert(wt_key.as_str());
+                }
+
+                let worktree_slug = run
+                    .worktree_id
+                    .as_deref()
+                    .map(&resolve_slug)
+                    .unwrap_or_else(|| "(ephemeral)".to_string());
+
+                // Borrow the agent run for this worktree (if any) to get elapsed.
+                let elapsed_secs = run
+                    .worktree_id
+                    .as_deref()
+                    .and_then(|id| self.data.latest_agent_runs.get(id))
+                    .filter(|ar| ar.is_active())
+                    .and_then(|ar| {
+                        chrono::DateTime::parse_from_rfc3339(&ar.started_at)
+                            .ok()
+                            .map(|dt| {
+                                let now = chrono::Utc::now();
+                                now.signed_duration_since(dt).num_seconds().max(0) as u64
+                            })
+                    })
+                    .unwrap_or(0);
+
+                let current_step = self
+                    .data
+                    .workflow_step_summaries
+                    .get(&run.id)
+                    .map(|s| s.step_name.clone());
+
+                gs.active_items.push(GlobalStatusItem::Workflow {
+                    worktree_slug,
+                    status: run.status.clone(),
+                    elapsed_secs,
+                    current_step,
+                });
+            }
+        }
+
+        // Second pass: build Agent items, skipping worktrees covered by a workflow.
         for run in self.data.latest_agent_runs.values() {
+            // Determine the dedup key for this agent run.
+            let wt_id = run.worktree_id.as_deref().unwrap_or("");
+            if !wt_id.is_empty() && workflow_worktree_ids.contains(wt_id) {
+                // This worktree already has a Workflow item — skip the agent entry.
+                continue;
+            }
+
             match run.status {
                 AgentRunStatus::Running => gs.running_agents += 1,
                 AgentRunStatus::WaitingForFeedback => gs.waiting_agents += 1,
@@ -896,29 +968,6 @@ impl AppState {
                     worktree_slug,
                     status: run.status.clone(),
                     elapsed_secs,
-                });
-            }
-        }
-
-        for run in self.data.latest_workflow_runs_by_worktree.values() {
-            match run.status {
-                WorkflowRunStatus::Running => gs.running_workflows += 1,
-                WorkflowRunStatus::Waiting => gs.waiting_workflows += 1,
-                _ => {}
-            }
-            if matches!(
-                run.status,
-                WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
-            ) {
-                let worktree_slug = run
-                    .worktree_id
-                    .as_deref()
-                    .map(&resolve_slug)
-                    .unwrap_or_else(|| "(ephemeral)".to_string());
-                gs.active_items.push(GlobalStatusItem::Workflow {
-                    worktree_slug,
-                    workflow_name: run.workflow_name.clone(),
-                    status: run.status.clone(),
                 });
             }
         }
@@ -1656,6 +1705,42 @@ mod tests {
             }
             _ => panic!("expected Agent item"),
         }
+    }
+
+    /// When a workflow and its spawned agent both exist for the same worktree,
+    /// `global_status()` should produce exactly one item (Workflow) and
+    /// `total_active()` should return 1.
+    #[test]
+    fn global_status_workflow_suppresses_agent_for_same_worktree() {
+        let mut state = AppState::new();
+        state
+            .data
+            .latest_agent_runs
+            .insert("wt1".into(), make_agent_run("wt1", AgentRunStatus::Running));
+        state.data.latest_workflow_runs_by_worktree.insert(
+            "wt1".into(),
+            make_workflow_run("wt1", WorkflowRunStatus::Running),
+        );
+        let gs = state.global_status();
+        assert_eq!(
+            gs.total_active(),
+            1,
+            "should count only one item after dedup"
+        );
+        assert_eq!(gs.active_items.len(), 1);
+        assert!(
+            matches!(
+                &gs.active_items[0],
+                GlobalStatusItem::Workflow {
+                    status: WorkflowRunStatus::Running,
+                    ..
+                }
+            ),
+            "surviving item should be a Workflow variant"
+        );
+        // The agent counter should NOT have been incremented for the suppressed entry.
+        assert_eq!(gs.running_agents, 0);
+        assert_eq!(gs.running_workflows, 1);
     }
 
     #[test]
