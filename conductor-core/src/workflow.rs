@@ -3545,7 +3545,7 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
 
                 // Poll gh pr view for approvals
                 let output = Command::new("gh")
-                    .args(["pr", "view", "--json", "reviews"])
+                    .args(["pr", "view", "--json", "reviews,author"])
                     .current_dir(&state.working_dir)
                     .output();
 
@@ -3553,12 +3553,18 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                     if out.status.success() {
                         let json_str = String::from_utf8_lossy(&out.stdout);
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                            let pr_author =
+                                val["author"]["login"].as_str().unwrap_or("").to_string();
                             let approvals = val["reviews"]
                                 .as_array()
                                 .map(|reviews| {
                                     reviews
                                         .iter()
-                                        .filter(|r| r["state"].as_str() == Some("APPROVED"))
+                                        .filter(|r| {
+                                            r["state"].as_str() == Some("APPROVED")
+                                                && r["author"]["login"].as_str().unwrap_or("")
+                                                    != pr_author
+                                        })
                                         .count() as u32
                                 })
                                 .unwrap_or(0);

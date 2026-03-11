@@ -1683,6 +1683,21 @@ fn run_agent(
         .stderr(Stdio::inherit())
         .current_dir(worktree_path);
 
+    // Inject GH_TOKEN from the GitHub App installation token so all `gh` calls
+    // made by the agent (including `gh pr create`) use the bot identity rather
+    // than the human `gh` CLI user. Fall back gracefully when not configured.
+    match github_app::resolve_app_token(&config, "agent-run") {
+        github_app::TokenResolution::AppToken(token) => {
+            cmd.env("GH_TOKEN", token);
+        }
+        github_app::TokenResolution::Fallback { reason } => {
+            eprintln!(
+                "[conductor] Warning: GitHub App token failed, agents will use gh user identity: {reason}"
+            );
+        }
+        github_app::TokenResolution::NotConfigured => {}
+    }
+
     if let Some(session_id) = resume_session_id {
         cmd.arg("--resume").arg(session_id);
     }
