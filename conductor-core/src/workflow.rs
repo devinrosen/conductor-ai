@@ -1372,30 +1372,28 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     // Build inputs map, injecting implicit ticket/repo variables
     let mut merged_inputs = input.inputs.clone();
     if let Some(tid) = input.ticket_id {
-        if let Ok(ticket) = crate::tickets::TicketSyncer::new(conn).get_by_id(tid) {
-            merged_inputs
-                .entry("ticket_id".to_string())
-                .or_insert_with(|| ticket.id.clone());
-            merged_inputs
-                .entry("ticket_title".to_string())
-                .or_insert_with(|| ticket.title.clone());
-            merged_inputs
-                .entry("ticket_url".to_string())
-                .or_insert_with(|| ticket.url.clone());
-        }
+        let ticket = crate::tickets::TicketSyncer::new(conn).get_by_id(tid)?;
+        merged_inputs
+            .entry("ticket_id".to_string())
+            .or_insert_with(|| ticket.id.clone());
+        merged_inputs
+            .entry("ticket_title".to_string())
+            .or_insert_with(|| ticket.title.clone());
+        merged_inputs
+            .entry("ticket_url".to_string())
+            .or_insert_with(|| ticket.url.clone());
     }
     if let Some(rid) = input.repo_id {
-        if let Ok(repo) = crate::repo::RepoManager::new(conn, config).get_by_id(rid) {
-            merged_inputs
-                .entry("repo_id".to_string())
-                .or_insert_with(|| repo.id.clone());
-            merged_inputs
-                .entry("repo_path".to_string())
-                .or_insert_with(|| repo.local_path.clone());
-            merged_inputs
-                .entry("repo_name".to_string())
-                .or_insert_with(|| repo.slug.clone());
-        }
+        let repo = crate::repo::RepoManager::new(conn, config).get_by_id(rid)?;
+        merged_inputs
+            .entry("repo_id".to_string())
+            .or_insert_with(|| repo.id.clone());
+        merged_inputs
+            .entry("repo_path".to_string())
+            .or_insert_with(|| repo.local_path.clone());
+        merged_inputs
+            .entry("repo_name".to_string())
+            .or_insert_with(|| repo.slug.clone());
     }
 
     // Persist inputs so they can be restored on resume
@@ -1679,13 +1677,13 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         }
     }
 
-    // Reject ephemeral PR runs early (no registered worktree — cannot resume).
-    let wt_id = wf_run.worktree_id.as_deref().ok_or_else(|| {
-        ConductorError::Workflow(format!(
+    // Fail early for ephemeral PR runs (no worktree_id, repo_id, or ticket_id).
+    if wf_run.worktree_id.is_none() && wf_run.repo_id.is_none() && wf_run.ticket_id.is_none() {
+        return Err(ConductorError::Workflow(format!(
             "Workflow run '{}' was an ephemeral PR run with no registered worktree — cannot resume.",
             wf_run.id
-        ))
-    })?;
+        )));
+    }
 
     // Deserialize definition from snapshot
     let snapshot = wf_run.definition_snapshot.as_deref().ok_or_else(|| {
@@ -1697,8 +1695,40 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
     let workflow: WorkflowDef = serde_json::from_str(snapshot).map_err(|e| {
         ConductorError::Workflow(format!("Failed to deserialize workflow snapshot: {e}"))
     })?;
-    let worktree = wt_mgr.get_by_id(wt_id)?;
-    let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&worktree.repo_id)?;
+
+    // Determine execution paths based on target type.
+    // - Worktree run: look up worktree and derive repo from it.
+    // - Repo/ticket run: look up repo directly (via repo_id or ticket.repo_id).
+    let (worktree_path, worktree_slug, repo_path) =
+        if let Some(wt_id) = wf_run.worktree_id.as_deref() {
+            let worktree = wt_mgr.get_by_id(wt_id)?;
+            let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&worktree.repo_id)?;
+            (
+                worktree.path.clone(),
+                worktree.slug.clone(),
+                repo.local_path.clone(),
+            )
+        } else {
+            // Resolve repo_id from the run or via the linked ticket.
+            // (The ephemeral guard above ensures at least one FK is set.)
+            let effective_repo_id = if let Some(rid) = wf_run.repo_id.as_deref() {
+                rid.to_string()
+            } else {
+                let tid = wf_run.ticket_id.as_deref().expect("guarded above");
+                crate::tickets::TicketSyncer::new(conn)
+                    .get_by_id(tid)
+                    .map_err(|e| {
+                        ConductorError::Workflow(format!(
+                            "Cannot resolve repo for ticket '{}' during resume: {e}",
+                            tid
+                        ))
+                    })?
+                    .repo_id
+            };
+            let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&effective_repo_id)?;
+            let path = repo.local_path.clone();
+            (path.clone(), String::new(), path)
+        };
 
     // Build the skip set
     let skip_completed = if input.restart {
@@ -1783,9 +1813,9 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         workflow_run_id: wf_run.id.clone(),
         workflow_name: workflow.name.clone(),
         worktree_id: wf_run.worktree_id.clone(),
-        worktree_path: worktree.path.clone(),
-        worktree_slug: worktree.slug.clone(),
-        repo_path: repo.local_path.clone(),
+        worktree_path,
+        worktree_slug,
+        repo_path,
         ticket_id: wf_run.ticket_id.clone(),
         repo_id: wf_run.repo_id.clone(),
         model: input.model.map(String::from),
@@ -7695,5 +7725,173 @@ And here is my actual output:
         assert!(mgr.get_workflow_run(&run_global.id).unwrap().is_some());
         // w1 run must be gone.
         assert!(mgr.get_workflow_run(&run_w1.id).unwrap().is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Implicit variable injection tests
+    // -----------------------------------------------------------------------
+
+    /// Insert a minimal ticket row into the test DB and return its id.
+    fn insert_test_ticket(conn: &Connection, id: &str, repo_id: &str) {
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, \
+             labels, url, synced_at, raw_json) \
+             VALUES (?1, ?2, 'github', ?3, 'Test ticket title', '', 'open', '[]', \
+             'https://github.com/test/repo/issues/1', '2024-01-01T00:00:00Z', '{}')",
+            rusqlite::params![id, repo_id, id],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_execute_workflow_injects_repo_variables() {
+        let conn = setup_db();
+        let config = Config::default();
+        let exec_config = WorkflowExecConfig::default();
+        let workflow = make_empty_workflow();
+
+        // repo `r1` with local_path `/tmp/repo` is inserted by setup_db()
+        let input = WorkflowExecInput {
+            conn: &conn,
+            config: &config,
+            workflow: &workflow,
+            worktree_id: None,
+            working_dir: "/tmp/repo",
+            repo_path: "/tmp/repo",
+            ticket_id: None,
+            repo_id: Some("r1"),
+            model: None,
+            exec_config: &exec_config,
+            inputs: HashMap::new(),
+            depth: 0,
+        };
+        let result = execute_workflow(&input).unwrap();
+
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .get_workflow_run(&result.workflow_run_id)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(run.inputs.get("repo_id").map(String::as_str), Some("r1"));
+        assert_eq!(
+            run.inputs.get("repo_path").map(String::as_str),
+            Some("/tmp/repo")
+        );
+        assert_eq!(
+            run.inputs.get("repo_name").map(String::as_str),
+            Some("test-repo")
+        );
+    }
+
+    #[test]
+    fn test_execute_workflow_injects_ticket_variables() {
+        let conn = setup_db();
+        let config = Config::default();
+        let exec_config = WorkflowExecConfig::default();
+        let workflow = make_empty_workflow();
+
+        insert_test_ticket(&conn, "tkt-1", "r1");
+
+        let input = WorkflowExecInput {
+            conn: &conn,
+            config: &config,
+            workflow: &workflow,
+            worktree_id: None,
+            working_dir: "/tmp/repo",
+            repo_path: "/tmp/repo",
+            ticket_id: Some("tkt-1"),
+            repo_id: None,
+            model: None,
+            exec_config: &exec_config,
+            inputs: HashMap::new(),
+            depth: 0,
+        };
+        let result = execute_workflow(&input).unwrap();
+
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .get_workflow_run(&result.workflow_run_id)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            run.inputs.get("ticket_id").map(String::as_str),
+            Some("tkt-1")
+        );
+        assert_eq!(
+            run.inputs.get("ticket_title").map(String::as_str),
+            Some("Test ticket title")
+        );
+        assert!(
+            run.inputs.contains_key("ticket_url"),
+            "ticket_url should be injected"
+        );
+    }
+
+    #[test]
+    fn test_execute_workflow_existing_input_not_overwritten_by_injection() {
+        let conn = setup_db();
+        let config = Config::default();
+        let exec_config = WorkflowExecConfig::default();
+        let workflow = make_empty_workflow();
+
+        let mut explicit_inputs = HashMap::new();
+        explicit_inputs.insert("repo_name".to_string(), "my-override".to_string());
+
+        let input = WorkflowExecInput {
+            conn: &conn,
+            config: &config,
+            workflow: &workflow,
+            worktree_id: None,
+            working_dir: "/tmp/repo",
+            repo_path: "/tmp/repo",
+            ticket_id: None,
+            repo_id: Some("r1"),
+            model: None,
+            exec_config: &exec_config,
+            inputs: explicit_inputs,
+            depth: 0,
+        };
+        let result = execute_workflow(&input).unwrap();
+
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .get_workflow_run(&result.workflow_run_id)
+            .unwrap()
+            .unwrap();
+
+        // Caller-supplied repo_name must not be overwritten by the injected value.
+        assert_eq!(
+            run.inputs.get("repo_name").map(String::as_str),
+            Some("my-override")
+        );
+    }
+
+    #[test]
+    fn test_execute_workflow_unknown_ticket_id_returns_error() {
+        let conn = setup_db();
+        let config = Config::default();
+        let exec_config = WorkflowExecConfig::default();
+        let workflow = make_empty_workflow();
+
+        let input = WorkflowExecInput {
+            conn: &conn,
+            config: &config,
+            workflow: &workflow,
+            worktree_id: None,
+            working_dir: "",
+            repo_path: "",
+            ticket_id: Some("nonexistent-ticket"),
+            repo_id: None,
+            model: None,
+            exec_config: &exec_config,
+            inputs: HashMap::new(),
+            depth: 0,
+        };
+        assert!(
+            execute_workflow(&input).is_err(),
+            "referencing a nonexistent ticket_id must return an error"
+        );
     }
 }

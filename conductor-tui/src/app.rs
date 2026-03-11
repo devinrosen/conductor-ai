@@ -4545,6 +4545,14 @@ impl App {
                 ticket_id: ticket.id.clone(),
                 ticket_title: ticket.title.clone(),
                 ticket_url: ticket.url.clone(),
+                repo_path: self
+                    .state
+                    .data
+                    .repos
+                    .iter()
+                    .find(|r| r.id == ticket.repo_id)
+                    .map(|r| r.local_path.clone())
+                    .unwrap_or_default(),
                 repo_id: ticket.repo_id.clone(),
             }
         };
@@ -4709,9 +4717,12 @@ impl App {
                 self.spawn_pr_workflow_in_background(pr_ref, def);
             }
             WorkflowPickerTarget::Ticket {
-                ticket_id, repo_id, ..
+                ticket_id,
+                repo_id,
+                repo_path,
+                ..
             } => {
-                self.spawn_ticket_workflow_in_background(def, ticket_id, repo_id);
+                self.spawn_ticket_workflow_in_background(def, ticket_id, repo_id, repo_path);
             }
             WorkflowPickerTarget::Repo {
                 repo_id,
@@ -4827,17 +4838,21 @@ impl App {
             let result = execute_workflow_standalone(&params);
 
             if let Some(ref tx) = bg_tx {
-                let msg = match result {
+                match result {
                     Ok(res) => {
-                        if res.all_succeeded {
+                        let msg = if res.all_succeeded {
                             format!("Workflow '{}' completed successfully", def.name)
                         } else {
                             format!("Workflow '{}' completed with failures", def.name)
-                        }
+                        };
+                        let _ = tx.send(Action::BackgroundSuccess { message: msg });
                     }
-                    Err(e) => format!("Workflow '{}' failed: {e}", def.name),
-                };
-                let _ = tx.send(Action::BackgroundSuccess { message: msg });
+                    Err(e) => {
+                        let _ = tx.send(Action::BackgroundError {
+                            message: format!("Workflow '{}' failed: {e}", def.name),
+                        });
+                    }
+                }
             }
         });
 
@@ -4849,7 +4864,8 @@ impl App {
         &mut self,
         def: conductor_core::workflow::WorkflowDef,
         ticket_id: String,
-        _repo_id: String,
+        repo_id: String,
+        repo_path: String,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -4861,30 +4877,41 @@ impl App {
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
             };
 
-            let temp_dir = match tempfile::TempDir::new() {
-                Ok(d) => d,
-                Err(e) => {
-                    if let Some(ref tx) = bg_tx {
-                        let _ = tx.send(Action::BackgroundSuccess {
-                            message: format!(
-                                "Workflow '{}' failed: could not create temp dir: {e}",
-                                def.name
-                            ),
-                        });
+            // When no repo_path is available, use a temp directory as working dir.
+            // _temp_dir is held to keep the directory alive for the duration of this thread.
+            let _temp_dir: Option<tempfile::TempDir>;
+            let working_dir = if repo_path.is_empty() {
+                match tempfile::TempDir::new() {
+                    Ok(d) => {
+                        let path = d.path().to_string_lossy().to_string();
+                        _temp_dir = Some(d);
+                        path
                     }
-                    return;
+                    Err(e) => {
+                        if let Some(ref tx) = bg_tx {
+                            let _ = tx.send(Action::BackgroundError {
+                                message: format!(
+                                    "Workflow '{}' failed: could not create temp dir: {e}",
+                                    def.name
+                                ),
+                            });
+                        }
+                        return;
+                    }
                 }
+            } else {
+                _temp_dir = None;
+                repo_path.clone()
             };
-            let working_dir = temp_dir.path().to_string_lossy().to_string();
 
             let params = WorkflowExecStandalone {
                 config,
                 workflow: def.clone(),
                 worktree_id: None,
                 working_dir,
-                repo_path: String::new(),
+                repo_path,
                 ticket_id: Some(ticket_id),
-                repo_id: None,
+                repo_id: Some(repo_id),
                 model: None,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
@@ -4894,21 +4921,23 @@ impl App {
             };
 
             let result = execute_workflow_standalone(&params);
-            // temp_dir is dropped here, cleaning up
-            drop(temp_dir);
 
             if let Some(ref tx) = bg_tx {
-                let msg = match result {
+                match result {
                     Ok(res) => {
-                        if res.all_succeeded {
+                        let msg = if res.all_succeeded {
                             format!("Workflow '{}' completed successfully", def.name)
                         } else {
                             format!("Workflow '{}' completed with failures", def.name)
-                        }
+                        };
+                        let _ = tx.send(Action::BackgroundSuccess { message: msg });
                     }
-                    Err(e) => format!("Workflow '{}' failed: {e}", def.name),
-                };
-                let _ = tx.send(Action::BackgroundSuccess { message: msg });
+                    Err(e) => {
+                        let _ = tx.send(Action::BackgroundError {
+                            message: format!("Workflow '{}' failed: {e}", def.name),
+                        });
+                    }
+                }
             }
         });
 
@@ -4952,17 +4981,21 @@ impl App {
             let result = execute_workflow_standalone(&params);
 
             if let Some(ref tx) = bg_tx {
-                let msg = match result {
+                match result {
                     Ok(res) => {
-                        if res.all_succeeded {
+                        let msg = if res.all_succeeded {
                             format!("Workflow '{}' completed successfully", def.name)
                         } else {
                             format!("Workflow '{}' completed with failures", def.name)
-                        }
+                        };
+                        let _ = tx.send(Action::BackgroundSuccess { message: msg });
                     }
-                    Err(e) => format!("Workflow '{}' failed: {e}", def.name),
-                };
-                let _ = tx.send(Action::BackgroundSuccess { message: msg });
+                    Err(e) => {
+                        let _ = tx.send(Action::BackgroundError {
+                            message: format!("Workflow '{}' failed: {e}", def.name),
+                        });
+                    }
+                }
             }
         });
 

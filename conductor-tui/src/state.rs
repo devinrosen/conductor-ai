@@ -436,6 +436,7 @@ pub enum WorkflowPickerTarget {
         ticket_title: String,
         ticket_url: String,
         repo_id: String,
+        repo_path: String,
     },
     Repo {
         repo_id: String,

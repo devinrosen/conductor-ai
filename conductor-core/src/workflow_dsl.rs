@@ -3587,4 +3587,53 @@ workflow test {
             report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
         );
     }
+
+    #[test]
+    fn test_validate_known_targets_accepted() {
+        for target in &["worktree", "ticket", "repo", "pr"] {
+            let input =
+                format!("workflow test {{ meta {{ targets = [\"{target}\"] }} call step }}",);
+            let def = parse_workflow_str(&input, "test.wf").unwrap();
+            let report = validate_workflow_semantics(&def, &no_loader);
+            assert!(
+                report.is_ok(),
+                "target '{target}' should be valid, got errors: {:?}",
+                report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_unknown_target_rejected() {
+        let input = r#"workflow test { meta { targets = ["foobar"] } call step }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            !report.is_ok(),
+            "unknown target 'foobar' should produce a validation error"
+        );
+        let msg = &report.errors[0].message;
+        assert!(
+            msg.contains("foobar"),
+            "error should mention the bad target, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_validate_multiple_targets_with_one_unknown() {
+        let input = r#"workflow test { meta { targets = ["worktree", "badtarget"] } call step }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            !report.is_ok(),
+            "mixed valid/invalid targets should produce a validation error"
+        );
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.message.contains("badtarget")),
+            "error should name the unknown target"
+        );
+    }
 }
