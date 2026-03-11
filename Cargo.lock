@@ -355,7 +355,6 @@ dependencies = [
  "ratatui",
  "rusqlite",
  "serde_json",
- "tempfile",
  "tracing",
  "tui-textarea",
  "ulid",
