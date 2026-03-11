@@ -49,7 +49,6 @@ pub fn render(frame: &mut Frame, area: Rect) {
         help_line("s", "Sync tickets"),
         help_line("W", "Manage work targets"),
         help_line("S", "Manage issue sources"),
-        help_line("m", "Set model (repo/worktree detail)"),
         help_line("A", "Toggle closed tickets"),
         help_line("!", "Toggle status bar expansion"),
         help_line("/", "Filter/search"),
@@ -90,7 +89,6 @@ pub fn render(frame: &mut Frame, area: Rect) {
         help_line("x", "Stop running agent"),
         help_line("f", "Submit feedback to agent"),
         help_line("F", "Dismiss feedback request"),
-        help_line("m", "Set model for this worktree"),
         Line::from(""),
         Line::from(Span::styled(
             "Workflow Run Detail",

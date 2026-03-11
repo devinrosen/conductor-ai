@@ -341,7 +341,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             {
                 return Action::LinkTicket
             }
-            KeyCode::Char('m') => return Action::SetModel,
             _ => {}
         }
     }
@@ -410,22 +409,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             }
         }
         match key.code {
-            KeyCode::Char('m') => return Action::SetModel,
             KeyCode::Char('I') => return Action::ToggleAgentIssues,
             _ => {}
-        }
-    }
-
-    // View-specific keybindings (Dashboard — Repos or Worktrees panel)
-    if state.view == View::Dashboard {
-        use crate::state::DashboardFocus;
-        if let KeyCode::Char('m') = key.code {
-            if matches!(
-                state.dashboard_focus,
-                DashboardFocus::Repos | DashboardFocus::Worktrees
-            ) {
-                return Action::SetModel;
-            }
         }
     }
 
