@@ -1138,4 +1138,79 @@ mod tests {
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].source_id, "10");
     }
+
+    #[test]
+    fn test_get_all_labels_groups_by_ticket_id() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Two tickets, first with two labels, second with one label, third with none.
+        let mut t1 = make_ticket("1", "Issue 1");
+        t1.label_details = vec![
+            TicketLabelInput {
+                name: "bug".to_string(),
+                color: Some("d73a4a".to_string()),
+            },
+            TicketLabelInput {
+                name: "enhancement".to_string(),
+                color: None,
+            },
+        ];
+        let mut t2 = make_ticket("2", "Issue 2");
+        t2.label_details = vec![TicketLabelInput {
+            name: "docs".to_string(),
+            color: Some("0075ca".to_string()),
+        }];
+        let t3 = make_ticket("3", "Issue 3"); // no labels
+
+        syncer.upsert_tickets("r1", &[t1, t2, t3]).unwrap();
+
+        let tid1: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let tid2: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '2'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let tid3: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '3'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        let map = syncer.get_all_labels().unwrap();
+
+        // ticket 1: two labels
+        let lbls1 = map.get(&tid1).expect("ticket 1 must have labels");
+        assert_eq!(lbls1.len(), 2);
+        assert!(lbls1
+            .iter()
+            .any(|l| l.label == "bug" && l.color == Some("d73a4a".to_string())));
+        assert!(lbls1
+            .iter()
+            .any(|l| l.label == "enhancement" && l.color.is_none()));
+
+        // ticket 2: one label
+        let lbls2 = map.get(&tid2).expect("ticket 2 must have labels");
+        assert_eq!(lbls2.len(), 1);
+        assert_eq!(lbls2[0].label, "docs");
+        assert_eq!(lbls2[0].color, Some("0075ca".to_string()));
+
+        // ticket 3: no entry in the map
+        assert!(
+            !map.contains_key(&tid3),
+            "ticket with no labels must not appear in the map"
+        );
+    }
+
+    #[test]
+    fn test_get_all_labels_empty_db() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let map = syncer.get_all_labels().unwrap();
+        assert!(map.is_empty(), "empty DB must yield empty label map");
+    }
 }
