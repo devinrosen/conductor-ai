@@ -194,9 +194,9 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
                     .and_then(|wt_id| state.data.latest_agent_runs.get(wt_id))
                     .is_some_and(|run| run.is_active());
                 if has_running {
-                    "r:agent  x:stop  o:ticket  Esc:back  ?:help".to_string()
+                    "p:prompt  x:stop  w:workflow  Esc:back  ?:help".to_string()
                 } else {
-                    "r:agent  o:ticket  p:push  P:PR  d:delete  Esc:back  ?:help".to_string()
+                    "p:prompt  O:orchestrate  w:workflow  d:delete  Esc:back  ?:help".to_string()
                 }
             }
             View::Tickets => "j/k:nav  /:filter  Esc:back  ?:help".to_string(),
