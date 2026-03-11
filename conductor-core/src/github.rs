@@ -3,7 +3,7 @@ use std::process::{Command, Output};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ConductorError, Result};
-use crate::tickets::TicketInput;
+use crate::tickets::{TicketInput, TicketLabelInput};
 
 /// Build an `"owner/repo"` slug from its two components.
 fn repo_slug(owner: &str, repo: &str) -> String {
@@ -242,14 +242,20 @@ pub fn sync_github_issues(
         .into_iter()
         .map(|issue| {
             let number = issue["number"].as_u64().unwrap_or(0);
-            let labels: Vec<String> = issue["labels"]
+            let label_details: Vec<TicketLabelInput> = issue["labels"]
                 .as_array()
                 .map(|arr| {
                     arr.iter()
-                        .filter_map(|l| l["name"].as_str().map(|s| s.to_string()))
+                        .filter_map(|l| {
+                            l["name"].as_str().map(|name| TicketLabelInput {
+                                name: name.to_string(),
+                                color: l["color"].as_str().map(|c| c.to_string()),
+                            })
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
+            let label_names: Vec<&str> = label_details.iter().map(|l| l.name.as_str()).collect();
             let assignee = issue["assignees"]
                 .as_array()
                 .and_then(|arr| arr.first())
@@ -262,11 +268,12 @@ pub fn sync_github_issues(
                 title: issue["title"].as_str().unwrap_or("").to_string(),
                 body: issue["body"].as_str().unwrap_or("").to_string(),
                 state: "open".to_string(),
-                labels: serde_json::to_string(&labels).unwrap_or_else(|_| "[]".to_string()),
+                labels: serde_json::to_string(&label_names).unwrap_or_else(|_| "[]".to_string()),
                 assignee,
                 priority: None,
                 url: issue["url"].as_str().unwrap_or("").to_string(),
                 raw_json: serde_json::to_string(&issue).unwrap_or_else(|_| "{}".to_string()),
+                label_details,
             }
         })
         .collect();

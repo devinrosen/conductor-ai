@@ -88,6 +88,7 @@ fn parse_jira_issues(json_str: &str, base_url: &str) -> Result<Vec<TicketInput>>
                 priority,
                 url,
                 raw_json: serde_json::to_string(&issue).unwrap_or_else(|_| "{}".to_string()),
+                label_details: vec![],
             }
         })
         .collect();
