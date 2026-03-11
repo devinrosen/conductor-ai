@@ -1502,25 +1502,37 @@ impl App {
         ticket.map(|t| t.url.clone())
     }
 
+    /// Open a URL in the default browser, checking the exit code.
+    fn open_url(&mut self, url: &str, label: &str) {
+        match Command::new("open")
+            .arg(url)
+            .output()
+            .or_else(|_| Command::new("xdg-open").arg(url).output())
+        {
+            Ok(output) if output.status.success() => {
+                self.state.status_message = Some(format!("Opened {url}"));
+            }
+            Ok(output) => {
+                let code = output
+                    .status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                self.state.status_message =
+                    Some(format!("Failed to open {label} URL (exit code {code})"));
+            }
+            Err(e) => {
+                self.state.status_message = Some(format!("Failed to open {label} URL: {e}"));
+            }
+        }
+    }
+
     fn handle_open_ticket_url(&mut self) {
         match self.selected_ticket_url().filter(|u| !u.is_empty()) {
             None => {
                 self.state.status_message = Some("No ticket URL available".to_string());
             }
-            Some(url) => {
-                match Command::new("open")
-                    .arg(&url)
-                    .output()
-                    .or_else(|_| Command::new("xdg-open").arg(&url).output())
-                {
-                    Ok(_) => {
-                        self.state.status_message = Some(format!("Opened {url}"));
-                    }
-                    Err(e) => {
-                        self.state.status_message = Some(format!("Failed to open ticket URL: {e}"));
-                    }
-                }
-            }
+            Some(url) => self.open_url(&url, "ticket"),
         }
     }
 
@@ -1542,20 +1554,7 @@ impl App {
 
     fn handle_open_repo_url(&mut self) {
         match self.repo_web_url() {
-            Some(url) => {
-                match Command::new("open")
-                    .arg(&url)
-                    .output()
-                    .or_else(|_| Command::new("xdg-open").arg(&url).output())
-                {
-                    Ok(_) => {
-                        self.state.status_message = Some(format!("Opened {url}"));
-                    }
-                    Err(e) => {
-                        self.state.status_message = Some(format!("Failed to open repo URL: {e}"));
-                    }
-                }
-            }
+            Some(url) => self.open_url(&url, "repo"),
             None => {
                 self.state.status_message = Some("No GitHub URL found for this repo".to_string());
             }
@@ -1583,20 +1582,7 @@ impl App {
             None => {
                 self.state.status_message = Some("No PR URL available".to_string());
             }
-            Some(url) => {
-                match Command::new("open")
-                    .arg(&url)
-                    .output()
-                    .or_else(|_| Command::new("xdg-open").arg(&url).output())
-                {
-                    Ok(_) => {
-                        self.state.status_message = Some(format!("Opened {url}"));
-                    }
-                    Err(e) => {
-                        self.state.status_message = Some(format!("Failed to open PR URL: {e}"));
-                    }
-                }
-            }
+            Some(url) => self.open_url(&url, "PR"),
         }
     }
 
@@ -3880,19 +3866,8 @@ impl App {
                     .map(|t| t.url.clone());
                 match url {
                     Some(ref u) if !u.is_empty() => {
-                        match Command::new("open")
-                            .arg(u)
-                            .output()
-                            .or_else(|_| Command::new("xdg-open").arg(u).output())
-                        {
-                            Ok(_) => {
-                                self.state.status_message = Some(format!("Opened ticket: {u}"));
-                            }
-                            Err(e) => {
-                                self.state.status_message =
-                                    Some(format!("Failed to open ticket: {e}"));
-                            }
-                        }
+                        let u = u.clone();
+                        self.open_url(&u, "ticket");
                     }
                     _ => {
                         self.state.status_message =
@@ -3917,20 +3892,7 @@ impl App {
         let Some(repo) = repo else { return };
         match row {
             repo_info_row::SLUG | repo_info_row::REMOTE => match self.repo_web_url() {
-                Some(url) => {
-                    match Command::new("open")
-                        .arg(&url)
-                        .output()
-                        .or_else(|_| Command::new("xdg-open").arg(&url).output())
-                    {
-                        Ok(_) => {
-                            self.state.status_message = Some(format!("Opened {url}"));
-                        }
-                        Err(e) => {
-                            self.state.status_message = Some(format!("Failed to open: {e}"));
-                        }
-                    }
-                }
+                Some(url) => self.open_url(&url, "repo"),
                 None => {
                     self.state.status_message =
                         Some("No GitHub URL found for this repo".to_string());
