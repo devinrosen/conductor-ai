@@ -171,12 +171,17 @@ enum WorkflowCommands {
     },
     /// Validate a workflow definition (check all agents exist)
     Validate {
-        /// Repo slug
-        repo: String,
-        /// Worktree slug
-        worktree: String,
+        /// Repo slug (required unless --path is given)
+        #[arg(required_unless_present = "path")]
+        repo: Option<String>,
+        /// Worktree slug (required unless --path is given)
+        #[arg(required_unless_present = "path")]
+        worktree: Option<String>,
         /// Workflow name
         name: String,
+        /// Path to a repo root directory; skips DB lookup
+        #[arg(long, conflicts_with_all = &["repo", "worktree"])]
+        path: Option<String>,
     },
     /// Resume a failed or stalled workflow run
     Resume {
@@ -1259,13 +1264,19 @@ fn main() -> Result<()> {
                 repo,
                 worktree,
                 name,
+                path,
             } => {
-                let repo_mgr = RepoManager::new(&conn, &config);
-                let r = repo_mgr.get_by_slug(&repo)?;
-                let wt_mgr = WorktreeManager::new(&conn, &config);
-                let wt = wt_mgr.get_by_slug(&r.id, &worktree)?;
+                let (wt_path, repo_path) = if let Some(ref dir) = path {
+                    (dir.clone(), dir.clone())
+                } else {
+                    let repo_mgr = RepoManager::new(&conn, &config);
+                    let r = repo_mgr.get_by_slug(repo.as_deref().unwrap())?;
+                    let wt_mgr = WorktreeManager::new(&conn, &config);
+                    let wt = wt_mgr.get_by_slug(&r.id, worktree.as_deref().unwrap())?;
+                    (wt.path, r.local_path)
+                };
 
-                let workflow = WorkflowManager::load_def_by_name(&wt.path, &r.local_path, &name)?;
+                let workflow = WorkflowManager::load_def_by_name(&wt_path, &repo_path, &name)?;
 
                 let mut all_refs = collect_agent_names(&workflow.body);
                 all_refs.extend(collect_agent_names(&workflow.always));
@@ -1276,8 +1287,8 @@ fn main() -> Result<()> {
 
                 let specs: Vec<AgentSpec> = all_refs.iter().map(AgentSpec::from).collect();
                 let missing = conductor_core::agent_config::find_missing_agents(
-                    &wt.path,
-                    &r.local_path,
+                    &wt_path,
+                    &repo_path,
                     &specs,
                     Some(&name),
                 );
@@ -1293,8 +1304,8 @@ fn main() -> Result<()> {
                 let all_snippets = workflow.collect_all_snippet_refs();
 
                 let missing_snippets = conductor_core::prompt_config::find_missing_snippets(
-                    &wt.path,
-                    &r.local_path,
+                    &wt_path,
+                    &repo_path,
                     &all_snippets,
                     Some(&name),
                 );
@@ -1329,8 +1340,8 @@ fn main() -> Result<()> {
                 }
 
                 // Build a loader closure for cycle detection and semantic validation.
-                let wt_path = wt.path.clone();
-                let repo_path = r.local_path.clone();
+                let wt_path = wt_path.clone();
+                let repo_path = repo_path.clone();
                 let loader = |wf_name: &str| {
                     WorkflowManager::load_def_by_name(&wt_path, &repo_path, wf_name)
                         .map_err(|e| e.to_string())
