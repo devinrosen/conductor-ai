@@ -2152,6 +2152,15 @@ impl App {
         // Fallback: repo-only path (no ticket context)
         match self.state.view {
             View::Dashboard | View::RepoDetail => {
+                // Creating a worktree from the Worktrees tab is ambiguous — no repo is selected
+                if self.state.view == View::Dashboard
+                    && self.state.dashboard_focus == DashboardFocus::Worktrees
+                {
+                    self.state.status_message =
+                        Some("Switch to the Repos tab to create a worktree".to_string());
+                    return;
+                }
+
                 let repo_slug = self
                     .state
                     .selected_repo_id
