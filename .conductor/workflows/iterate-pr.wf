@@ -1,0 +1,27 @@
+workflow iterate-pr {
+  meta {
+    description = "Sync with main, resolve conflicts, lint, then iterate review until clean"
+    trigger     = "manual"
+    targets     = ["worktree"]
+  }
+
+  do {
+    max_iterations = 10
+    on_max_iter    = fail
+
+    call sync-with-main
+
+    if sync-with-main.has_conflicts {
+      call resolve-conflicts
+      call push
+    }
+
+    call workflow lint-fix
+
+    call workflow review-pr
+
+    if review-pr.has_review_issues {
+      call address-reviews
+    }
+  } while review-pr.has_review_issues
+}
