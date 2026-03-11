@@ -3912,6 +3912,72 @@ mod tests {
     }
 
     #[test]
+    fn test_create_workflow_run_with_repo_id_round_trip() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run_with_targets(
+                "test-wf",
+                Some("w1"),
+                None,
+                Some("r1"),
+                &parent.id,
+                false,
+                "manual",
+                None,
+            )
+            .unwrap();
+
+        // Verify the struct returned by create reflects the inputs.
+        assert_eq!(run.repo_id.as_deref(), Some("r1"));
+        assert_eq!(run.ticket_id, None);
+
+        // Read back from DB and assert columns are persisted correctly.
+        let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.repo_id.as_deref(), Some("r1"));
+        assert_eq!(fetched.ticket_id, None);
+    }
+
+    #[test]
+    fn test_create_workflow_run_with_ticket_id_round_trip() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+
+        insert_test_ticket(&conn, "tkt-rt-1", "r1");
+
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run_with_targets(
+                "test-wf",
+                None,
+                Some("tkt-rt-1"),
+                None,
+                &parent.id,
+                false,
+                "manual",
+                None,
+            )
+            .unwrap();
+
+        // Verify the struct returned by create reflects the inputs.
+        assert_eq!(run.ticket_id.as_deref(), Some("tkt-rt-1"));
+        assert_eq!(run.repo_id, None);
+
+        // Read back from DB and assert columns are persisted correctly.
+        let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.ticket_id.as_deref(), Some("tkt-rt-1"));
+        assert_eq!(fetched.repo_id, None);
+    }
+
+    #[test]
     fn test_insert_step_with_iteration() {
         let conn = setup_db();
         let agent_mgr = AgentManager::new(&conn);
@@ -7803,6 +7869,9 @@ And here is my actual output:
             run.inputs.get("repo_name").map(String::as_str),
             Some("test-repo")
         );
+        // Assert the repo_id column is persisted on the WorkflowRun record itself.
+        assert_eq!(run.repo_id.as_deref(), Some("r1"));
+        assert_eq!(run.ticket_id, None);
     }
 
     #[test]
@@ -7848,6 +7917,9 @@ And here is my actual output:
             run.inputs.contains_key("ticket_url"),
             "ticket_url should be injected"
         );
+        // Assert the ticket_id column is persisted on the WorkflowRun record itself.
+        assert_eq!(run.ticket_id.as_deref(), Some("tkt-1"));
+        assert_eq!(run.repo_id, None);
     }
 
     #[test]
