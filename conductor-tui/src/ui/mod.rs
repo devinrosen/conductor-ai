@@ -84,7 +84,12 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         Modal::TicketInfo { ticket } => {
             let agent_totals = state.data.ticket_agent_totals.get(&ticket.id);
             let worktrees = state.data.ticket_worktrees.get(&ticket.id);
-            modal::render_ticket_info(frame, area, ticket, agent_totals, worktrees);
+            let labels = state
+                .data
+                .ticket_labels
+                .get(&ticket.id)
+                .map(|v| v.as_slice());
+            modal::render_ticket_info(frame, area, ticket, agent_totals, worktrees, labels);
         }
         Modal::PostCreatePicker {
             items,

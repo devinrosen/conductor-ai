@@ -7,48 +7,6 @@ use ratatui::Frame;
 use super::common::truncate;
 use crate::state::AppState;
 
-/// Parse a 6-digit hex color string (with or without `#`) into `Color::Rgb`.
-/// Falls back to `Color::DarkGray` on any parse error.
-fn hex_to_color(hex: &str) -> Color {
-    let h = hex.trim_start_matches('#');
-    // Support 3-digit shorthand
-    let full = if h.len() == 3 {
-        format!(
-            "{}{}{}{}{}{}",
-            &h[0..1],
-            &h[0..1],
-            &h[1..2],
-            &h[1..2],
-            &h[2..3],
-            &h[2..3]
-        )
-    } else {
-        h.to_string()
-    };
-    if full.len() != 6 {
-        return Color::DarkGray;
-    }
-    let r = u8::from_str_radix(&full[0..2], 16).unwrap_or(128);
-    let g = u8::from_str_radix(&full[2..4], 16).unwrap_or(128);
-    let b = u8::from_str_radix(&full[4..6], 16).unwrap_or(128);
-    Color::Rgb(r, g, b)
-}
-
-/// Choose black or white foreground for maximum contrast against a colored background.
-fn label_fg(bg: Color) -> Color {
-    match bg {
-        Color::Rgb(r, g, b) => {
-            let luminance = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
-            if luminance > 128.0 {
-                Color::Black
-            } else {
-                Color::White
-            }
-        }
-        _ => Color::White,
-    }
-}
-
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let filter = state.filter.as_query();
     let label_filter = state.label_filter.as_query();
@@ -102,9 +60,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                     let bg = lbl
                         .color
                         .as_deref()
-                        .map(hex_to_color)
+                        .map(super::common::hex_to_color)
                         .unwrap_or(Color::DarkGray);
-                    let fg = label_fg(bg);
+                    let fg = super::common::label_fg(bg);
                     spans.push(Span::raw(" "));
                     spans.push(Span::styled(
                         format!(" {name} "),

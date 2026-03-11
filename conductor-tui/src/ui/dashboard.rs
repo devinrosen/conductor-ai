@@ -165,6 +165,13 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
                 Span::raw("  "),
                 Span::styled(format!("[{}]", t.state), Style::default().fg(state_color)),
             ];
+            let labels = state
+                .data
+                .ticket_labels
+                .get(&t.id)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            spans.extend(super::common::ticket_label_spans_compact(labels));
             spans.extend(super::common::ticket_worktree_spans(state, &t.id, "  "));
             spans.extend(super::common::ticket_agent_total_spans(
                 state, &t.id, "  ", false,

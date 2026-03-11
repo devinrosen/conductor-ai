@@ -8,7 +8,7 @@ use tui_textarea::TextArea;
 use conductor_core::agent::TicketAgentTotals;
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::issue_source::IssueSource;
-use conductor_core::tickets::Ticket;
+use conductor_core::tickets::{Ticket, TicketLabel};
 use conductor_core::worktree::Worktree;
 
 pub fn render_confirm(frame: &mut Frame, area: Rect, title: &str, message: &str) {
@@ -181,6 +181,7 @@ pub fn render_ticket_info(
     ticket: &Ticket,
     agent_totals: Option<&TicketAgentTotals>,
     worktrees: Option<&Vec<Worktree>>,
+    labels: Option<&[TicketLabel]>,
 ) {
     let popup = centered_rect(60, 70, area);
     frame.render_widget(Clear, popup);
@@ -208,10 +209,42 @@ pub fn render_ticket_info(
 
     let assignee_text = ticket.assignee.as_deref().unwrap_or("unassigned");
 
-    let labels_text = if ticket.labels.is_empty() {
-        "none".to_string()
-    } else {
-        ticket.labels.clone()
+    // Build the labels line — colored badge chips if rich label data is available,
+    // otherwise fall back to the raw comma-separated string.
+    let labels_line = {
+        let mut spans: Vec<Span<'static>> = vec![Span::styled("  Labels:    ", label_style)];
+        let rich = labels.unwrap_or(&[]);
+        if rich.is_empty() && ticket.labels.is_empty() {
+            spans.push(Span::styled("none", value_style));
+        } else if !rich.is_empty() {
+            let mut shown = 0usize;
+            for lbl in rich.iter().take(5) {
+                let bg = lbl
+                    .color
+                    .as_deref()
+                    .map(super::common::hex_to_color)
+                    .unwrap_or(Color::DarkGray);
+                let fg = super::common::label_fg(bg);
+                if shown > 0 {
+                    spans.push(Span::raw(" "));
+                }
+                spans.push(Span::styled(
+                    format!(" {} ", lbl.label.clone()),
+                    Style::default().fg(fg).bg(bg),
+                ));
+                shown += 1;
+            }
+            let remaining = rich.len().saturating_sub(shown);
+            if remaining > 0 {
+                spans.push(Span::styled(
+                    format!(" +{remaining}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+        } else {
+            spans.push(Span::styled(ticket.labels.clone(), value_style));
+        }
+        Line::from(spans)
     };
 
     let mut lines = vec![
@@ -236,10 +269,7 @@ pub fn render_ticket_info(
             Span::styled("  Assignee:  ", label_style),
             Span::styled(assignee_text, value_style),
         ]),
-        Line::from(vec![
-            Span::styled("  Labels:    ", label_style),
-            Span::styled(&labels_text, value_style),
-        ]),
+        labels_line,
         Line::from(vec![
             Span::styled("  URL:       ", label_style),
             Span::styled(&ticket.url, Style::default().fg(Color::Blue)),
