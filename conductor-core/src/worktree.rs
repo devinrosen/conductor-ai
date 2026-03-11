@@ -143,6 +143,11 @@ impl<'a> WorktreeManager<'a> {
             None => {}
         }
 
+        // Auto-clone if the local path doesn't exist on disk yet
+        if !Path::new(&repo.local_path).exists() {
+            clone_repo(&repo.remote_url, &repo.local_path)?;
+        }
+
         // Resolve the base branch: explicit --from flag, or detect from repo
         let base = from_branch
             .map(|b| b.to_string())
@@ -786,6 +791,14 @@ pub(crate) fn check_output(cmd: &mut Command) -> Result<std::process::Output> {
     Ok(output)
 }
 
+/// Clone a remote repository into `local_path`.
+/// Uses `git clone -- <remote_url> <local_path>` so that a `remote_url`
+/// starting with `-` cannot be misinterpreted as a flag.
+fn clone_repo(remote_url: &str, local_path: &str) -> Result<()> {
+    check_output(Command::new("git").args(["clone", "--", remote_url, local_path]))?;
+    Ok(())
+}
+
 /// Detect package manager and install dependencies if applicable.
 fn install_deps(worktree_path: &Path) {
     if worktree_path.join("package.json").exists() {
@@ -1309,6 +1322,78 @@ mod tests {
             )
             .unwrap();
         assert!(completed_at.is_some());
+    }
+
+    #[test]
+    fn test_create_auto_clones_missing_local_path() {
+        let (tmp, remote, _local) = setup_repo_with_remote();
+
+        // Point local_path to a directory that does not yet exist
+        let missing_local = tmp.path().join("not-yet-cloned");
+
+        let conn = crate::test_helpers::setup_db();
+        let mut config = Config::default();
+        config.general.workspace_root = tmp.path().to_path_buf();
+
+        let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+        let repo = repo_mgr
+            .add(
+                "myrepo",
+                missing_local.to_str().unwrap(),
+                remote.to_str().unwrap(),
+                Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+            )
+            .unwrap();
+
+        // Workspace dir must exist for `git worktree add`
+        std::fs::create_dir_all(&repo.workspace_dir).unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let result = mgr.create("myrepo", "feat-auto-clone", None, None);
+        assert!(
+            result.is_ok(),
+            "expected Ok, got: {:?}",
+            result.unwrap_err()
+        );
+
+        // The local repo should now exist on disk (cloned)
+        assert!(missing_local.exists(), "local_path should have been cloned");
+
+        // The worktree directory should also exist
+        let (wt, _) = result.unwrap();
+        assert!(
+            Path::new(&wt.path).exists(),
+            "worktree path should exist: {}",
+            wt.path
+        );
+    }
+
+    #[test]
+    fn test_create_clone_fails_with_bad_remote() {
+        let tmp = TempDir::new().unwrap();
+        let missing_local = tmp.path().join("not-yet-cloned");
+
+        let conn = crate::test_helpers::setup_db();
+        let mut config = Config::default();
+        config.general.workspace_root = tmp.path().to_path_buf();
+
+        let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+        repo_mgr
+            .add(
+                "badrepo",
+                missing_local.to_str().unwrap(),
+                "file:///this/does/not/exist/at/all",
+                Some(tmp.path().join("workspaces/badrepo").to_str().unwrap()),
+            )
+            .unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let result = mgr.create("badrepo", "feat-should-fail", None, None);
+        assert!(result.is_err(), "expected Err for bad remote");
+        match result.unwrap_err() {
+            ConductorError::Git(_) => {}
+            other => panic!("expected ConductorError::Git, got: {other:?}"),
+        }
     }
 
     #[test]
