@@ -1,0 +1,15 @@
+workflow workflow-postmortem {
+  meta {
+    description = "Analyze a completed workflow run and produce a markdown postmortem report"
+    trigger     = "manual"
+    targets     = ["worktree"]
+  }
+
+  inputs {
+    workflow_run_id required
+  }
+
+  call fetch-run-data
+  call analyze-postmortem
+  call write-postmortem-report
+}
