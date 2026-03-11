@@ -137,6 +137,8 @@ pub enum Action {
     WorktreeDetailOpen,
     /// Act on the selected row in the RepoDetail info pane.
     RepoDetailInfoOpen,
+    /// Copy the value of the selected row in the RepoDetail info pane.
+    RepoDetailInfoCopy,
     ScrollLeft,
     ScrollRight,
 

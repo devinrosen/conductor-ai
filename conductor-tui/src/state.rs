@@ -216,8 +216,9 @@ pub mod repo_info_row {
     pub const PATH: usize = 3;
     pub const WORKTREES_DIR: usize = 4;
     pub const MODEL: usize = 5;
+    pub const AGENT_ISSUES: usize = 6;
     /// Total number of navigable rows (used for bounds clamping).
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 7;
 }
 
 /// Choice offered in the post-worktree-creation picker.

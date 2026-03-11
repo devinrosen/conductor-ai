@@ -381,10 +381,16 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Char('j') | KeyCode::Down => return Action::MoveDown,
                 KeyCode::Char('k') | KeyCode::Up => return Action::MoveUp,
                 KeyCode::Char('o') => return Action::RepoDetailInfoOpen,
+                KeyCode::Char('y') => return Action::RepoDetailInfoCopy,
                 KeyCode::Enter
                     if state.repo_detail_info_row == crate::state::repo_info_row::MODEL =>
                 {
                     return Action::SetModel
+                }
+                KeyCode::Enter
+                    if state.repo_detail_info_row == crate::state::repo_info_row::AGENT_ISSUES =>
+                {
+                    return Action::ToggleAgentIssues
                 }
                 _ => {}
             }

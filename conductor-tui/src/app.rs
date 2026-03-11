@@ -493,6 +493,7 @@ impl App {
             Action::WorktreeDetailCopy => self.handle_worktree_detail_copy(),
             Action::WorktreeDetailOpen => self.handle_worktree_detail_open(),
             Action::RepoDetailInfoOpen => self.handle_repo_detail_info_open(),
+            Action::RepoDetailInfoCopy => self.handle_repo_detail_info_copy(),
 
             // Agent (tmux-based)
             Action::LaunchAgent => self.handle_launch_agent(),
@@ -4293,6 +4294,29 @@ impl App {
                 self.state.status_message = Some("No action for this row".to_string());
             }
         }
+    }
+
+    fn handle_repo_detail_info_copy(&mut self) {
+        let row = self.state.repo_detail_info_row;
+        let repo = self
+            .state
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id));
+        let Some(repo) = repo else { return };
+        let text = match row {
+            repo_info_row::SLUG => repo.slug.clone(),
+            repo_info_row::REMOTE => repo.remote_url.clone(),
+            repo_info_row::BRANCH => repo.default_branch.clone(),
+            repo_info_row::PATH => repo.local_path.clone(),
+            repo_info_row::WORKTREES_DIR => repo.workspace_dir.clone(),
+            repo_info_row::MODEL => repo
+                .model
+                .clone()
+                .unwrap_or_else(|| "(not set)".to_string()),
+            _ => return,
+        };
+        self.copy_text_to_clipboard(text);
     }
 
     /// Open a new terminal window/tab at `path`, using the best available method:

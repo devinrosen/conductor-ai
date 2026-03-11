@@ -67,11 +67,12 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             Span::styled("Model:         ", Style::default().fg(Color::DarkGray)),
             match repo.model.as_deref() {
                 Some(m) => Span::raw(m.to_string()),
-                None => Span::styled(
-                    "(not set — press Enter to configure)",
-                    Style::default().fg(Color::DarkGray),
-                ),
+                None => Span::styled("(not set)", Style::default().fg(Color::DarkGray)),
             },
+            Span::styled(
+                " (press Enter to change)",
+                Style::default().fg(Color::DarkGray),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Agent Issues:  ", Style::default().fg(Color::DarkGray)),
@@ -80,7 +81,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             } else {
                 Span::styled("Disabled", Style::default().fg(Color::DarkGray))
             },
-            Span::styled(" (press I to toggle)", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                " (press Enter to toggle)",
+                Style::default().fg(Color::DarkGray),
+            ),
         ]),
     ];
 
