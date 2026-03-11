@@ -1304,6 +1304,7 @@ mod tests {
             inputs: std::collections::HashMap::new(),
             ticket_id: None,
             repo_id: None,
+            parent_workflow_run_id: None,
         }
     }
 

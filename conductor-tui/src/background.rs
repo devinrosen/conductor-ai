@@ -72,10 +72,12 @@ pub fn poll_data() -> Option<Action> {
 
     use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
     let wf_mgr = WorkflowManager::new(&conn);
-    // Build a per-worktree map of the most recent run (any status) for inline indicators.
+    // Build a per-worktree map of the most recent *root* run for inline indicators.
+    // Using list_root_workflow_runs ensures the parent run wins the per-worktree slot
+    // rather than a concurrently-active child sub-workflow run.
     // Fetch recent runs sorted DESC; the first entry per worktree_id wins.
     let mut latest_workflow_runs_by_worktree = std::collections::HashMap::new();
-    for run in wf_mgr.list_all_workflow_runs(100).unwrap_or_default() {
+    for run in wf_mgr.list_root_workflow_runs(100).unwrap_or_default() {
         // Skip ephemeral runs (no registered worktree) — they have no worktree
         // entry to display inline indicators for.
         if let Some(ref wt_id) = run.worktree_id {

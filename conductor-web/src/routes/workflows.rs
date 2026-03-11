@@ -179,6 +179,7 @@ pub async fn run_workflow(
                 exec_config: &exec_config,
                 inputs: inputs.clone(),
                 depth: 0,
+                parent_workflow_run_id: None,
             };
 
             execute_workflow(&input)

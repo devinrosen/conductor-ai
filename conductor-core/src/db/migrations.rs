@@ -565,6 +565,12 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 30)?;
     }
 
+    // Migration 031: add parent_workflow_run_id to workflow_runs for sub-workflow linking.
+    if version < 31 {
+        conn.execute_batch(include_str!("migrations/031_workflow_parent_run_id.sql"))?;
+        bump_version(conn, 31)?;
+    }
+
     Ok(())
 }
 

@@ -1183,6 +1183,7 @@ fn main() -> Result<()> {
                             exec_config: &exec_config,
                             inputs: input_map,
                             depth: 0,
+                            parent_workflow_run_id: None,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),

@@ -412,18 +412,84 @@ pub fn worktree_list_item(
                     } else {
                         String::new()
                     };
-                    let base = format!("{symbol} {} > {iter_prefix}", wf_run.workflow_name);
-                    // Truncate step name if it would overflow a reasonable column width.
-                    // We use a heuristic max of 80 chars for the full label.
+
+                    // Build the full breadcrumb from workflow_chain + step_name.
+                    // workflow_chain is empty for single-level workflows (no sub-workflows).
+                    // For nested workflows it contains [root, ...parents] (leaf omitted).
                     const MAX_LABEL: usize = 80;
-                    let base_chars = base.chars().count();
-                    let step_chars = s.step_name.chars().count();
-                    if base_chars + step_chars <= MAX_LABEL {
-                        format!("{base}{}", s.step_name)
+
+                    // Assemble all workflow-name parts followed by the step name.
+                    // The step_name is always the last segment.
+                    let all_names: Vec<&str> = s
+                        .workflow_chain
+                        .iter()
+                        .map(String::as_str)
+                        .chain(std::iter::once(s.step_name.as_str()))
+                        .collect();
+
+                    // "{symbol} name1 > name2 > … > {iter_prefix}step_name"
+                    let symbol_prefix = format!("{symbol} ");
+
+                    // First try the full chain.
+                    if !s.workflow_chain.is_empty() {
+                        let mut remaining = all_names.as_slice();
+                        // Drop leading workflow names one-by-one until it fits,
+                        // replacing with "..." prefix.
+                        loop {
+                            // Rebuild with current remaining names.
+                            let (prefix_part, step_part) = remaining.split_at(remaining.len() - 1);
+                            let step_str = format!("{iter_prefix}{}", step_part[0]);
+                            let joined_names: Vec<&str> = prefix_part
+                                .iter()
+                                .copied()
+                                .chain(std::iter::once(step_str.as_str()))
+                                .collect();
+                            let omitted = all_names.len() - remaining.len();
+                            let candidate = if omitted > 0 {
+                                format!("{symbol_prefix}... > {}", joined_names.join(" > "))
+                            } else {
+                                format!("{symbol_prefix}{}", joined_names.join(" > "))
+                            };
+                            if candidate.chars().count() <= MAX_LABEL || remaining.len() <= 1 {
+                                // Fits, or we've dropped everything except the step — use it.
+                                // If the step name alone is still too wide, truncate it.
+                                if candidate.chars().count() <= MAX_LABEL {
+                                    break candidate;
+                                }
+                                // Truncate step name.
+                                let overhead = candidate.chars().count() - step_str.chars().count();
+                                let available = MAX_LABEL.saturating_sub(overhead + 1);
+                                let truncated: String = step_str.chars().take(available).collect();
+                                let base = if omitted > 0 {
+                                    format!(
+                                        "{symbol_prefix}... > {}",
+                                        joined_names[..joined_names.len() - 1].join(" > ")
+                                    )
+                                } else if joined_names.len() > 1 {
+                                    format!(
+                                        "{symbol_prefix}{}",
+                                        joined_names[..joined_names.len() - 1].join(" > ")
+                                    )
+                                } else {
+                                    symbol_prefix.clone()
+                                };
+                                let sep = if base.ends_with(' ') { "" } else { " > " };
+                                break format!("{base}{sep}{truncated}…");
+                            }
+                            remaining = &remaining[1..];
+                        }
                     } else {
-                        let available = MAX_LABEL.saturating_sub(base_chars + 1); // +1 for ellipsis
-                        let truncated: String = s.step_name.chars().take(available).collect();
-                        format!("{base}{truncated}…")
+                        // Single-level workflow: keep original format.
+                        let base = format!("{symbol} {} > {iter_prefix}", wf_run.workflow_name);
+                        let base_chars = base.chars().count();
+                        let step_chars = s.step_name.chars().count();
+                        if base_chars + step_chars <= MAX_LABEL {
+                            format!("{base}{}", s.step_name)
+                        } else {
+                            let available = MAX_LABEL.saturating_sub(base_chars + 1);
+                            let truncated: String = s.step_name.chars().take(available).collect();
+                            format!("{base}{truncated}…")
+                        }
                     }
                 })
             } else {
