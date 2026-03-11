@@ -24,6 +24,38 @@ fn worktree_slug(worktrees: &[Worktree], predicate: impl Fn(&Worktree) -> bool) 
 
 /// Render the Workflows split-pane view: defs (left) + runs (right).
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
+    // When a worktree is selected, show a 1-line context bar at the top so
+    // the user always knows which worktree's workflows they are viewing.
+    let selected_wt = state
+        .selected_worktree_id
+        .as_ref()
+        .and_then(|id| state.data.worktrees.iter().find(|w| &w.id == id));
+
+    let (area, header_area) = if let Some(wt) = selected_wt {
+        let v = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(area);
+        (v[1], Some((v[0], wt)))
+    } else {
+        (area, None)
+    };
+
+    if let Some((header_area, wt)) = header_area {
+        let line = Line::from(vec![
+            Span::styled("Worktree: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                wt.slug.clone(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  Branch: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(wt.branch.clone()),
+        ]);
+        frame.render_widget(Paragraph::new(line), header_area);
+    }
+
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
