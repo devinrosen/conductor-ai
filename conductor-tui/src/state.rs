@@ -370,6 +370,12 @@ pub enum Modal {
         workflow_defs: Vec<WorkflowDef>,
         selected: usize,
     },
+    /// Generic workflow picker — opened by `w` key in any context.
+    WorkflowPicker {
+        target: WorkflowPickerTarget,
+        workflow_defs: Vec<WorkflowDef>,
+        selected: usize,
+    },
 }
 
 impl fmt::Debug for Modal {
@@ -416,8 +422,25 @@ impl fmt::Debug for Modal {
                 pr_title,
                 ..
             } => write!(f, "Modal::PrWorkflowPicker(#{pr_number} {pr_title:?})"),
+            Modal::WorkflowPicker { ref target, .. } => {
+                write!(f, "Modal::WorkflowPicker(target={target:?})")
+            }
         }
     }
+}
+
+/// Target context for the generic workflow picker.
+#[derive(Debug, Clone)]
+pub enum WorkflowPickerTarget {
+    Worktree {
+        worktree_id: String,
+        worktree_path: String,
+        repo_path: String,
+    },
+    Pr {
+        pr_number: i64,
+        pr_title: String,
+    },
 }
 
 #[derive(Debug, Clone)]

@@ -599,6 +599,7 @@ impl App {
             }
 
             // Workflow actions
+            Action::PickWorkflow => self.handle_pick_workflow(),
             Action::RunWorkflow => self.handle_run_workflow(),
             Action::RunPrWorkflow => self.handle_run_pr_workflow(),
             Action::ResumeWorkflow => self.handle_resume_workflow(),
@@ -1035,6 +1036,11 @@ impl App {
                 ref workflow_defs,
                 ref mut selected,
                 ..
+            }
+            | Modal::WorkflowPicker {
+                ref workflow_defs,
+                ref mut selected,
+                ..
             } => {
                 wrap_decrement(selected, workflow_defs.len());
                 return;
@@ -1171,6 +1177,11 @@ impl App {
                 return;
             }
             Modal::PrWorkflowPicker {
+                ref workflow_defs,
+                ref mut selected,
+                ..
+            }
+            | Modal::WorkflowPicker {
                 ref workflow_defs,
                 ref mut selected,
                 ..
@@ -1790,6 +1801,12 @@ impl App {
         // PrWorkflowPicker: confirm the selected workflow
         if matches!(self.state.modal, Modal::PrWorkflowPicker { .. }) {
             self.handle_pr_workflow_picker_confirm();
+            return;
+        }
+
+        // WorkflowPicker: confirm the selected workflow
+        if matches!(self.state.modal, Modal::WorkflowPicker { .. }) {
+            self.handle_workflow_picker_confirm();
             return;
         }
 
@@ -4794,6 +4811,278 @@ impl App {
         // Auto-reset focus to Steps if current step has no agent activity
         if !self.state.selected_step_has_agent() {
             self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
+        }
+    }
+
+    /// Open a workflow picker appropriate for the current context.
+    fn handle_pick_workflow(&mut self) {
+        use crate::state::WorkflowPickerTarget;
+
+        // Determine the target based on current view/focus
+        let target = if self.state.view == View::WorktreeDetail {
+            // WorktreeDetail: target is the current worktree
+            let wt = match self
+                .state
+                .selected_worktree_id
+                .as_ref()
+                .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
+            {
+                Some(w) => w.clone(),
+                None => {
+                    self.state.status_message = Some("No worktree selected".to_string());
+                    return;
+                }
+            };
+            let repo_path = self
+                .state
+                .data
+                .repos
+                .iter()
+                .find(|r| r.id == wt.repo_id)
+                .map(|r| r.local_path.clone())
+                .unwrap_or_default();
+            WorkflowPickerTarget::Worktree {
+                worktree_id: wt.id.clone(),
+                worktree_path: wt.path.clone(),
+                repo_path,
+            }
+        } else if self.state.view == View::RepoDetail
+            && self.state.repo_detail_focus == crate::state::RepoDetailFocus::Prs
+        {
+            // RepoDetail PRs pane: target is the selected PR
+            let pr = match self.state.detail_prs.get(self.state.detail_pr_index) {
+                Some(pr) => pr.clone(),
+                None => {
+                    self.state.status_message = Some("No PR selected".to_string());
+                    return;
+                }
+            };
+            WorkflowPickerTarget::Pr {
+                pr_number: pr.number,
+                pr_title: pr.title.clone(),
+            }
+        } else if self.state.view == View::Dashboard
+            && self.state.dashboard_focus == crate::state::DashboardFocus::Repos
+        {
+            // Dashboard Repos pane: find the first worktree for selected repo
+            match self.resolve_worktree_for_selected_repo() {
+                Some((wt_id, wt_path, repo_path)) => WorkflowPickerTarget::Worktree {
+                    worktree_id: wt_id,
+                    worktree_path: wt_path,
+                    repo_path,
+                },
+                None => {
+                    self.state.status_message = Some("No worktree found for this repo".to_string());
+                    return;
+                }
+            }
+        } else {
+            // Ticket list contexts: find linked worktree for selected ticket
+            match self.resolve_worktree_for_selected_ticket() {
+                Some((wt_id, wt_path, repo_path)) => WorkflowPickerTarget::Worktree {
+                    worktree_id: wt_id,
+                    worktree_path: wt_path,
+                    repo_path,
+                },
+                None => {
+                    self.state.status_message =
+                        Some("No worktree linked to this ticket".to_string());
+                    return;
+                }
+            }
+        };
+
+        // Filter workflow defs based on target type
+        let defs: Vec<conductor_core::workflow::WorkflowDef> = match &target {
+            WorkflowPickerTarget::Pr { .. } => self
+                .state
+                .data
+                .workflow_defs
+                .iter()
+                .filter(|d| d.targets.iter().any(|t| t == "pr"))
+                .cloned()
+                .collect(),
+            WorkflowPickerTarget::Worktree { .. } => self
+                .state
+                .data
+                .workflow_defs
+                .iter()
+                .filter(|d| !d.targets.iter().any(|t| t == "pr"))
+                .cloned()
+                .collect(),
+        };
+
+        if defs.is_empty() {
+            let kind = match &target {
+                WorkflowPickerTarget::Pr { .. } => "PR",
+                WorkflowPickerTarget::Worktree { .. } => "worktree",
+            };
+            self.state.modal = Modal::Error {
+                message: format!(
+                    "No {kind}-compatible workflows found.\nAdd targets: [{kind}] to a workflow definition."
+                ),
+            };
+            return;
+        }
+
+        self.state.modal = Modal::WorkflowPicker {
+            target,
+            workflow_defs: defs,
+            selected: 0,
+        };
+    }
+
+    /// Resolve a worktree target from the currently selected repo (Dashboard Repos pane).
+    fn resolve_worktree_for_selected_repo(&self) -> Option<(String, String, String)> {
+        let repo = self
+            .state
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))?;
+        let repo_path = repo.local_path.clone();
+        let wt = self
+            .state
+            .data
+            .worktrees
+            .iter()
+            .find(|w| w.repo_id == repo.id)?;
+        Some((wt.id.clone(), wt.path.clone(), repo_path))
+    }
+
+    /// Resolve a worktree target from the currently selected ticket.
+    fn resolve_worktree_for_selected_ticket(&self) -> Option<(String, String, String)> {
+        // Get the selected ticket (uses filtered lists, matching selected_ticket_url pattern)
+        let ticket = match self.state.view {
+            View::Dashboard
+                if self.state.dashboard_focus == crate::state::DashboardFocus::Tickets =>
+            {
+                self.state.filtered_tickets.get(self.state.ticket_index)
+            }
+            View::Tickets => self.state.filtered_tickets.get(self.state.ticket_index),
+            View::RepoDetail
+                if self.state.repo_detail_focus == crate::state::RepoDetailFocus::Tickets =>
+            {
+                self.state
+                    .filtered_detail_tickets
+                    .get(self.state.detail_ticket_index)
+            }
+            _ => return None,
+        };
+        let ticket = ticket?;
+
+        // Find a worktree linked to this ticket
+        let wt = self
+            .state
+            .data
+            .worktrees
+            .iter()
+            .find(|w| w.ticket_id.as_deref() == Some(&ticket.id))?;
+        let repo_path = self
+            .state
+            .data
+            .repos
+            .iter()
+            .find(|r| r.id == wt.repo_id)
+            .map(|r| r.local_path.clone())
+            .unwrap_or_default();
+        Some((wt.id.clone(), wt.path.clone(), repo_path))
+    }
+
+    /// Confirm the workflow selection from the generic WorkflowPicker modal.
+    fn handle_workflow_picker_confirm(&mut self) {
+        use crate::state::WorkflowPickerTarget;
+
+        let (target, def) = if let Modal::WorkflowPicker {
+            ref target,
+            ref workflow_defs,
+            selected,
+            ..
+        } = self.state.modal
+        {
+            let def = match workflow_defs.get(selected) {
+                Some(d) => d.clone(),
+                None => return,
+            };
+            (target.clone(), def)
+        } else {
+            return;
+        };
+
+        self.state.modal = Modal::None;
+
+        match target {
+            WorkflowPickerTarget::Worktree {
+                worktree_id,
+                worktree_path,
+                repo_path,
+            } => {
+                // Block if a workflow run is already active on this worktree
+                {
+                    use conductor_core::workflow::WorkflowManager;
+                    let wf_mgr = WorkflowManager::new(&self.conn);
+                    match wf_mgr.get_active_run_for_worktree(&worktree_id) {
+                        Ok(Some(active)) => {
+                            self.state.status_message = Some(format!(
+                                "Workflow '{}' is already running — cancel it before starting another",
+                                active.workflow_name
+                            ));
+                            return;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            self.state.status_message =
+                                Some(format!("Failed to check active workflow run: {e}"));
+                            return;
+                        }
+                    }
+                }
+
+                self.spawn_workflow_in_background(
+                    def,
+                    worktree_id,
+                    worktree_path,
+                    repo_path,
+                    std::collections::HashMap::new(),
+                );
+            }
+            WorkflowPickerTarget::Pr { pr_number, .. } => {
+                // Get owner/repo from selected repo's remote_url
+                let remote_url = match self
+                    .state
+                    .selected_repo_id
+                    .as_ref()
+                    .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
+                    .map(|r| r.remote_url.clone())
+                {
+                    Some(url) => url,
+                    None => {
+                        self.state.modal = Modal::Error {
+                            message: "No repo selected".to_string(),
+                        };
+                        return;
+                    }
+                };
+
+                let (owner, repo) = match conductor_core::github::parse_github_remote(&remote_url) {
+                    Some(pair) => pair,
+                    None => {
+                        self.state.modal = Modal::Error {
+                            message: format!(
+                                "Could not parse GitHub owner/repo from remote URL: {remote_url}"
+                            ),
+                        };
+                        return;
+                    }
+                };
+
+                let pr_ref = conductor_core::workflow_ephemeral::PrRef {
+                    owner,
+                    repo,
+                    number: pr_number as u64,
+                };
+
+                self.spawn_pr_workflow_in_background(pr_ref, def);
+            }
         }
     }
 

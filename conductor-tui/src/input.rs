@@ -230,7 +230,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
-        Modal::PrWorkflowPicker { .. } => {
+        Modal::PrWorkflowPicker { .. } | Modal::WorkflowPicker { .. } => {
             return match key.code {
                 KeyCode::Esc => Action::DismissModal,
                 KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
@@ -279,6 +279,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         match key.code {
             KeyCode::Char('o') => return Action::OpenTicketUrl,
             KeyCode::Char('y') => return Action::CopyTicketUrl,
+            KeyCode::Char('w') => return Action::PickWorkflow,
             _ => {}
         }
     }
@@ -289,6 +290,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         match key.code {
             KeyCode::Char('o') => return Action::OpenRepoUrl,
             KeyCode::Char('y') => return Action::CopyRepoUrl,
+            KeyCode::Char('w') => return Action::PickWorkflow,
             _ => {}
         }
     }
@@ -314,6 +316,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('f') if is_waiting_for_feedback => return Action::SubmitFeedback,
             KeyCode::Char('F') if is_waiting_for_feedback => return Action::DismissFeedback,
             KeyCode::Char('l') if has_log => return Action::ViewAgentLog,
+            KeyCode::Char('w') => return Action::PickWorkflow,
             KeyCode::Char('y') => return Action::WorktreeDetailCopy,
             KeyCode::Char('o') => return Action::WorktreeDetailOpen,
             KeyCode::Char('j') if focus == WorktreeDetailFocus::InfoPanel => {
@@ -348,7 +351,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
     // View-specific keybindings (Workflows)
     if state.view == View::Workflows {
         match key.code {
-            KeyCode::Char('r') => return Action::RunWorkflow,
+            KeyCode::Char('r') | KeyCode::Char('w') => return Action::RunWorkflow,
             KeyCode::Char('v') if state.workflows_focus == crate::state::WorkflowsFocus::Defs => {
                 return Action::ViewWorkflowDef;
             }
@@ -404,13 +407,12 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             match key.code {
                 KeyCode::Char('o') => return Action::OpenPrUrl,
                 KeyCode::Char('y') => return Action::CopyPrUrl,
-                KeyCode::Char('r') => return Action::RunPrWorkflow,
+                KeyCode::Char('r') | KeyCode::Char('w') => return Action::RunPrWorkflow,
                 _ => {}
             }
         }
-        match key.code {
-            KeyCode::Char('I') => return Action::ToggleAgentIssues,
-            _ => {}
+        if let KeyCode::Char('I') = key.code {
+            return Action::ToggleAgentIssues;
         }
     }
 
@@ -771,7 +773,8 @@ mod tests {
     fn removed_global_bindings_produce_no_action_in_dashboard() {
         let state = dashboard_state();
         // All of these were removed in the keybinding cleanup (#515)
-        for ch in ['p', 'P', 't', 'w', 'D'] {
+        // Note: 'w' was re-added as PickWorkflow
+        for ch in ['p', 'P', 't', 'D'] {
             assert!(
                 matches!(map_key(key(KeyCode::Char(ch)), &state), Action::None),
                 "key '{ch}' should map to Action::None after removal but did not"
@@ -847,6 +850,49 @@ mod tests {
         assert!(!matches!(
             map_key(key(KeyCode::Char('y')), &state),
             Action::ApproveGate
+        ));
+    }
+
+    // --- `w` key: PickWorkflow / RunWorkflow bindings ---
+
+    #[test]
+    fn w_maps_to_pick_workflow_in_worktree_detail() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::InfoPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('w')), &state),
+            Action::PickWorkflow
+        ));
+    }
+
+    #[test]
+    fn w_maps_to_run_workflow_in_workflows_view() {
+        let mut state = AppState::new();
+        state.view = View::Workflows;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('w')), &state),
+            Action::RunWorkflow
+        ));
+    }
+
+    #[test]
+    fn w_maps_to_pick_workflow_in_dashboard_tickets() {
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state.dashboard_focus = crate::state::DashboardFocus::Tickets;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('w')), &state),
+            Action::PickWorkflow
+        ));
+    }
+
+    #[test]
+    fn w_maps_to_pick_workflow_in_dashboard_repos() {
+        let mut state = AppState::new();
+        state.view = View::Dashboard;
+        state.dashboard_focus = crate::state::DashboardFocus::Repos;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('w')), &state),
+            Action::PickWorkflow
         ));
     }
 }

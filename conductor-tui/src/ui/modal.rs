@@ -590,6 +590,84 @@ pub fn render_pr_workflow_picker(
     frame.render_widget(content, popup);
 }
 
+pub fn render_workflow_picker(
+    frame: &mut Frame,
+    area: Rect,
+    target: &crate::state::WorkflowPickerTarget,
+    workflow_defs: &[conductor_core::workflow::WorkflowDef],
+    selected: usize,
+) {
+    use crate::state::WorkflowPickerTarget;
+
+    let (title, subtitle) = match target {
+        WorkflowPickerTarget::Worktree { worktree_path, .. } => {
+            let short = worktree_path.rsplit('/').next().unwrap_or(worktree_path);
+            (
+                " Run Workflow ".to_string(),
+                format!("  on worktree: {short}"),
+            )
+        }
+        WorkflowPickerTarget::Pr {
+            pr_number,
+            pr_title,
+        } => (
+            " Run Workflow on PR ".to_string(),
+            format!("  PR #{pr_number}: {pr_title}"),
+        ),
+    };
+
+    let height = (workflow_defs.len() as u16 + 7).min(25);
+    let percent_y = ((height as f32 / area.height as f32) * 100.0) as u16;
+    let popup = centered_rect(60, percent_y.max(25), area);
+    frame.render_widget(Clear, popup);
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(subtitle, Style::default().fg(Color::Cyan))),
+        Line::from(""),
+    ];
+
+    for (i, def) in workflow_defs.iter().enumerate() {
+        let is_selected = i == selected;
+        let prefix = if is_selected { "▸ " } else { "  " };
+
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        let mut row = vec![
+            Span::styled(format!("  {prefix}"), style),
+            Span::styled(&def.name, style),
+        ];
+        if !def.description.is_empty() {
+            row.push(Span::styled(
+                format!("  — {}", def.description),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        lines.push(Line::from(row));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Enter confirm  Esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let content = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(title),
+    );
+
+    frame.render_widget(content, popup);
+}
+
 pub fn render_work_target_manager(
     frame: &mut Frame,
     area: Rect,

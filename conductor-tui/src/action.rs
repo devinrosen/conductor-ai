@@ -224,6 +224,8 @@ pub enum Action {
     },
 
     // Workflow actions
+    /// Open a workflow picker for the current context (worktree, PR, etc.)
+    PickWorkflow,
     RunWorkflow,
     RunPrWorkflow,
     ResumeWorkflow,

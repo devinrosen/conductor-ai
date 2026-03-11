@@ -196,5 +196,10 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             workflow_defs,
             *selected,
         ),
+        Modal::WorkflowPicker {
+            target,
+            workflow_defs,
+            selected,
+        } => modal::render_workflow_picker(frame, area, target, workflow_defs, *selected),
     }
 }

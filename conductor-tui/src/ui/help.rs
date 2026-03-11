@@ -50,6 +50,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         help_line("W", "Manage work targets"),
         help_line("S", "Manage issue sources"),
         help_line("A", "Toggle closed tickets"),
+        help_line("w", "Run workflow on current item"),
         help_line("!", "Toggle status bar expansion"),
         help_line("/", "Filter/search"),
         Line::from(""),
