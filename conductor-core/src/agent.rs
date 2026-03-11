@@ -918,6 +918,7 @@ impl<'a> AgentManager<'a> {
             ))
         } else if stderr.contains("No such file or directory")
             || stderr.contains("error connecting to")
+            || stderr.contains("no server running")
         {
             Err(ConductorError::Agent(
                 "tmux is not running — start a tmux session first, then relaunch conductor"

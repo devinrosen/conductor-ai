@@ -57,34 +57,32 @@ pub fn spawn_tmux_window(args: &[String], window_name: &str) -> std::result::Res
         return verify_tmux_window(window_name);
     }
 
-    let stderr = String::from_utf8_lossy(&result.stderr);
     // No tmux server running — create a detached session and retry.
-    if stderr.contains("No such file or directory") || stderr.contains("error connecting to") {
-        let mut session_args = vec![
-            "new-session".to_string(),
-            "-d".to_string(),
-            "-s".to_string(),
-            "conductor".to_string(),
-            "-n".to_string(),
-            window_name.to_string(),
-            "--".to_string(),
-            conductor_bin,
-        ];
-        session_args.extend_from_slice(args);
+    // tmux error messages for a missing server vary across versions and platforms
+    // ("no server running on …", "error connecting to …", "No such file or directory"),
+    // so we attempt the session fallback on any new-window failure.
+    let mut session_args = vec![
+        "new-session".to_string(),
+        "-d".to_string(),
+        "-s".to_string(),
+        "conductor".to_string(),
+        "-n".to_string(),
+        window_name.to_string(),
+        "--".to_string(),
+        conductor_bin,
+    ];
+    session_args.extend_from_slice(args);
 
-        let retry = Command::new("tmux")
-            .args(&session_args)
-            .output()
-            .map_err(|e| format!("Failed to start tmux session: {e}"))?;
+    let retry = Command::new("tmux")
+        .args(&session_args)
+        .output()
+        .map_err(|e| format!("Failed to start tmux session: {e}"))?;
 
-        if retry.status.success() {
-            return verify_tmux_window(window_name);
-        }
-        let retry_stderr = String::from_utf8_lossy(&retry.stderr);
-        return Err(format!("Failed to start tmux session: {retry_stderr}"));
+    if retry.status.success() {
+        return verify_tmux_window(window_name);
     }
-
-    Err(format!("tmux failed: {stderr}"))
+    let retry_stderr = String::from_utf8_lossy(&retry.stderr);
+    Err(format!("Failed to start tmux session: {retry_stderr}"))
 }
 
 /// After a successful `tmux new-window`, wait briefly and verify the window
