@@ -36,6 +36,23 @@ pub struct TicketInput {
     pub priority: Option<String>,
     pub url: String,
     pub raw_json: String,
+    /// Label details (name + color) for populating the ticket_labels join table.
+    /// Pass `vec![]` for sources that do not supply color data.
+    pub label_details: Vec<TicketLabelInput>,
+}
+
+/// Label detail passed in during sync. Carries color alongside the name.
+pub struct TicketLabelInput {
+    pub name: String,
+    pub color: Option<String>,
+}
+
+/// A label row from the ticket_labels table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TicketLabel {
+    pub ticket_id: String,
+    pub label: String,
+    pub color: Option<String>,
 }
 
 impl Ticket {
@@ -65,11 +82,12 @@ impl<'a> TicketSyncer<'a> {
 
     /// Upsert a batch of tickets for a repo. Returns the number of tickets upserted.
     pub fn upsert_tickets(&self, repo_id: &str, tickets: &[TicketInput]) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
         let now = Utc::now().to_rfc3339();
 
         for ticket in tickets {
             let id = ulid::Ulid::new().to_string();
-            self.conn.execute(
+            tx.execute(
                 "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                  ON CONFLICT(repo_id, source_type, source_id) DO UPDATE SET
@@ -98,8 +116,25 @@ impl<'a> TicketSyncer<'a> {
                     ticket.raw_json,
                 ],
             )?;
+
+            let ticket_id: String = tx.query_row(
+                "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
+                params![repo_id, ticket.source_type, ticket.source_id],
+                |row| row.get(0),
+            )?;
+            tx.execute(
+                "DELETE FROM ticket_labels WHERE ticket_id = ?1",
+                params![ticket_id],
+            )?;
+            for ld in &ticket.label_details {
+                tx.execute(
+                    "INSERT OR REPLACE INTO ticket_labels (ticket_id, label, color) VALUES (?1, ?2, ?3)",
+                    params![ticket_id, ld.name, ld.color],
+                )?;
+            }
         }
 
+        tx.commit()?;
         Ok(tickets.len())
     }
 
@@ -227,6 +262,22 @@ impl<'a> TicketSyncer<'a> {
         (synced, closed)
     }
 
+    /// Query the normalized labels for a ticket by its internal (ULID) ID.
+    pub fn get_labels(&self, ticket_id: &str) -> Result<Vec<TicketLabel>> {
+        query_collect(
+            self.conn,
+            "SELECT ticket_id, label, color FROM ticket_labels WHERE ticket_id = ?1 ORDER BY label",
+            params![ticket_id],
+            |row| {
+                Ok(TicketLabel {
+                    ticket_id: row.get(0)?,
+                    label: row.get(1)?,
+                    color: row.get(2)?,
+                })
+            },
+        )
+    }
+
     /// After syncing tickets, mark any linked worktrees whose ticket is now
     /// closed by setting their status to `'merged'`. Also removes the git
     /// worktree directory and branch for each affected worktree (best-effort).
@@ -332,6 +383,7 @@ mod tests {
             priority: None,
             url: String::new(),
             raw_json: "{}".to_string(),
+            label_details: vec![],
         }
     }
 
@@ -872,6 +924,107 @@ mod tests {
         let syncer = TicketSyncer::new(&conn);
         let result = syncer.get_by_id("nonexistent-id");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_upsert_tickets_stores_label_details() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let mut ticket = make_ticket("1", "Issue 1");
+        ticket.label_details = vec![
+            TicketLabelInput {
+                name: "bug".to_string(),
+                color: Some("d73a4a".to_string()),
+            },
+            TicketLabelInput {
+                name: "enhancement".to_string(),
+                color: None,
+            },
+        ];
+        ticket.labels = r#"["bug","enhancement"]"#.to_string();
+        syncer.upsert_tickets("r1", &[ticket]).unwrap();
+
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        let labels = syncer.get_labels(&ticket_id).unwrap();
+        assert_eq!(labels.len(), 2);
+        let bug = labels.iter().find(|l| l.label == "bug").unwrap();
+        assert_eq!(bug.color, Some("d73a4a".to_string()));
+        let enh = labels.iter().find(|l| l.label == "enhancement").unwrap();
+        assert_eq!(enh.color, None);
+    }
+
+    #[test]
+    fn test_resync_removes_stale_labels() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // First sync: bug + enhancement
+        let mut ticket = make_ticket("1", "Issue 1");
+        ticket.label_details = vec![
+            TicketLabelInput {
+                name: "bug".to_string(),
+                color: Some("d73a4a".to_string()),
+            },
+            TicketLabelInput {
+                name: "enhancement".to_string(),
+                color: None,
+            },
+        ];
+        syncer.upsert_tickets("r1", &[ticket]).unwrap();
+
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(syncer.get_labels(&ticket_id).unwrap().len(), 2);
+
+        // Second sync: only bug remains
+        let mut ticket2 = make_ticket("1", "Issue 1");
+        ticket2.label_details = vec![TicketLabelInput {
+            name: "bug".to_string(),
+            color: Some("d73a4a".to_string()),
+        }];
+        syncer.upsert_tickets("r1", &[ticket2]).unwrap();
+
+        let labels = syncer.get_labels(&ticket_id).unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].label, "bug");
+    }
+
+    #[test]
+    fn test_resync_adds_new_labels() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // First sync: no labels
+        let ticket = make_ticket("1", "Issue 1");
+        syncer.upsert_tickets("r1", &[ticket]).unwrap();
+
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(syncer.get_labels(&ticket_id).unwrap().len(), 0);
+
+        // Second sync: add a label
+        let mut ticket2 = make_ticket("1", "Issue 1");
+        ticket2.label_details = vec![TicketLabelInput {
+            name: "wontfix".to_string(),
+            color: Some("ffffff".to_string()),
+        }];
+        syncer.upsert_tickets("r1", &[ticket2]).unwrap();
+
+        let labels = syncer.get_labels(&ticket_id).unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].label, "wontfix");
     }
 
     #[test]

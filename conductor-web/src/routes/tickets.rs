@@ -207,6 +207,7 @@ mod tests {
                 priority: None,
                 url: String::new(),
                 raw_json: "{}".to_string(),
+                label_details: vec![],
             },
             TicketInput {
                 source_type: "github".to_string(),
@@ -219,6 +220,7 @@ mod tests {
                 priority: None,
                 url: String::new(),
                 raw_json: "{}".to_string(),
+                label_details: vec![],
             },
         ];
         syncer.upsert_tickets("r1", &tickets).unwrap();

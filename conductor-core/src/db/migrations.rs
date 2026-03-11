@@ -553,6 +553,12 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 28)?;
     }
 
+    // Migration 029: ticket_labels join table.
+    if version < 29 {
+        conn.execute_batch(include_str!("migrations/029_ticket_labels.sql"))?;
+        bump_version(conn, 29)?;
+    }
+
     Ok(())
 }
 
