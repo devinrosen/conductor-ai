@@ -197,8 +197,9 @@ pub mod info_row {
     pub const STATUS: usize = 5;
     pub const MODEL: usize = 6;
     pub const CREATED: usize = 7;
+    pub const TICKET: usize = 8;
     /// Total number of navigable rows (used for bounds clamping).
-    pub const COUNT: usize = 8;
+    pub const COUNT: usize = 9;
 }
 
 /// Choice offered in the post-worktree-creation picker.

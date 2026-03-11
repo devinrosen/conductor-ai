@@ -111,6 +111,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             Span::styled("Created: ", Style::default().fg(Color::DarkGray)),
             Span::raw(&wt.created_at),
         ]),
+        // TICKET row — index 8, always present so navigation index stays stable
+        Line::from(ticket_line),
     ];
 
     if let Some(ref completed) = wt.completed_at {
@@ -121,7 +123,6 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 
     lines.push(Line::from(""));
-    lines.push(Line::from(ticket_line));
 
     // Agent status line and plan checklist from DB poll
     if let Some(run) = state.data.latest_agent_runs.get(&wt.id) {

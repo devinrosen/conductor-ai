@@ -4060,6 +4060,20 @@ impl App {
                     info_row::STATUS => wt.status.to_string(),
                     info_row::MODEL => wt.model.clone().unwrap_or_else(|| "(not set)".to_string()),
                     info_row::CREATED => wt.created_at.clone(),
+                    info_row::TICKET => {
+                        let url = wt
+                            .ticket_id
+                            .as_ref()
+                            .and_then(|tid| self.state.data.ticket_map.get(tid))
+                            .map(|t| t.url.clone())
+                            .unwrap_or_default();
+                        if url.is_empty() {
+                            self.state.status_message =
+                                Some("No ticket linked to this worktree".to_string());
+                            return;
+                        }
+                        url
+                    }
                     _ => {
                         self.state.status_message = Some("Nothing to copy on this row".to_string());
                         return;
@@ -4105,9 +4119,41 @@ impl App {
                     }
                 }
             }
+            info_row::TICKET => {
+                // Ticket row: open the ticket URL in the default browser
+                let url = self
+                    .state
+                    .selected_worktree_id
+                    .as_ref()
+                    .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
+                    .and_then(|wt| wt.ticket_id.as_ref())
+                    .and_then(|tid| self.state.data.ticket_map.get(tid))
+                    .map(|t| t.url.clone());
+                match url {
+                    Some(ref u) if !u.is_empty() => {
+                        match Command::new("open")
+                            .arg(u)
+                            .output()
+                            .or_else(|_| Command::new("xdg-open").arg(u).output())
+                        {
+                            Ok(_) => {
+                                self.state.status_message = Some(format!("Opened ticket: {u}"));
+                            }
+                            Err(e) => {
+                                self.state.status_message =
+                                    Some(format!("Failed to open ticket: {e}"));
+                            }
+                        }
+                    }
+                    _ => {
+                        self.state.status_message =
+                            Some("No ticket linked to this worktree".to_string());
+                    }
+                }
+            }
             _ => {
                 self.state.status_message =
-                    Some("No action for this row (try Path row)".to_string());
+                    Some("No action for this row (try Path or Ticket row)".to_string());
             }
         }
     }
