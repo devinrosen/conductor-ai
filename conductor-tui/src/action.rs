@@ -122,7 +122,6 @@ pub enum Action {
     LaunchAgent,
     OrchestrateAgent,
     StopAgent,
-    AttachAgent,
     ViewAgentLog,
     #[allow(dead_code)]
     CopyLastCodeBlock,

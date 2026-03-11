@@ -312,7 +312,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('r') => return Action::LaunchAgent,
             KeyCode::Char('O') if !is_active => return Action::OrchestrateAgent,
             KeyCode::Char('x') if is_active => return Action::StopAgent,
-            KeyCode::Char('a') if is_active => return Action::AttachAgent,
             KeyCode::Char('f') if is_waiting_for_feedback => return Action::SubmitFeedback,
             KeyCode::Char('F') if is_waiting_for_feedback => return Action::DismissFeedback,
             KeyCode::Char('l') if has_log => return Action::ViewAgentLog,
@@ -497,34 +496,6 @@ mod tests {
             .latest_agent_runs
             .insert("wt1".into(), make_agent_run("wt1", status));
         state
-    }
-
-    #[test]
-    fn attach_agent_key_when_active_maps_to_attach_agent() {
-        let state = worktree_detail_state_with_run(AgentRunStatus::Running);
-        assert!(matches!(
-            map_key(key(KeyCode::Char('a')), &state),
-            Action::AttachAgent
-        ));
-    }
-
-    #[test]
-    fn attach_agent_key_when_inactive_does_not_map_to_attach_agent() {
-        let state = worktree_detail_state_with_run(AgentRunStatus::Completed);
-        // 'a' falls through to the global binding (AddRepo), not AttachAgent
-        assert!(!matches!(
-            map_key(key(KeyCode::Char('a')), &state),
-            Action::AttachAgent
-        ));
-    }
-
-    #[test]
-    fn attach_agent_key_when_waiting_for_feedback_maps_to_attach_agent() {
-        let state = worktree_detail_state_with_run(AgentRunStatus::WaitingForFeedback);
-        assert!(matches!(
-            map_key(key(KeyCode::Char('a')), &state),
-            Action::AttachAgent
-        ));
     }
 
     // --- PostCreatePicker tests ---
