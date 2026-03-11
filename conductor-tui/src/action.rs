@@ -155,6 +155,8 @@ pub enum Action {
     ShowHelp,
     DismissModal,
     OpenTicketUrl,
+    OpenRepoUrl,
+    CopyRepoUrl,
     ConfirmYes,
     ConfirmNo,
     InputChar(char),

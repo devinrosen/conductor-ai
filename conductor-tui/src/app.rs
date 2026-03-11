@@ -350,6 +350,8 @@ impl App {
                 self.state.modal = Modal::None;
             }
             Action::OpenTicketUrl => self.handle_open_ticket_url(),
+            Action::OpenRepoUrl => self.handle_open_repo_url(),
+            Action::CopyRepoUrl => self.handle_copy_repo_url(),
             Action::ConfirmYes => self.handle_confirm_yes(),
             Action::ConfirmNo => {
                 self.state.modal = Modal::None;
@@ -1520,6 +1522,44 @@ impl App {
             }
             Err(e) => {
                 self.state.status_message = Some(format!("Failed to open URL: {e}"));
+            }
+        }
+    }
+
+    /// Build a web URL from a repo's remote_url (SSH or HTTPS GitHub format).
+    fn repo_web_url(&self) -> Option<String> {
+        let remote_url = self.state.selected_repo().map(|r| r.remote_url.clone())?;
+        let (owner, repo) = conductor_core::github::parse_github_remote(&remote_url)?;
+        Some(format!("https://github.com/{owner}/{repo}"))
+    }
+
+    fn handle_open_repo_url(&mut self) {
+        match self.repo_web_url() {
+            Some(url) => {
+                match Command::new("open")
+                    .arg(&url)
+                    .output()
+                    .or_else(|_| Command::new("xdg-open").arg(&url).output())
+                {
+                    Ok(_) => {
+                        self.state.status_message = Some(format!("Opened {url}"));
+                    }
+                    Err(e) => {
+                        self.state.status_message = Some(format!("Failed to open repo URL: {e}"));
+                    }
+                }
+            }
+            None => {
+                self.state.status_message = Some("No GitHub URL found for this repo".to_string());
+            }
+        }
+    }
+
+    fn handle_copy_repo_url(&mut self) {
+        match self.repo_web_url() {
+            Some(url) => self.copy_text_to_clipboard(url),
+            None => {
+                self.state.status_message = Some("No GitHub URL found for this repo".to_string());
             }
         }
     }

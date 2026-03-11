@@ -268,6 +268,16 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         }
     }
 
+    // View-specific keybindings (Dashboard Repos pane)
+    if state.view == View::Dashboard && state.dashboard_focus == crate::state::DashboardFocus::Repos
+    {
+        match key.code {
+            KeyCode::Char('o') => return Action::OpenRepoUrl,
+            KeyCode::Char('y') => return Action::CopyRepoUrl,
+            _ => {}
+        }
+    }
+
     // View-specific keybindings (WorktreeDetail agent controls)
     if state.view == View::WorktreeDetail {
         let agent_run = state
