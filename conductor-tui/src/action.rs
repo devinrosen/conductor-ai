@@ -220,6 +220,26 @@ pub enum Action {
         has_ticket: bool,
     },
 
+    // Background results for async blocking operations
+    PushComplete {
+        result: Result<String, String>,
+    },
+    PrCreateComplete {
+        result: Result<String, String>,
+    },
+    WorktreeDeleteComplete {
+        wt_slug: String,
+        result: Result<String, String>,
+    },
+    RepoRemoveComplete {
+        repo_slug: String,
+        result: Result<(), String>,
+    },
+    GithubImportComplete {
+        imported: usize,
+        errors: Vec<String>,
+    },
+
     // Post-create picker (after worktree creation)
     SelectPostCreateChoice(usize),
     /// Background result: workflow defs loaded, ready to show post-create picker.

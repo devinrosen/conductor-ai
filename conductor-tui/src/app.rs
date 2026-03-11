@@ -770,6 +770,75 @@ impl App {
                     has_ticket,
                 );
             }
+            Action::PushComplete { result } => {
+                self.state.modal = Modal::None;
+                match result {
+                    Ok(msg) => self.state.status_message = Some(msg),
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Push failed: {e}"),
+                        }
+                    }
+                }
+            }
+            Action::PrCreateComplete { result } => {
+                self.state.modal = Modal::None;
+                match result {
+                    Ok(url) => self.state.status_message = Some(format!("PR created: {url}")),
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("PR creation failed: {e}"),
+                        }
+                    }
+                }
+            }
+            Action::WorktreeDeleteComplete { wt_slug, result } => {
+                self.state.modal = Modal::None;
+                match result {
+                    Ok(status) => {
+                        self.state.status_message =
+                            Some(format!("Worktree {} marked as {}", wt_slug, status));
+                        self.state.view = View::Dashboard;
+                        self.state.selected_worktree_id = None;
+                        self.refresh_data();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Delete failed: {e}"),
+                        };
+                    }
+                }
+            }
+            Action::RepoRemoveComplete { repo_slug, result } => {
+                self.state.modal = Modal::None;
+                match result {
+                    Ok(()) => {
+                        self.state.status_message = Some(format!("Removed repo: {repo_slug}"));
+                        self.state.view = View::Dashboard;
+                        self.state.selected_repo_id = None;
+                        self.refresh_data();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Remove failed: {e}"),
+                        };
+                    }
+                }
+            }
+            Action::GithubImportComplete { imported, errors } => {
+                self.state.modal = Modal::None;
+                self.handle_github_back_to_orgs();
+                if errors.is_empty() {
+                    self.state.status_message =
+                        Some(format!("Imported {imported} repo(s) from GitHub"));
+                } else {
+                    self.state.status_message = Some(format!(
+                        "Imported {imported} repo(s), {} error(s)",
+                        errors.len()
+                    ));
+                }
+                self.refresh_data();
+            }
         }
         true
     }
@@ -1689,37 +1758,47 @@ impl App {
                 self.spawn_worktree_create(repo_slug, wt_name, ticket_id);
             }
             ConfirmAction::DeleteWorktree { repo_slug, wt_slug } => {
-                let wt_mgr = WorktreeManager::new(&self.conn, &self.config);
-                match wt_mgr.delete(&repo_slug, &wt_slug) {
-                    Ok(wt) => {
-                        self.state.status_message =
-                            Some(format!("Worktree {} marked as {}", wt_slug, wt.status));
-                        self.state.view = View::Dashboard;
-                        self.state.selected_worktree_id = None;
-                        self.refresh_data();
-                    }
-                    Err(e) => {
-                        self.state.modal = Modal::Error {
-                            message: format!("Delete failed: {e}"),
-                        };
-                    }
-                }
+                let Some(bg_tx) = self.bg_tx.clone() else {
+                    return;
+                };
+                self.state.modal = Modal::Progress {
+                    message: "Deleting worktree…".to_string(),
+                };
+                let config = self.config.clone();
+                std::thread::spawn(move || {
+                    let result = (|| -> anyhow::Result<String> {
+                        let db = conductor_core::config::db_path();
+                        let conn = conductor_core::db::open_database(&db)?;
+                        let wt_mgr = WorktreeManager::new(&conn, &config);
+                        let wt = wt_mgr.delete(&repo_slug, &wt_slug)?;
+                        Ok(wt.status.to_string())
+                    })();
+                    let _ = bg_tx.send(Action::WorktreeDeleteComplete {
+                        wt_slug,
+                        result: result.map_err(|e| e.to_string()),
+                    });
+                });
             }
             ConfirmAction::RemoveRepo { repo_slug } => {
-                let mgr = RepoManager::new(&self.conn, &self.config);
-                match mgr.remove(&repo_slug) {
-                    Ok(()) => {
-                        self.state.status_message = Some(format!("Removed repo: {repo_slug}"));
-                        self.state.view = View::Dashboard;
-                        self.state.selected_repo_id = None;
-                        self.refresh_data();
-                    }
-                    Err(e) => {
-                        self.state.modal = Modal::Error {
-                            message: format!("Remove failed: {e}"),
-                        };
-                    }
-                }
+                let Some(bg_tx) = self.bg_tx.clone() else {
+                    return;
+                };
+                self.state.modal = Modal::Progress {
+                    message: "Removing repo…".to_string(),
+                };
+                let config = self.config.clone();
+                std::thread::spawn(move || {
+                    let result = (|| -> anyhow::Result<()> {
+                        let db = conductor_core::config::db_path();
+                        let conn = conductor_core::db::open_database(&db)?;
+                        let mgr = RepoManager::new(&conn, &config);
+                        mgr.remove(&repo_slug).map_err(anyhow::Error::from)
+                    })();
+                    let _ = bg_tx.send(Action::RepoRemoveComplete {
+                        repo_slug,
+                        result: result.map_err(|e| e.to_string()),
+                    });
+                });
             }
             ConfirmAction::CancelWorkflow { workflow_run_id } => {
                 use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
@@ -2938,18 +3017,25 @@ impl App {
                     return;
                 }
             };
-            self.state.status_message = Some(format!("Pushing {}...", wt.slug));
-            let mgr = WorktreeManager::new(&self.conn, &self.config);
-            match mgr.push(&repo_slug, &wt.slug) {
-                Ok(msg) => {
-                    self.state.status_message = Some(msg);
-                }
-                Err(e) => {
-                    self.state.modal = Modal::Error {
-                        message: format!("Push failed: {e}"),
-                    };
-                }
-            }
+            let Some(bg_tx) = self.bg_tx.clone() else {
+                return;
+            };
+            self.state.modal = Modal::Progress {
+                message: "Pushing branch…".to_string(),
+            };
+            let config = self.config.clone();
+            let wt_slug = wt.slug.clone();
+            std::thread::spawn(move || {
+                let result = (|| -> anyhow::Result<String> {
+                    let db = conductor_core::config::db_path();
+                    let conn = conductor_core::db::open_database(&db)?;
+                    let mgr = WorktreeManager::new(&conn, &config);
+                    mgr.push(&repo_slug, &wt_slug).map_err(anyhow::Error::from)
+                })();
+                let _ = bg_tx.send(Action::PushComplete {
+                    result: result.map_err(|e| e.to_string()),
+                });
+            });
         } else {
             self.state.status_message = Some("Select a worktree first".to_string());
         }
@@ -2971,18 +3057,26 @@ impl App {
                     return;
                 }
             };
-            self.state.status_message = Some(format!("Creating PR for {}...", wt.slug));
-            let mgr = WorktreeManager::new(&self.conn, &self.config);
-            match mgr.create_pr(&repo_slug, &wt.slug, false) {
-                Ok(url) => {
-                    self.state.status_message = Some(format!("PR created: {url}"));
-                }
-                Err(e) => {
-                    self.state.modal = Modal::Error {
-                        message: format!("PR creation failed: {e}"),
-                    };
-                }
-            }
+            let Some(bg_tx) = self.bg_tx.clone() else {
+                return;
+            };
+            self.state.modal = Modal::Progress {
+                message: "Creating PR…".to_string(),
+            };
+            let config = self.config.clone();
+            let wt_slug = wt.slug.clone();
+            std::thread::spawn(move || {
+                let result = (|| -> anyhow::Result<String> {
+                    let db = conductor_core::config::db_path();
+                    let conn = conductor_core::db::open_database(&db)?;
+                    let mgr = WorktreeManager::new(&conn, &config);
+                    mgr.create_pr(&repo_slug, &wt_slug, false)
+                        .map_err(anyhow::Error::from)
+                })();
+                let _ = bg_tx.send(Action::PrCreateComplete {
+                    result: result.map_err(|e| e.to_string()),
+                });
+            });
         } else {
             self.state.status_message = Some("Select a worktree first".to_string());
         }
@@ -4198,14 +4292,9 @@ impl App {
                     }
                     drop(stdin);
                 }
-                match child.wait() {
-                    Ok(status) if status.success() => {
-                        self.state.status_message = Some("Copied to clipboard".to_string());
-                    }
-                    _ => {
-                        self.state.status_message = Some("Clipboard command failed".to_string());
-                    }
-                }
+                // Fire-and-forget: pbcopy/xclip/xsel completes almost instantly.
+                drop(child);
+                self.state.status_message = Some("Copied to clipboard".to_string());
             }
             Err(_) => {
                 self.state.status_message =
@@ -4428,30 +4517,42 @@ impl App {
             return;
         }
 
-        let mgr = RepoManager::new(&self.conn, &self.config);
-        let mut imported = 0usize;
-        let mut errors = Vec::new();
-
-        for url in &to_import {
-            let slug = derive_slug_from_url(url);
-            let local_path = derive_local_path(&self.config, &slug);
-            match mgr.add(&slug, &local_path, url, None) {
-                Ok(_) => imported += 1,
-                Err(e) => errors.push(format!("{slug}: {e}")),
+        let Some(bg_tx) = self.bg_tx.clone() else {
+            return;
+        };
+        self.state.modal = Modal::Progress {
+            message: "Importing repos…".to_string(),
+        };
+        let config = self.config.clone();
+        std::thread::spawn(move || {
+            let result = (|| -> anyhow::Result<(usize, Vec<String>)> {
+                let db = conductor_core::config::db_path();
+                let conn = conductor_core::db::open_database(&db)?;
+                let mgr = RepoManager::new(&conn, &config);
+                let mut imported = 0usize;
+                let mut errors = Vec::new();
+                for url in &to_import {
+                    let slug = derive_slug_from_url(url);
+                    let local_path = derive_local_path(&config, &slug);
+                    match mgr.add(&slug, &local_path, url, None) {
+                        Ok(_) => imported += 1,
+                        Err(e) => errors.push(format!("{slug}: {e}")),
+                    }
+                }
+                Ok((imported, errors))
+            })();
+            match result {
+                Ok((imported, errors)) => {
+                    let _ = bg_tx.send(Action::GithubImportComplete { imported, errors });
+                }
+                Err(e) => {
+                    let _ = bg_tx.send(Action::GithubImportComplete {
+                        imported: 0,
+                        errors: vec![e.to_string()],
+                    });
+                }
             }
-        }
-
-        self.refresh_data();
-        self.handle_github_back_to_orgs();
-
-        if errors.is_empty() {
-            self.state.status_message = Some(format!("Imported {imported} repo(s) from GitHub"));
-        } else {
-            self.state.status_message = Some(format!(
-                "Imported {imported} repo(s), {} error(s)",
-                errors.len()
-            ));
-        }
+        });
     }
 
     // ── Workflow handlers ──────────────────────────────────────────────
