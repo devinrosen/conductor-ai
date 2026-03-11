@@ -26,7 +26,7 @@ pub fn render_confirm(frame: &mut Frame, area: Rect, title: &str, message: &str)
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" = confirm    "),
+            Span::raw("/Enter = confirm    "),
             Span::styled(
                 "n",
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),

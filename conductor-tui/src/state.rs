@@ -453,6 +453,7 @@ pub enum ConfirmAction {
     ResumeWorkflow {
         workflow_run_id: String,
     },
+    Quit,
 }
 
 #[derive(Debug, Clone)]

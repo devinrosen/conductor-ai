@@ -283,7 +283,13 @@ impl App {
                 // so this is cheap).
                 return true;
             }
-            Action::Quit => self.state.should_quit = true,
+            Action::Quit => {
+                if matches!(self.state.modal, Modal::None) {
+                    self.show_confirm_quit();
+                } else {
+                    self.state.should_quit = true;
+                }
+            }
 
             // Navigation
             Action::Back => self.go_back(),
@@ -890,7 +896,7 @@ impl App {
 
     fn go_back(&mut self) {
         match self.state.view {
-            View::Dashboard => self.state.should_quit = true,
+            View::Dashboard => self.show_confirm_quit(),
             View::RepoDetail => {
                 self.state.view = View::Dashboard;
                 self.state.selected_repo_id = None;
@@ -1720,7 +1726,33 @@ impl App {
                     }
                 }
             }
+            ConfirmAction::Quit => {
+                self.state.should_quit = true;
+            }
         }
+    }
+
+    fn show_confirm_quit(&mut self) {
+        let running = self
+            .state
+            .data
+            .latest_agent_runs
+            .values()
+            .filter(|r| r.status == conductor_core::agent::AgentRunStatus::Running)
+            .count();
+        let message = if running == 0 {
+            "Quit conductor?".to_string()
+        } else {
+            format!(
+                "{running} agent{} running. Quit anyway?",
+                if running == 1 { " is" } else { "s are" }
+            )
+        };
+        self.state.modal = Modal::Confirm {
+            title: "Confirm Quit".to_string(),
+            message,
+            on_confirm: ConfirmAction::Quit,
+        };
     }
 
     fn handle_input_submit(&mut self) {
