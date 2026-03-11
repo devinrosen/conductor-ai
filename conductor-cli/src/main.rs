@@ -1212,6 +1212,20 @@ fn main() -> Result<()> {
                         if let Some(ref ended) = run.ended_at {
                             println!("  Ended:   {ended}");
                         }
+                        if !run.inputs.is_empty() {
+                            println!("  Inputs:");
+                            let mut sorted_inputs: Vec<_> = run.inputs.iter().collect();
+                            sorted_inputs.sort_by_key(|(k, _)| k.as_str());
+                            for (k, v) in sorted_inputs {
+                                println!("    {k}: {v}");
+                            }
+                        }
+                        if let Some(ref snapshot) = run.definition_snapshot {
+                            println!("  Definition snapshot:");
+                            for line in snapshot.lines() {
+                                println!("    {line}");
+                            }
+                        }
                         if let Some(ref summary) = run.result_summary {
                             println!("\n{summary}");
                         }
@@ -1231,6 +1245,13 @@ fn main() -> Result<()> {
                                     "  [{marker}] {} ({}{}){iter_label}",
                                     step.step_name, step.role, commit_flag
                                 );
+                                if let Some(ref started) = step.started_at {
+                                    print!("        started: {started}");
+                                    if let Some(ref ended) = step.ended_at {
+                                        print!("  ended: {ended}");
+                                    }
+                                    println!();
+                                }
                                 if let Some(ref gate_type) = step.gate_type {
                                     print!("        gate: {gate_type}");
                                     if let Some(ref approved_at) = step.gate_approved_at {
@@ -1241,12 +1262,24 @@ fn main() -> Result<()> {
                                 if step.retry_count > 0 {
                                     println!("        retries: {}", step.retry_count);
                                 }
+                                if let Some(ref expr) = step.condition_expr {
+                                    let met = step
+                                        .condition_met
+                                        .map(|b| if b { "true" } else { "false" })
+                                        .unwrap_or("(unevaluated)");
+                                    println!("        condition: {expr} => {met}");
+                                }
                                 if let Some(ref markers) = step.markers_out {
                                     println!("        markers: {markers}");
                                 }
                                 if let Some(ref ctx) = step.context_out {
                                     if !ctx.is_empty() {
                                         println!("        context: {ctx}");
+                                    }
+                                }
+                                if let Some(ref result) = step.result_text {
+                                    if !result.is_empty() {
+                                        println!("        result: {result}");
                                     }
                                 }
                                 if let Some(ref child) = step.child_run_id {
