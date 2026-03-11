@@ -376,6 +376,10 @@ pub enum Modal {
         workflow_defs: Vec<WorkflowDef>,
         selected: usize,
     },
+    /// Non-dismissable progress indicator shown while a background operation runs.
+    Progress {
+        message: String,
+    },
 }
 
 impl fmt::Debug for Modal {
@@ -423,6 +427,9 @@ impl fmt::Debug for Modal {
             Modal::WorkflowPicker { ref target, .. } => {
                 write!(f, "Modal::WorkflowPicker(target={target:?})")
             }
+            Modal::Progress { message } => {
+                write!(f, "Modal::Progress({message:?})")
+            }
         }
     }
 }
@@ -463,6 +470,12 @@ pub enum WorkflowPickerTarget {
 
 #[derive(Debug, Clone)]
 pub enum ConfirmAction {
+    /// Carry creation params through the clone-warning confirm flow.
+    CreateWorktree {
+        repo_slug: String,
+        wt_name: String,
+        ticket_id: Option<String>,
+    },
     DeleteWorktree {
         repo_slug: String,
         wt_slug: String,

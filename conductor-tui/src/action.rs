@@ -198,6 +198,19 @@ pub enum Action {
         message: String,
     },
 
+    // Background results for worktree creation
+    WorktreeCreated {
+        wt_id: String,
+        wt_path: String,
+        wt_slug: String,
+        wt_repo_id: String,
+        warnings: Vec<String>,
+        ticket_id: Option<String>,
+    },
+    WorktreeCreateFailed {
+        message: String,
+    },
+
     // Background result for worktree delete readiness check
     DeleteWorktreeReady {
         repo_slug: String,

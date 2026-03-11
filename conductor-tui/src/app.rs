@@ -384,6 +384,9 @@ impl App {
                 self.state.modal = Modal::Help;
             }
             Action::DismissModal => {
+                if matches!(self.state.modal, Modal::Progress { .. }) {
+                    return true;
+                }
                 self.state.modal = Modal::None;
             }
             Action::OpenTicketUrl => self.handle_open_ticket_url(),
@@ -710,6 +713,39 @@ impl App {
             Action::TicketSyncDone => {
                 self.state.ticket_sync_in_progress = false;
                 self.refresh_data();
+            }
+            Action::WorktreeCreated {
+                wt_id,
+                wt_path,
+                wt_slug,
+                wt_repo_id,
+                warnings,
+                ticket_id,
+            } => {
+                self.state.modal = Modal::None;
+                let mut msg = if let Some(ref tid) = ticket_id {
+                    let source_id = self
+                        .state
+                        .data
+                        .ticket_map
+                        .get(tid)
+                        .map(|t| t.source_id.as_str())
+                        .unwrap_or("?");
+                    format!("Created worktree: {} (linked to #{})", wt_slug, source_id)
+                } else {
+                    format!("Created worktree: {}", wt_slug)
+                };
+                if !warnings.is_empty() {
+                    msg.push_str(&format!(" [{}]", warnings.join("; ")));
+                }
+                self.state.status_message = Some(msg);
+                self.refresh_data();
+                if let Some(tid) = ticket_id {
+                    self.maybe_start_agent_for_worktree(wt_id, wt_path, wt_slug, tid, wt_repo_id);
+                }
+            }
+            Action::WorktreeCreateFailed { message } => {
+                self.state.modal = Modal::Error { message };
             }
             Action::BackgroundError { message } => {
                 self.state.modal = Modal::Error { message };
@@ -1645,6 +1681,13 @@ impl App {
 
     fn execute_confirm_action(&mut self, on_confirm: ConfirmAction) {
         match on_confirm {
+            ConfirmAction::CreateWorktree {
+                repo_slug,
+                wt_name,
+                ticket_id,
+            } => {
+                self.spawn_worktree_create(repo_slug, wt_name, ticket_id);
+            }
             ConfirmAction::DeleteWorktree { repo_slug, wt_slug } => {
                 let wt_mgr = WorktreeManager::new(&self.conn, &self.config);
                 match wt_mgr.delete(&repo_slug, &wt_slug) {
@@ -1880,39 +1923,31 @@ impl App {
                 if value.is_empty() {
                     return;
                 }
-                let wt_mgr = WorktreeManager::new(&self.conn, &self.config);
-                match wt_mgr.create(&repo_slug, &value, None, ticket_id.as_deref()) {
-                    Ok((wt, warnings)) => {
-                        let mut msg = if let Some(ref tid) = ticket_id {
-                            let source_id = self
-                                .state
-                                .data
-                                .ticket_map
-                                .get(tid)
-                                .map(|t| t.source_id.as_str())
-                                .unwrap_or("?");
-                            format!("Created worktree: {} (linked to #{})", wt.slug, source_id)
-                        } else {
-                            format!("Created worktree: {}", wt.slug)
-                        };
-                        if !warnings.is_empty() {
-                            msg.push_str(&format!(" [{}]", warnings.join("; ")));
-                        }
-                        self.state.status_message = Some(msg);
-                        self.refresh_data();
+                // Check if the repo needs to be cloned first.
+                let needs_clone = self
+                    .state
+                    .data
+                    .repos
+                    .iter()
+                    .find(|r| r.slug == repo_slug)
+                    .map(|r| !std::path::Path::new(&r.local_path).exists())
+                    .unwrap_or(false);
 
-                        if let Some(tid) = ticket_id {
-                            let repo_id = wt.repo_id.clone();
-                            self.maybe_start_agent_for_worktree(
-                                wt.id, wt.path, wt.slug, tid, repo_id,
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        self.state.modal = Modal::Error {
-                            message: format!("Create failed: {e}"),
-                        };
-                    }
+                if needs_clone {
+                    self.state.modal = Modal::Confirm {
+                        title: "Clone Required".to_string(),
+                        message: format!(
+                            "Repo '{}' is not cloned locally. Clone it now?",
+                            repo_slug
+                        ),
+                        on_confirm: ConfirmAction::CreateWorktree {
+                            repo_slug,
+                            wt_name: value,
+                            ticket_id,
+                        },
+                    };
+                } else {
+                    self.spawn_worktree_create(repo_slug, value, ticket_id);
                 }
             }
             InputAction::LinkTicket { worktree_id } => {
@@ -3588,6 +3623,61 @@ impl App {
                 self.state.modal = Modal::Error { message: e };
             }
         }
+    }
+
+    fn spawn_worktree_create(
+        &mut self,
+        repo_slug: String,
+        name: String,
+        ticket_id: Option<String>,
+    ) {
+        // Guard before setting the non-dismissable Progress modal: if bg_tx is
+        // None (only possible before init() completes), skip rather than
+        // permanently locking the UI with no recovery path.
+        let Some(bg_tx) = self.bg_tx.clone() else {
+            return;
+        };
+        self.state.modal = Modal::Progress {
+            message: "Creating worktree…".to_string(),
+        };
+        let config = self.config.clone();
+        std::thread::spawn(move || {
+            let result = (|| -> anyhow::Result<_> {
+                let db = conductor_core::config::db_path();
+                let conn = conductor_core::db::open_database(&db)?;
+                let wt_mgr = WorktreeManager::new(&conn, &config);
+                let (wt, warnings) =
+                    wt_mgr.create(&repo_slug, &name, None, ticket_id.as_deref())?;
+                Ok((wt, warnings))
+            })();
+            match result {
+                Ok((wt, warnings)) => {
+                    if !bg_tx.send(Action::WorktreeCreated {
+                        wt_id: wt.id,
+                        wt_path: wt.path,
+                        wt_slug: wt.slug,
+                        wt_repo_id: wt.repo_id,
+                        warnings,
+                        ticket_id,
+                    }) {
+                        tracing::warn!(
+                            "worktree created but bg_tx.send failed; \
+                             Progress modal may remain visible until app exit"
+                        );
+                    }
+                }
+                Err(e) => {
+                    if !bg_tx.send(Action::WorktreeCreateFailed {
+                        message: format!("Create failed: {e}"),
+                    }) {
+                        tracing::warn!(
+                            "worktree creation failed and bg_tx.send also failed; \
+                             Progress modal may remain visible until app exit"
+                        );
+                    }
+                }
+            }
+        });
     }
 
     fn maybe_start_agent_for_worktree(
