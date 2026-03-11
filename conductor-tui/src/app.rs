@@ -4889,32 +4889,7 @@ impl App {
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
             };
 
-            // When no repo_path is available, use a temp directory as working dir.
-            // _temp_dir is held to keep the directory alive for the duration of this thread.
-            let _temp_dir: Option<tempfile::TempDir>;
-            let working_dir = if repo_path.is_empty() {
-                match tempfile::TempDir::new() {
-                    Ok(d) => {
-                        let path = d.path().to_string_lossy().to_string();
-                        _temp_dir = Some(d);
-                        path
-                    }
-                    Err(e) => {
-                        if let Some(ref tx) = bg_tx {
-                            let _ = tx.send(Action::BackgroundError {
-                                message: format!(
-                                    "Workflow '{}' failed: could not create temp dir: {e}",
-                                    def.name
-                                ),
-                            });
-                        }
-                        return;
-                    }
-                }
-            } else {
-                _temp_dir = None;
-                repo_path.clone()
-            };
+            let working_dir = repo_path.clone();
 
             let params = WorkflowExecStandalone {
                 config,
