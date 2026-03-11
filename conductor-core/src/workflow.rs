@@ -969,8 +969,8 @@ impl<'a> WorkflowManager<'a> {
             let sql = format!(
                 "DELETE FROM workflow_runs \
                  WHERE status IN ({placeholders}) \
-                   AND (worktree_id IS NULL OR worktree_id IN \
-                        (SELECT id FROM worktrees WHERE repo_id = ?{}))",
+                   AND worktree_id IN \
+                        (SELECT id FROM worktrees WHERE repo_id = ?{})",
                 statuses.len() + 1
             );
             let mut params_vec: Vec<&dyn rusqlite::ToSql> =
@@ -1005,8 +1005,8 @@ impl<'a> WorkflowManager<'a> {
             let sql = format!(
                 "SELECT COUNT(*) FROM workflow_runs \
                  WHERE status IN ({placeholders}) \
-                   AND (worktree_id IS NULL OR worktree_id IN \
-                        (SELECT id FROM worktrees WHERE repo_id = ?{}))",
+                   AND worktree_id IN \
+                        (SELECT id FROM worktrees WHERE repo_id = ?{})",
                 statuses.len() + 1
             );
             let mut params_vec: Vec<&dyn rusqlite::ToSql> =
@@ -7604,5 +7604,39 @@ And here is my actual output:
         let mgr = WorkflowManager::new(&conn);
         assert_eq!(mgr.purge(None, &[]).unwrap(), 0);
         assert_eq!(mgr.purge_count(None, &[]).unwrap(), 0);
+    }
+
+    /// Repo-scoped purge must NOT delete global workflow runs (worktree_id IS NULL).
+    #[test]
+    fn test_purge_repo_scoped_does_not_delete_global_runs() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+
+        // Create a global run (no worktree) and a run scoped to w1.
+        let a_global = agent_mgr.create_run(None, "wf", None, None).unwrap();
+        let a_w1 = agent_mgr.create_run(Some("w1"), "wf", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let run_global = mgr
+            .create_workflow_run("t", None, &a_global.id, false, "manual", None)
+            .unwrap();
+        let run_w1 = mgr
+            .create_workflow_run("t", Some("w1"), &a_w1.id, false, "manual", None)
+            .unwrap();
+
+        mgr.update_workflow_status(&run_global.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+        mgr.update_workflow_status(&run_w1.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+
+        // Scope purge to r1 — must only delete the worktree-bound run.
+        assert_eq!(mgr.purge_count(Some("r1"), &["completed"]).unwrap(), 1);
+        let deleted = mgr.purge(Some("r1"), &["completed"]).unwrap();
+        assert_eq!(deleted, 1);
+
+        // Global run must survive.
+        assert!(mgr.get_workflow_run(&run_global.id).unwrap().is_some());
+        // w1 run must be gone.
+        assert!(mgr.get_workflow_run(&run_w1.id).unwrap().is_none());
     }
 }
