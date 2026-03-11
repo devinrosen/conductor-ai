@@ -59,6 +59,9 @@ pub enum GlobalStatusItem {
         elapsed_secs: u64,
         /// Current step name, if known.
         current_step: Option<String>,
+        /// Ordered list of workflow names from root down to the workflow containing the
+        /// currently-running step. Empty for single-level (non-nested) workflows.
+        workflow_chain: Vec<String>,
     },
 }
 
@@ -922,17 +925,19 @@ impl AppState {
                     })
                     .unwrap_or(0);
 
-                let current_step = self
+                let (current_step, workflow_chain) = self
                     .data
                     .workflow_step_summaries
                     .get(&run.id)
-                    .map(|s| s.step_name.clone());
+                    .map(|s| (Some(s.step_name.clone()), s.workflow_chain.clone()))
+                    .unwrap_or((None, Vec::new()));
 
                 gs.active_items.push(GlobalStatusItem::Workflow {
                     worktree_slug,
                     status: run.status.clone(),
                     elapsed_secs,
                     current_step,
+                    workflow_chain,
                 });
             }
         }
