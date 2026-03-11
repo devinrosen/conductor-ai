@@ -318,7 +318,33 @@ pub fn worktree_list_item(
             WorkflowRunStatus::Pending | WorkflowRunStatus::Cancelled => ("", Color::DarkGray),
         };
         if !symbol.is_empty() {
-            let label = format!("{symbol} {}", wf_run.workflow_name);
+            // For running/waiting runs, append step progress if available.
+            let step_suffix = if matches!(
+                wf_run.status,
+                WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
+            ) {
+                state.data.workflow_step_summaries.get(&wf_run.id).map(|s| {
+                    let base = format!(
+                        "{symbol} {} ({}/{}) > ",
+                        wf_run.workflow_name, s.position, s.total
+                    );
+                    // Truncate step name if it would overflow a reasonable column width.
+                    // We use a heuristic max of 80 chars for the full label.
+                    const MAX_LABEL: usize = 80;
+                    let base_chars = base.chars().count();
+                    let step_chars = s.step_name.chars().count();
+                    if base_chars + step_chars <= MAX_LABEL {
+                        format!("{base}{}", s.step_name)
+                    } else {
+                        let available = MAX_LABEL.saturating_sub(base_chars + 1); // +1 for ellipsis
+                        let truncated: String = s.step_name.chars().take(available).collect();
+                        format!("{base}{truncated}…")
+                    }
+                })
+            } else {
+                None
+            };
+            let label = step_suffix.unwrap_or_else(|| format!("{symbol} {}", wf_run.workflow_name));
             spans.push(Span::raw("  "));
             spans.push(Span::styled(label, Style::default().fg(color)));
         }

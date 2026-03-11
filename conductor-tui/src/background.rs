@@ -69,7 +69,7 @@ pub fn poll_data() -> Option<Action> {
     let latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
     let ticket_agent_totals = agent_mgr.totals_by_ticket_all().unwrap_or_default();
 
-    use conductor_core::workflow::WorkflowManager;
+    use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
     let wf_mgr = WorkflowManager::new(&conn);
     // Build a per-worktree map of the most recent run (any status) for inline indicators.
     // Fetch recent runs sorted DESC; the first entry per worktree_id wins.
@@ -84,6 +84,22 @@ pub fn poll_data() -> Option<Action> {
         }
     }
 
+    // Collect IDs of active runs to fetch current step summaries in a single batch query.
+    let active_run_ids: Vec<String> = latest_workflow_runs_by_worktree
+        .values()
+        .filter(|r| {
+            matches!(
+                r.status,
+                WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
+            )
+        })
+        .map(|r| r.id.clone())
+        .collect();
+    let active_run_id_refs: Vec<&str> = active_run_ids.iter().map(|s| s.as_str()).collect();
+    let workflow_step_summaries = wf_mgr
+        .get_step_summaries_for_runs(&active_run_id_refs)
+        .unwrap_or_default();
+
     Some(Action::DataRefreshed(Box::new(DataRefreshedPayload {
         repos,
         worktrees,
@@ -91,6 +107,7 @@ pub fn poll_data() -> Option<Action> {
         latest_agent_runs,
         ticket_agent_totals,
         latest_workflow_runs_by_worktree,
+        workflow_step_summaries,
     })))
 }
 

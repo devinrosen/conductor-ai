@@ -39,7 +39,9 @@ use conductor_core::github::{DiscoveredRepo, GithubPr};
 use conductor_core::issue_source::IssueSource;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::Ticket;
-use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep};
+use conductor_core::workflow::{
+    WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepSummary,
+};
 
 /// A single active item for the global status bar detail line.
 #[derive(Debug, Clone)]
@@ -554,6 +556,8 @@ pub struct DataCache {
     pub pending_feedback: Option<FeedbackRequest>,
     /// Most recent workflow run per worktree (worktree_id → run), for inline indicators.
     pub latest_workflow_runs_by_worktree: HashMap<String, WorkflowRun>,
+    /// Currently-running step summary per workflow_run_id, for inline step indicators.
+    pub workflow_step_summaries: HashMap<String, WorkflowStepSummary>,
     /// Workflow definitions for the currently viewed worktree
     pub workflow_defs: Vec<WorkflowDef>,
     /// Workflow runs for the currently viewed worktree (or all worktrees in global mode)
