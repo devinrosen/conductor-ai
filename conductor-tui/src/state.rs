@@ -452,6 +452,13 @@ pub enum WorkflowPickerTarget {
         repo_path: String,
         repo_name: String,
     },
+    WorkflowRun {
+        workflow_run_id: String,
+        workflow_name: String,
+        worktree_id: Option<String>,
+        worktree_path: Option<String>,
+        repo_path: String,
+    },
 }
 
 #[derive(Debug, Clone)]

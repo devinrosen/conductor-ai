@@ -1543,7 +1543,7 @@ where
     validate_nodes(&def.always, &mut always_produced, &mut errors, loader);
 
     // Validate target values
-    const VALID_TARGETS: &[&str] = &["worktree", "ticket", "repo", "pr"];
+    const VALID_TARGETS: &[&str] = &["worktree", "ticket", "repo", "pr", "workflow_run"];
     for target in &def.targets {
         if !VALID_TARGETS.contains(&target.as_str()) {
             errors.push(ValidationError {

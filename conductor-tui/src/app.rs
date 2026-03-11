@@ -4589,6 +4589,68 @@ impl App {
                     return;
                 }
             }
+        } else if self.state.view == View::WorkflowRunDetail {
+            // WorkflowRunDetail: target is the current workflow run
+            let run = match self
+                .state
+                .selected_workflow_run_id
+                .as_ref()
+                .and_then(|id| self.state.data.workflow_runs.iter().find(|r| &r.id == id))
+            {
+                Some(r) => r.clone(),
+                None => {
+                    self.state.status_message = Some("No workflow run selected".to_string());
+                    return;
+                }
+            };
+            // Resolve repo_path from worktree or repo_id
+            let repo_path = if let Some(wt_id) = &run.worktree_id {
+                self.state
+                    .data
+                    .worktrees
+                    .iter()
+                    .find(|w| &w.id == wt_id)
+                    .and_then(|wt| {
+                        self.state
+                            .data
+                            .repos
+                            .iter()
+                            .find(|r| r.id == wt.repo_id)
+                            .map(|r| r.local_path.clone())
+                    })
+            } else if let Some(repo_id) = &run.repo_id {
+                self.state
+                    .data
+                    .repos
+                    .iter()
+                    .find(|r| &r.id == repo_id)
+                    .map(|r| r.local_path.clone())
+            } else {
+                None
+            };
+            let repo_path = match repo_path {
+                Some(p) => p,
+                None => {
+                    self.state.status_message =
+                        Some("Cannot determine repo for this workflow run".to_string());
+                    return;
+                }
+            };
+            let worktree_path = run.worktree_id.as_ref().and_then(|wt_id| {
+                self.state
+                    .data
+                    .worktrees
+                    .iter()
+                    .find(|w| &w.id == wt_id)
+                    .map(|w| w.path.clone())
+            });
+            WorkflowPickerTarget::WorkflowRun {
+                workflow_run_id: run.id.clone(),
+                workflow_name: run.workflow_name.clone(),
+                worktree_id: run.worktree_id.clone(),
+                worktree_path,
+                repo_path,
+            }
         } else {
             // Ticket list contexts: target is the selected ticket itself
             let ticket = match self.state.view {
@@ -4673,6 +4735,13 @@ impl App {
                     .filter(|d| d.targets.iter().any(|t| t == "repo"))
                     .collect()
             }
+            WorkflowPickerTarget::WorkflowRun { repo_path, .. } => {
+                conductor_core::workflow::WorkflowManager::list_defs("", repo_path)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|d| d.targets.iter().any(|t| t == "workflow_run"))
+                    .collect()
+            }
         };
 
         if defs.is_empty() {
@@ -4681,6 +4750,7 @@ impl App {
                 WorkflowPickerTarget::Worktree { .. } => "worktree",
                 WorkflowPickerTarget::Ticket { .. } => "ticket",
                 WorkflowPickerTarget::Repo { .. } => "repo",
+                WorkflowPickerTarget::WorkflowRun { .. } => "workflow_run",
             };
             self.state.modal = Modal::Error {
                 message: format!(
@@ -4806,6 +4876,22 @@ impl App {
                 repo_name,
             } => {
                 self.spawn_repo_workflow_in_background(def, repo_id, repo_path, repo_name);
+            }
+            WorkflowPickerTarget::WorkflowRun {
+                workflow_run_id,
+                worktree_id,
+                worktree_path,
+                repo_path,
+                ..
+            } => {
+                let mut inputs = std::collections::HashMap::new();
+                inputs.insert("workflow_run_id".to_string(), workflow_run_id);
+                let working_dir = worktree_path.unwrap_or_else(|| repo_path.clone());
+                if let Some(wt_id) = worktree_id {
+                    self.spawn_workflow_in_background(def, wt_id, working_dir, repo_path, inputs);
+                } else {
+                    self.spawn_workflow_run_target_in_background(def, repo_path, inputs);
+                }
             }
         }
     }
@@ -5004,6 +5090,49 @@ impl App {
 
         self.workflow_threads.push(handle);
         self.state.status_message = Some(format!("Starting workflow '{workflow_name}' on repo…"));
+    }
+
+    fn spawn_workflow_run_target_in_background(
+        &mut self,
+        def: conductor_core::workflow::WorkflowDef,
+        repo_path: String,
+        inputs: std::collections::HashMap<String, String>,
+    ) {
+        let config = self.config.clone();
+        let bg_tx = self.bg_tx.clone();
+        let workflow_name = def.name.clone();
+        let shutdown = Arc::clone(&self.workflow_shutdown);
+
+        let handle = std::thread::spawn(move || {
+            use conductor_core::workflow::{
+                execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
+            };
+
+            let params = WorkflowExecStandalone {
+                config,
+                workflow: def.clone(),
+                worktree_id: None,
+                working_dir: repo_path.clone(),
+                repo_path,
+                ticket_id: None,
+                repo_id: None,
+                model: None,
+                exec_config: WorkflowExecConfig {
+                    shutdown: Some(shutdown),
+                    ..WorkflowExecConfig::default()
+                },
+                inputs,
+            };
+
+            let result = execute_workflow_standalone(&params);
+
+            send_workflow_result(&bg_tx, &def.name, result);
+        });
+
+        self.workflow_threads.push(handle);
+        self.state.status_message = Some(format!(
+            "Starting workflow '{workflow_name}' on workflow run…"
+        ));
     }
 
     fn handle_run_pr_workflow(&mut self) {

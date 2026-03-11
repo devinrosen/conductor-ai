@@ -344,6 +344,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         match key.code {
             KeyCode::Char('x') => return Action::CancelWorkflow,
             KeyCode::Char('r') => return Action::ResumeWorkflow,
+            KeyCode::Char('w') => return Action::PickWorkflow,
             KeyCode::Enter => {
                 // Approve a waiting gate step if one exists
                 let has_gate = state

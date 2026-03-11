@@ -609,6 +609,17 @@ pub fn render_workflow_picker(
             " Run Workflow on Repo ".to_string(),
             format!("  {repo_name}"),
         ),
+        WorkflowPickerTarget::WorkflowRun {
+            workflow_name,
+            workflow_run_id,
+            ..
+        } => {
+            let short_id = &workflow_run_id[..8.min(workflow_run_id.len())];
+            (
+                " Run Workflow on Run ".to_string(),
+                format!("  {workflow_name} ({short_id}…)"),
+            )
+        }
     };
 
     let height = (workflow_defs.len() as u16 + 7).min(25);
