@@ -87,7 +87,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         ]),
         Line::from(vec![
             Span::styled("Path: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(&wt.path),
+            Span::raw(shorten_paths(
+                &wt.path,
+                "",
+                dirs::home_dir().as_deref().and_then(|p| p.to_str()),
+            )),
         ]),
         Line::from(vec![
             Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
