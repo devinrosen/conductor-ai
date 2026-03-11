@@ -589,10 +589,19 @@ pub fn ticket_worktree_spans(
     )]
 }
 
+/// Format a token count as `X.Xk` for values ≥ 1000, or plain integer otherwise.
+fn fmt_tokens_k(n: i64) -> String {
+    if n >= 1000 {
+        format!("{:.1}k", n as f64 / 1000.0)
+    } else {
+        n.to_string()
+    }
+}
+
 /// Build optional agent-totals spans for a ticket row.
 ///
 /// Compact views (dashboard, repo-detail) pass `show_duration: false`
-/// to get `$X.XX Xt`.  The full Tickets view passes `true` to also
+/// to get `X.Xk↓ X.Xk↑ Xt`.  The full Tickets view passes `true` to also
 /// show `Xm XXs`.
 pub fn ticket_agent_total_spans(
     state: &AppState,
@@ -603,16 +612,18 @@ pub fn ticket_agent_total_spans(
     let Some(totals) = state.data.ticket_agent_totals.get(ticket_id) else {
         return Vec::new();
     };
+    let in_k = fmt_tokens_k(totals.total_input_tokens);
+    let out_k = fmt_tokens_k(totals.total_output_tokens);
     let text = if show_duration {
         let dur_secs = totals.total_duration_ms as f64 / 1000.0;
         let mins = (dur_secs / 60.0) as i64;
         let secs = (dur_secs % 60.0) as i64;
         format!(
-            "{leading}${:.2}  {}t  {}m{:02}s",
-            totals.total_cost, totals.total_turns, mins, secs
+            "{leading}{in_k}↓ {out_k}↑ {}t  {}m{:02}s",
+            totals.total_turns, mins, secs
         )
     } else {
-        format!("{leading}${:.2} {}t", totals.total_cost, totals.total_turns)
+        format!("{leading}{in_k}↓ {out_k}↑ {}t", totals.total_turns)
     };
     vec![Span::styled(text, Style::default().fg(Color::Magenta))]
 }
