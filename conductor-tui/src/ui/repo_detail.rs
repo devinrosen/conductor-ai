@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
+use super::helpers::shorten_paths;
 use crate::state::{AppState, RepoDetailFocus};
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -25,44 +26,55 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(8),
+            Constraint::Length(9),
             Constraint::Percentage(50),
             Constraint::Percentage(50),
         ])
         .split(area);
 
     // Repo info header
-    let info = Paragraph::new(vec![
+    let info_focused = state.repo_detail_focus == RepoDetailFocus::Info;
+    let info_border_color = if info_focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+    let home_dir = dirs::home_dir();
+    let home_str = home_dir.as_deref().and_then(|p| p.to_str());
+
+    let mut lines: Vec<Line> = vec![
         Line::from(vec![
-            Span::styled("Repo: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Repo:          ", Style::default().fg(Color::DarkGray)),
             Span::styled(&repo.slug, Style::default().add_modifier(Modifier::BOLD)),
         ]),
         Line::from(vec![
-            Span::styled("Remote: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Remote:        ", Style::default().fg(Color::DarkGray)),
             Span::raw(&repo.remote_url),
         ]),
         Line::from(vec![
-            Span::styled("Branch: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Branch:        ", Style::default().fg(Color::DarkGray)),
             Span::raw(&repo.default_branch),
-            Span::styled("  Path: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(&repo.local_path),
+        ]),
+        Line::from(vec![
+            Span::styled("Path:          ", Style::default().fg(Color::DarkGray)),
+            Span::raw(shorten_paths(&repo.local_path, "", home_str)),
         ]),
         Line::from(vec![
             Span::styled("Worktrees Dir: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(&repo.workspace_dir),
+            Span::raw(shorten_paths(&repo.workspace_dir, "", home_str)),
         ]),
         Line::from(vec![
-            Span::styled("Model: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Model:         ", Style::default().fg(Color::DarkGray)),
             match repo.model.as_deref() {
                 Some(m) => Span::raw(m.to_string()),
                 None => Span::styled(
-                    "(not set — press m to configure)",
+                    "(not set — press Enter to configure)",
                     Style::default().fg(Color::DarkGray),
                 ),
             },
         ]),
         Line::from(vec![
-            Span::styled("Agent Issues: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Agent Issues:  ", Style::default().fg(Color::DarkGray)),
             if repo.allow_agent_issue_creation {
                 Span::styled("Enabled", Style::default().fg(Color::Green))
             } else {
@@ -70,8 +82,22 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             },
             Span::styled(" (press I to toggle)", Style::default().fg(Color::DarkGray)),
         ]),
-    ])
-    .block(Block::default().borders(Borders::ALL).title(" Info "));
+    ];
+
+    // Apply highlight to the focused row when info pane is focused
+    if info_focused {
+        let row = state.repo_detail_info_row;
+        if let Some(line) = lines.get_mut(row) {
+            *line = std::mem::take(line).style(Style::default().add_modifier(Modifier::REVERSED));
+        }
+    }
+
+    let info = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(info_border_color))
+            .title(" Info "),
+    );
 
     frame.render_widget(info, layout[0]);
 

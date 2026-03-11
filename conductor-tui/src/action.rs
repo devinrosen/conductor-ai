@@ -135,6 +135,8 @@ pub enum Action {
     WorktreeDetailCopy,
     /// Act on the selected info panel row: Path → open tmux window, Ticket → show ticket modal, PR → open browser.
     WorktreeDetailOpen,
+    /// Act on the selected row in the RepoDetail info pane.
+    RepoDetailInfoOpen,
     ScrollLeft,
     ScrollRight,
 

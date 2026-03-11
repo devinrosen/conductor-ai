@@ -115,6 +115,7 @@ impl DashboardFocus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepoDetailFocus {
+    Info,
     Worktrees,
     Tickets,
     Prs,
@@ -123,15 +124,17 @@ pub enum RepoDetailFocus {
 impl RepoDetailFocus {
     pub fn next(self) -> Self {
         match self {
+            Self::Info => Self::Worktrees,
             Self::Worktrees => Self::Tickets,
             Self::Tickets => Self::Prs,
-            Self::Prs => Self::Worktrees,
+            Self::Prs => Self::Info,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Worktrees => Self::Prs,
+            Self::Info => Self::Prs,
+            Self::Worktrees => Self::Info,
             Self::Tickets => Self::Worktrees,
             Self::Prs => Self::Tickets,
         }
@@ -200,6 +203,21 @@ pub mod info_row {
     pub const TICKET: usize = 8;
     /// Total number of navigable rows (used for bounds clamping).
     pub const COUNT: usize = 9;
+}
+
+/// Named row indices for the RepoDetail info panel.
+/// These constants must stay in sync with the row order rendered in
+/// `ui/repo_detail.rs`.
+pub mod repo_info_row {
+    pub const SLUG: usize = 0;
+    pub const REMOTE: usize = 1;
+    #[allow(dead_code)]
+    pub const BRANCH: usize = 2;
+    pub const PATH: usize = 3;
+    pub const WORKTREES_DIR: usize = 4;
+    pub const MODEL: usize = 5;
+    /// Total number of navigable rows (used for bounds clamping).
+    pub const COUNT: usize = 6;
 }
 
 /// Choice offered in the post-worktree-creation picker.
@@ -687,6 +705,9 @@ pub struct AppState {
     /// Selected row index in the WorktreeDetail info panel (for j/k navigation and y/o actions).
     pub worktree_detail_selected_row: usize,
 
+    /// Selected row index in the RepoDetail info panel (for j/k navigation and o actions).
+    pub repo_detail_info_row: usize,
+
     // Filters
     pub filter: FilterState,
     pub detail_ticket_filter: FilterState,
@@ -751,6 +772,7 @@ impl AppState {
             pending_g: false,
             worktree_detail_focus: WorktreeDetailFocus::InfoPanel,
             worktree_detail_selected_row: 0,
+            repo_detail_info_row: 0,
             filter: FilterState::default(),
             detail_ticket_filter: FilterState::default(),
             status_message: None,
@@ -938,6 +960,7 @@ impl AppState {
                 DashboardFocus::Tickets => (self.ticket_index, self.filtered_tickets.len()),
             },
             View::RepoDetail => match self.repo_detail_focus {
+                RepoDetailFocus::Info => (self.repo_detail_info_row, repo_info_row::COUNT),
                 RepoDetailFocus::Worktrees => (self.detail_wt_index, self.detail_worktrees.len()),
                 RepoDetailFocus::Tickets => {
                     (self.detail_ticket_index, self.filtered_detail_tickets.len())
@@ -974,6 +997,7 @@ impl AppState {
                 DashboardFocus::Tickets => self.ticket_index = index,
             },
             View::RepoDetail => match self.repo_detail_focus {
+                RepoDetailFocus::Info => self.repo_detail_info_row = index,
                 RepoDetailFocus::Worktrees => self.detail_wt_index = index,
                 RepoDetailFocus::Tickets => self.detail_ticket_index = index,
                 RepoDetailFocus::Prs => self.detail_pr_index = index,
@@ -1059,14 +1083,16 @@ mod tests {
 
     #[test]
     fn repo_detail_focus_next_cycles_forward() {
+        assert_eq!(RepoDetailFocus::Info.next(), RepoDetailFocus::Worktrees);
         assert_eq!(RepoDetailFocus::Worktrees.next(), RepoDetailFocus::Tickets);
         assert_eq!(RepoDetailFocus::Tickets.next(), RepoDetailFocus::Prs);
-        assert_eq!(RepoDetailFocus::Prs.next(), RepoDetailFocus::Worktrees);
+        assert_eq!(RepoDetailFocus::Prs.next(), RepoDetailFocus::Info);
     }
 
     #[test]
     fn repo_detail_focus_prev_cycles_backward() {
-        assert_eq!(RepoDetailFocus::Worktrees.prev(), RepoDetailFocus::Prs);
+        assert_eq!(RepoDetailFocus::Info.prev(), RepoDetailFocus::Prs);
+        assert_eq!(RepoDetailFocus::Worktrees.prev(), RepoDetailFocus::Info);
         assert_eq!(RepoDetailFocus::Prs.prev(), RepoDetailFocus::Tickets);
         assert_eq!(RepoDetailFocus::Tickets.prev(), RepoDetailFocus::Worktrees);
     }
@@ -1074,6 +1100,7 @@ mod tests {
     #[test]
     fn repo_detail_focus_next_prev_are_inverses() {
         for focus in [
+            RepoDetailFocus::Info,
             RepoDetailFocus::Worktrees,
             RepoDetailFocus::Tickets,
             RepoDetailFocus::Prs,

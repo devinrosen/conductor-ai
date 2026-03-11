@@ -22,9 +22,9 @@ use crate::background;
 use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
 use crate::state::{
-    info_row, AppState, ConfirmAction, DashboardFocus, FormAction, FormField, InputAction, Modal,
-    PostCreateChoice, RepoDetailFocus, View, WorkflowRunDetailFocus, WorkflowsFocus,
-    WorktreeDetailFocus,
+    info_row, repo_info_row, AppState, ConfirmAction, DashboardFocus, FormAction, FormField,
+    InputAction, Modal, PostCreateChoice, RepoDetailFocus, View, WorkflowRunDetailFocus,
+    WorkflowsFocus, WorktreeDetailFocus,
 };
 use crate::ui;
 
@@ -492,6 +492,7 @@ impl App {
             // WorktreeDetail panel actions
             Action::WorktreeDetailCopy => self.handle_worktree_detail_copy(),
             Action::WorktreeDetailOpen => self.handle_worktree_detail_open(),
+            Action::RepoDetailInfoOpen => self.handle_repo_detail_info_open(),
 
             // Agent (tmux-based)
             Action::LaunchAgent => self.handle_launch_agent(),
@@ -1068,6 +1069,10 @@ impl App {
                 }
             },
             View::RepoDetail => match self.state.repo_detail_focus {
+                RepoDetailFocus::Info => {
+                    self.state.repo_detail_info_row =
+                        self.state.repo_detail_info_row.saturating_sub(1);
+                }
                 RepoDetailFocus::Worktrees => {
                     self.state.detail_wt_index = self.state.detail_wt_index.saturating_sub(1);
                 }
@@ -1209,6 +1214,9 @@ impl App {
                 }
             },
             View::RepoDetail => match self.state.repo_detail_focus {
+                RepoDetailFocus::Info => {
+                    clamp_increment(&mut self.state.repo_detail_info_row, repo_info_row::COUNT);
+                }
                 RepoDetailFocus::Worktrees => {
                     clamp_increment(
                         &mut self.state.detail_wt_index,
@@ -1337,6 +1345,10 @@ impl App {
                 }
             },
             View::RepoDetail => match self.state.repo_detail_focus {
+                RepoDetailFocus::Info => {
+                    // Delegate to info open handler
+                    self.handle_repo_detail_info_open();
+                }
                 RepoDetailFocus::Worktrees => {
                     if let Some(wt) = self.state.detail_worktrees.get(self.state.detail_wt_index) {
                         let wt_id = wt.id.clone();
@@ -4236,6 +4248,49 @@ impl App {
             _ => {
                 self.state.status_message =
                     Some("No action for this row (try Path or Ticket row)".to_string());
+            }
+        }
+    }
+
+    fn handle_repo_detail_info_open(&mut self) {
+        let row = self.state.repo_detail_info_row;
+        let repo = self
+            .state
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id));
+        let Some(repo) = repo else { return };
+        match row {
+            repo_info_row::SLUG | repo_info_row::REMOTE => match self.repo_web_url() {
+                Some(url) => {
+                    match Command::new("open")
+                        .arg(&url)
+                        .output()
+                        .or_else(|_| Command::new("xdg-open").arg(&url).output())
+                    {
+                        Ok(_) => {
+                            self.state.status_message = Some(format!("Opened {url}"));
+                        }
+                        Err(e) => {
+                            self.state.status_message = Some(format!("Failed to open: {e}"));
+                        }
+                    }
+                }
+                None => {
+                    self.state.status_message =
+                        Some("No GitHub URL found for this repo".to_string());
+                }
+            },
+            repo_info_row::PATH => {
+                let path = repo.local_path.clone();
+                self.open_terminal_at_path(&path);
+            }
+            repo_info_row::WORKTREES_DIR => {
+                let path = repo.workspace_dir.clone();
+                self.open_terminal_at_path(&path);
+            }
+            _ => {
+                self.state.status_message = Some("No action for this row".to_string());
             }
         }
     }

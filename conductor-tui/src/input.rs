@@ -376,6 +376,19 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
     // View-specific keybindings (RepoDetail)
     if state.view == View::RepoDetail {
+        if state.repo_detail_focus == crate::state::RepoDetailFocus::Info {
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => return Action::MoveDown,
+                KeyCode::Char('k') | KeyCode::Up => return Action::MoveUp,
+                KeyCode::Char('o') => return Action::RepoDetailInfoOpen,
+                KeyCode::Enter
+                    if state.repo_detail_info_row == crate::state::repo_info_row::MODEL =>
+                {
+                    return Action::SetModel
+                }
+                _ => {}
+            }
+        }
         if state.repo_detail_focus == crate::state::RepoDetailFocus::Prs {
             match key.code {
                 KeyCode::Char('o') => return Action::OpenPrUrl,
