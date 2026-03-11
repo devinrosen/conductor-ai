@@ -344,7 +344,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         match key.code {
             KeyCode::Char('x') => return Action::CancelWorkflow,
             KeyCode::Char('r') => return Action::ResumeWorkflow,
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
+            KeyCode::Enter => {
                 // Approve a waiting gate step if one exists
                 let has_gate = state
                     .data
@@ -747,25 +747,34 @@ mod tests {
     }
 
     #[test]
-    fn workflow_run_detail_y_approves_waiting_gate() {
+    fn workflow_run_detail_enter_approves_waiting_gate() {
         let state = workflow_run_detail_state_with_waiting_gate();
         assert!(matches!(
-            map_key(key(KeyCode::Char('y')), &state),
-            Action::ApproveGate
-        ));
-        assert!(matches!(
-            map_key(key(KeyCode::Char('Y')), &state),
+            map_key(key(KeyCode::Enter), &state),
             Action::ApproveGate
         ));
     }
 
     #[test]
-    fn workflow_run_detail_y_does_not_approve_when_no_gate() {
+    fn workflow_run_detail_enter_does_not_approve_when_no_gate() {
         let mut state = AppState::new();
         state.view = View::WorkflowRunDetail;
         // No workflow steps → no waiting gate
         assert!(!matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::ApproveGate
+        ));
+    }
+
+    #[test]
+    fn workflow_run_detail_y_no_longer_approves_gate() {
+        let state = workflow_run_detail_state_with_waiting_gate();
+        assert!(!matches!(
             map_key(key(KeyCode::Char('y')), &state),
+            Action::ApproveGate
+        ));
+        assert!(!matches!(
+            map_key(key(KeyCode::Char('Y')), &state),
             Action::ApproveGate
         ));
     }

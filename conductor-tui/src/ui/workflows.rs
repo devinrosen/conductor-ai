@@ -455,10 +455,17 @@ fn render_step_list(
         })
         .collect();
 
-    let title = if focused {
-        " Steps (Enter=detail, Tab=switch) "
-    } else {
-        " Steps "
+    let has_waiting_gate = state
+        .data
+        .workflow_steps
+        .iter()
+        .any(|s| s.status.to_string() == "waiting" && s.gate_type.is_some());
+
+    let title = match (focused, has_waiting_gate) {
+        (true, true) => " Steps (Enter=approve gate, Tab=switch) ",
+        (true, false) => " Steps (Enter=detail, Tab=switch) ",
+        (false, true) => " Steps (Enter=approve gate) ",
+        (false, false) => " Steps ",
     };
 
     let list = List::new(items)

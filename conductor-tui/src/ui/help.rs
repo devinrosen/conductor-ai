@@ -98,7 +98,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
         Line::from(""),
         help_line("x", "Cancel workflow run"),
         help_line("r", "Resume workflow run"),
-        help_line("y / Y", "Approve waiting gate step"),
+        help_line("Enter", "Approve waiting gate step"),
         Line::from(""),
         Line::from(Span::styled(
             "Press Esc or ? to close",
