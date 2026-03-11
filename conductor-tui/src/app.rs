@@ -4586,6 +4586,30 @@ impl App {
                 repo_path: repo.local_path.clone(),
                 repo_name: repo.slug.clone(),
             }
+        } else if self.state.view == View::Dashboard
+            && self.state.dashboard_focus == crate::state::DashboardFocus::Worktrees
+        {
+            // Dashboard Worktrees pane: target is the highlighted worktree (cursor position)
+            let wt = match self.state.selected_worktree() {
+                Some(w) => w.clone(),
+                None => {
+                    self.state.status_message = Some("No worktree selected".to_string());
+                    return;
+                }
+            };
+            let repo_path = self
+                .state
+                .data
+                .repos
+                .iter()
+                .find(|r| r.id == wt.repo_id)
+                .map(|r| r.local_path.clone())
+                .unwrap_or_default();
+            WorkflowPickerTarget::Worktree {
+                worktree_id: wt.id.clone(),
+                worktree_path: wt.path.clone(),
+                repo_path,
+            }
         } else {
             // Ticket list contexts: target is the selected ticket itself
             let ticket = match self.state.view {
