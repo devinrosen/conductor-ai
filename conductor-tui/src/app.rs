@@ -3631,11 +3631,16 @@ impl App {
         name: String,
         ticket_id: Option<String>,
     ) {
+        // Guard before setting the non-dismissable Progress modal: if bg_tx is
+        // None (only possible before init() completes), skip rather than
+        // permanently locking the UI with no recovery path.
+        let Some(bg_tx) = self.bg_tx.clone() else {
+            return;
+        };
         self.state.modal = Modal::Progress {
             message: "Creating worktree…".to_string(),
         };
         let config = self.config.clone();
-        let bg_tx = self.bg_tx.clone();
         std::thread::spawn(move || {
             let result = (|| -> anyhow::Result<_> {
                 let db = conductor_core::config::db_path();
@@ -3645,23 +3650,21 @@ impl App {
                     wt_mgr.create(&repo_slug, &name, None, ticket_id.as_deref())?;
                 Ok((wt, warnings))
             })();
-            if let Some(ref tx) = bg_tx {
-                match result {
-                    Ok((wt, warnings)) => {
-                        let _ = tx.send(Action::WorktreeCreated {
-                            wt_id: wt.id,
-                            wt_path: wt.path,
-                            wt_slug: wt.slug,
-                            wt_repo_id: wt.repo_id,
-                            warnings,
-                            ticket_id,
-                        });
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Action::WorktreeCreateFailed {
-                            message: format!("Create failed: {e}"),
-                        });
-                    }
+            match result {
+                Ok((wt, warnings)) => {
+                    let _ = bg_tx.send(Action::WorktreeCreated {
+                        wt_id: wt.id,
+                        wt_path: wt.path,
+                        wt_slug: wt.slug,
+                        wt_repo_id: wt.repo_id,
+                        warnings,
+                        ticket_id,
+                    });
+                }
+                Err(e) => {
+                    let _ = bg_tx.send(Action::WorktreeCreateFailed {
+                        message: format!("Create failed: {e}"),
+                    });
                 }
             }
         });
