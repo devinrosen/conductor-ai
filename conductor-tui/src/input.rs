@@ -367,6 +367,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Char('k') | KeyCode::Up => return Action::MoveUp,
                 KeyCode::Char('o') => return Action::RepoDetailInfoOpen,
                 KeyCode::Char('y') => return Action::RepoDetailInfoCopy,
+                KeyCode::Char('w') => return Action::PickWorkflow,
                 KeyCode::Enter
                     if state.repo_detail_info_row == crate::state::repo_info_row::MODEL =>
                 {
@@ -378,6 +379,11 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                     return Action::ToggleAgentIssues
                 }
                 _ => {}
+            }
+        }
+        if state.repo_detail_focus == crate::state::RepoDetailFocus::Worktrees {
+            if let KeyCode::Char('w') = key.code {
+                return Action::PickWorkflow;
             }
         }
         if state.repo_detail_focus == crate::state::RepoDetailFocus::Prs {
@@ -812,6 +818,28 @@ mod tests {
         let mut state = AppState::new();
         state.view = View::Dashboard;
         state.dashboard_focus = crate::state::DashboardFocus::Worktrees;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('w')), &state),
+            Action::PickWorkflow
+        ));
+    }
+
+    #[test]
+    fn w_maps_to_pick_workflow_in_repo_detail_info() {
+        let mut state = AppState::new();
+        state.view = View::RepoDetail;
+        state.repo_detail_focus = crate::state::RepoDetailFocus::Info;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('w')), &state),
+            Action::PickWorkflow
+        ));
+    }
+
+    #[test]
+    fn w_maps_to_pick_workflow_in_repo_detail_worktrees() {
+        let mut state = AppState::new();
+        state.view = View::RepoDetail;
+        state.repo_detail_focus = crate::state::RepoDetailFocus::Worktrees;
         assert!(matches!(
             map_key(key(KeyCode::Char('w')), &state),
             Action::PickWorkflow
