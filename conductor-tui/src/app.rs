@@ -4497,18 +4497,13 @@ impl App {
                     return;
                 }
             };
-            let repo_path = self
-                .state
-                .data
-                .repos
-                .iter()
-                .find(|r| r.id == wt.repo_id)
-                .map(|r| r.local_path.clone())
-                .unwrap_or_default();
-            WorkflowPickerTarget::Worktree {
-                worktree_id: wt.id.clone(),
-                worktree_path: wt.path.clone(),
-                repo_path,
+            match self.worktree_picker_target(&wt) {
+                Some(t) => t,
+                None => {
+                    self.state.status_message =
+                        Some("Repo not found for this worktree".to_string());
+                    return;
+                }
             }
         } else if self.state.view == View::RepoDetail
             && self.state.repo_detail_focus == crate::state::RepoDetailFocus::Prs
@@ -4541,11 +4536,7 @@ impl App {
                     return;
                 }
             };
-            WorkflowPickerTarget::Repo {
-                repo_id: repo.id.clone(),
-                repo_path: repo.local_path.clone(),
-                repo_name: repo.slug.clone(),
-            }
+            self.repo_picker_target(&repo)
         } else if self.state.view == View::RepoDetail
             && self.state.repo_detail_focus == crate::state::RepoDetailFocus::Worktrees
         {
@@ -4557,14 +4548,13 @@ impl App {
                     return;
                 }
             };
-            let Some(repo) = self.state.data.repos.iter().find(|r| r.id == wt.repo_id) else {
-                self.state.status_message = Some("Repo not found for this worktree".to_string());
-                return;
-            };
-            WorkflowPickerTarget::Worktree {
-                worktree_id: wt.id.clone(),
-                worktree_path: wt.path.clone(),
-                repo_path: repo.local_path.clone(),
+            match self.worktree_picker_target(&wt) {
+                Some(t) => t,
+                None => {
+                    self.state.status_message =
+                        Some("Repo not found for this worktree".to_string());
+                    return;
+                }
             }
         } else if self.state.view == View::Dashboard
             && self.state.dashboard_focus == crate::state::DashboardFocus::Repos
@@ -4577,11 +4567,7 @@ impl App {
                     return;
                 }
             };
-            WorkflowPickerTarget::Repo {
-                repo_id: repo.id.clone(),
-                repo_path: repo.local_path.clone(),
-                repo_name: repo.slug.clone(),
-            }
+            self.repo_picker_target(&repo)
         } else if self.state.view == View::Dashboard
             && self.state.dashboard_focus == crate::state::DashboardFocus::Worktrees
         {
@@ -4593,18 +4579,13 @@ impl App {
                     return;
                 }
             };
-            let repo_path = self
-                .state
-                .data
-                .repos
-                .iter()
-                .find(|r| r.id == wt.repo_id)
-                .map(|r| r.local_path.clone())
-                .unwrap_or_default();
-            WorkflowPickerTarget::Worktree {
-                worktree_id: wt.id.clone(),
-                worktree_path: wt.path.clone(),
-                repo_path,
+            match self.worktree_picker_target(&wt) {
+                Some(t) => t,
+                None => {
+                    self.state.status_message =
+                        Some("Repo not found for this worktree".to_string());
+                    return;
+                }
             }
         } else {
             // Ticket list contexts: target is the selected ticket itself
@@ -5381,6 +5362,38 @@ impl App {
             Err(e) => {
                 self.state.status_message = Some(format!("Could not launch {editor}: {e}"));
             }
+        }
+    }
+
+    /// Resolve a worktree to a `WorkflowPickerTarget::Worktree`, looking up the repo path from
+    /// `self.state.data.repos`. Returns `None` if the repo is not found.
+    fn worktree_picker_target(
+        &self,
+        wt: &conductor_core::worktree::Worktree,
+    ) -> Option<crate::state::WorkflowPickerTarget> {
+        let repo_path = self
+            .state
+            .data
+            .repos
+            .iter()
+            .find(|r| r.id == wt.repo_id)
+            .map(|r| r.local_path.clone())?;
+        Some(crate::state::WorkflowPickerTarget::Worktree {
+            worktree_id: wt.id.clone(),
+            worktree_path: wt.path.clone(),
+            repo_path,
+        })
+    }
+
+    /// Construct a `WorkflowPickerTarget::Repo` from a `&Repo`.
+    fn repo_picker_target(
+        &self,
+        repo: &conductor_core::repo::Repo,
+    ) -> crate::state::WorkflowPickerTarget {
+        crate::state::WorkflowPickerTarget::Repo {
+            repo_id: repo.id.clone(),
+            repo_path: repo.local_path.clone(),
+            repo_name: repo.slug.clone(),
         }
     }
 }
