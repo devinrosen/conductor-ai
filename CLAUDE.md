@@ -91,6 +91,45 @@ Branch ruleset on `main`: PRs required, linear history (squash/rebase only), `Cl
 - **Current priorities:** [docs/ROADMAP.md](docs/ROADMAP.md)
 - **Workflow engine design:** [docs/workflow/engine.md](docs/workflow/engine.md)
 
+## TUI Threading Rule
+
+**Never call blocking operations on the TUI main thread.** The TUI renders on a single thread — any synchronous blocking call (git, network, file I/O, subprocess) freezes the UI completely.
+
+**What counts as blocking:** anything in `conductor-core` that calls `std::process::Command` (all git ops, `gh` CLI, dep installs), large file reads (agent logs), or slow DB queries.
+
+**The required pattern:**
+
+```rust
+// 1. Capture data needed by the thread
+let tx = self.bg_tx.clone();
+let repo_slug = repo_slug.clone();
+
+// 2. Show a non-dismissable progress modal
+self.state.modal = Modal::Progress { message: "Pushing branch…".into() };
+
+// 3. Do the work off-thread
+std::thread::spawn(move || {
+    let db = open_database(&db_path()).unwrap();
+    let config = Config::load().unwrap();
+    let result = WorktreeManager::new(&db, &config).push(&repo_slug, &wt_slug);
+    let _ = tx.send(Action::PushComplete { result: result.map_err(|e| e.to_string()) });
+});
+
+// 4. Handle the result action back on the main thread
+Action::PushComplete { result } => {
+    self.state.modal = Modal::None;
+    match result {
+        Ok(msg) => self.state.status_message = Some(msg),
+        Err(e)  => self.state.modal = Modal::Error { message: e },
+    }
+}
+```
+
+Reference implementations already using this pattern correctly:
+- `has_merged_pr()` check before worktree delete (`app.rs` ~line 2827)
+- Workflow execution and resume (`app.rs` ~lines 4893, 1705)
+- PR fetch background task (`background.rs`)
+
 ## Key Conventions
 
 - All record IDs are ULIDs (sortable, collision-resistant)
