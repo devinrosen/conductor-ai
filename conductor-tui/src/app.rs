@@ -501,7 +501,6 @@ impl App {
             Action::StopAgent => self.handle_stop_agent(),
             Action::SubmitFeedback => self.handle_submit_feedback(),
             Action::DismissFeedback => self.handle_dismiss_feedback(),
-            Action::ViewAgentLog => self.handle_view_agent_log(),
             Action::CopyLastCodeBlock => self.handle_copy_last_code_block(),
             Action::ExpandAgentEvent => self.handle_expand_agent_event(),
             Action::AgentActivityDown => {
@@ -4051,34 +4050,6 @@ impl App {
             Err(e) => {
                 let _ = mgr.update_run_failed(&run.id, &e);
                 self.state.modal = Modal::Error { message: e };
-            }
-        }
-    }
-
-    fn handle_view_agent_log(&mut self) {
-        let run = self.selected_worktree_run();
-
-        let log_path = run.and_then(|r| r.log_file.as_deref());
-        let Some(log_path) = log_path else {
-            self.state.status_message = Some("No agent log available".to_string());
-            return;
-        };
-
-        let viewer = std::env::var("EDITOR").unwrap_or_else(|_| "less".to_string());
-
-        let result = Command::new("tmux")
-            .args(["new-window", "--", &viewer, log_path])
-            .output();
-
-        match result {
-            Ok(o) if o.status.success() => {
-                self.state.status_message = Some("Opened agent log".to_string());
-            }
-            Ok(_) => {
-                self.state.status_message = Some("Failed to open log viewer".to_string());
-            }
-            Err(e) => {
-                self.state.status_message = Some(format!("Failed to open log: {e}"));
             }
         }
     }

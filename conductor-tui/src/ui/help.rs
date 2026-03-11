@@ -75,7 +75,6 @@ pub fn render(frame: &mut Frame, area: Rect) {
         help_line("j / k", "Scroll activity log"),
         help_line("Enter", "Expand selected event"),
         help_line("y", "Copy last code block"),
-        help_line("l", "View agent log file"),
         Line::from(""),
         Line::from(Span::styled(
             "Worktree Detail — Agent Controls",

@@ -304,7 +304,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         let is_active = agent_run.is_some_and(|run| run.is_active());
         let is_waiting_for_feedback = agent_run.is_some_and(|run| run.is_waiting_for_feedback());
-        let has_log = agent_run.is_some_and(|run| run.log_file.is_some());
 
         let focus = state.worktree_detail_focus;
 
@@ -314,7 +313,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('x') if is_active => return Action::StopAgent,
             KeyCode::Char('f') if is_waiting_for_feedback => return Action::SubmitFeedback,
             KeyCode::Char('F') if is_waiting_for_feedback => return Action::DismissFeedback,
-            KeyCode::Char('l') if has_log => return Action::ViewAgentLog,
             KeyCode::Char('w') => return Action::PickWorkflow,
             KeyCode::Char('y') => return Action::WorktreeDetailCopy,
             KeyCode::Char('o') => return Action::WorktreeDetailOpen,
@@ -706,32 +704,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn worktree_detail_l_maps_to_view_agent_log_when_log_exists() {
-        let mut state = worktree_detail_state_with_run(AgentRunStatus::Completed);
-        // Give the run a log file so `has_log` is true
-        state
-            .data
-            .latest_agent_runs
-            .get_mut("wt1")
-            .unwrap()
-            .log_file = Some("/tmp/run.log".into());
-        assert!(matches!(
-            map_key(key(KeyCode::Char('l')), &state),
-            Action::ViewAgentLog
-        ));
-    }
-
-    #[test]
-    fn worktree_detail_l_does_not_map_to_view_agent_log_when_no_log() {
-        let state = worktree_detail_state_with_run(AgentRunStatus::Completed);
-        // No log_file → falls through to global 'l' (ScrollRight in EventDetail, None here)
-        assert!(!matches!(
-            map_key(key(KeyCode::Char('l')), &state),
-            Action::ViewAgentLog
-        ));
-    }
-
     // --- Removed global bindings (p, P, t, w, D) must not fire in Dashboard ---
 
     fn dashboard_state() -> AppState {
@@ -751,17 +723,6 @@ mod tests {
                 "key '{ch}' should map to Action::None after removal but did not"
             );
         }
-    }
-
-    #[test]
-    fn global_l_does_not_trigger_view_agent_log_outside_worktree_detail() {
-        // 'l' was a global key (LinkTicket) before; now it is only active in
-        // WorktreeDetail. Outside that view it must not fire ViewAgentLog.
-        let state = dashboard_state();
-        assert!(!matches!(
-            map_key(key(KeyCode::Char('l')), &state),
-            Action::ViewAgentLog
-        ));
     }
 
     // --- WorkflowRunDetail: y/Y fires ApproveGate when a gate step is waiting ---
