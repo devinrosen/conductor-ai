@@ -1,0 +1,18 @@
+workflow label-ticket {
+  meta {
+    description = "Add appropriate labels to a single GitHub issue if it is missing labels"
+    trigger     = "manual"
+    targets     = ["ticket"]
+  }
+
+  call label-ticket
+
+  if label-ticket.needs_new_label {
+    gate human_review {
+      prompt     = "No existing label fits this ticket. Review the agent's suggestion and provide feedback — e.g. use an existing label anyway, or name a new label to create first. The agent will then apply labels based on your guidance."
+      timeout    = "24h"
+      on_timeout = fail
+    }
+    call label-ticket
+  }
+}

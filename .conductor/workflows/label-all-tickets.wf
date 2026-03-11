@@ -1,0 +1,18 @@
+workflow label-all-tickets {
+  meta {
+    description = "Add appropriate labels to all unlabeled open GitHub issues in a repo"
+    trigger     = "manual"
+    targets     = ["repo"]
+  }
+
+  call label-all-tickets
+
+  if label-all-tickets.needs_new_labels {
+    gate human_review {
+      prompt     = "Some issues could not be labeled using existing labels. Review the agent's suggestions and provide feedback — e.g. which existing labels to use anyway, or names for new labels to create first. The agent will re-process only the unresolved issues."
+      timeout    = "48h"
+      on_timeout = continue
+    }
+    call label-all-tickets
+  }
+}
