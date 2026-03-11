@@ -51,10 +51,15 @@ pub struct LogResult {
     pub num_turns: Option<i64>,
     pub duration_ms: Option<i64>,
     pub is_error: bool,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_input_tokens: Option<i64>,
+    pub cache_creation_input_tokens: Option<i64>,
 }
 
-/// Extract the five protocol fields from a `result` JSON event.
+/// Extract the protocol fields from a `result` JSON event.
 pub fn parse_result_event(event: &serde_json::Value) -> LogResult {
+    let usage = event.get("usage");
     LogResult {
         result_text: event
             .get("result")
@@ -67,6 +72,18 @@ pub fn parse_result_event(event: &serde_json::Value) -> LogResult {
             .get("is_error")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        input_tokens: usage
+            .and_then(|u| u.get("input_tokens"))
+            .and_then(|v| v.as_i64()),
+        output_tokens: usage
+            .and_then(|u| u.get("output_tokens"))
+            .and_then(|v| v.as_i64()),
+        cache_read_input_tokens: usage
+            .and_then(|u| u.get("cache_read_input_tokens"))
+            .and_then(|v| v.as_i64()),
+        cache_creation_input_tokens: usage
+            .and_then(|u| u.get("cache_creation_input_tokens"))
+            .and_then(|v| v.as_i64()),
     }
 }
 
@@ -128,6 +145,10 @@ pub(crate) fn try_recover_from_log_at(
             log_result.cost_usd,
             log_result.num_turns,
             log_result.duration_ms,
+            log_result.input_tokens,
+            log_result.output_tokens,
+            log_result.cache_read_input_tokens,
+            log_result.cache_creation_input_tokens,
         );
     }
     mgr.get_run(run_id).ok().flatten()
@@ -302,6 +323,10 @@ pub struct AgentRun {
     pub plan: Option<Vec<PlanStep>>,
     /// If this is a child run, the ID of the parent (supervisor) run.
     pub parent_run_id: Option<String>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_input_tokens: Option<i64>,
+    pub cache_creation_input_tokens: Option<i64>,
 }
 
 impl AgentRun {
@@ -618,6 +643,10 @@ pub struct TicketAgentTotals {
     pub total_cost: f64,
     pub total_turns: i64,
     pub total_duration_ms: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
+    pub total_cache_read_tokens: i64,
+    pub total_cache_creation_tokens: i64,
 }
 
 /// Aggregated stats for a run tree (parent + all descendants).
@@ -696,6 +725,10 @@ impl<'a> AgentManager<'a> {
             model: model.map(String::from),
             plan: None,
             parent_run_id: parent_run_id.map(String::from),
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         };
 
         self.conn.execute(
@@ -720,7 +753,8 @@ impl<'a> AgentManager<'a> {
         let result = self.conn.query_row(
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan, parent_run_id \
+             model, plan, parent_run_id, \
+             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens \
              FROM agent_runs WHERE id = ?1",
             params![run_id],
             row_to_agent_run,
@@ -757,7 +791,8 @@ impl<'a> AgentManager<'a> {
         let sql = format!(
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan, parent_run_id \
+             model, plan, parent_run_id, \
+             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens \
              FROM agent_runs WHERE id IN ({placeholders})"
         );
         let params: Vec<&dyn rusqlite::types::ToSql> = ids
@@ -774,6 +809,7 @@ impl<'a> AgentManager<'a> {
         Ok(map)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_run_completed(
         &self,
         run_id: &str,
@@ -782,12 +818,18 @@ impl<'a> AgentManager<'a> {
         cost_usd: Option<f64>,
         num_turns: Option<i64>,
         duration_ms: Option<i64>,
+        input_tokens: Option<i64>,
+        output_tokens: Option<i64>,
+        cache_read_input_tokens: Option<i64>,
+        cache_creation_input_tokens: Option<i64>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
             "UPDATE agent_runs SET status = 'completed', claude_session_id = ?1, \
              result_text = ?2, cost_usd = ?3, num_turns = ?4, duration_ms = ?5, \
-             ended_at = ?6 WHERE id = ?7",
+             ended_at = ?6, input_tokens = ?8, output_tokens = ?9, \
+             cache_read_input_tokens = ?10, cache_creation_input_tokens = ?11 \
+             WHERE id = ?7",
             params![
                 session_id,
                 result_text,
@@ -795,7 +837,11 @@ impl<'a> AgentManager<'a> {
                 num_turns,
                 duration_ms,
                 now,
-                run_id
+                run_id,
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
             ],
         )?;
         Ok(())
@@ -1044,7 +1090,8 @@ impl<'a> AgentManager<'a> {
             self.conn,
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan, parent_run_id \
+             model, plan, parent_run_id, \
+             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens \
              FROM agent_runs WHERE worktree_id = ?1 ORDER BY started_at DESC",
             params![worktree_id],
             row_to_agent_run,
@@ -1059,7 +1106,8 @@ impl<'a> AgentManager<'a> {
             self.conn,
             "SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, a.result_text, \
              a.cost_usd, a.num_turns, a.duration_ms, a.started_at, a.ended_at, a.tmux_window, \
-             a.log_file, a.model, NULL, a.parent_run_id \
+             a.log_file, a.model, NULL, a.parent_run_id, \
+             a.input_tokens, a.output_tokens, a.cache_read_input_tokens, a.cache_creation_input_tokens \
              FROM agent_runs a \
              JOIN worktrees w ON a.worktree_id = w.id \
              WHERE w.repo_id = ?1 \
@@ -1085,7 +1133,8 @@ impl<'a> AgentManager<'a> {
         let result = self.conn.query_row(
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan, parent_run_id \
+             model, plan, parent_run_id, \
+             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens \
              FROM agent_runs WHERE worktree_id = ?1 ORDER BY started_at DESC LIMIT 1",
             params![worktree_id],
             row_to_agent_run,
@@ -1110,7 +1159,11 @@ impl<'a> AgentManager<'a> {
                     COUNT(*) AS total_runs, \
                     COALESCE(SUM(a.cost_usd), 0.0) AS total_cost, \
                     COALESCE(SUM(a.num_turns), 0) AS total_turns, \
-                    COALESCE(SUM(a.duration_ms), 0) AS total_duration_ms \
+                    COALESCE(SUM(a.duration_ms), 0) AS total_duration_ms, \
+                    COALESCE(SUM(a.input_tokens), 0) AS total_input_tokens, \
+                    COALESCE(SUM(a.output_tokens), 0) AS total_output_tokens, \
+                    COALESCE(SUM(a.cache_read_input_tokens), 0) AS total_cache_read_tokens, \
+                    COALESCE(SUM(a.cache_creation_input_tokens), 0) AS total_cache_creation_tokens \
              FROM agent_runs a \
              JOIN worktrees w ON a.worktree_id = w.id \
              WHERE w.ticket_id IS NOT NULL AND a.status = 'completed' \
@@ -1124,6 +1177,10 @@ impl<'a> AgentManager<'a> {
                 total_cost: row.get(2)?,
                 total_turns: row.get(3)?,
                 total_duration_ms: row.get(4)?,
+                total_input_tokens: row.get(5)?,
+                total_output_tokens: row.get(6)?,
+                total_cache_read_tokens: row.get(7)?,
+                total_cache_creation_tokens: row.get(8)?,
             })
         })?;
 
@@ -1284,7 +1341,8 @@ impl<'a> AgentManager<'a> {
             self.conn,
             "SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, \
              a.result_text, a.cost_usd, a.num_turns, a.duration_ms, a.started_at, \
-             a.ended_at, a.tmux_window, a.log_file, a.model, a.plan, a.parent_run_id \
+             a.ended_at, a.tmux_window, a.log_file, a.model, a.plan, a.parent_run_id, \
+             a.input_tokens, a.output_tokens, a.cache_read_input_tokens, a.cache_creation_input_tokens \
              FROM agent_runs a \
              INNER JOIN ( \
                  SELECT worktree_id, MAX(started_at) AS max_started \
@@ -1311,7 +1369,8 @@ impl<'a> AgentManager<'a> {
             self.conn,
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan, parent_run_id \
+             model, plan, parent_run_id, \
+             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens \
              FROM agent_runs WHERE parent_run_id = ?1 ORDER BY started_at DESC",
             params![parent_run_id],
             row_to_agent_run,
@@ -1334,7 +1393,8 @@ impl<'a> AgentManager<'a> {
              ) \
              SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, \
                     a.result_text, a.cost_usd, a.num_turns, a.duration_ms, a.started_at, \
-                    a.ended_at, a.tmux_window, a.log_file, a.model, a.plan, a.parent_run_id \
+                    a.ended_at, a.tmux_window, a.log_file, a.model, a.plan, a.parent_run_id, \
+                    a.input_tokens, a.output_tokens, a.cache_read_input_tokens, a.cache_creation_input_tokens \
              FROM agent_runs a \
              JOIN tree t ON a.id = t.id \
              ORDER BY a.started_at ASC",
@@ -1351,7 +1411,8 @@ impl<'a> AgentManager<'a> {
             self.conn,
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan, parent_run_id \
+             model, plan, parent_run_id, \
+             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens \
              FROM agent_runs WHERE worktree_id = ?1 AND parent_run_id IS NULL \
              ORDER BY started_at DESC",
             params![worktree_id],
@@ -1609,7 +1670,8 @@ impl<'a> AgentManager<'a> {
             self.conn,
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan, parent_run_id \
+             model, plan, parent_run_id, \
+             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens \
              FROM agent_runs WHERE status IN ('running', 'waiting_for_feedback')",
             [],
             row_to_agent_run,
@@ -1894,6 +1956,10 @@ fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun> {
         model: row.get(13)?,
         plan: None,
         parent_run_id: row.get(15)?,
+        input_tokens: row.get(16)?,
+        output_tokens: row.get(17)?,
+        cache_read_input_tokens: row.get(18)?,
+        cache_creation_input_tokens: row.get(19)?,
     })
 }
 
@@ -1988,6 +2054,10 @@ mod tests {
             Some(0.05),
             Some(3),
             Some(15000),
+            None,
+            None,
+            None,
+            None,
         )
         .unwrap();
 
@@ -2137,18 +2207,51 @@ mod tests {
         let run1 = mgr
             .create_run(Some("w1"), "First task", None, None)
             .unwrap();
-        mgr.update_run_completed(&run1.id, None, None, Some(0.10), Some(5), Some(30000))
-            .unwrap();
+        mgr.update_run_completed(
+            &run1.id,
+            None,
+            None,
+            Some(0.10),
+            Some(5),
+            Some(30000),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let run2 = mgr
             .create_run(Some("w1"), "Second task", None, None)
             .unwrap();
-        mgr.update_run_completed(&run2.id, None, None, Some(0.05), Some(3), Some(15000))
-            .unwrap();
+        mgr.update_run_completed(
+            &run2.id,
+            None,
+            None,
+            Some(0.05),
+            Some(3),
+            Some(15000),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let run3 = mgr
             .create_run(Some("w2"), "Third task", None, None)
             .unwrap();
-        mgr.update_run_completed(&run3.id, None, None, Some(0.08), Some(4), Some(20000))
-            .unwrap();
+        mgr.update_run_completed(
+            &run3.id,
+            None,
+            None,
+            Some(0.08),
+            Some(4),
+            Some(20000),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         // Create a running run (should NOT be included)
         let _run4 = mgr
@@ -2803,20 +2906,53 @@ mod tests {
         let parent = mgr
             .create_run(Some("w1"), "Supervisor", None, None)
             .unwrap();
-        mgr.update_run_completed(&parent.id, None, None, Some(0.10), Some(5), Some(30000))
-            .unwrap();
+        mgr.update_run_completed(
+            &parent.id,
+            None,
+            None,
+            Some(0.10),
+            Some(5),
+            Some(30000),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let child1 = mgr
             .create_child_run(Some("w1"), "Child 1", None, None, &parent.id)
             .unwrap();
-        mgr.update_run_completed(&child1.id, None, None, Some(0.05), Some(3), Some(15000))
-            .unwrap();
+        mgr.update_run_completed(
+            &child1.id,
+            None,
+            None,
+            Some(0.05),
+            Some(3),
+            Some(15000),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let child2 = mgr
             .create_child_run(Some("w2"), "Child 2", None, None, &parent.id)
             .unwrap();
-        mgr.update_run_completed(&child2.id, None, None, Some(0.08), Some(4), Some(20000))
-            .unwrap();
+        mgr.update_run_completed(
+            &child2.id,
+            None,
+            None,
+            Some(0.08),
+            Some(4),
+            Some(20000),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         // Still-running child should NOT be included in totals
         let _running = mgr
@@ -2920,8 +3056,19 @@ mod tests {
             },
         ];
         mgr.update_run_plan(&prior.id, &steps).unwrap();
-        mgr.update_run_completed(&prior.id, None, Some("All done"), None, None, None)
-            .unwrap();
+        mgr.update_run_completed(
+            &prior.id,
+            None,
+            Some("All done"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         // Create current run
         let current = mgr
@@ -2951,6 +3098,10 @@ mod tests {
             Some(0.15),
             Some(10),
             Some(60000),
+            None,
+            None,
+            None,
+            None,
         )
         .unwrap();
 
@@ -2986,8 +3137,19 @@ mod tests {
             .create_run(Some("w1"), "Prior task", None, None)
             .unwrap();
         let long_result = "x".repeat(1000);
-        mgr.update_run_completed(&prior.id, None, Some(&long_result), None, None, None)
-            .unwrap();
+        mgr.update_run_completed(
+            &prior.id,
+            None,
+            Some(&long_result),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let current = mgr.create_run(Some("w1"), "Next", None, None).unwrap();
 
@@ -3009,8 +3171,19 @@ mod tests {
             .create_run(Some("w1"), "Prior task", None, None)
             .unwrap();
         let long_result = "é".repeat(300);
-        mgr.update_run_completed(&prior.id, None, Some(&long_result), None, None, None)
-            .unwrap();
+        mgr.update_run_completed(
+            &prior.id,
+            None,
+            Some(&long_result),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let current = mgr.create_run(Some("w1"), "Next", None, None).unwrap();
 
@@ -3053,8 +3226,19 @@ mod tests {
         mgr.dismiss_feedback(&fb2.id).unwrap();
 
         // Complete the run after feedback
-        mgr.update_run_completed(&prior.id, None, Some("Done"), None, None, None)
-            .unwrap();
+        mgr.update_run_completed(
+            &prior.id,
+            None,
+            Some("Done"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         // Create current run
         let current = mgr.create_run(Some("w1"), "Next task", None, None).unwrap();
@@ -3076,8 +3260,19 @@ mod tests {
         let prior = mgr
             .create_run(Some("w1"), "Prior task", None, None)
             .unwrap();
-        mgr.update_run_completed(&prior.id, None, Some("Done"), None, None, None)
-            .unwrap();
+        mgr.update_run_completed(
+            &prior.id,
+            None,
+            Some("Done"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let current = mgr.create_run(Some("w1"), "Next task", None, None).unwrap();
 
@@ -3162,8 +3357,19 @@ mod tests {
             ..Default::default()
         }];
         mgr.update_run_plan(&run.id, &steps).unwrap();
-        mgr.update_run_completed(&run.id, Some("sess-123"), None, None, None, None)
-            .unwrap();
+        mgr.update_run_completed(
+            &run.id,
+            Some("sess-123"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         mgr.mark_plan_done(&run.id).unwrap();
 
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
@@ -3244,6 +3450,10 @@ mod tests {
                 },
             ]),
             parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         };
 
         let prompt = run.build_resume_prompt();
@@ -3327,6 +3537,10 @@ mod tests {
             Some(0.031),
             Some(10),
             Some(492_000),
+            None,
+            None,
+            None,
+            None,
         )
         .unwrap();
 
@@ -3354,6 +3568,10 @@ mod tests {
             Some(0.03),
             Some(10),
             Some(400_000),
+            None,
+            None,
+            None,
+            None,
         )
         .unwrap();
 
@@ -3382,6 +3600,10 @@ mod tests {
             Some(0.002),
             Some(3),
             Some(60_000),
+            None,
+            None,
+            None,
+            None,
         )
         .unwrap();
         mgr.update_run_completed(
@@ -3391,6 +3613,10 @@ mod tests {
             Some(0.001),
             Some(1),
             Some(70_000),
+            None,
+            None,
+            None,
+            None,
         )
         .unwrap();
 
@@ -3421,6 +3647,10 @@ mod tests {
             Some(0.01),
             Some(5),
             Some(100_000),
+            None,
+            None,
+            None,
+            None,
         )
         .unwrap();
         mgr.update_run_completed(
@@ -3430,6 +3660,10 @@ mod tests {
             Some(0.005),
             Some(2),
             Some(50_000),
+            None,
+            None,
+            None,
+            None,
         )
         .unwrap();
 
@@ -3745,8 +3979,19 @@ mod tests {
         let run = mgr
             .create_run(Some("w1"), "test prompt", None, None)
             .unwrap();
-        mgr.update_run_completed(&run.id, None, Some("Done"), None, None, None)
-            .unwrap();
+        mgr.update_run_completed(
+            &run.id,
+            None,
+            Some("Done"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let reaped = mgr.reap_orphaned_runs().unwrap();
         assert_eq!(reaped, 0);
@@ -3761,8 +4006,19 @@ mod tests {
         let r1 = mgr.create_run(Some("w1"), "prompt 1", None, None).unwrap();
         let r2 = mgr.create_run(Some("w1"), "prompt 2", None, None).unwrap();
         let r3 = mgr.create_run(Some("w1"), "prompt 3", None, None).unwrap();
-        mgr.update_run_completed(&r3.id, None, Some("Done"), None, None, None)
-            .unwrap();
+        mgr.update_run_completed(
+            &r3.id,
+            None,
+            Some("Done"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let reaped = mgr.reap_orphaned_runs().unwrap();
         assert_eq!(reaped, 2);

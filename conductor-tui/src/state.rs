@@ -1384,6 +1384,10 @@ mod tests {
             model: None,
             plan: None,
             parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         }
     }
 
@@ -1749,6 +1753,10 @@ mod tests {
             model: None,
             plan: None,
             parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
         };
         // Insert under an arbitrary key to exercise the global_status iteration path.
         state.data.latest_agent_runs.insert("run-eph".into(), run);

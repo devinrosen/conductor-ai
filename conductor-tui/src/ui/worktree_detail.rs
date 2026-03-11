@@ -533,10 +533,14 @@ fn render_child_run_line(run: &conductor_core::agent::AgentRun) -> Line<'static>
     let cost = run.cost_usd.unwrap_or(0.0);
     let turns = run.num_turns.unwrap_or(0);
     if cost > 0.0 || turns > 0 {
-        spans.push(Span::styled(
-            format!("  ${cost:.4} {turns}t"),
-            Style::default().fg(Color::Magenta),
-        ));
+        let mut cost_str = format!("  ${cost:.4} {turns}t");
+        if let Some(in_tok) = run.input_tokens {
+            cost_str.push_str(&format!(" {:.1}k↓", in_tok as f64 / 1000.0));
+        }
+        if let Some(out_tok) = run.output_tokens {
+            cost_str.push_str(&format!(" {out_tok}↑"));
+        }
+        spans.push(Span::styled(cost_str, Style::default().fg(Color::Magenta)));
     }
 
     Line::from(spans)
