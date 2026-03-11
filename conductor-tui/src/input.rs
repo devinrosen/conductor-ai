@@ -335,6 +335,12 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             {
                 return Action::SetModel
             }
+            KeyCode::Enter
+                if focus == WorktreeDetailFocus::InfoPanel
+                    && state.worktree_detail_selected_row == crate::state::info_row::TICKET =>
+            {
+                return Action::LinkTicket
+            }
             KeyCode::Char('m') => return Action::SetModel,
             _ => {}
         }

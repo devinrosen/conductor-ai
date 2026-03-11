@@ -55,7 +55,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     } else {
         vec![
             Span::styled("Ticket: ", Style::default().fg(Color::DarkGray)),
-            Span::raw("None (press l to link)"),
+            Span::styled(
+                "None (press Enter to link)",
+                Style::default().fg(Color::DarkGray),
+            ),
         ]
     };
 

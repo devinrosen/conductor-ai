@@ -196,8 +196,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
                 if has_running {
                     "r:agent  x:stop  o:ticket  Esc:back  ?:help".to_string()
                 } else {
-                    "r:agent  o:ticket  p:push  P:PR  l:link  d:delete  Esc:back  ?:help"
-                        .to_string()
+                    "r:agent  o:ticket  p:push  P:PR  d:delete  Esc:back  ?:help".to_string()
                 }
             }
             View::Tickets => "j/k:nav  /:filter  Esc:back  ?:help".to_string(),
