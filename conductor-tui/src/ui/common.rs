@@ -215,7 +215,7 @@ fn render_header_detail(
                 spans.push(Span::styled(label, Style::default().fg(color)));
             }
             GlobalStatusItem::Workflow {
-                worktree_slug,
+                context_label,
                 status,
                 elapsed_secs,
                 current_step,
@@ -232,7 +232,7 @@ fn render_header_detail(
                     WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
                 ) {
                     build_workflow_breadcrumb(
-                        worktree_slug,
+                        context_label,
                         workflow_chain,
                         current_step.as_deref(),
                         0,
@@ -240,7 +240,7 @@ fn render_header_detail(
                         symbol,
                     )
                 } else {
-                    format!("{symbol} {worktree_slug}")
+                    format!("{symbol} {context_label}")
                 };
                 spans.push(Span::styled(label, Style::default().fg(color)));
             }
@@ -439,23 +439,22 @@ pub fn worktree_list_item(
 /// Build a workflow step breadcrumb label string.
 ///
 /// Produces a string of the form:
-/// `"{symbol} name1 > name2 > … > {iter_prefix}step_name ({elapsed}s)"`.
+/// `"{symbol} context_label  name1 > name2 > … > {iter_prefix}step_name ({elapsed}s)"`.
 ///
 /// The result is capped at `MAX_LABEL` (80) characters; leading workflow names
 /// are dropped one-by-one with a `"..."` prefix when needed, and the step name
 /// itself is truncated as a last resort.
 ///
-/// - `worktree_slug` — label prefix used when `workflow_chain` is empty (single-level
-///   workflow), and also as the fallback when no `step_name` is available.
+/// - `context_label` — label prefix (worktree slug, repo slug, or `#N` ticket ref).
 /// - `workflow_chain` — ordered parent workflow names (root → immediate parent).
 ///   Empty for single-level (non-nested) workflows.
 /// - `step_name` — currently-running step name; `None` if unknown (returns
-///   `"{symbol} {worktree_slug}"`).
+///   `"{symbol} {context_label}"`).
 /// - `iteration` — loop iteration count (0 = first pass, omit prefix when 0).
 /// - `elapsed_secs` — seconds since the current step started (0 = omit elapsed).
 /// - `symbol` — prefix symbol (e.g. `"⚙"`, `"⏸"`).
 pub fn build_workflow_breadcrumb(
-    worktree_slug: &str,
+    context_label: &str,
     workflow_chain: &[String],
     step_name: Option<&str>,
     iteration: i64,
@@ -463,7 +462,7 @@ pub fn build_workflow_breadcrumb(
     symbol: &str,
 ) -> String {
     let Some(step) = step_name else {
-        return format!("{symbol} {worktree_slug}");
+        return format!("{symbol} {context_label}");
     };
 
     const MAX_LABEL: usize = 80;
@@ -485,11 +484,13 @@ pub fn build_workflow_breadcrumb(
         String::new()
     };
 
-    let symbol_prefix = format!("{symbol} ");
+    let symbol_prefix = format!("{symbol} {context_label}  ");
 
     if !workflow_chain.is_empty() {
         // Assemble all workflow-name parts followed by the step name.
         // workflow_chain holds [root, …parents]; step is the final segment.
+        // Prepend context_label so the output is:
+        //   "{symbol} context_label  chain > … > step (elapsed)"
         let all_names: Vec<&str> = workflow_chain
             .iter()
             .map(String::as_str)
@@ -538,8 +539,8 @@ pub fn build_workflow_breadcrumb(
             remaining = &remaining[1..];
         }
     } else {
-        // Single-level workflow: "{symbol} {worktree_slug} > {iter_prefix}step_name{elapsed_suffix}"
-        let base = format!("{symbol_prefix}{worktree_slug} > {iter_prefix}");
+        // Single-level workflow: "{symbol} {context_label} > {iter_prefix}step_name{elapsed_suffix}"
+        let base = format!("{symbol} {context_label} > {iter_prefix}");
         let base_chars = base.chars().count();
         let step_with_elapsed = format!("{step}{elapsed_suffix}");
         if base_chars + step_with_elapsed.chars().count() <= MAX_LABEL {

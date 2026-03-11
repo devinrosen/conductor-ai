@@ -53,7 +53,8 @@ pub enum GlobalStatusItem {
         elapsed_secs: u64,
     },
     Workflow {
-        worktree_slug: String,
+        /// Display label for the context: worktree slug, repo slug, or `#<source_id>` for tickets.
+        context_label: String,
         status: WorkflowRunStatus,
         /// Elapsed seconds since the agent run for the current step started (0 if unknown).
         elapsed_secs: u64,
@@ -579,6 +580,8 @@ pub struct DataCache {
     pub latest_workflow_runs_by_worktree: HashMap<String, WorkflowRun>,
     /// Currently-running step summary per workflow_run_id, for inline step indicators.
     pub workflow_step_summaries: HashMap<String, WorkflowStepSummary>,
+    /// Active root workflow runs with no associated worktree (repo/ticket-targeted).
+    pub active_non_worktree_workflow_runs: Vec<WorkflowRun>,
     /// Workflow definitions for the currently viewed worktree
     pub workflow_defs: Vec<WorkflowDef>,
     /// Workflow runs for the currently viewed worktree (or all worktrees in global mode)
@@ -903,7 +906,7 @@ impl AppState {
                     workflow_worktree_ids.insert(wt_key.as_str());
                 }
 
-                let worktree_slug = run
+                let context_label = run
                     .worktree_id
                     .as_deref()
                     .map(&resolve_slug)
@@ -933,9 +936,56 @@ impl AppState {
                     .unwrap_or((None, Vec::new()));
 
                 gs.active_items.push(GlobalStatusItem::Workflow {
-                    worktree_slug,
+                    context_label,
                     status: run.status.clone(),
                     elapsed_secs,
+                    current_step,
+                    workflow_chain,
+                });
+            }
+        }
+
+        // Third pass: build Workflow items for active non-worktree runs (repo/ticket-targeted).
+        for run in &self.data.active_non_worktree_workflow_runs {
+            match run.status {
+                WorkflowRunStatus::Running => gs.running_workflows += 1,
+                WorkflowRunStatus::Waiting => gs.waiting_workflows += 1,
+                _ => {}
+            }
+            if matches!(
+                run.status,
+                WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
+            ) {
+                // Derive a context label from repo or ticket, fallback to "(ephemeral)".
+                // Use the pre-built maps from DataCache instead of allocating new ones.
+                let context_label = if let Some(ref rid) = run.repo_id {
+                    self.data
+                        .repo_slug_map
+                        .get(rid.as_str())
+                        .map(|s| s.as_str())
+                        .unwrap_or("(ephemeral)")
+                        .to_string()
+                } else if let Some(ref tid) = run.ticket_id {
+                    self.data
+                        .ticket_map
+                        .get(tid.as_str())
+                        .map(|t| format!("#{}", t.source_id))
+                        .unwrap_or_else(|| "(ephemeral)".to_string())
+                } else {
+                    "(ephemeral)".to_string()
+                };
+
+                let (current_step, workflow_chain) = self
+                    .data
+                    .workflow_step_summaries
+                    .get(&run.id)
+                    .map(|s| (Some(s.step_name.clone()), s.workflow_chain.clone()))
+                    .unwrap_or((None, Vec::new()));
+
+                gs.active_items.push(GlobalStatusItem::Workflow {
+                    context_label,
+                    status: run.status.clone(),
+                    elapsed_secs: 0,
                     current_step,
                     workflow_chain,
                 });
@@ -1747,6 +1797,151 @@ mod tests {
         // The agent counter should NOT have been incremented for the suppressed entry.
         assert_eq!(gs.running_agents, 0);
         assert_eq!(gs.running_workflows, 1);
+    }
+
+    #[test]
+    fn global_status_non_worktree_workflow_repo_targeted() {
+        let mut state = AppState::new();
+        // Register a repo so repo_slug_map is populated.
+        let repo = conductor_core::repo::Repo {
+            id: "repo-1".into(),
+            slug: "my-repo".into(),
+            local_path: "/tmp/repo".into(),
+            remote_url: String::new(),
+            default_branch: "main".into(),
+            workspace_dir: String::new(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            model: None,
+            allow_agent_issue_creation: false,
+        };
+        state.data.repos.push(repo);
+        state.data.rebuild_maps();
+
+        let mut run = conductor_core::workflow::WorkflowRun {
+            id: "wfrun-repo".into(),
+            workflow_name: "test-workflow".into(),
+            worktree_id: None,
+            parent_run_id: "root".into(),
+            status: WorkflowRunStatus::Running,
+            dry_run: false,
+            trigger: "manual".into(),
+            started_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
+            result_summary: None,
+            definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
+            ticket_id: None,
+            repo_id: Some("repo-1".into()),
+            parent_workflow_run_id: None,
+        };
+        state
+            .data
+            .active_non_worktree_workflow_runs
+            .push(run.clone());
+
+        let gs = state.global_status();
+        assert_eq!(gs.running_workflows, 1);
+        assert_eq!(gs.total_active(), 1);
+        match &gs.active_items[0] {
+            GlobalStatusItem::Workflow { context_label, .. } => {
+                assert_eq!(context_label, "my-repo");
+            }
+            _ => panic!("expected Workflow item"),
+        }
+
+        // Unknown repo_id falls back to "(ephemeral)".
+        run.repo_id = Some("unknown-repo".into());
+        state.data.active_non_worktree_workflow_runs[0] = run;
+        let gs2 = state.global_status();
+        match &gs2.active_items[0] {
+            GlobalStatusItem::Workflow { context_label, .. } => {
+                assert_eq!(context_label, "(ephemeral)");
+            }
+            _ => panic!("expected Workflow item"),
+        }
+    }
+
+    #[test]
+    fn global_status_non_worktree_workflow_ticket_targeted() {
+        let mut state = AppState::new();
+        // Register a ticket so ticket_map is populated.
+        state.data.tickets.push(make_ticket("ticket-1", "open"));
+        state.data.rebuild_maps();
+
+        let mut run = conductor_core::workflow::WorkflowRun {
+            id: "wfrun-ticket".into(),
+            workflow_name: "test-workflow".into(),
+            worktree_id: None,
+            parent_run_id: "root".into(),
+            status: WorkflowRunStatus::Running,
+            dry_run: false,
+            trigger: "manual".into(),
+            started_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
+            result_summary: None,
+            definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
+            ticket_id: Some("ticket-1".into()),
+            repo_id: None,
+            parent_workflow_run_id: None,
+        };
+        state
+            .data
+            .active_non_worktree_workflow_runs
+            .push(run.clone());
+
+        let gs = state.global_status();
+        assert_eq!(gs.running_workflows, 1);
+        assert_eq!(gs.total_active(), 1);
+        match &gs.active_items[0] {
+            GlobalStatusItem::Workflow { context_label, .. } => {
+                // make_ticket sets source_id = id = "ticket-1"
+                assert_eq!(context_label, "#ticket-1");
+            }
+            _ => panic!("expected Workflow item"),
+        }
+
+        // Unknown ticket_id falls back to "(ephemeral)".
+        run.ticket_id = Some("unknown-ticket".into());
+        state.data.active_non_worktree_workflow_runs[0] = run;
+        let gs2 = state.global_status();
+        match &gs2.active_items[0] {
+            GlobalStatusItem::Workflow { context_label, .. } => {
+                assert_eq!(context_label, "(ephemeral)");
+            }
+            _ => panic!("expected Workflow item"),
+        }
+    }
+
+    #[test]
+    fn global_status_non_worktree_workflow_no_context_is_ephemeral() {
+        let mut state = AppState::new();
+        let run = conductor_core::workflow::WorkflowRun {
+            id: "wfrun-eph".into(),
+            workflow_name: "test-workflow".into(),
+            worktree_id: None,
+            parent_run_id: "root".into(),
+            status: WorkflowRunStatus::Running,
+            dry_run: false,
+            trigger: "manual".into(),
+            started_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
+            result_summary: None,
+            definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
+            ticket_id: None,
+            repo_id: None,
+            parent_workflow_run_id: None,
+        };
+        state.data.active_non_worktree_workflow_runs.push(run);
+        let gs = state.global_status();
+        assert_eq!(gs.running_workflows, 1);
+        match &gs.active_items[0] {
+            GlobalStatusItem::Workflow { context_label, .. } => {
+                assert_eq!(context_label, "(ephemeral)");
+            }
+            _ => panic!("expected Workflow item"),
+        }
     }
 
     #[test]
