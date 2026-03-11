@@ -1481,18 +1481,15 @@ fn main() -> Result<()> {
                 dry_run,
             } => {
                 const ALLOWED: &[&str] = &["completed", "failed", "cancelled"];
-                let statuses: Vec<&str> = match status.as_deref() {
-                    None | Some("all") => ALLOWED.to_vec(),
-                    Some(s) => {
-                        if ALLOWED.contains(&s) {
-                            vec![s]
-                        } else {
-                            eprintln!(
-                                "Unknown status '{s}'. Allowed values: completed, failed, cancelled, all"
-                            );
-                            std::process::exit(1);
-                        }
-                    }
+                let status_val = status.as_deref().unwrap_or("all");
+                let statuses: Vec<&str> = if status_val == "all" {
+                    ALLOWED.to_vec()
+                } else if ALLOWED.contains(&status_val) {
+                    vec![status_val]
+                } else {
+                    anyhow::bail!(
+                        "Unknown status '{status_val}'. Allowed values: completed, failed, cancelled, all"
+                    );
                 };
 
                 let repo_id: Option<String> = if let Some(slug) = &repo {

@@ -958,33 +958,11 @@ impl<'a> WorkflowManager<'a> {
         if statuses.is_empty() {
             return Ok(0);
         }
-        let placeholders = statuses
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", i + 1))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let count = if let Some(rid) = repo_id {
-            let sql = format!(
-                "DELETE FROM workflow_runs \
-                 WHERE status IN ({placeholders}) \
-                   AND worktree_id IN \
-                        (SELECT id FROM worktrees WHERE repo_id = ?{})",
-                statuses.len() + 1
-            );
-            let mut params_vec: Vec<&dyn rusqlite::ToSql> =
-                statuses.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-            params_vec.push(&rid);
-            self.conn.execute(&sql, params_vec.as_slice())?
-        } else {
-            let sql = format!("DELETE FROM workflow_runs WHERE status IN ({placeholders})");
-            let params_vec: Vec<&dyn rusqlite::ToSql> =
-                statuses.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-            self.conn.execute(&sql, params_vec.as_slice())?
-        };
-
-        Ok(count)
+        let (where_clause, params) = purge_where_clause(statuses, repo_id);
+        let sql = format!("DELETE FROM workflow_runs WHERE {where_clause}");
+        let params_ref: Vec<&dyn rusqlite::ToSql> =
+            params.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        Ok(self.conn.execute(&sql, params_ref.as_slice())?)
     }
 
     /// Count workflow runs that *would* be deleted by [`purge`] with the same arguments.
@@ -994,37 +972,41 @@ impl<'a> WorkflowManager<'a> {
         if statuses.is_empty() {
             return Ok(0);
         }
-        let placeholders = statuses
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", i + 1))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let count: i64 = if let Some(rid) = repo_id {
-            let sql = format!(
-                "SELECT COUNT(*) FROM workflow_runs \
-                 WHERE status IN ({placeholders}) \
-                   AND worktree_id IN \
-                        (SELECT id FROM worktrees WHERE repo_id = ?{})",
-                statuses.len() + 1
-            );
-            let mut params_vec: Vec<&dyn rusqlite::ToSql> =
-                statuses.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-            params_vec.push(&rid);
-            self.conn
-                .query_row(&sql, params_vec.as_slice(), |row| row.get(0))?
-        } else {
-            let sql =
-                format!("SELECT COUNT(*) FROM workflow_runs WHERE status IN ({placeholders})");
-            let params_vec: Vec<&dyn rusqlite::ToSql> =
-                statuses.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-            self.conn
-                .query_row(&sql, params_vec.as_slice(), |row| row.get(0))?
-        };
-
+        let (where_clause, params) = purge_where_clause(statuses, repo_id);
+        let sql = format!("SELECT COUNT(*) FROM workflow_runs WHERE {where_clause}");
+        let params_ref: Vec<&dyn rusqlite::ToSql> =
+            params.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let count: i64 = self
+            .conn
+            .query_row(&sql, params_ref.as_slice(), |row| row.get(0))?;
         Ok(count as usize)
     }
+}
+
+/// Build the WHERE clause and owned parameter list for purge / purge_count queries.
+///
+/// Returns `(where_clause, params)` where `params` is a `Vec<String>` whose
+/// elements bind to the positional placeholders in the clause.
+fn purge_where_clause(statuses: &[&str], repo_id: Option<&str>) -> (String, Vec<String>) {
+    let n = statuses.len();
+    let placeholders = (1..=n)
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let where_clause = if repo_id.is_some() {
+        format!(
+            "status IN ({placeholders}) AND worktree_id IN \
+             (SELECT id FROM worktrees WHERE repo_id = ?{})",
+            n + 1
+        )
+    } else {
+        format!("status IN ({placeholders})")
+    };
+    let mut params: Vec<String> = statuses.iter().map(|s| s.to_string()).collect();
+    if let Some(rid) = repo_id {
+        params.push(rid.to_string());
+    }
+    (where_clause, params)
 }
 
 fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
