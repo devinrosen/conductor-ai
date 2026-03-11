@@ -4528,13 +4528,8 @@ impl App {
         } else if self.state.view == View::Dashboard
             && self.state.dashboard_focus == crate::state::DashboardFocus::Repos
         {
-            // Dashboard Repos pane: target is the selected repo
-            let repo = match self
-                .state
-                .selected_repo_id
-                .as_ref()
-                .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
-            {
+            // Dashboard Repos pane: target is the highlighted repo (cursor position)
+            let repo = match self.state.selected_repo() {
                 Some(r) => r.clone(),
                 None => {
                     self.state.status_message = Some("No repo selected".to_string());
