@@ -9,7 +9,39 @@ Apply a plain-English change to an existing conductor workflow `.wf` file.
 
 ## Steps
 
-### 0. Read the canonical DSL reference
+### 0. Resolve target directory and run init preflight
+
+**Determine the target directory:**
+- If the user provided a directory path as an argument, use it as `<target_dir>`
+- Otherwise default to CWD: `$(pwd)`
+
+**Validate it is a git repo root:**
+```bash
+git -C <target_dir> rev-parse --show-toplevel
+```
+- If the command fails, stop and report: "`<target_dir>` is not inside a git repository."
+- If the returned path does not equal `<target_dir>`, stop and report: "`<target_dir>` is a subdirectory — please pass the repo root."
+
+**Auto-init preflight (silent):**
+```bash
+[ -d <target_dir>/.conductor/agents ] && [ -d <target_dir>/.conductor/workflows ]
+```
+If either is missing, silently run the init steps (do not ask the user — mention it in the final summary):
+```bash
+mkdir -p <target_dir>/.conductor/agents
+mkdir -p <target_dir>/.conductor/workflows
+mkdir -p <target_dir>/.conductor/prompts
+mkdir -p <target_dir>/.conductor/schemas
+mkdir -p <target_dir>/.conductor/reviewers
+for dir in agents workflows prompts schemas reviewers; do
+  t="<target_dir>/.conductor/$dir"
+  [ -z "$(ls -A "$t" 2>/dev/null)" ] && touch "$t/.gitkeep"
+done
+```
+
+**All file paths in subsequent steps use `<target_dir>` as the prefix.**
+
+### 0a. Read the canonical DSL reference
 
 Read `docs/workflow/engine.md` for the full grammar, all constructs, and design rationale. This is the authoritative source — use it throughout this session.
 
@@ -18,7 +50,7 @@ Read `docs/workflow/engine.md` for the full grammar, all constructs, and design 
 If the user specified a workflow name in their request, use it. Otherwise:
 
 ```bash
-ls .conductor/workflows/
+ls <target_dir>/.conductor/workflows/
 ```
 
 List the available workflows and ask the user which one to modify.
@@ -27,14 +59,14 @@ List the available workflows and ask the user which one to modify.
 
 Read the `.wf` file:
 ```bash
-cat .conductor/workflows/<name>.wf
+cat <target_dir>/.conductor/workflows/<name>.wf
 ```
 
 Also introspect available agents and prompts to ensure any additions you suggest actually exist:
 
 ```bash
-ls .conductor/agents/
-ls .conductor/prompts/ 2>/dev/null || echo "(no prompts directory)"
+ls <target_dir>/.conductor/agents/
+ls <target_dir>/.conductor/prompts/ 2>/dev/null || echo "(no prompts directory)"
 ```
 
 ### 3. Understand the change request
@@ -97,21 +129,21 @@ Prior step context: {{prior_context}}
 [TODO: flesh out this prompt]
 ```
 
-Write to `.conductor/agents/<name>.md`.
+Write to `<target_dir>/.conductor/agents/<name>.md`.
 
 ### 7. Write the updated workflow
 
-Rewrite `.conductor/workflows/<name>.wf` with the applied changes.
+Rewrite `<target_dir>/.conductor/workflows/<name>.wf` with the applied changes.
 
 ### 8. Validate
 
 ```bash
-conductor workflow validate <name>
+conductor workflow validate --path <target_dir> <name>
 ```
 
 If `conductor` is not on PATH:
 ```bash
-cargo run --bin conductor -- workflow validate <name>
+cargo run --bin conductor -- workflow validate --path <target_dir> <name>
 ```
 
 ### 9. Summarize
@@ -120,7 +152,8 @@ Report:
 - What changed (line-level summary)
 - Why the chosen DSL construct is correct for this use case
 - Any new files created
-- Any TODOs remaining (e.g., "stub agent at `.conductor/agents/review-performance.md` still needs its prompt fleshed out")
+- Whether `.conductor/` was auto-initialized (if the preflight ran)
+- Any TODOs remaining (e.g., "stub agent at `<target_dir>/.conductor/agents/review-performance.md` still needs its prompt fleshed out")
 - If validation passed
 
 If validation failed, interpret and fix each error before declaring done.
@@ -131,4 +164,4 @@ If validation failed, interpret and fix each error before declaring done.
 - If the user's request is ambiguous (e.g., "make the loop better"), ask a clarifying question before editing.
 - When adding a gate, consider the most natural position: human approval gates typically come before irreversible steps (push, merge, deploy); human review gates come after agent-generated findings.
 - `gate human_review` accepts written feedback via `{{gate_feedback}}` in the next step — mention this if the user is adding a review gate so they know to thread it into the downstream agent prompt.
-- Dry-run the updated workflow to verify it is structurally sound: `conductor workflow run <name> --dry-run`.
+- Dry-run the updated workflow to verify it is structurally sound: `conductor workflow run <name> --dry-run`. Note: `--dry-run` does not yet support `--path`; if the workflow lives outside the current repo, `cd` to `<target_dir>` first.
