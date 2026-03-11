@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -276,6 +278,29 @@ impl<'a> TicketSyncer<'a> {
                 })
             },
         )
+    }
+
+    /// Fetch all label rows grouped by ticket_id.
+    /// Returns a `HashMap<ticket_id, Vec<TicketLabel>>` in a single query,
+    /// avoiding N+1 per-ticket queries.
+    pub fn get_all_labels(&self) -> Result<HashMap<String, Vec<TicketLabel>>> {
+        let all = query_collect(
+            self.conn,
+            "SELECT ticket_id, label, color FROM ticket_labels ORDER BY ticket_id, label",
+            [],
+            |row| {
+                Ok(TicketLabel {
+                    ticket_id: row.get(0)?,
+                    label: row.get(1)?,
+                    color: row.get(2)?,
+                })
+            },
+        )?;
+        let mut map: HashMap<String, Vec<TicketLabel>> = HashMap::new();
+        for lbl in all {
+            map.entry(lbl.ticket_id.clone()).or_default().push(lbl);
+        }
+        Ok(map)
     }
 
     /// After syncing tickets, mark any linked worktrees whose ticket is now

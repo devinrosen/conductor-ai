@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use conductor_core::agent::{AgentRun, AgentRunEvent, TicketAgentTotals};
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
-use conductor_core::tickets::Ticket;
+use conductor_core::tickets::{Ticket, TicketLabel};
 use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStep, WorkflowStepSummary};
 use conductor_core::worktree::Worktree;
 use crossterm::event::KeyEvent;
@@ -36,6 +36,7 @@ pub struct DataRefreshedPayload {
     pub repos: Vec<Repo>,
     pub worktrees: Vec<Worktree>,
     pub tickets: Vec<Ticket>,
+    pub ticket_labels: HashMap<String, Vec<TicketLabel>>,
     pub latest_agent_runs: HashMap<String, AgentRun>,
     pub ticket_agent_totals: HashMap<String, TicketAgentTotals>,
     /// Most recent workflow run per worktree (for inline indicators in the Worktrees panel).
@@ -143,6 +144,7 @@ pub enum Action {
 
     // Filter
     EnterFilter,
+    EnterLabelFilter,
     FilterChar(char),
     FilterBackspace,
     ExitFilter,

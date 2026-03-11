@@ -2,6 +2,7 @@ import type {
   Repo,
   Worktree,
   Ticket,
+  TicketLabel,
   TicketAgentTotals,
   TicketDetail,
   CreateRepoRequest,
@@ -88,6 +89,7 @@ export const api = {
     }),
 
   // Tickets
+  ticketLabels: () => request<TicketLabel[]>("/ticket-labels"),
   listAllTickets: (showClosed = false) =>
     request<Ticket[]>(showClosed ? "/tickets?show_closed=true" : "/tickets"),
   listTickets: (repoId: string, showClosed = false) =>

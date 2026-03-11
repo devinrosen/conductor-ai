@@ -50,6 +50,7 @@ pub fn api_router() -> Router<AppState> {
             post(worktrees::link_ticket),
         )
         // Tickets
+        .route("/api/ticket-labels", get(tickets::list_ticket_labels))
         .route("/api/tickets", get(tickets::list_all_tickets))
         .route("/api/repos/{id}/tickets", get(tickets::list_tickets))
         .route("/api/repos/{id}/tickets/sync", post(tickets::sync_tickets))

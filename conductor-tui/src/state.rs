@@ -38,7 +38,7 @@ use conductor_core::agent::{
 use conductor_core::github::{DiscoveredRepo, GithubPr};
 use conductor_core::issue_source::IssueSource;
 use conductor_core::repo::Repo;
-use conductor_core::tickets::Ticket;
+use conductor_core::tickets::{Ticket, TicketLabel};
 use conductor_core::workflow::{
     WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepSummary,
 };
@@ -543,6 +543,8 @@ pub struct DataCache {
     pub repos: Vec<Repo>,
     pub worktrees: Vec<Worktree>,
     pub tickets: Vec<Ticket>,
+    /// ticket_id -> labels with colors (populated by DB poller)
+    pub ticket_labels: HashMap<String, Vec<TicketLabel>>,
     /// repo_id -> slug for display
     pub repo_slug_map: HashMap<String, String>,
     /// ticket_id -> Ticket for lookups
@@ -738,6 +740,7 @@ pub struct AppState {
     // Filters
     pub filter: FilterState,
     pub detail_ticket_filter: FilterState,
+    pub label_filter: FilterState,
 
     // Status bar message
     pub status_message: Option<String>,
@@ -802,6 +805,7 @@ impl AppState {
             repo_detail_info_row: 0,
             filter: FilterState::default(),
             detail_ticket_filter: FilterState::default(),
+            label_filter: FilterState::default(),
             status_message: None,
             status_message_at: None,
             github_orgs_cache: Vec::new(),
@@ -822,7 +826,11 @@ impl AppState {
 
     /// Returns the filter that should receive input based on current view/focus.
     pub fn active_filter_mut(&mut self) -> &mut FilterState {
-        if self.view == View::RepoDetail && self.repo_detail_focus == RepoDetailFocus::Tickets {
+        if self.label_filter.active {
+            &mut self.label_filter
+        } else if self.view == View::RepoDetail
+            && self.repo_detail_focus == RepoDetailFocus::Tickets
+        {
             &mut self.detail_ticket_filter
         } else {
             &mut self.filter
@@ -831,7 +839,9 @@ impl AppState {
 
     /// Returns the currently active filter (immutable), or None if no filter is active.
     pub fn active_filter(&self) -> Option<&FilterState> {
-        if self.filter.active {
+        if self.label_filter.active {
+            Some(&self.label_filter)
+        } else if self.filter.active {
             Some(&self.filter)
         } else if self.detail_ticket_filter.active {
             Some(&self.detail_ticket_filter)
@@ -842,7 +852,7 @@ impl AppState {
 
     /// Returns whether any filter is currently active.
     pub fn any_filter_active(&self) -> bool {
-        self.filter.active || self.detail_ticket_filter.active
+        self.filter.active || self.detail_ticket_filter.active || self.label_filter.active
     }
 
     /// Compute the current global status from cached data.
@@ -949,10 +959,11 @@ impl AppState {
     }
 
     /// Rebuild the pre-filtered ticket vecs from the current source data,
-    /// `show_closed_tickets`, and the active text filters.  Must be called
+    /// `show_closed_tickets`, and the active text/label filters.  Must be called
     /// whenever any of those inputs change.
     pub fn rebuild_filtered_tickets(&mut self) {
         let filter_query = self.filter.as_query();
+        let label_query = self.label_filter.as_query();
         self.filtered_tickets = self
             .data
             .tickets
@@ -960,6 +971,15 @@ impl AppState {
             .filter(|t| self.show_closed_tickets || t.state != "closed")
             .filter(|t| match filter_query.as_deref() {
                 Some(f) if !f.is_empty() => t.matches_filter(f),
+                _ => true,
+            })
+            .filter(|t| match label_query.as_deref() {
+                Some(f) if !f.is_empty() => self
+                    .data
+                    .ticket_labels
+                    .get(&t.id)
+                    .map(|labels| labels.iter().any(|l| l.label.to_lowercase().contains(f)))
+                    .unwrap_or(false),
                 _ => true,
             })
             .cloned()

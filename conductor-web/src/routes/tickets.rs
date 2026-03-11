@@ -10,7 +10,7 @@ use conductor_core::github_app;
 use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
-use conductor_core::tickets::{Ticket, TicketInput, TicketSyncer};
+use conductor_core::tickets::{Ticket, TicketInput, TicketLabel, TicketSyncer};
 use conductor_core::worktree::{Worktree, WorktreeManager};
 
 use crate::error::ApiError;
@@ -140,6 +140,16 @@ pub async fn sync_tickets(
         synced: total_synced,
         closed: total_closed,
     }))
+}
+
+pub async fn list_ticket_labels(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<TicketLabel>>, ApiError> {
+    let db = state.db.lock().await;
+    let syncer = TicketSyncer::new(&db);
+    let map = syncer.get_all_labels()?;
+    let labels: Vec<TicketLabel> = map.into_values().flatten().collect();
+    Ok(Json(labels))
 }
 
 pub async fn ticket_detail(

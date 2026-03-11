@@ -7,17 +7,28 @@ import { EmptyState } from "../components/shared/EmptyState";
 import { TicketRow } from "../components/tickets/TicketRow";
 import { TicketDetailModal } from "../components/tickets/TicketDetailModal";
 import type { Ticket, Repo } from "../api/types";
-import { parseLabels } from "../utils/ticketUtils";
+import { parseLabels, buildLabelColorMap, labelTextColor } from "../utils/ticketUtils";
 import { useHotkeys } from "../hooks/useHotkeys";
 import { useListNav } from "../hooks/useListNav";
 
-function matchesFilter(ticket: Ticket, filter: string): boolean {
-  const lower = filter.toLowerCase();
-  if (ticket.title.toLowerCase().includes(lower)) return true;
-  if (ticket.source_id.toLowerCase().includes(lower)) return true;
-  const labels = parseLabels(ticket.labels);
-  if (labels.some((l) => l.toLowerCase().includes(lower))) return true;
-  return false;
+function matchesFilter(ticket: Ticket, filter: string, selectedLabels: Set<string>): boolean {
+  // Text filter
+  if (filter) {
+    const lower = filter.toLowerCase();
+    const textMatch =
+      ticket.title.toLowerCase().includes(lower) ||
+      ticket.source_id.toLowerCase().includes(lower) ||
+      parseLabels(ticket.labels).some((l) => l.toLowerCase().includes(lower));
+    if (!textMatch) return false;
+  }
+  // Label chip filter: ticket must have ALL selected labels
+  if (selectedLabels.size > 0) {
+    const ticketLabels = new Set(parseLabels(ticket.labels));
+    for (const label of selectedLabels) {
+      if (!ticketLabels.has(label)) return false;
+    }
+  }
+  return true;
 }
 
 export function TicketsPage() {
@@ -28,7 +39,9 @@ export function TicketsPage() {
     [showClosed],
   );
   const { data: ticketTotals } = useApi(() => api.ticketAgentTotals(), []);
+  const { data: allLabels } = useApi(() => api.ticketLabels(), []);
   const [filter, setFilter] = useState("");
+  const [selectedLabels, setSelectedLabels] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Ticket | null>(null);
   const filterRef = useRef<HTMLInputElement>(null);
 
@@ -38,11 +51,24 @@ export function TicketsPage() {
     return map;
   }, [repos]);
 
+  const labelColorMap = useMemo(
+    () => buildLabelColorMap(allLabels ?? []),
+    [allLabels],
+  );
+
+  // Collect all unique label names for the chip filter row
+  const allLabelNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const key of Object.keys(labelColorMap)) {
+      names.add(key);
+    }
+    return Array.from(names).sort();
+  }, [labelColorMap]);
+
   const filtered = useMemo(() => {
     if (!tickets) return [];
-    if (!filter.trim()) return tickets;
-    return tickets.filter((t) => matchesFilter(t, filter.trim()));
-  }, [tickets, filter]);
+    return tickets.filter((t) => matchesFilter(t, filter.trim(), selectedLabels));
+  }, [tickets, filter, selectedLabels]);
 
   const { selectedIndex, moveDown, moveUp, reset } = useListNav(filtered.length);
 
@@ -60,10 +86,24 @@ export function TicketsPage() {
     } else if (filter) {
       setFilter("");
       filterRef.current?.blur();
+    } else if (selectedLabels.size > 0) {
+      setSelectedLabels(new Set());
     } else if (selectedIndex >= 0) {
       reset();
     }
-  }, [selected, filter, selectedIndex, reset]);
+  }, [selected, filter, selectedLabels, selectedIndex, reset]);
+
+  const toggleLabel = useCallback((label: string) => {
+    setSelectedLabels((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) {
+        next.delete(label);
+      } else {
+        next.add(label);
+      }
+      return next;
+    });
+  }, []);
 
   useHotkeys([
     { key: "/", handler: focusFilter, description: "Focus search" },
@@ -99,12 +139,47 @@ export function TicketsPage() {
         </div>
       </div>
 
+      {/* Label chip filter */}
+      {allLabelNames.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 items-center">
+          <span className="text-xs text-gray-400 mr-1">Filter by label:</span>
+          {allLabelNames.map((label) => {
+            const bg = labelColorMap[label];
+            const active = selectedLabels.has(label);
+            return (
+              <button
+                key={label}
+                onClick={() => toggleLabel(label)}
+                className={`px-2 py-0.5 text-xs rounded border transition-all ${
+                  active ? "ring-2 ring-offset-1 ring-indigo-400 opacity-100" : "opacity-70 hover:opacity-100"
+                }`}
+                style={
+                  bg
+                    ? { backgroundColor: bg, color: labelTextColor(bg), borderColor: bg }
+                    : { backgroundColor: "#f3f4f6", color: "#4b5563", borderColor: "#e5e7eb" }
+                }
+              >
+                {label}
+              </button>
+            );
+          })}
+          {selectedLabels.size > 0 && (
+            <button
+              onClick={() => setSelectedLabels(new Set())}
+              className="px-2 py-0.5 text-xs rounded border border-gray-300 text-gray-500 hover:bg-gray-50"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
+
       {loading ? (
         <LoadingSpinner />
       ) : filtered.length === 0 ? (
         <EmptyState
           message={
-            filter ? "No tickets match your filter" : "No tickets synced yet"
+            filter || selectedLabels.size > 0 ? "No tickets match your filter" : "No tickets synced yet"
           }
         />
       ) : (
@@ -131,6 +206,7 @@ export function TicketsPage() {
                   onClick={setSelected}
                   selected={index === selectedIndex}
                   index={index}
+                  labelColorMap={labelColorMap}
                 />
               ))}
             </tbody>
@@ -142,6 +218,7 @@ export function TicketsPage() {
         <TicketDetailModal
           ticket={selected}
           onClose={() => setSelected(null)}
+          labelColorMap={labelColorMap}
         />
       )}
     </div>

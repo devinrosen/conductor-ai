@@ -1,7 +1,7 @@
 import type { Ticket, TicketAgentTotals } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
 import { formatTicketTotalsFull } from "../../utils/agentStats";
-import { parseLabels } from "../../utils/ticketUtils";
+import { parseLabels, labelTextColor } from "../../utils/ticketUtils";
 
 interface TicketRowProps {
   ticket: Ticket;
@@ -10,9 +10,10 @@ interface TicketRowProps {
   onClick: (ticket: Ticket) => void;
   selected?: boolean;
   index?: number;
+  labelColorMap?: Record<string, string>;
 }
 
-export function TicketRow({ ticket, agentTotals, repoSlug, onClick, selected, index }: TicketRowProps) {
+export function TicketRow({ ticket, agentTotals, repoSlug, onClick, selected, index, labelColorMap }: TicketRowProps) {
   const labels = parseLabels(ticket.labels);
   return (
     <tr
@@ -32,14 +33,25 @@ export function TicketRow({ ticket, agentTotals, repoSlug, onClick, selected, in
       </td>
       <td className="px-4 py-2">
         <div className="flex flex-wrap gap-1">
-          {labels.map((l) => (
-            <span
-              key={l}
-              className="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-600"
-            >
-              {l}
-            </span>
-          ))}
+          {labels.map((l) => {
+            const bg = labelColorMap?.[l];
+            return bg ? (
+              <span
+                key={l}
+                className="px-1.5 py-0.5 text-xs rounded"
+                style={{ backgroundColor: bg, color: labelTextColor(bg) }}
+              >
+                {l}
+              </span>
+            ) : (
+              <span
+                key={l}
+                className="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-600"
+              >
+                {l}
+              </span>
+            );
+          })}
         </div>
       </td>
       <td className="px-4 py-2 text-xs text-gray-500">

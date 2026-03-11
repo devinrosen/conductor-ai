@@ -251,6 +251,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('o') => return Action::OpenTicketUrl,
             KeyCode::Char('y') => return Action::CopyTicketUrl,
             KeyCode::Char('w') => return Action::PickWorkflow,
+            KeyCode::Char('L') => return Action::EnterLabelFilter,
             _ => {}
         }
     }

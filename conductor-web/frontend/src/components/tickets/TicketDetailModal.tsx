@@ -3,15 +3,16 @@ import type { Ticket, TicketDetail } from "../../api/types";
 import { api } from "../../api/client";
 import { useApi } from "../../hooks/useApi";
 import { StatusBadge } from "../shared/StatusBadge";
-import { parseLabels } from "../../utils/ticketUtils";
+import { parseLabels, labelTextColor } from "../../utils/ticketUtils";
 import { formatCostCompact, formatDuration } from "../../utils/agentStats";
 
 interface TicketDetailModalProps {
   ticket: Ticket;
   onClose: () => void;
+  labelColorMap?: Record<string, string>;
 }
 
-export function TicketDetailModal({ ticket, onClose }: TicketDetailModalProps) {
+export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDetailModalProps) {
   const {
     data: detail,
     loading,
@@ -70,14 +71,25 @@ export function TicketDetailModal({ ticket, onClose }: TicketDetailModalProps) {
             <dd>
               {labels.length > 0 ? (
                 <div className="flex flex-wrap gap-1">
-                  {labels.map((l) => (
-                    <span
-                      key={l}
-                      className="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-600"
-                    >
-                      {l}
-                    </span>
-                  ))}
+                  {labels.map((l) => {
+                    const bg = labelColorMap?.[l];
+                    return bg ? (
+                      <span
+                        key={l}
+                        className="px-1.5 py-0.5 text-xs rounded"
+                        style={{ backgroundColor: bg, color: labelTextColor(bg) }}
+                      >
+                        {l}
+                      </span>
+                    ) : (
+                      <span
+                        key={l}
+                        className="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-600"
+                      >
+                        {l}
+                      </span>
+                    );
+                  })}
                 </div>
               ) : (
                 <span className="text-gray-400">None</span>

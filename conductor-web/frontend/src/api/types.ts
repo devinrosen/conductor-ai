@@ -39,6 +39,12 @@ export interface Ticket {
   raw_json: string;
 }
 
+export interface TicketLabel {
+  ticket_id: string;
+  label: string;
+  color: string | null;
+}
+
 export interface TicketAgentTotals {
   ticket_id: string;
   total_runs: number;

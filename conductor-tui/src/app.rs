@@ -366,6 +366,9 @@ impl App {
 
             // Filter
             Action::EnterFilter => self.state.active_filter_mut().enter(),
+            Action::EnterLabelFilter => {
+                self.state.label_filter.enter();
+            }
             Action::FilterChar(c) => {
                 self.state.active_filter_mut().push(c);
                 self.state.rebuild_filtered_tickets();
@@ -675,6 +678,7 @@ impl App {
                 self.state.data.repos = payload.repos;
                 self.state.data.worktrees = payload.worktrees;
                 self.state.data.tickets = payload.tickets;
+                self.state.data.ticket_labels = payload.ticket_labels;
                 self.state.data.latest_agent_runs = payload.latest_agent_runs;
                 self.state.data.ticket_agent_totals = payload.ticket_agent_totals;
                 self.state.data.latest_workflow_runs_by_worktree =
