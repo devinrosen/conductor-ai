@@ -21,8 +21,8 @@ use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::prompt_config;
 use crate::workflow_dsl::{
-    self, CallNode, CallWorkflowNode, DoNode, DoWhileNode, GateNode, GateType, IfNode, OnMaxIter,
-    OnTimeout, ParallelNode, UnlessNode, WhileNode, WorkflowNode,
+    self, ApprovalMode, CallNode, CallWorkflowNode, DoNode, DoWhileNode, GateNode, GateType,
+    IfNode, OnMaxIter, OnTimeout, ParallelNode, UnlessNode, WhileNode, WorkflowNode,
 };
 
 // Re-export DSL types so consumers go through `workflow::` instead of `workflow_dsl::` directly.
@@ -3733,45 +3733,87 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                     return handle_gate_timeout(state, &step_id, node);
                 }
 
-                // Poll gh pr view for approvals
-                let output = Command::new("gh")
-                    .args(["pr", "view", "--json", "reviews,author"])
-                    .current_dir(&state.working_dir)
-                    .output();
+                match node.approval_mode {
+                    ApprovalMode::MinApprovals => {
+                        // Poll gh pr view for raw approval count
+                        let output = Command::new("gh")
+                            .args(["pr", "view", "--json", "reviews,author"])
+                            .current_dir(&state.working_dir)
+                            .output();
 
-                if let Ok(out) = output {
-                    if out.status.success() {
-                        let json_str = String::from_utf8_lossy(&out.stdout);
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                            let pr_author =
-                                val["author"]["login"].as_str().unwrap_or("").to_string();
-                            let approvals = val["reviews"]
-                                .as_array()
-                                .map(|reviews| {
-                                    reviews
-                                        .iter()
-                                        .filter(|r| {
-                                            r["state"].as_str() == Some("APPROVED")
-                                                && r["author"]["login"].as_str().unwrap_or("")
-                                                    != pr_author
+                        if let Ok(out) = output {
+                            if out.status.success() {
+                                let json_str = String::from_utf8_lossy(&out.stdout);
+                                if let Ok(val) =
+                                    serde_json::from_str::<serde_json::Value>(&json_str)
+                                {
+                                    let pr_author =
+                                        val["author"]["login"].as_str().unwrap_or("").to_string();
+                                    let approvals = val["reviews"]
+                                        .as_array()
+                                        .map(|reviews| {
+                                            reviews
+                                                .iter()
+                                                .filter(|r| {
+                                                    r["state"].as_str() == Some("APPROVED")
+                                                        && r["author"]["login"]
+                                                            .as_str()
+                                                            .unwrap_or("")
+                                                            != pr_author
+                                                })
+                                                .count()
+                                                as u32
                                         })
-                                        .count() as u32
-                                })
-                                .unwrap_or(0);
-                            if approvals >= node.min_approvals {
-                                tracing::info!(
-                                    "Gate '{}': {} approvals (required {})",
-                                    node.name,
-                                    approvals,
-                                    node.min_approvals
-                                );
-                                state.wf_mgr.approve_gate(&step_id, "gh", None)?;
-                                state.wf_mgr.update_workflow_status(
-                                    &state.workflow_run_id,
-                                    WorkflowRunStatus::Running,
-                                    None,
-                                )?;
-                                return Ok(());
+                                        .unwrap_or(0);
+                                    if approvals >= node.min_approvals {
+                                        tracing::info!(
+                                            "Gate '{}': {} approvals (required {})",
+                                            node.name,
+                                            approvals,
+                                            node.min_approvals
+                                        );
+                                        state.wf_mgr.approve_gate(&step_id, "gh", None)?;
+                                        state.wf_mgr.update_workflow_status(
+                                            &state.workflow_run_id,
+                                            WorkflowRunStatus::Running,
+                                            None,
+                                        )?;
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ApprovalMode::ReviewDecision => {
+                        // Poll gh pr view for GitHub's branch-protection-aware reviewDecision
+                        let output = Command::new("gh")
+                            .args(["pr", "view", "--json", "reviewDecision"])
+                            .current_dir(&state.working_dir)
+                            .output();
+
+                        if let Ok(out) = output {
+                            if out.status.success() {
+                                let json_str = String::from_utf8_lossy(&out.stdout);
+                                if let Ok(val) =
+                                    serde_json::from_str::<serde_json::Value>(&json_str)
+                                {
+                                    let decision = val["reviewDecision"].as_str().unwrap_or("");
+                                    tracing::info!(
+                                        "Gate '{}': reviewDecision = {}",
+                                        node.name,
+                                        decision
+                                    );
+                                    if decision == "APPROVED" {
+                                        state.wf_mgr.approve_gate(&step_id, "gh", None)?;
+                                        state.wf_mgr.update_workflow_status(
+                                            &state.workflow_run_id,
+                                            WorkflowRunStatus::Running,
+                                            None,
+                                        )?;
+                                        return Ok(());
+                                    }
+                                    // CHANGES_REQUESTED or REVIEW_REQUIRED: keep polling
+                                }
                             }
                         }
                     }
@@ -4444,6 +4486,7 @@ mod tests {
             gate_type,
             prompt: None,
             min_approvals: 1,
+            approval_mode: ApprovalMode::default(),
             timeout_secs: 1,
             on_timeout,
         }
@@ -5890,6 +5933,7 @@ And here is my actual output:
                 gate_type: GateType::HumanApproval,
                 prompt: None,
                 min_approvals: 1,
+                approval_mode: ApprovalMode::default(),
                 timeout_secs: 1,
                 on_timeout: OnTimeout::Fail,
             })],
@@ -6238,6 +6282,7 @@ And here is my actual output:
                 gate_type: GateType::HumanApproval,
                 prompt: None,
                 min_approvals: 1,
+                approval_mode: ApprovalMode::default(),
                 timeout_secs: 1,
                 on_timeout: OnTimeout::Fail,
             })],
@@ -6301,6 +6346,7 @@ And here is my actual output:
                     gate_type: GateType::HumanApproval,
                     prompt: None,
                     min_approvals: 1,
+                    approval_mode: ApprovalMode::default(),
                     timeout_secs: 1,
                     on_timeout: OnTimeout::Fail,
                 }),
@@ -6309,6 +6355,7 @@ And here is my actual output:
                     gate_type: GateType::HumanApproval,
                     prompt: None,
                     min_approvals: 1,
+                    approval_mode: ApprovalMode::default(),
                     timeout_secs: 1,
                     on_timeout: OnTimeout::Fail,
                 }),
@@ -6342,6 +6389,7 @@ And here is my actual output:
                     gate_type: GateType::HumanApproval,
                     prompt: None,
                     min_approvals: 1,
+                    approval_mode: ApprovalMode::default(),
                     timeout_secs: 1,
                     on_timeout: OnTimeout::Fail,
                 })],
@@ -6376,6 +6424,7 @@ And here is my actual output:
                     gate_type: GateType::HumanApproval,
                     prompt: None,
                     min_approvals: 1,
+                    approval_mode: ApprovalMode::default(),
                     timeout_secs: 1,
                     on_timeout: OnTimeout::Fail,
                 })],
@@ -6876,6 +6925,7 @@ And here is my actual output:
                     gate_type: crate::workflow_dsl::GateType::HumanApproval,
                     prompt: None,
                     min_approvals: 1,
+                    approval_mode: ApprovalMode::default(),
                     timeout_secs: 300,
                     on_timeout: crate::workflow_dsl::OnTimeout::Fail,
                 }),

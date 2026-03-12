@@ -268,6 +268,14 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalMode {
+    #[default]
+    MinApprovals,
+    ReviewDecision,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateNode {
     pub name: String,
@@ -275,6 +283,8 @@ pub struct GateNode {
     pub prompt: Option<String>,
     #[serde(default = "default_one")]
     pub min_approvals: u32,
+    #[serde(default)]
+    pub approval_mode: ApprovalMode,
     pub timeout_secs: u64,
     pub on_timeout: OnTimeout,
 }
@@ -1168,6 +1178,17 @@ impl Parser {
             .map_err(|e| format!("Invalid min_approvals: {e}"))?
             .unwrap_or(1);
 
+        let approval_mode = match kvs.get("mode").map(|v| v.as_str()) {
+            Some("review_decision") => ApprovalMode::ReviewDecision,
+            Some("min_approvals") | None => ApprovalMode::MinApprovals,
+            Some(other) => return Err(format!("Invalid mode for pr_approval: {other}")),
+        };
+        if approval_mode == ApprovalMode::ReviewDecision && kvs.contains_key("min_approvals") {
+            return Err(
+                "Cannot specify both mode = \"review_decision\" and min_approvals".to_string(),
+            );
+        }
+
         let timeout_secs = kvs
             .get("timeout")
             .map(|v| parse_duration_str(v.as_str()))
@@ -1185,6 +1206,7 @@ impl Parser {
             gate_type,
             prompt,
             min_approvals,
+            approval_mode,
             timeout_secs,
             on_timeout,
         })
@@ -3634,6 +3656,87 @@ workflow test {
                 .iter()
                 .any(|e| e.message.contains("badtarget")),
             "error should name the unknown target"
+        );
+    }
+
+    #[test]
+    fn test_parse_gate_review_decision_mode() {
+        let input = r#"
+            workflow test {
+                meta { targets = ["worktree"] }
+                gate pr_approval {
+                    mode = "review_decision"
+                    timeout = "1h"
+                }
+            }
+        "#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let node = def.body.first().unwrap();
+        match node {
+            WorkflowNode::Gate(g) => {
+                assert_eq!(g.approval_mode, ApprovalMode::ReviewDecision);
+                assert_eq!(g.gate_type, GateType::PrApproval);
+            }
+            other => panic!("Expected Gate node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_gate_min_approvals_mode_explicit() {
+        let input = r#"
+            workflow test {
+                meta { targets = ["worktree"] }
+                gate pr_approval {
+                    mode = "min_approvals"
+                    min_approvals = 2
+                    timeout = "1h"
+                }
+            }
+        "#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let node = def.body.first().unwrap();
+        match node {
+            WorkflowNode::Gate(g) => {
+                assert_eq!(g.approval_mode, ApprovalMode::MinApprovals);
+                assert_eq!(g.min_approvals, 2);
+            }
+            other => panic!("Expected Gate node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_gate_invalid_mode_rejected() {
+        let input = r#"
+            workflow test {
+                gate pr_approval {
+                    mode = "banana"
+                    timeout = "1h"
+                }
+            }
+        "#;
+        let result = parse_workflow_str(input, "test.wf");
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("Invalid mode"), "got: {err}");
+    }
+
+    #[test]
+    fn test_parse_gate_review_decision_with_min_approvals_rejected() {
+        let input = r#"
+            workflow test {
+                gate pr_approval {
+                    mode = "review_decision"
+                    min_approvals = 2
+                    timeout = "1h"
+                }
+            }
+        "#;
+        let result = parse_workflow_str(input, "test.wf");
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("Cannot specify both"),
+            "expected conflict error, got: {err}"
         );
     }
 }

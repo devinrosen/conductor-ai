@@ -292,10 +292,26 @@ gate pr_approval { min_approvals = 1; timeout = "72h"; on_timeout = fail }
 gate pr_checks   { timeout = "2h"; on_timeout = fail }
 ```
 
+Use `mode = "review_decision"` to delegate to GitHub's branch-protection-aware
+merge status instead of counting raw approvals. This correctly handles repos
+requiring 1, 2, or N approvals without hardcoding a count:
+
+```
+gate pr_approval {
+  mode       = "review_decision"  # passes when GitHub reviewDecision == APPROVED
+  timeout    = "72h"
+  on_timeout = fail
+}
+```
+
+> **Note:** If the repo has no branch protection rules, `reviewDecision` may
+> always return `null`. Use `min_approvals` mode instead for such repos.
+
 | Option | Applies to | Description |
 |---|---|---|
 | `prompt` | human gates | Message shown to the approver |
 | `min_approvals` | `pr_approval` | GitHub approvals required (default 1) |
+| `mode` | `pr_approval` | `min_approvals` (default) or `review_decision` |
 | `timeout` | all | Duration string: `"2h"`, `"24h"`, `"72h"` |
 | `on_timeout` | all | `fail` (default) or `continue` |
 
