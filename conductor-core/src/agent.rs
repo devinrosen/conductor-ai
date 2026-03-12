@@ -2220,8 +2220,8 @@ mod tests {
             Some(0.10),
             Some(5),
             Some(30000),
-            None,
-            None,
+            Some(1000),
+            Some(500),
             None,
             None,
         )
@@ -2236,8 +2236,8 @@ mod tests {
             Some(0.05),
             Some(3),
             Some(15000),
-            None,
-            None,
+            Some(600),
+            Some(300),
             None,
             None,
         )
@@ -2252,8 +2252,8 @@ mod tests {
             Some(0.08),
             Some(4),
             Some(20000),
-            None,
-            None,
+            Some(400),
+            Some(200),
             None,
             None,
         )
@@ -2272,6 +2272,8 @@ mod tests {
         assert!((t1.total_cost - 0.23).abs() < 0.001);
         assert_eq!(t1.total_turns, 12);
         assert_eq!(t1.total_duration_ms, 65000);
+        assert_eq!(t1.total_input_tokens, 2000);
+        assert_eq!(t1.total_output_tokens, 1000);
     }
 
     #[test]
@@ -2919,8 +2921,8 @@ mod tests {
             Some(0.10),
             Some(5),
             Some(30000),
-            None,
-            None,
+            Some(1000),
+            Some(500),
             None,
             None,
         )
@@ -2936,8 +2938,8 @@ mod tests {
             Some(0.05),
             Some(3),
             Some(15000),
-            None,
-            None,
+            Some(600),
+            Some(300),
             None,
             None,
         )
@@ -2953,8 +2955,8 @@ mod tests {
             Some(0.08),
             Some(4),
             Some(20000),
-            None,
-            None,
+            Some(400),
+            Some(200),
             None,
             None,
         )
@@ -2970,6 +2972,8 @@ mod tests {
         assert!((totals.total_cost - 0.23).abs() < 0.001);
         assert_eq!(totals.total_turns, 12);
         assert_eq!(totals.total_duration_ms, 65000);
+        assert_eq!(totals.total_input_tokens, 2000);
+        assert_eq!(totals.total_output_tokens, 1000);
     }
 
     #[test]
