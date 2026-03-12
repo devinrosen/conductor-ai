@@ -422,11 +422,12 @@ fn render_agent_status_line(
                 });
             let total_ms = totals.total_duration_ms + live_elapsed_ms.unwrap_or(0);
             let dur_secs = total_ms as f64 / 1000.0;
-            let cost = totals.total_cost;
-            let stats = if cost > 0.0 {
-                format!(" ${cost:.4}, {turns} turns, {dur_secs:.1}s{runs_label}")
+            let in_k = super::common::fmt_tokens_k(totals.total_input_tokens);
+            let out_k = super::common::fmt_tokens_k(totals.total_output_tokens);
+            let stats = if totals.total_input_tokens > 0 || totals.total_output_tokens > 0 {
+                format!(" {in_k}↓ {out_k}↑ · {turns} turns · {dur_secs:.1}s{runs_label}")
             } else {
-                format!(" {turns} turns, {dur_secs:.1}s{runs_label}")
+                format!(" {turns} turns · {dur_secs:.1}s{runs_label}")
             };
             Line::from(vec![
                 Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
@@ -451,13 +452,16 @@ fn render_agent_status_line(
                 Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
                 Span::styled("[completed]", Style::default().fg(Color::Green)),
             ];
-            let cost = totals.total_cost;
             let turns = totals.total_turns;
             let dur_secs = totals.total_duration_ms as f64 / 1000.0;
-            spans.push(Span::styled(
-                format!(" ${cost:.4}, {turns} turns, {dur_secs:.1}s{runs_label}"),
-                Style::default().fg(Color::DarkGray),
-            ));
+            let in_k = super::common::fmt_tokens_k(totals.total_input_tokens);
+            let out_k = super::common::fmt_tokens_k(totals.total_output_tokens);
+            let stats = if totals.total_input_tokens > 0 || totals.total_output_tokens > 0 {
+                format!(" {in_k}↓ {out_k}↑ · {turns} turns · {dur_secs:.1}s{runs_label}")
+            } else {
+                format!(" {turns} turns · {dur_secs:.1}s{runs_label}")
+            };
+            spans.push(Span::styled(stats, Style::default().fg(Color::DarkGray)));
             if let Some(ref sid) = run.claude_session_id {
                 spans.push(Span::styled(
                     format!("  session: {}", &sid[..13.min(sid.len())]),
@@ -530,17 +534,18 @@ fn render_child_run_line(run: &conductor_core::agent::AgentRun) -> Line<'static>
         Span::styled(format!(" {prompt}"), Style::default().fg(Color::DarkGray)),
     ];
 
-    let cost = run.cost_usd.unwrap_or(0.0);
     let turns = run.num_turns.unwrap_or(0);
-    if cost > 0.0 || turns > 0 {
-        let mut cost_str = format!("  ${cost:.4} {turns}t");
-        if let Some(in_tok) = run.input_tokens {
-            cost_str.push_str(&format!(" {:.1}k↓", in_tok as f64 / 1000.0));
-        }
-        if let Some(out_tok) = run.output_tokens {
-            cost_str.push_str(&format!(" {out_tok}↑"));
-        }
-        spans.push(Span::styled(cost_str, Style::default().fg(Color::Magenta)));
+    let in_tok = run.input_tokens.unwrap_or(0);
+    let out_tok = run.output_tokens.unwrap_or(0);
+    if in_tok > 0 || out_tok > 0 || turns > 0 {
+        let in_k = super::common::fmt_tokens_k(in_tok);
+        let out_k = super::common::fmt_tokens_k(out_tok);
+        let tok_str = if in_tok > 0 || out_tok > 0 {
+            format!("  {in_k}↓ {out_k}↑ {turns}t")
+        } else {
+            format!("  {turns}t")
+        };
+        spans.push(Span::styled(tok_str, Style::default().fg(Color::Magenta)));
     }
 
     Line::from(spans)

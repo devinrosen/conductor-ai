@@ -51,6 +51,8 @@ export interface TicketAgentTotals {
   total_cost: number;
   total_turns: number;
   total_duration_ms: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
 }
 
 export interface CreateRepoRequest {
@@ -91,6 +93,10 @@ export interface AgentRun {
   cost_usd: number | null;
   num_turns: number | null;
   duration_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_input_tokens: number | null;
+  cache_creation_input_tokens: number | null;
   started_at: string;
   ended_at: string | null;
   tmux_window: string | null;
@@ -105,6 +111,8 @@ export interface RunTreeTotals {
   total_cost: number;
   total_turns: number;
   total_duration_ms: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
 }
 
 export interface AgentEvent {

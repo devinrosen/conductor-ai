@@ -922,6 +922,8 @@ impl App {
             totals.total_cost += run.cost_usd.unwrap_or(0.0);
             totals.total_turns += run.num_turns.unwrap_or(0);
             totals.total_duration_ms += run.duration_ms.unwrap_or(0);
+            totals.total_input_tokens += run.input_tokens.unwrap_or(0);
+            totals.total_output_tokens += run.output_tokens.unwrap_or(0);
         }
 
         // For running agents, count live turns from the log file

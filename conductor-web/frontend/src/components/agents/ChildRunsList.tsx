@@ -1,5 +1,5 @@
 import type { AgentRun } from "../../api/types";
-import { statusColors, statusLabels } from "../../utils/agentStats";
+import { formatTokens, statusColors, statusLabels } from "../../utils/agentStats";
 import { StatusPulseBadge } from "../shared/StatusPulseBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 
@@ -11,9 +11,6 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${remaining}s`;
 }
 
-function formatCost(usd: number): string {
-  return `$${usd.toFixed(4)}`;
-}
 
 /**
  * Extract a clean step label from an orchestrator child prompt.
@@ -81,8 +78,8 @@ export function ChildRunsList({ children }: ChildRunsListProps) {
                     : child.prompt)}
               </span>
               <span className="shrink-0 text-xs text-gray-500 tabular-nums space-x-2">
-                {child.cost_usd != null && child.cost_usd > 0 && (
-                  <span>{formatCost(child.cost_usd)}</span>
+                {(child.input_tokens != null || child.output_tokens != null) && (
+                  <span>{formatTokens(child.input_tokens ?? 0, child.output_tokens ?? 0)}</span>
                 )}
                 {child.num_turns != null && child.num_turns > 0 && (
                   <span>{child.num_turns}t</span>

@@ -1,5 +1,5 @@
 import type { AgentRun } from "../../api/types";
-import { isActiveRun, statusColors, statusLabels } from "../../utils/agentStats";
+import { formatTokens, isActiveRun, statusColors, statusLabels } from "../../utils/agentStats";
 import { StatusPulseBadge } from "../shared/StatusPulseBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 import { ChildRunsList } from "./ChildRunsList";
@@ -10,10 +10,6 @@ function formatDuration(ms: number): string {
   const minutes = Math.floor(seconds / 60);
   const remaining = seconds % 60;
   return `${minutes}m ${remaining}s`;
-}
-
-function formatCost(usd: number): string {
-  return `$${usd.toFixed(4)}`;
 }
 
 interface AgentStatusDisplayProps {
@@ -38,18 +34,22 @@ export function AgentStatusDisplay({
 
   // Aggregate totals across all completed runs (top-level only)
   const completedRuns = runs.filter((r) => r.status === "completed");
-  const totalCost = completedRuns.reduce((s, r) => s + (r.cost_usd ?? 0), 0);
+  const totalInputTokens = completedRuns.reduce((s, r) => s + (r.input_tokens ?? 0), 0);
+  const totalOutputTokens = completedRuns.reduce((s, r) => s + (r.output_tokens ?? 0), 0);
   const totalTurns = completedRuns.reduce((s, r) => s + (r.num_turns ?? 0), 0);
   const totalDurationMs = completedRuns.reduce(
     (s, r) => s + (r.duration_ms ?? 0),
     0,
   );
 
-  // Include in-progress run's turns in the total
+  // Include in-progress run's stats in the total
   const isActive = isActiveRun(run);
-  const displayCost = isActive
-    ? totalCost + (run.cost_usd ?? 0)
-    : totalCost;
+  const displayInputTokens = isActive
+    ? totalInputTokens + (run.input_tokens ?? 0)
+    : totalInputTokens;
+  const displayOutputTokens = isActive
+    ? totalOutputTokens + (run.output_tokens ?? 0)
+    : totalOutputTokens;
   const displayTurns = isActive
     ? totalTurns + (run.num_turns ?? 0)
     : totalTurns;
@@ -58,8 +58,11 @@ export function AgentStatusDisplay({
     : totalDurationMs;
 
   // If the latest run has child runs, compute aggregated (parent + children) totals
-  const childCost = hasChildren
-    ? childRuns.reduce((s, r) => s + (r.cost_usd ?? 0), 0)
+  const childInputTokens = hasChildren
+    ? childRuns.reduce((s, r) => s + (r.input_tokens ?? 0), 0)
+    : 0;
+  const childOutputTokens = hasChildren
+    ? childRuns.reduce((s, r) => s + (r.output_tokens ?? 0), 0)
     : 0;
   const childTurns = hasChildren
     ? childRuns.reduce((s, r) => s + (r.num_turns ?? 0), 0)
@@ -68,7 +71,8 @@ export function AgentStatusDisplay({
     ? childRuns.reduce((s, r) => s + (r.duration_ms ?? 0), 0)
     : 0;
 
-  const treeCost = displayCost + childCost;
+  const treeInputTokens = displayInputTokens + childInputTokens;
+  const treeOutputTokens = displayOutputTokens + childOutputTokens;
   const treeTurns = displayTurns + childTurns;
   const treeDuration = displayDuration + childDurationMs;
 
@@ -121,13 +125,13 @@ export function AgentStatusDisplay({
       </div>
 
       <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-2 text-sm">
-        {treeCost > 0 && (
+        {(treeInputTokens > 0 || treeOutputTokens > 0) && (
           <div>
             <dt className="text-gray-500">
-              Cost{hasChildren ? " (tree)" : ""}
+              Tokens{hasChildren ? " (tree)" : ""}
             </dt>
             <dd className="font-medium text-gray-900">
-              {formatCost(treeCost)}
+              {formatTokens(treeInputTokens, treeOutputTokens)}
             </dd>
           </div>
         )}

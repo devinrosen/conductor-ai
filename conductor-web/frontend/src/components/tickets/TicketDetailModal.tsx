@@ -4,7 +4,7 @@ import { api } from "../../api/client";
 import { useApi } from "../../hooks/useApi";
 import { StatusBadge } from "../shared/StatusBadge";
 import { parseLabels, labelTextColor } from "../../utils/ticketUtils";
-import { formatCostCompact, formatDuration } from "../../utils/agentStats";
+import { formatDuration, formatTokens } from "../../utils/agentStats";
 
 interface TicketDetailModalProps {
   ticket: Ticket;
@@ -139,8 +139,8 @@ export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDeta
                   <div className="text-xs text-gray-500">Runs</div>
                 </div>
                 <div className="rounded-md bg-gray-50 p-2 text-center">
-                  <div className="text-base font-semibold text-fuchsia-700">{formatCostCompact(totals.total_cost)}</div>
-                  <div className="text-xs text-gray-500">Cost</div>
+                  <div className="text-base font-semibold text-fuchsia-700">{formatTokens(totals.total_input_tokens, totals.total_output_tokens)}</div>
+                  <div className="text-xs text-gray-500">Tokens</div>
                 </div>
                 <div className="rounded-md bg-gray-50 p-2 text-center">
                   <div className="text-base font-semibold text-gray-900">{totals.total_turns}</div>

@@ -656,6 +656,8 @@ pub struct RunTreeTotals {
     pub total_cost: f64,
     pub total_turns: i64,
     pub total_duration_ms: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
 }
 
 /// A single phase in the cost breakdown (initial run, review fix #N, etc.).
@@ -1503,7 +1505,9 @@ impl<'a> AgentManager<'a> {
              SELECT COUNT(*) AS total_runs, \
                     COALESCE(SUM(a.cost_usd), 0.0) AS total_cost, \
                     COALESCE(SUM(a.num_turns), 0) AS total_turns, \
-                    COALESCE(SUM(a.duration_ms), 0) AS total_duration_ms \
+                    COALESCE(SUM(a.duration_ms), 0) AS total_duration_ms, \
+                    COALESCE(SUM(a.input_tokens), 0) AS total_input_tokens, \
+                    COALESCE(SUM(a.output_tokens), 0) AS total_output_tokens \
              FROM agent_runs a \
              JOIN tree t ON a.id = t.id \
              WHERE a.status = 'completed'",
@@ -1514,6 +1518,8 @@ impl<'a> AgentManager<'a> {
                     total_cost: row.get(1)?,
                     total_turns: row.get(2)?,
                     total_duration_ms: row.get(3)?,
+                    total_input_tokens: row.get(4)?,
+                    total_output_tokens: row.get(5)?,
                 })
             },
         )?;

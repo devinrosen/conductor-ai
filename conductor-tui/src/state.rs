@@ -620,6 +620,8 @@ pub struct AgentTotals {
     pub total_cost: f64,
     pub total_turns: i64,
     pub total_duration_ms: i64,
+    pub total_input_tokens: i64,
+    pub total_output_tokens: i64,
     pub run_count: usize,
     /// Live turn count from the currently running agent's log file.
     pub live_turns: i64,

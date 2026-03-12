@@ -32,6 +32,17 @@ export function formatCostCompact(cost: number): string {
   return `$${cost.toFixed(2)}`;
 }
 
+/** Format a token count as X.Xk for values ≥ 1000, or plain integer otherwise. */
+function fmtTokensK(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(Math.round(n));
+}
+
+/** Format input/output token counts as "5.8k↓ 342↑". */
+export function formatTokens(input: number, output: number): string {
+  return `${fmtTokensK(input)}↓ ${fmtTokensK(output)}↑`;
+}
+
 /** Format duration from milliseconds to human-readable. */
 export function formatDuration(ms: number): string {
   const totalSecs = ms / 1000;
@@ -54,23 +65,24 @@ export function agentStatusColor(status: string): string {
   return statusColors[status] ?? "bg-gray-100 text-gray-600";
 }
 
-/** Build a compact stats string for ticket agent totals: "$X.XX Xt". */
+/** Build a compact stats string for ticket agent totals: "5.8k↓ 342↑ Xt". */
 export function formatTicketTotalsCompact(totals: TicketAgentTotals): string {
-  return `${formatCostCompact(totals.total_cost)} ${totals.total_turns}t`;
+  return `${formatTokens(totals.total_input_tokens, totals.total_output_tokens)} ${totals.total_turns}t`;
 }
 
-/** Build a full stats string: "$X.XX  Xt  XmXXs". */
+/** Build a full stats string: "5.8k↓ 342↑  Xt  XmXXs". */
 export function formatTicketTotalsFull(totals: TicketAgentTotals): string {
-  return `${formatCostCompact(totals.total_cost)}  ${totals.total_turns}t  ${formatDuration(totals.total_duration_ms)}`;
+  return `${formatTokens(totals.total_input_tokens, totals.total_output_tokens)}  ${totals.total_turns}t  ${formatDuration(totals.total_duration_ms)}`;
 }
 
 /** Build stats string for an agent run status line. */
 export function formatRunStats(run: AgentRun, durationMs: number): string {
-  const cost = run.cost_usd ?? 0;
+  const inputTokens = run.input_tokens ?? 0;
+  const outputTokens = run.output_tokens ?? 0;
   const turns = run.num_turns ?? 0;
   const dur = formatDuration(durationMs);
-  if (cost > 0) {
-    return `${formatCost(cost)}, ${turns} turns, ${dur}`;
+  if (inputTokens > 0 || outputTokens > 0) {
+    return `${formatTokens(inputTokens, outputTokens)}, ${turns} turns, ${dur}`;
   }
   return `${turns} turns, ${dur}`;
 }

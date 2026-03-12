@@ -457,8 +457,7 @@ fn check_prerequisites() {
 
 fn report_workflow_result(result: conductor_core::workflow::WorkflowResult) {
     println!(
-        "\nTotal: ${:.4}, {} turns, {:.1}s",
-        result.total_cost,
+        "\nTotal: {} turns, {:.1}s",
         result.total_turns,
         result.total_duration_ms as f64 / 1000.0
     );
@@ -1055,10 +1054,9 @@ fn main() -> Result<()> {
                         let mins = (dur_secs / 60.0) as i64;
                         let secs = (dur_secs % 60.0) as i64;
                         println!(
-                            "  #{:<6} {:<40} ${:.4}  {} turns  {}m{:02}s  ({} runs)",
+                            "  #{:<6} {:<40} {} turns  {}m{:02}s  ({} runs)",
                             t.source_id,
                             truncate_str(&t.title, 40),
-                            stats.total_cost,
                             stats.total_turns,
                             mins,
                             secs,
@@ -2116,26 +2114,23 @@ fn run_agent(
                 eprintln!("[conductor] Warning: could not mark plan done: {e}");
             }
             eprintln!("[conductor] Agent completed successfully");
-            if let Some(cost) = cost_usd {
-                let mut summary = format!(
-                    "[conductor] Cost: ${:.4}  Turns: {}  Duration: {:.1}s",
-                    cost,
-                    num_turns.unwrap_or(0),
-                    duration_ms.map(|ms| ms as f64 / 1000.0).unwrap_or(0.0)
+            {
+                let fmt_k = |n: i64| -> String {
+                    if n >= 1000 {
+                        format!("{:.1}k", n as f64 / 1000.0)
+                    } else {
+                        n.to_string()
+                    }
+                };
+                let in_str = fmt_k(input_tokens.unwrap_or(0));
+                let out_str = output_tokens.unwrap_or(0).to_string();
+                let cache_r_str = fmt_k(cache_read_input_tokens.unwrap_or(0));
+                let cache_w_str = fmt_k(cache_creation_input_tokens.unwrap_or(0));
+                let turns = num_turns.unwrap_or(0);
+                let dur = duration_ms.map(|ms| ms as f64 / 1000.0).unwrap_or(0.0);
+                eprintln!(
+                    "[conductor] in: {in_str}  out: {out_str}  cache_r: {cache_r_str}  cache_w: {cache_w_str}  turns: {turns}  duration: {dur:.1}s"
                 );
-                if let Some(in_tok) = input_tokens {
-                    summary.push_str(&format!("  in: {:.1}k", in_tok as f64 / 1000.0));
-                }
-                if let Some(out_tok) = output_tokens {
-                    summary.push_str(&format!("  out: {out_tok}"));
-                }
-                if let Some(cr_tok) = cache_read_input_tokens {
-                    summary.push_str(&format!("  cache_r: {:.1}k", cr_tok as f64 / 1000.0));
-                }
-                if let Some(cw_tok) = cache_creation_input_tokens {
-                    summary.push_str(&format!("  cache_w: {:.1}k", cw_tok as f64 / 1000.0));
-                }
-                eprintln!("{summary}");
             }
         }
         Ok(_) if is_error => {

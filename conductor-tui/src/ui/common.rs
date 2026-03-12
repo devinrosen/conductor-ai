@@ -591,7 +591,7 @@ pub fn ticket_worktree_spans(
 }
 
 /// Format a token count as `X.Xk` for values ≥ 1000, or plain integer otherwise.
-fn fmt_tokens_k(n: i64) -> String {
+pub(super) fn fmt_tokens_k(n: i64) -> String {
     if n >= 1000 {
         format!("{:.1}k", n as f64 / 1000.0)
     } else {
