@@ -33,8 +33,7 @@ mkdir -p <target_dir>/.conductor/agents
 mkdir -p <target_dir>/.conductor/workflows
 mkdir -p <target_dir>/.conductor/prompts
 mkdir -p <target_dir>/.conductor/schemas
-mkdir -p <target_dir>/.conductor/reviewers
-for dir in agents workflows prompts schemas reviewers; do
+for dir in agents workflows prompts schemas; do
   t="<target_dir>/.conductor/$dir"
   [ -z "$(ls -A "$t" 2>/dev/null)" ] && touch "$t/.gitkeep"
 done

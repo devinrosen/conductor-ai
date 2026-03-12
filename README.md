@@ -95,61 +95,6 @@ Workflow files live in `.conductor/workflows/<name>.wf`. Agent prompts live in `
 
 For full details on the DSL grammar, constructs, structured output, and design tradeoffs, see [docs/workflow/engine.md](docs/workflow/engine.md).
 
-## PR Review Swarm
-
-Conductor ships a built-in `review-pr` workflow that runs a multi-agent review swarm against a PR — spawning one AI reviewer per role and aggregating the results into a single PR comment.
-
-### Reviewer roles
-
-Each reviewer is a Markdown file in `.conductor/reviewers/` at the repo root. The filename (minus `.md`) is used as the role name if no `name` is set in the frontmatter.
-
-**File format** — YAML frontmatter + Markdown body:
-
-```markdown
----
-name: security
-description: Input validation, auth gaps, injection risks, secrets in code
-model: opus
-required: true
----
-
-You are a security-focused code reviewer working on a Rust CLI tool.
-Focus exclusively on:
-- Command injection risks in subprocess calls
-- Path traversal in file system operations
-- Authentication and authorization issues
-...
-```
-
-**Frontmatter fields:**
-
-| Field | Required | Default | Description |
-|---|---|---|---|
-| `name` | no | filename stem | Short identifier used in output and PR comments |
-| `description` | no | filename stem | Human-readable focus area shown in the PR comment |
-| `model` | no | — | Claude model to use (e.g. `opus`, `sonnet`) |
-| `required` | no | `true` | If `true`, blocking findings from this reviewer prevent auto-merge |
-
-The Markdown body becomes the reviewer's system prompt.
-
-### Swarm settings
-
-Create `.conductor/review.toml` in the repo root to control swarm-level behavior:
-
-```toml
-# Post an aggregated review comment to the GitHub PR (default: true).
-post_to_pr = true
-
-# Auto-enqueue for merge when all required reviewers approve (default: true).
-auto_merge = true
-```
-
-Both settings default to `true` — the file is optional.
-
-### Lookup order
-
-When a review runs, Conductor looks for `.conductor/reviewers/` in the PR branch worktree first, then falls back to the main repo checkout. This lets you develop and test new reviewer roles in a branch before merging them.
-
 ## Architecture
 
 Four crates in a Cargo workspace:
@@ -162,16 +107,6 @@ Four crates in a Cargo workspace:
 | **conductor-web** | Web UI using axum + React (Vite + Tailwind, embedded via `rust_embed`) |
 
 Data lives in `~/.conductor/` — a single SQLite database and per-repo worktree directories. No daemon or background process; the CLI and TUI link directly against `conductor-core`.
-
-## Contributing
-
-One-time setup after cloning — enables a pre-commit hook that enforces formatting:
-
-```bash
-git config core.hooksPath .githooks
-```
-
-CI runs format, clippy, and tests on every PR to `main`. Squash or rebase merges only (no merge commits).
 
 ## License
 

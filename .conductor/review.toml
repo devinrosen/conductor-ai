@@ -1,9 +1,0 @@
-# Review swarm settings for this repo.
-# These control behavior after reviewers finish — not which reviewers run.
-# Reviewer roles are defined in .conductor/reviewers/*.md files.
-
-# Post an aggregated review comment to the GitHub PR.
-post_to_pr = true
-
-# Auto-enqueue for merge when all required reviewers approve.
-auto_merge = true
