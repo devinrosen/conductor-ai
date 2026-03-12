@@ -268,6 +268,14 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalMode {
+    #[default]
+    MinApprovals,
+    ReviewDecision,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateNode {
     pub name: String,
@@ -275,6 +283,8 @@ pub struct GateNode {
     pub prompt: Option<String>,
     #[serde(default = "default_one")]
     pub min_approvals: u32,
+    #[serde(default)]
+    pub approval_mode: ApprovalMode,
     pub timeout_secs: u64,
     pub on_timeout: OnTimeout,
 }
@@ -1168,6 +1178,17 @@ impl Parser {
             .map_err(|e| format!("Invalid min_approvals: {e}"))?
             .unwrap_or(1);
 
+        let approval_mode = match kvs.get("mode").map(|v| v.as_str()) {
+            Some("review_decision") => ApprovalMode::ReviewDecision,
+            Some("min_approvals") | None => ApprovalMode::MinApprovals,
+            Some(other) => return Err(format!("Invalid mode for pr_approval: {other}")),
+        };
+        if approval_mode == ApprovalMode::ReviewDecision && kvs.contains_key("min_approvals") {
+            return Err(
+                "Cannot specify both mode = \"review_decision\" and min_approvals".to_string(),
+            );
+        }
+
         let timeout_secs = kvs
             .get("timeout")
             .map(|v| parse_duration_str(v.as_str()))
@@ -1185,6 +1206,7 @@ impl Parser {
             gate_type,
             prompt,
             min_approvals,
+            approval_mode,
             timeout_secs,
             on_timeout,
         })
