@@ -1250,6 +1250,66 @@ impl App {
         }
     }
 
+    fn workflow_column_move_up(&mut self) {
+        match self.state.workflows_focus {
+            WorkflowsFocus::Defs => {
+                self.state.workflow_def_index = self.state.workflow_def_index.saturating_sub(1);
+            }
+            WorkflowsFocus::Runs => {
+                self.state.workflow_run_index = self.state.workflow_run_index.saturating_sub(1);
+            }
+        }
+    }
+
+    fn workflow_column_move_down(&mut self) {
+        match self.state.workflows_focus {
+            WorkflowsFocus::Defs => {
+                clamp_increment(
+                    &mut self.state.workflow_def_index,
+                    self.state.data.workflow_defs.len(),
+                );
+            }
+            WorkflowsFocus::Runs => {
+                let visible_len = self.state.visible_workflow_run_rows().len();
+                clamp_increment(&mut self.state.workflow_run_index, visible_len);
+            }
+        }
+    }
+
+    fn workflow_column_select(&mut self) {
+        match self.state.workflows_focus {
+            WorkflowsFocus::Defs => {
+                self.handle_run_workflow();
+            }
+            WorkflowsFocus::Runs => {
+                let visible = self.state.visible_workflow_run_rows();
+                if let Some(row) = visible.get(self.state.workflow_run_index) {
+                    let target_id = row.run_id().to_string();
+                    if let Some(run) = self
+                        .state
+                        .data
+                        .workflow_runs
+                        .iter()
+                        .find(|r| r.id == target_id)
+                    {
+                        let run_id = run.id.clone();
+                        let worktree_id = run.worktree_id.clone();
+                        if self.state.selected_worktree_id.is_none() {
+                            self.state.selected_worktree_id = worktree_id;
+                        }
+                        self.state.selected_workflow_run_id = Some(run_id);
+                        self.state.view = View::WorkflowRunDetail;
+                        self.state.workflow_step_index = 0;
+                        self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
+                        self.state.step_agent_event_index = 0;
+                        self.state.column_focus = crate::state::ColumnFocus::Content;
+                        self.reload_workflow_steps();
+                    }
+                }
+            }
+        }
+    }
+
     fn move_up(&mut self) {
         match self.state.modal {
             Modal::EventDetail {
@@ -1318,14 +1378,7 @@ impl App {
         }
         // When workflow column has focus, navigate workflow panes.
         if self.state.column_focus == crate::state::ColumnFocus::Workflow {
-            match self.state.workflows_focus {
-                WorkflowsFocus::Defs => {
-                    self.state.workflow_def_index = self.state.workflow_def_index.saturating_sub(1);
-                }
-                WorkflowsFocus::Runs => {
-                    self.state.workflow_run_index = self.state.workflow_run_index.saturating_sub(1);
-                }
-            }
+            self.workflow_column_move_up();
             return;
         }
         match self.state.view {
@@ -1446,18 +1499,7 @@ impl App {
         }
         // When workflow column has focus, navigate workflow panes.
         if self.state.column_focus == crate::state::ColumnFocus::Workflow {
-            match self.state.workflows_focus {
-                WorkflowsFocus::Defs => {
-                    clamp_increment(
-                        &mut self.state.workflow_def_index,
-                        self.state.data.workflow_defs.len(),
-                    );
-                }
-                WorkflowsFocus::Runs => {
-                    let visible_len = self.state.visible_workflow_run_rows().len();
-                    clamp_increment(&mut self.state.workflow_run_index, visible_len);
-                }
-            }
+            self.workflow_column_move_down();
             return;
         }
         match self.state.view {
@@ -1526,37 +1568,7 @@ impl App {
     fn select(&mut self) {
         // When workflow column has focus, handle workflow selection.
         if self.state.column_focus == crate::state::ColumnFocus::Workflow {
-            match self.state.workflows_focus {
-                WorkflowsFocus::Defs => {
-                    self.handle_run_workflow();
-                }
-                WorkflowsFocus::Runs => {
-                    let visible = self.state.visible_workflow_run_rows();
-                    if let Some(row) = visible.get(self.state.workflow_run_index) {
-                        let target_id = row.run_id().to_string();
-                        if let Some(run) = self
-                            .state
-                            .data
-                            .workflow_runs
-                            .iter()
-                            .find(|r| r.id == target_id)
-                        {
-                            let run_id = run.id.clone();
-                            let worktree_id = run.worktree_id.clone();
-                            if self.state.selected_worktree_id.is_none() {
-                                self.state.selected_worktree_id = worktree_id;
-                            }
-                            self.state.selected_workflow_run_id = Some(run_id);
-                            self.state.view = View::WorkflowRunDetail;
-                            self.state.workflow_step_index = 0;
-                            self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
-                            self.state.step_agent_event_index = 0;
-                            self.state.column_focus = crate::state::ColumnFocus::Content;
-                            self.reload_workflow_steps();
-                        }
-                    }
-                }
-            }
+            self.workflow_column_select();
             return;
         }
         match self.state.view {
