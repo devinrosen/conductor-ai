@@ -140,6 +140,7 @@ pub fn orchestrate_run(
             Some(&child_window),
             model,
             parent_run_id,
+            None,
         )?;
 
         eprintln!(
@@ -154,6 +155,7 @@ pub fn orchestrate_run(
             &child_prompt,
             model,
             &child_window,
+            None,
         );
 
         if let Err(e) = spawn_result {
@@ -411,6 +413,7 @@ mod tests {
             output_tokens: None,
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
+            bot_name: None,
         }
     }
 

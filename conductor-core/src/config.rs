@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -43,11 +45,18 @@ pub struct Config {
     pub github: GitHubSettings,
 }
 
-/// Top-level `[github]` section, currently containing only the optional App config.
+/// Top-level `[github]` section.
+///
+/// Supports a single `[github.app]` identity (original) and a named map
+/// `[github.apps.<name>]` for multiple bot identities. Both forms can coexist;
+/// named apps take precedence when looked up by name.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GitHubSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<GitHubAppConfig>,
+    /// Named GitHub App identities, e.g. `[github.apps.developer]`.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub apps: HashMap<String, GitHubAppConfig>,
 }
 
 /// Configuration for posting comments as a GitHub App bot identity.
@@ -221,6 +230,23 @@ fn load_config_from(path: &std::path::Path) -> Result<Config> {
         let _: GitHubAppConfig = app_value.try_into().map_err(|e: toml::de::Error| {
             ConductorError::Config(format!("[github.app] failed to deserialize: {e}"))
         })?;
+    }
+
+    // Guard: validate each entry in [github.apps.<name>] that deserialized to empty.
+    // Mirrors the single-app guard above for the named map case.
+    if let Some(raw_apps) = raw.get("github").and_then(|g| g.get("apps")) {
+        if let Some(apps_table) = raw_apps.as_table() {
+            for (name, raw_value) in apps_table {
+                if !config.github.apps.contains_key(name.as_str()) {
+                    let _: GitHubAppConfig =
+                        raw_value.clone().try_into().map_err(|e: toml::de::Error| {
+                            ConductorError::Config(format!(
+                                "[github.apps.{name}] failed to deserialize: {e}"
+                            ))
+                        })?;
+                }
+            }
+        }
     }
 
     // Backward compat: migrate old `editor` field to `work_targets`
@@ -516,6 +542,74 @@ installation_id = 789012
         assert!(
             msg.contains("malformed"),
             "error message should mention malformed, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_github_apps_map_configured() {
+        let config: Config = toml::from_str(
+            r#"
+            [github.apps.developer]
+            app_id = 111111
+            private_key_path = "~/.conductor/dev-bot.pem"
+            installation_id = 222222
+
+            [github.apps.reviewer]
+            app_id = 333333
+            private_key_path = "~/.conductor/reviewer-bot.pem"
+            installation_id = 444444
+        "#,
+        )
+        .unwrap();
+        assert_eq!(config.github.apps.len(), 2);
+        let dev = config.github.apps.get("developer").unwrap();
+        assert_eq!(dev.app_id, 111111);
+        let rev = config.github.apps.get("reviewer").unwrap();
+        assert_eq!(rev.app_id, 333333);
+    }
+
+    #[test]
+    fn test_github_apps_and_app_coexist() {
+        let config: Config = toml::from_str(
+            r#"
+            [github.app]
+            app_id = 999999
+            private_key_path = "~/.conductor/legacy.pem"
+            installation_id = 888888
+
+            [github.apps.developer]
+            app_id = 111111
+            private_key_path = "~/.conductor/dev-bot.pem"
+            installation_id = 222222
+        "#,
+        )
+        .unwrap();
+        assert!(config.github.app.is_some());
+        assert_eq!(config.github.apps.len(), 1);
+    }
+
+    #[test]
+    fn test_load_config_fails_on_malformed_github_apps_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // Missing required fields
+        std::fs::write(
+            &path,
+            r#"
+[github.apps.developer]
+app_id = 123456
+"#,
+        )
+        .unwrap();
+        let result = load_config_from(&path);
+        assert!(
+            result.is_err(),
+            "expected Err for malformed [github.apps.developer]"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("github.apps.developer"),
+            "error message should mention github.apps.developer, got: {msg}"
         );
     }
 

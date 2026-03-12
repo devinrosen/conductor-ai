@@ -327,6 +327,8 @@ pub struct AgentRun {
     pub output_tokens: Option<i64>,
     pub cache_read_input_tokens: Option<i64>,
     pub cache_creation_input_tokens: Option<i64>,
+    /// GitHub App bot identity used for this run (matches `[github.apps.<name>]`).
+    pub bot_name: Option<String>,
 }
 
 impl AgentRun {
@@ -685,7 +687,7 @@ impl<'a> AgentManager<'a> {
         tmux_window: Option<&str>,
         model: Option<&str>,
     ) -> Result<AgentRun> {
-        self.create_run_with_parent(worktree_id, prompt, tmux_window, model, None)
+        self.create_run_with_parent(worktree_id, prompt, tmux_window, model, None, None)
     }
 
     pub fn create_child_run(
@@ -695,8 +697,16 @@ impl<'a> AgentManager<'a> {
         tmux_window: Option<&str>,
         model: Option<&str>,
         parent_run_id: &str,
+        bot_name: Option<&str>,
     ) -> Result<AgentRun> {
-        self.create_run_with_parent(worktree_id, prompt, tmux_window, model, Some(parent_run_id))
+        self.create_run_with_parent(
+            worktree_id,
+            prompt,
+            tmux_window,
+            model,
+            Some(parent_run_id),
+            bot_name,
+        )
     }
 
     fn create_run_with_parent(
@@ -706,6 +716,7 @@ impl<'a> AgentManager<'a> {
         tmux_window: Option<&str>,
         model: Option<&str>,
         parent_run_id: Option<&str>,
+        bot_name: Option<&str>,
     ) -> Result<AgentRun> {
         let id = ulid::Ulid::new().to_string();
         let now = Utc::now().to_rfc3339();
@@ -731,11 +742,12 @@ impl<'a> AgentManager<'a> {
             output_tokens: None,
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
+            bot_name: bot_name.map(String::from),
         };
 
         self.conn.execute(
-            "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, tmux_window, model, parent_run_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, tmux_window, model, parent_run_id, bot_name) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 run.id,
                 run.worktree_id,
@@ -744,7 +756,8 @@ impl<'a> AgentManager<'a> {
                 run.started_at,
                 run.tmux_window,
                 run.model,
-                run.parent_run_id
+                run.parent_run_id,
+                run.bot_name
             ],
         )?;
 
@@ -756,7 +769,8 @@ impl<'a> AgentManager<'a> {
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
              model, plan, parent_run_id, \
-             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens \
+             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
+             bot_name \
              FROM agent_runs WHERE id = ?1",
             params![run_id],
             row_to_agent_run,
@@ -794,7 +808,8 @@ impl<'a> AgentManager<'a> {
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
              model, plan, parent_run_id, \
-             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens \
+             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
+             bot_name \
              FROM agent_runs WHERE id IN ({placeholders})"
         );
         let params: Vec<&dyn rusqlite::types::ToSql> = ids
@@ -1093,7 +1108,8 @@ impl<'a> AgentManager<'a> {
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
              model, plan, parent_run_id, \
-             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens \
+             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
+             bot_name \
              FROM agent_runs WHERE worktree_id = ?1 ORDER BY started_at DESC",
             params![worktree_id],
             row_to_agent_run,
@@ -1109,7 +1125,8 @@ impl<'a> AgentManager<'a> {
             "SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, a.result_text, \
              a.cost_usd, a.num_turns, a.duration_ms, a.started_at, a.ended_at, a.tmux_window, \
              a.log_file, a.model, NULL, a.parent_run_id, \
-             a.input_tokens, a.output_tokens, a.cache_read_input_tokens, a.cache_creation_input_tokens \
+             a.input_tokens, a.output_tokens, a.cache_read_input_tokens, a.cache_creation_input_tokens, \
+             a.bot_name \
              FROM agent_runs a \
              JOIN worktrees w ON a.worktree_id = w.id \
              WHERE w.repo_id = ?1 \
@@ -1136,7 +1153,8 @@ impl<'a> AgentManager<'a> {
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
              model, plan, parent_run_id, \
-             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens \
+             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
+             bot_name \
              FROM agent_runs WHERE worktree_id = ?1 ORDER BY started_at DESC LIMIT 1",
             params![worktree_id],
             row_to_agent_run,
@@ -1344,7 +1362,7 @@ impl<'a> AgentManager<'a> {
             "SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, \
              a.result_text, a.cost_usd, a.num_turns, a.duration_ms, a.started_at, \
              a.ended_at, a.tmux_window, a.log_file, a.model, a.plan, a.parent_run_id, \
-             a.input_tokens, a.output_tokens, a.cache_read_input_tokens, a.cache_creation_input_tokens \
+             a.input_tokens, a.output_tokens, a.cache_read_input_tokens, a.cache_creation_input_tokens, bot_name \
              FROM agent_runs a \
              INNER JOIN ( \
                  SELECT worktree_id, MAX(started_at) AS max_started \
@@ -1372,7 +1390,8 @@ impl<'a> AgentManager<'a> {
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
              model, plan, parent_run_id, \
-             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens \
+             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
+             bot_name \
              FROM agent_runs WHERE parent_run_id = ?1 ORDER BY started_at DESC",
             params![parent_run_id],
             row_to_agent_run,
@@ -1396,7 +1415,8 @@ impl<'a> AgentManager<'a> {
              SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, \
                     a.result_text, a.cost_usd, a.num_turns, a.duration_ms, a.started_at, \
                     a.ended_at, a.tmux_window, a.log_file, a.model, a.plan, a.parent_run_id, \
-                    a.input_tokens, a.output_tokens, a.cache_read_input_tokens, a.cache_creation_input_tokens \
+                    a.input_tokens, a.output_tokens, a.cache_read_input_tokens, a.cache_creation_input_tokens, \
+                    a.bot_name \
              FROM agent_runs a \
              JOIN tree t ON a.id = t.id \
              ORDER BY a.started_at ASC",
@@ -1414,7 +1434,8 @@ impl<'a> AgentManager<'a> {
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
              model, plan, parent_run_id, \
-             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens \
+             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
+             bot_name \
              FROM agent_runs WHERE worktree_id = ?1 AND parent_run_id IS NULL \
              ORDER BY started_at DESC",
             params![worktree_id],
@@ -1677,7 +1698,8 @@ impl<'a> AgentManager<'a> {
             "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
              cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
              model, plan, parent_run_id, \
-             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens \
+             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
+             bot_name \
              FROM agent_runs WHERE status IN ('running', 'waiting_for_feedback')",
             [],
             row_to_agent_run,
@@ -1966,6 +1988,7 @@ fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun> {
         output_tokens: row.get(17)?,
         cache_read_input_tokens: row.get(18)?,
         cache_creation_input_tokens: row.get(19)?,
+        bot_name: row.get(20)?,
     })
 }
 
@@ -2823,7 +2846,7 @@ mod tests {
         assert!(parent.parent_run_id.is_none());
 
         let child = mgr
-            .create_child_run(Some("w1"), "Sub-task A", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Sub-task A", None, None, &parent.id, None)
             .unwrap();
         assert_eq!(child.parent_run_id.as_deref(), Some(parent.id.as_str()));
 
@@ -2840,10 +2863,10 @@ mod tests {
             .create_run(Some("w1"), "Supervisor", None, None)
             .unwrap();
         let _child1 = mgr
-            .create_child_run(Some("w1"), "Child 1", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Child 1", None, None, &parent.id, None)
             .unwrap();
         let _child2 = mgr
-            .create_child_run(Some("w1"), "Child 2", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Child 2", None, None, &parent.id, None)
             .unwrap();
 
         // Unrelated run should not appear
@@ -2866,13 +2889,13 @@ mod tests {
         // Build a tree: parent -> child1, child2 -> grandchild
         let parent = mgr.create_run(Some("w1"), "Root task", None, None).unwrap();
         let child1 = mgr
-            .create_child_run(Some("w1"), "Child 1", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Child 1", None, None, &parent.id, None)
             .unwrap();
         let _child2 = mgr
-            .create_child_run(Some("w2"), "Child 2", None, None, &parent.id)
+            .create_child_run(Some("w2"), "Child 2", None, None, &parent.id, None)
             .unwrap();
         let _grandchild = mgr
-            .create_child_run(Some("w1"), "Grandchild", None, None, &child1.id)
+            .create_child_run(Some("w1"), "Grandchild", None, None, &child1.id, None)
             .unwrap();
 
         // Unrelated run
@@ -2892,7 +2915,7 @@ mod tests {
             .create_run(Some("w1"), "Supervisor", None, None)
             .unwrap();
         let _child = mgr
-            .create_child_run(Some("w1"), "Child", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Child", None, None, &parent.id, None)
             .unwrap();
         let standalone = mgr
             .create_run(Some("w1"), "Standalone", None, None)
@@ -2929,7 +2952,7 @@ mod tests {
         .unwrap();
 
         let child1 = mgr
-            .create_child_run(Some("w1"), "Child 1", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Child 1", None, None, &parent.id, None)
             .unwrap();
         mgr.update_run_completed(
             &child1.id,
@@ -2946,7 +2969,7 @@ mod tests {
         .unwrap();
 
         let child2 = mgr
-            .create_child_run(Some("w2"), "Child 2", None, None, &parent.id)
+            .create_child_run(Some("w2"), "Child 2", None, None, &parent.id, None)
             .unwrap();
         mgr.update_run_completed(
             &child2.id,
@@ -2964,7 +2987,7 @@ mod tests {
 
         // Still-running child should NOT be included in totals
         let _running = mgr
-            .create_child_run(Some("w1"), "Still running", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Still running", None, None, &parent.id, None)
             .unwrap();
 
         let totals = mgr.aggregate_run_tree(&parent.id).unwrap();
@@ -2983,7 +3006,7 @@ mod tests {
 
         let parent = mgr.create_run(Some("w1"), "Parent", None, None).unwrap();
         let child = mgr
-            .create_child_run(Some("w1"), "Child", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Child", None, None, &parent.id, None)
             .unwrap();
 
         // Delete the parent — ON DELETE SET NULL should clear child's parent_run_id
@@ -3464,6 +3487,7 @@ mod tests {
             output_tokens: None,
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
+            bot_name: None,
         };
 
         let prompt = run.build_resume_prompt();
@@ -3601,6 +3625,7 @@ mod tests {
                 None,
                 Some("haiku"),
                 &review.id,
+                None,
             )
             .unwrap();
         mgr.update_run_completed(
@@ -3648,7 +3673,7 @@ mod tests {
             .create_run(Some("w1"), "Fix the bug", None, None)
             .unwrap();
         let child = mgr
-            .create_child_run(Some("w1"), "Sub-task", None, None, &parent.id)
+            .create_child_run(Some("w1"), "Sub-task", None, None, &parent.id, None)
             .unwrap();
         mgr.update_run_completed(
             &parent.id,
@@ -4093,6 +4118,28 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert!(result.contains_key(&r1.id));
         assert!(!result.contains_key("nonexistent-id-xyz"));
+    }
+
+    #[test]
+    fn test_agent_run_bot_name_non_null_round_trip() {
+        // Verify that a concrete bot_name value survives a write→read round-trip
+        // through the DB.  A typo in the column name or SELECT list would cause
+        // bot_name to come back as None, which this test would catch.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let parent = mgr.create_run(Some("w1"), "Parent", None, None).unwrap();
+        let run = mgr
+            .create_child_run(Some("w1"), "Task", None, None, &parent.id, Some("my-bot"))
+            .unwrap();
+        assert_eq!(run.bot_name.as_deref(), Some("my-bot"));
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.bot_name.as_deref(),
+            Some("my-bot"),
+            "bot_name should round-trip through the DB unchanged"
+        );
     }
 
     #[test]

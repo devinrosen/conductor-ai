@@ -188,6 +188,7 @@ pub async fn run_workflow(
                 depth: 0,
                 parent_workflow_run_id: None,
                 target_label: Some(&wt_target_label),
+                default_bot_name: None,
             };
 
             execute_workflow(&input)

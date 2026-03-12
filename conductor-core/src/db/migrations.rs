@@ -593,6 +593,30 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 33)?;
     }
 
+    // Migration 034: add bot_name column to agent_runs.
+    let has_bot_name: bool = conn
+        .prepare("SELECT bot_name FROM agent_runs LIMIT 0")
+        .is_ok();
+    if !has_bot_name {
+        conn.execute_batch(include_str!("migrations/034_agent_run_bot_name.sql"))?;
+    }
+    if version < 34 {
+        bump_version(conn, 34)?;
+    }
+
+    // Migration 035: add default_bot_name column to workflow_runs.
+    let has_wf_default_bot_name: bool = conn
+        .prepare("SELECT default_bot_name FROM workflow_runs LIMIT 0")
+        .is_ok();
+    if !has_wf_default_bot_name {
+        conn.execute_batch(include_str!(
+            "migrations/035_workflow_run_default_bot_name.sql"
+        ))?;
+    }
+    if version < 35 {
+        bump_version(conn, 35)?;
+    }
+
     Ok(())
 }
 

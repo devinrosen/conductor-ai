@@ -181,6 +181,7 @@ pub fn spawn_child_tmux(
     prompt: &str,
     model: Option<&str>,
     window_name: &str,
+    bot_name: Option<&str>,
 ) -> std::result::Result<(), String> {
     let mut args = vec![
         "agent".to_string(),
@@ -196,6 +197,11 @@ pub fn spawn_child_tmux(
     if let Some(m) = model {
         args.push("--model".to_string());
         args.push(m.to_string());
+    }
+
+    if let Some(b) = bot_name {
+        args.push("--bot-name".to_string());
+        args.push(b.to_string());
     }
 
     spawn_tmux_window(&args, window_name)

@@ -121,6 +121,7 @@ pub async fn start_agent(
             Some(&wt.slug),
             model.as_deref(),
             parent_id,
+            None,
         )?
     } else {
         agent_mgr.create_run(

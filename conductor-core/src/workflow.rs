@@ -63,7 +63,7 @@ const STEP_COLUMNS: &str =
 const RUN_COLUMNS: &str =
     "id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
      started_at, ended_at, result_summary, definition_snapshot, inputs, ticket_id, repo_id, \
-     parent_workflow_run_id, target_label";
+     parent_workflow_run_id, target_label, default_bot_name";
 
 /// Instruction appended to every agent prompt for structured output.
 pub const CONDUCTOR_OUTPUT_INSTRUCTION: &str = r#"
@@ -302,6 +302,9 @@ pub struct WorkflowRun {
     pub parent_workflow_run_id: Option<String>,
     /// Human-readable label for the target (e.g. `repo_slug/wt_slug`, `owner/repo#N`).
     pub target_label: Option<String>,
+    /// Default named GitHub App bot identity for this run.
+    /// Set when the run is invoked via `call workflow { as = "..." }`.
+    pub default_bot_name: Option<String>,
 }
 
 /// A workflow step execution record from the database.
@@ -595,7 +598,17 @@ impl<'a> WorkflowManager<'a> {
             repo_id: repo_id.map(String::from),
             parent_workflow_run_id: parent_workflow_run_id.map(String::from),
             target_label: target_label.map(String::from),
+            default_bot_name: None,
         })
+    }
+
+    /// Persist the default bot name for a workflow run.
+    pub fn set_workflow_run_default_bot_name(&self, run_id: &str, bot_name: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workflow_runs SET default_bot_name = ?1 WHERE id = ?2",
+            params![bot_name, run_id],
+        )?;
+        Ok(())
     }
 
     /// Persist the input variables for a workflow run.
@@ -1405,6 +1418,7 @@ fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
     let repo_id: Option<String> = row.get(13)?;
     let parent_workflow_run_id: Option<String> = row.get(14)?;
     let target_label: Option<String> = row.get(15)?;
+    let default_bot_name: Option<String> = row.get(16)?;
     Ok(WorkflowRun {
         id: row.get(0)?,
         workflow_name: row.get(1)?,
@@ -1422,6 +1436,7 @@ fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
         repo_id,
         parent_workflow_run_id,
         target_label,
+        default_bot_name,
     })
 }
 
@@ -1614,6 +1629,8 @@ struct ExecutionState<'a> {
     block_with: Vec<String>,
     /// Resume context — `None` for fresh runs, `Some` when resuming.
     resume_ctx: Option<ResumeContext>,
+    /// Default named GitHub App bot identity inherited from a parent `call workflow { as = "..." }`.
+    default_bot_name: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1663,6 +1680,9 @@ pub struct WorkflowExecInput<'a> {
     pub parent_workflow_run_id: Option<&'a str>,
     /// Human-readable label for the target (e.g. `repo_slug/wt_slug`, `owner/repo#N`).
     pub target_label: Option<&'a str>,
+    /// Default named GitHub App bot identity for call nodes that have no explicit `as =`.
+    /// Set by a `call workflow { as = "..." }` node when it invokes a sub-workflow.
+    pub default_bot_name: Option<String>,
 }
 
 /// Execute a workflow definition against a worktree.
@@ -1753,6 +1773,11 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         input.target_label,
     )?;
 
+    // Persist default_bot_name so it can be restored on resume.
+    if let Some(ref bot_name) = input.default_bot_name {
+        wf_mgr.set_workflow_run_default_bot_name(&wf_run.id, bot_name)?;
+    }
+
     // Build inputs map, injecting implicit ticket/repo variables
     let mut merged_inputs = input.inputs.clone();
     if let Some(tid) = input.ticket_id {
@@ -1819,6 +1844,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         block_output: None,
         block_with: Vec::new(),
         resume_ctx: None,
+        default_bot_name: input.default_bot_name.clone(),
     };
 
     run_workflow_engine(&mut state, workflow)
@@ -1956,6 +1982,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         depth: 0,
         parent_workflow_run_id: None,
         target_label: params.target_label.as_deref(),
+        default_bot_name: None,
     };
 
     execute_workflow(&input)
@@ -2231,6 +2258,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         block_output: None,
         block_with: Vec::new(),
         resume_ctx,
+        default_bot_name: wf_run.default_bot_name.clone(),
     };
 
     run_workflow_engine(&mut state, &workflow)
@@ -2307,6 +2335,7 @@ fn run_on_fail_agent(
         on_fail: None,
         output: None,
         with: Vec::new(),
+        bot_name: None,
     };
     if let Err(e) = execute_call(state, &on_fail_node, iteration) {
         tracing::warn!("on_fail agent '{}' also failed: {e}", on_fail_agent.label(),);
@@ -2541,12 +2570,17 @@ fn execute_call_with_schema(
             state.worktree_slug.as_str()
         };
         let child_window = sanitize_tmux_name(&format!("{}-wf-{}", window_prefix, agent_label));
+        let effective_bot_name = node
+            .bot_name
+            .as_deref()
+            .or(state.default_bot_name.as_deref());
         let child_run = state.agent_mgr.create_child_run(
             state.worktree_id.as_deref(),
             &prompt,
             Some(&child_window),
             step_model,
             &state.parent_run_id,
+            effective_bot_name,
         )?;
 
         state.wf_mgr.update_step_status(
@@ -2574,6 +2608,7 @@ fn execute_call_with_schema(
             &prompt,
             step_model,
             &child_window,
+            effective_bot_name,
         ) {
             tracing::warn!("Failed to spawn child: {e}");
             let _ = state
@@ -2847,6 +2882,10 @@ fn execute_call_workflow(
             depth: child_depth,
             parent_workflow_run_id: Some(&state.workflow_run_id),
             target_label: state.target_label.as_deref(),
+            default_bot_name: node
+                .bot_name
+                .clone()
+                .or_else(|| state.default_bot_name.clone()),
         };
 
         match execute_workflow(&child_input) {
@@ -3447,6 +3486,7 @@ fn execute_parallel(
             Some(&window_name),
             step_model,
             &state.parent_run_id,
+            state.default_bot_name.as_deref(),
         )?;
 
         state.wf_mgr.update_step_status(
@@ -3465,6 +3505,7 @@ fn execute_parallel(
             &prompt,
             step_model,
             &window_name,
+            state.default_bot_name.as_deref(),
         ) {
             tracing::warn!("Failed to spawn parallel agent '{agent_label}': {e}");
             let _ = state
@@ -3775,6 +3816,55 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
         None,
     )?;
 
+    // Capture the bot name used for this gate (resolved fresh on each poll to avoid
+    // using an expired installation token in long-running gate loops).
+    let gate_effective_bot: Option<String> = node
+        .bot_name
+        .clone()
+        .or_else(|| state.default_bot_name.clone());
+    let gate_config = state.config;
+    // Cache the installation token so we don't make a live HTTPS call on every
+    // poll iteration.  Installation tokens are valid for 1 hour; we refresh
+    // after 55 minutes to stay well inside that window.
+    // Cache entry: (token_or_none, fetched_at).  `None` token means the last
+    // fetch failed; those entries use a short 30-second TTL so we don't
+    // hammer a misconfigured GitHub App key on every 5-second poll tick.
+    let gate_token_cache: std::cell::RefCell<Option<(Option<String>, std::time::Instant)>> =
+        std::cell::RefCell::new(None);
+    let resolve_gate_token = || -> Option<String> {
+        if gate_effective_bot.is_none() && gate_config.github.app.is_none() {
+            return None;
+        }
+        let mut cache = gate_token_cache.borrow_mut();
+        let needs_refresh = cache
+            .as_ref()
+            .map(|(cached_token, fetched_at)| {
+                let ttl = if cached_token.is_some() {
+                    Duration::from_secs(55 * 60)
+                } else {
+                    // Short retry TTL for failed fetches.
+                    Duration::from_secs(30)
+                };
+                fetched_at.elapsed() > ttl
+            })
+            .unwrap_or(true);
+        if needs_refresh {
+            let token = crate::github_app::resolve_named_app_token(
+                gate_config,
+                gate_effective_bot.as_deref(),
+                "gate",
+            )
+            .token()
+            .map(String::from);
+            // Always write to cache — on failure we store None with a short
+            // TTL so repeated poll ticks don't retrigger the subprocess call.
+            *cache = Some((token.clone(), std::time::Instant::now()));
+            token
+        } else {
+            cache.as_ref().and_then(|(t, _)| t.clone())
+        }
+    };
+
     match node.gate_type {
         GateType::HumanApproval | GateType::HumanReview => {
             tracing::info!("Gate '{}' waiting for human action:", node.name);
@@ -3860,13 +3950,17 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                     return handle_gate_timeout(state, &step_id, node);
                 }
 
+                let gate_bot_token = resolve_gate_token();
                 match node.approval_mode {
                     ApprovalMode::MinApprovals => {
                         // Poll gh pr view for raw approval count
-                        let output = Command::new("gh")
-                            .args(["pr", "view", "--json", "reviews,author"])
-                            .current_dir(&state.working_dir)
-                            .output();
+                        let mut cmd = Command::new("gh");
+                        cmd.args(["pr", "view", "--json", "reviews,author"])
+                            .current_dir(&state.working_dir);
+                        if let Some(ref token) = gate_bot_token {
+                            cmd.env("GH_TOKEN", token);
+                        }
+                        let output = cmd.output();
 
                         if let Ok(out) = output {
                             if out.status.success() {
@@ -3913,10 +4007,13 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                     }
                     ApprovalMode::ReviewDecision => {
                         // Poll gh pr view for GitHub's branch-protection-aware reviewDecision
-                        let output = Command::new("gh")
-                            .args(["pr", "view", "--json", "reviewDecision"])
-                            .current_dir(&state.working_dir)
-                            .output();
+                        let mut cmd = Command::new("gh");
+                        cmd.args(["pr", "view", "--json", "reviewDecision"])
+                            .current_dir(&state.working_dir);
+                        if let Some(ref token) = gate_bot_token {
+                            cmd.env("GH_TOKEN", token);
+                        }
+                        let output = cmd.output();
 
                         if let Ok(out) = output {
                             if out.status.success() {
@@ -3957,10 +4054,14 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                     return handle_gate_timeout(state, &step_id, node);
                 }
 
-                let output = Command::new("gh")
-                    .args(["pr", "checks", "--json", "state"])
-                    .current_dir(&state.working_dir)
-                    .output();
+                let gate_bot_token = resolve_gate_token();
+                let mut cmd = Command::new("gh");
+                cmd.args(["pr", "checks", "--json", "state"])
+                    .current_dir(&state.working_dir);
+                if let Some(ref token) = gate_bot_token {
+                    cmd.env("GH_TOKEN", token);
+                }
+                let output = cmd.output();
 
                 if let Ok(out) = output {
                     if out.status.success() {
@@ -4618,6 +4719,7 @@ mod tests {
             approval_mode: ApprovalMode::default(),
             timeout_secs: 1,
             on_timeout,
+            bot_name: None,
         }
     }
 
@@ -4668,6 +4770,7 @@ mod tests {
             block_output: None,
             block_with: Vec::new(),
             resume_ctx: None,
+            default_bot_name: None,
         };
         (state, run_id)
     }
@@ -5538,6 +5641,7 @@ And here is my actual output:
             block_output: None,
             block_with: Vec::new(),
             resume_ctx: None,
+            default_bot_name: None,
         }
     }
 
@@ -5945,6 +6049,7 @@ And here is my actual output:
             block_output: None,
             block_with: Vec::new(),
             resume_ctx: None,
+            default_bot_name: None,
         }
     }
 
@@ -6083,6 +6188,7 @@ And here is my actual output:
                 approval_mode: ApprovalMode::default(),
                 timeout_secs: 1,
                 on_timeout: OnTimeout::Fail,
+                bot_name: None,
             })],
         };
 
@@ -6299,6 +6405,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let err = execute_workflow(&input).unwrap_err();
         assert!(
@@ -6340,6 +6447,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         // Guard should pass; empty workflow completes successfully.
         let result = execute_workflow(&input);
@@ -6383,6 +6491,7 @@ And here is my actual output:
             depth: 1,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result = execute_workflow(&input);
         assert!(
@@ -6435,6 +6544,7 @@ And here is my actual output:
                 approval_mode: ApprovalMode::default(),
                 timeout_secs: 1,
                 on_timeout: OnTimeout::Fail,
+                bot_name: None,
             })],
         };
 
@@ -6465,6 +6575,7 @@ And here is my actual output:
                 on_fail: None,
                 output: None,
                 with: vec![],
+                bot_name: None,
             })],
         };
 
@@ -6499,6 +6610,7 @@ And here is my actual output:
                     approval_mode: ApprovalMode::default(),
                     timeout_secs: 1,
                     on_timeout: OnTimeout::Fail,
+                    bot_name: None,
                 }),
                 WorkflowNode::Gate(GateNode {
                     name: "g2".into(),
@@ -6508,6 +6620,7 @@ And here is my actual output:
                     approval_mode: ApprovalMode::default(),
                     timeout_secs: 1,
                     on_timeout: OnTimeout::Fail,
+                    bot_name: None,
                 }),
             ],
         };
@@ -6542,6 +6655,7 @@ And here is my actual output:
                     approval_mode: ApprovalMode::default(),
                     timeout_secs: 1,
                     on_timeout: OnTimeout::Fail,
+                    bot_name: None,
                 })],
             })],
         };
@@ -6577,6 +6691,7 @@ And here is my actual output:
                     approval_mode: ApprovalMode::default(),
                     timeout_secs: 1,
                     on_timeout: OnTimeout::Fail,
+                    bot_name: None,
                 })],
             })],
         };
@@ -6606,6 +6721,7 @@ And here is my actual output:
             on_fail: None,
             output: None,
             with: vec!["call-snippet".into()],
+            bot_name: None,
         };
 
         // Call will error on load_agent, but the merging logic should execute
@@ -6636,6 +6752,7 @@ And here is my actual output:
             on_fail: None,
             output: Some("call-schema".into()),
             with: vec![],
+            bot_name: None,
         };
 
         let result = execute_call(&mut state, &node, 0);
@@ -6927,6 +7044,7 @@ And here is my actual output:
                 on_fail: None,
                 output: None,
                 with: vec![],
+                bot_name: None,
             })],
         };
 
@@ -6960,6 +7078,7 @@ And here is my actual output:
                 on_fail: None,
                 output: None,
                 with: vec![],
+                bot_name: None,
             })],
         };
 
@@ -7018,6 +7137,7 @@ And here is my actual output:
                     on_fail: None,
                     output: None,
                     with: vec![],
+                    bot_name: None,
                 }),
                 WorkflowNode::Call(CallNode {
                     agent: crate::workflow_dsl::AgentRef::Name("step-b".to_string()),
@@ -7025,6 +7145,7 @@ And here is my actual output:
                     on_fail: None,
                     output: None,
                     with: vec![],
+                    bot_name: None,
                 }),
             ],
         };
@@ -7078,6 +7199,7 @@ And here is my actual output:
                     approval_mode: ApprovalMode::default(),
                     timeout_secs: 300,
                     on_timeout: crate::workflow_dsl::OnTimeout::Fail,
+                    bot_name: None,
                 }),
             ],
         };
@@ -7559,6 +7681,87 @@ And here is my actual output:
     }
 
     #[test]
+    fn test_set_workflow_run_default_bot_name_round_trip() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run(
+                "test-wf",
+                Some("w1"),
+                &parent.id,
+                false,
+                "manual",
+                Some("{}"),
+            )
+            .unwrap();
+
+        // Initially default_bot_name should be None
+        let fetched = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert!(
+            fetched.default_bot_name.is_none(),
+            "Expected no default_bot_name initially"
+        );
+
+        // Write a bot name and read it back
+        wf_mgr
+            .set_workflow_run_default_bot_name(&run.id, "reviewer-bot")
+            .unwrap();
+
+        let fetched = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.default_bot_name.as_deref(),
+            Some("reviewer-bot"),
+            "default_bot_name should persist after set"
+        );
+    }
+
+    #[test]
+    fn test_default_bot_name_persists_through_suspend_and_resume() {
+        // Verify that default_bot_name written by set_workflow_run_default_bot_name is
+        // correctly loaded back when resume_workflow reads the run from the DB — this
+        // exercises the full store → retrieve invariant for multi-stage bot identity.
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run(
+                "test-wf",
+                Some("w1"),
+                &parent.id,
+                false,
+                "manual",
+                Some("{}"),
+            )
+            .unwrap();
+
+        // Simulate what execute_workflow does when a default_bot_name is set
+        wf_mgr
+            .set_workflow_run_default_bot_name(&run.id, "deploy-bot")
+            .unwrap();
+
+        // Simulate a suspend by marking the run as waiting
+        wf_mgr
+            .update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None)
+            .unwrap();
+
+        // Load the run as resume_workflow would — the bot name must survive the round-trip
+        let restored = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            restored.default_bot_name.as_deref(),
+            Some("deploy-bot"),
+            "default_bot_name must survive a suspend/resume DB round-trip"
+        );
+        assert_eq!(restored.status, WorkflowRunStatus::Waiting);
+    }
+
+    #[test]
     fn test_row_to_workflow_run_malformed_inputs_json_returns_empty() {
         let conn = setup_db();
         let agent_mgr = AgentManager::new(&conn);
@@ -8027,6 +8230,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result1 = execute_workflow(&input1);
         assert!(
@@ -8055,6 +8259,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result2 = execute_workflow(&input2);
         assert!(
@@ -8342,6 +8547,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8389,6 +8595,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8440,6 +8647,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8478,6 +8686,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         assert!(
             execute_workflow(&input).is_err(),
@@ -8507,6 +8716,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         assert!(
             execute_workflow(&input).is_err(),
@@ -8574,6 +8784,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8625,6 +8836,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result = execute_workflow(&input).unwrap();
 

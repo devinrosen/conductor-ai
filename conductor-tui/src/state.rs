@@ -1409,6 +1409,7 @@ mod tests {
             repo_id: None,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         }
     }
 
@@ -1437,6 +1438,7 @@ mod tests {
             output_tokens: None,
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
+            bot_name: None,
         }
     }
 
@@ -1806,6 +1808,7 @@ mod tests {
             output_tokens: None,
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
+            bot_name: None,
         };
         // Insert under an arbitrary key to exercise the global_status iteration path.
         state.data.latest_agent_runs.insert("run-eph".into(), run);
@@ -1891,6 +1894,7 @@ mod tests {
             repo_id: Some("repo-1".into()),
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         state
             .data
@@ -1943,6 +1947,7 @@ mod tests {
             repo_id: None,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         state
             .data
@@ -1992,6 +1997,7 @@ mod tests {
             repo_id: None,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         state.data.active_non_worktree_workflow_runs.push(run);
         let gs = state.global_status();
