@@ -663,6 +663,9 @@ impl App {
                 if let Some(defs) = payload.workflow_defs {
                     self.state.data.workflow_defs = defs;
                 }
+                if let Some(slugs) = payload.workflow_def_slugs {
+                    self.state.data.workflow_def_slugs = slugs;
+                }
                 self.state.data.workflow_runs = payload.workflow_runs;
                 self.state.data.workflow_steps = payload.workflow_steps;
                 self.state.data.step_agent_events = payload.step_agent_events;
@@ -4650,6 +4653,7 @@ impl App {
         } else {
             // Global mode: defs are cross-worktree, cleared here and populated by background poller
             self.state.data.workflow_defs.clear();
+            self.state.data.workflow_def_slugs.clear();
         }
         self.state.data.workflow_runs = wf_mgr
             .list_workflow_runs_for_scope(self.state.selected_worktree_id.as_deref(), 50)

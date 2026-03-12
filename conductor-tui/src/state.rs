@@ -604,6 +604,9 @@ pub struct DataCache {
     pub active_non_worktree_workflow_runs: Vec<WorkflowRun>,
     /// Workflow definitions for the currently viewed worktree
     pub workflow_defs: Vec<WorkflowDef>,
+    /// Pre-computed repo slug per def (parallel to `workflow_defs`).
+    /// Populated by the background thread in global mode; empty in worktree-scoped mode.
+    pub workflow_def_slugs: Vec<String>,
     /// Workflow runs for the currently viewed worktree (or all worktrees in global mode)
     pub workflow_runs: Vec<WorkflowRun>,
     /// Steps for the currently viewed workflow run

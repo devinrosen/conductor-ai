@@ -22,6 +22,9 @@ pub struct GithubDiscoverPayload {
 #[derive(Debug)]
 pub struct WorkflowDataPayload {
     pub workflow_defs: Option<Vec<WorkflowDef>>, // None = defs not re-scanned, keep existing
+    /// Pre-computed repo slug for each def in `workflow_defs` (parallel vec, same length).
+    /// Empty in worktree-scoped mode (single repo implied).
+    pub workflow_def_slugs: Option<Vec<String>>,
     pub workflow_runs: Vec<WorkflowRun>,
     pub workflow_steps: Vec<WorkflowRunStep>,
     /// Agent events for the selected step's child_run_id (live activity)
