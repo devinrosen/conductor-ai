@@ -925,6 +925,9 @@ impl Parser {
         if self.peek() == &Token::LBrace {
             self.advance();
 
+            // Parse kvs that may appear before inputs { } (e.g. `as = "developer"`)
+            let mut kvs = self.parse_kvs()?;
+
             // Parse optional `inputs { ... }` block inside the braces
             if self.peek() == &Token::Inputs {
                 self.advance();
@@ -936,8 +939,8 @@ impl Parser {
                 }
             }
 
-            // Parse remaining kvs (retries, on_fail, as)
-            let mut kvs = self.parse_kvs()?;
+            // Parse any remaining kvs after inputs { } and merge
+            kvs.extend(self.parse_kvs()?);
             self.expect(&Token::RBrace)?;
 
             if let Some(r) = kvs.get("retries") {
@@ -2512,6 +2515,32 @@ workflow parent {
                     n.on_fail,
                     Some(AgentRef::Name("notify-lint-failure".to_string()))
                 );
+            }
+            _ => panic!("Expected CallWorkflow node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_call_workflow_as_before_inputs() {
+        // Regression: `as =` before `inputs { }` used to silently drop the workflow
+        let input = r#"
+workflow parent {
+    meta { targets = ["worktree"] }
+    call workflow ticket-to-pr {
+        as = "developer"
+        inputs {
+            ticket_id = "{{ticket_id}}"
+        }
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.body.len(), 1);
+        match &def.body[0] {
+            WorkflowNode::CallWorkflow(n) => {
+                assert_eq!(n.workflow, "ticket-to-pr");
+                assert_eq!(n.inputs.get("ticket_id").unwrap(), "{{ticket_id}}");
+                assert_eq!(n.bot_name.as_deref(), Some("developer"));
             }
             _ => panic!("Expected CallWorkflow node"),
         }
