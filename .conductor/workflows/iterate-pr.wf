@@ -22,6 +22,7 @@ workflow iterate-pr {
 
     if review-pr.has_review_issues {
       call address-reviews
+      call workflow lint-fix
     }
   } while review-pr.has_review_issues
 }
