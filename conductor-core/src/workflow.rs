@@ -1378,6 +1378,8 @@ fn build_variable_map<'a>(state: &'a ExecutionState<'_>) -> HashMap<&'a str, Str
     if let Some(last_output) = state.last_structured_output.as_ref() {
         vars.insert("prior_output", last_output.clone());
     }
+    // dry_run: "true" or "false" — lets non-committing agents skip GitHub side effects
+    vars.insert("dry_run", state.exec_config.dry_run.to_string());
     vars
 }
 
@@ -5494,6 +5496,21 @@ And here is my actual output:
 
         let vars = build_variable_map(&state);
         assert_eq!(vars.get("prior_output").unwrap(), &json);
+    }
+
+    #[test]
+    fn test_build_variable_map_includes_dry_run() {
+        let conn = setup_db();
+        let mut state = make_test_state(&conn);
+
+        // Default exec_config has dry_run = false
+        let vars = build_variable_map(&state);
+        assert_eq!(vars.get("dry_run").unwrap(), "false");
+
+        // Set dry_run = true
+        state.exec_config.dry_run = true;
+        let vars = build_variable_map(&state);
+        assert_eq!(vars.get("dry_run").unwrap(), "true");
     }
 
     // -----------------------------------------------------------------------
