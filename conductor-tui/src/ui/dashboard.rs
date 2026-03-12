@@ -23,6 +23,26 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     render_tickets(frame, vert[1], state);
 }
 
+/// Given a flat list sorted by repo (get_repo returns an owned String key),
+/// return the visual row index (including interleaved header rows) for
+/// the item at `logical_idx`.
+fn visual_idx_with_headers<T>(
+    items: &[T],
+    get_repo: impl Fn(&T) -> String,
+    logical_idx: usize,
+) -> usize {
+    let mut headers = 0usize;
+    let mut prev = String::new();
+    for item in items.iter().take(logical_idx + 1) {
+        let repo = get_repo(item);
+        if repo != prev {
+            headers += 1;
+            prev = repo;
+        }
+    }
+    logical_idx + headers
+}
+
 fn render_repos(frame: &mut Frame, area: Rect, state: &AppState) {
     let focused = state.dashboard_focus == DashboardFocus::Repos;
     let border_style = if focused {
@@ -54,8 +74,13 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &AppState) {
             } else {
                 format!("  ({active} worktrees)")
             };
+            let slug_style = if active == 0 && done == 0 {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default().add_modifier(Modifier::BOLD)
+            };
             ListItem::new(Line::from(vec![
-                Span::styled(&r.slug, Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(r.slug.clone(), slug_style),
                 Span::raw(count_text),
             ]))
         })
@@ -91,27 +116,58 @@ fn render_worktrees(frame: &mut Frame, area: Rect, state: &AppState) {
         Style::default().fg(Color::DarkGray)
     };
 
-    let items: Vec<ListItem> = state
+    // data.worktrees is pre-sorted by (repo_slug, wt_slug) in DataCache::rebuild_maps(),
+    // so state.worktree_index directly indexes this list (matching selection actions).
+    let wts_with_slug: Vec<(String, &conductor_core::worktree::Worktree)> = state
         .data
         .worktrees
         .iter()
         .map(|wt| {
-            let repo_slug = state
+            let slug = state
                 .data
                 .repo_slug_map
                 .get(&wt.repo_id)
-                .map(|s| s.as_str())
-                .unwrap_or("?");
-            super::common::worktree_list_item(wt, state, Some(repo_slug), false)
+                .cloned()
+                .unwrap_or_else(|| "?".to_string());
+            (slug, wt)
         })
         .collect();
+
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut prev_repo = String::new();
+    for (repo_slug, wt) in &wts_with_slug {
+        if *repo_slug != prev_repo {
+            items.push(ListItem::new(Line::from(vec![Span::styled(
+                repo_slug.clone(),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )])));
+            prev_repo = repo_slug.clone();
+        }
+        items.push(super::common::worktree_list_item_with_prefix(
+            wt,
+            state,
+            None,
+            false,
+            "\u{2514} ",
+        ));
+    }
+
+    let active_count = state
+        .data
+        .worktrees
+        .iter()
+        .filter(|w| w.is_active())
+        .count();
+    let title = format!(" Worktrees ({active_count} active) ");
 
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(border_style)
-                .title(" Worktrees "),
+                .title(title),
         )
         .highlight_style(
             Style::default()
@@ -122,7 +178,15 @@ fn render_worktrees(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let mut list_state = ListState::default();
     if focused && !state.data.worktrees.is_empty() {
-        list_state.select(Some(state.worktree_index));
+        let logical_idx = state
+            .worktree_index
+            .min(wts_with_slug.len().saturating_sub(1));
+        let visual_idx = visual_idx_with_headers(
+            &wts_with_slug,
+            |(repo_slug, _)| repo_slug.clone(),
+            logical_idx,
+        );
+        list_state.select(Some(visual_idx));
     }
 
     frame.render_stateful_widget(list, area, &mut list_state);
@@ -136,51 +200,48 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
         Style::default().fg(Color::DarkGray)
     };
 
-    let items: Vec<ListItem> = state
-        .filtered_tickets
-        .iter()
-        .map(|t| {
-            let repo_slug = state
-                .data
-                .repo_slug_map
-                .get(&t.repo_id)
-                .map(|s| s.as_str())
-                .unwrap_or("?");
-            let state_color = match t.state.as_str() {
-                "open" => Color::Green,
-                "closed" => Color::Red,
-                "in_progress" => Color::Yellow,
-                _ => Color::White,
-            };
-            let mut spans = vec![
-                Span::styled(
-                    format!("{repo_slug} "),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    format!("#{} ", t.source_id),
-                    Style::default().fg(Color::Yellow),
-                ),
-                Span::raw(&t.title),
-                Span::raw("  "),
-                Span::styled(format!("[{}]", t.state), Style::default().fg(state_color)),
-            ];
-            let labels = state
-                .data
-                .ticket_labels
-                .get(&t.id)
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
-            spans.extend(super::common::ticket_label_spans_compact(labels));
-            spans.extend(super::common::ticket_worktree_spans(
-                state, &t.id, "  ", false,
-            ));
-            spans.extend(super::common::ticket_agent_total_spans(
-                state, &t.id, "  ", false,
-            ));
-            ListItem::new(Line::from(spans))
-        })
-        .collect();
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut prev_repo_id = String::new();
+    for t in &state.filtered_tickets {
+        let repo_slug = state
+            .data
+            .repo_slug_map
+            .get(&t.repo_id)
+            .map(|s| s.as_str())
+            .unwrap_or("?");
+        if t.repo_id != prev_repo_id {
+            items.push(ListItem::new(Line::from(vec![Span::styled(
+                repo_slug.to_string(),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )])));
+            prev_repo_id = t.repo_id.clone();
+        }
+        let mut spans = vec![
+            Span::raw("\u{2514} "),
+            Span::styled(
+                format!("#{} ", t.source_id),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::raw(t.title.clone()),
+            Span::raw("  "),
+        ];
+        let labels = state
+            .data
+            .ticket_labels
+            .get(&t.id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        spans.extend(super::common::ticket_label_spans_compact(labels));
+        spans.extend(super::common::ticket_worktree_spans(
+            state, &t.id, "  ", true,
+        ));
+        spans.extend(super::common::ticket_agent_total_spans(
+            state, &t.id, "  ", false,
+        ));
+        items.push(ListItem::new(Line::from(spans)));
+    }
 
     let ticket_title = if state.show_closed_tickets {
         " Tickets "
@@ -203,7 +264,22 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let mut list_state = ListState::default();
     if focused && !state.filtered_tickets.is_empty() {
-        list_state.select(Some(state.ticket_index));
+        let logical_idx = state
+            .ticket_index
+            .min(state.filtered_tickets.len().saturating_sub(1));
+        let visual_idx = visual_idx_with_headers(
+            &state.filtered_tickets,
+            |t| {
+                state
+                    .data
+                    .repo_slug_map
+                    .get(&t.repo_id)
+                    .cloned()
+                    .unwrap_or_else(|| "?".to_string())
+            },
+            logical_idx,
+        );
+        list_state.select(Some(visual_idx));
     }
 
     frame.render_stateful_widget(list, area, &mut list_state);

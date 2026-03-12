@@ -709,6 +709,22 @@ impl DataCache {
             self.ticket_map.insert(ticket.id.clone(), ticket.clone());
         }
 
+        // Sort worktrees by (repo_slug, wt_slug) so that state.worktree_index
+        // indexes into the same order that the dashboard renders them.
+        self.worktrees.sort_by(|a, b| {
+            let sa = self
+                .repo_slug_map
+                .get(&a.repo_id)
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            let sb = self
+                .repo_slug_map
+                .get(&b.repo_id)
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            sa.cmp(sb).then_with(|| a.slug.cmp(&b.slug))
+        });
+
         self.repo_worktree_count.clear();
         self.ticket_worktrees.clear();
         for wt in &self.worktrees {
@@ -1110,6 +1126,13 @@ impl AppState {
             })
             .cloned()
             .collect();
+
+        let slug_map = &self.data.repo_slug_map;
+        self.filtered_tickets.sort_by(|a, b| {
+            let sa = slug_map.get(&a.repo_id).map(|s| s.as_str()).unwrap_or("");
+            let sb = slug_map.get(&b.repo_id).map(|s| s.as_str()).unwrap_or("");
+            sa.cmp(sb).then_with(|| a.source_id.cmp(&b.source_id))
+        });
 
         let detail_filter_query = self.detail_ticket_filter.as_query();
         self.filtered_detail_tickets = self
