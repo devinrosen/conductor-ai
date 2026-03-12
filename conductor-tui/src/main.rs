@@ -4,6 +4,7 @@ mod background;
 mod event;
 mod input;
 mod state;
+mod theme;
 mod ui;
 
 use anyhow::Result;

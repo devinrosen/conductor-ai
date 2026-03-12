@@ -93,7 +93,14 @@ pub fn render_header(
             .constraints([Constraint::Length(1), Constraint::Length(1)])
             .split(area);
         render_header_summary(frame, rows[0], state, total_active, gs);
-        render_header_detail(frame, rows[1], gs, state.status_bar_expanded, total_active);
+        render_header_detail(
+            frame,
+            rows[1],
+            gs,
+            state.status_bar_expanded,
+            total_active,
+            &state.theme,
+        );
     } else {
         render_header_summary(frame, area, state, total_active, gs);
     }
@@ -115,18 +122,19 @@ fn render_header_summary(
         View::WorkflowRunDetail => "Workflow Run",
     };
 
+    let theme = &state.theme;
     let mut spans = vec![
         Span::styled(
             " Conductor ",
             Style::default()
                 .fg(Color::Black)
-                .bg(Color::Cyan)
+                .bg(theme.border_focused)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!(" {view_name}"),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.border_focused)
                 .add_modifier(Modifier::BOLD),
         ),
     ];
@@ -140,7 +148,7 @@ fn render_header_summary(
             spans.push(Span::styled(
                 format!("⏸ {waiting} waiting"),
                 Style::default()
-                    .fg(Color::Magenta)
+                    .fg(theme.status_waiting)
                     .add_modifier(Modifier::BOLD),
             ));
             if gs.running_agents + gs.running_workflows > 0 {
@@ -153,7 +161,7 @@ fn render_header_summary(
         if running > 0 {
             spans.push(Span::styled(
                 format!("● {running} running"),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.status_running),
             ));
         }
 
@@ -165,7 +173,10 @@ fn render_header_summary(
             } else {
                 "!:expand"
             };
-            spans.push(Span::styled(hint, Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                hint,
+                Style::default().fg(theme.label_secondary),
+            ));
         }
     }
 
@@ -178,6 +189,7 @@ fn render_header_detail(
     gs: &crate::state::GlobalStatus,
     expanded: bool,
     total_active: usize,
+    theme: &crate::theme::Theme,
 ) {
     let mut spans: Vec<Span<'static>> = Vec::new();
 
@@ -198,9 +210,9 @@ fn render_header_detail(
                 elapsed_secs,
             } => {
                 let (symbol, color) = match status {
-                    AgentRunStatus::WaitingForFeedback => ("⏸", Color::Magenta),
-                    AgentRunStatus::Running => ("●", Color::Yellow),
-                    _ => ("○", Color::DarkGray),
+                    AgentRunStatus::WaitingForFeedback => ("⏸", theme.status_waiting),
+                    AgentRunStatus::Running => ("●", theme.status_running),
+                    _ => ("○", theme.label_secondary),
                 };
                 let label = if matches!(status, AgentRunStatus::Running) && *elapsed_secs > 0 {
                     let elapsed_str = if *elapsed_secs < 60 {
@@ -222,9 +234,9 @@ fn render_header_detail(
                 workflow_chain,
             } => {
                 let (symbol, color) = match status {
-                    WorkflowRunStatus::Waiting => ("⏸", Color::Magenta),
-                    WorkflowRunStatus::Running => ("⚙", Color::Cyan),
-                    _ => ("○", Color::DarkGray),
+                    WorkflowRunStatus::Waiting => ("⏸", theme.status_waiting),
+                    WorkflowRunStatus::Running => ("⚙", theme.label_accent),
+                    _ => ("○", theme.label_secondary),
                 };
                 // For running/waiting workflows, build the full chain breadcrumb.
                 let label = if matches!(
@@ -253,7 +265,7 @@ fn render_header_detail(
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("+{overflow} more  !:expand"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.label_secondary),
         ));
     }
 
@@ -308,7 +320,7 @@ pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let bar = Paragraph::new(Line::from(Span::styled(
         msg,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(state.theme.label_secondary),
     )));
     frame.render_widget(bar, area);
 }
@@ -337,14 +349,14 @@ pub fn worktree_list_item_with_prefix(
 ) -> ListItem<'static> {
     let is_active = wt.is_active();
     let status_color = match wt.status {
-        WorktreeStatus::Active => Color::Green,
+        WorktreeStatus::Active => state.theme.status_completed,
         WorktreeStatus::Merged => Color::Blue,
-        WorktreeStatus::Abandoned => Color::Red,
+        WorktreeStatus::Abandoned => state.theme.status_failed,
     };
     let text_style = if is_active {
         Style::default()
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(state.theme.label_secondary)
     };
 
     let mut spans: Vec<Span<'static>> = Vec::new();
@@ -356,7 +368,7 @@ pub fn worktree_list_item_with_prefix(
     if let Some(prefix) = repo_prefix {
         spans.push(Span::styled(
             format!("{prefix}/"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(state.theme.label_secondary),
         ));
     }
 
@@ -397,10 +409,10 @@ pub fn worktree_list_item_with_prefix(
         .and_then(|tid| state.data.ticket_map.get(tid))
     {
         let ticket_state_color = match ticket.state.as_str() {
-            "open" => Color::Green,
-            "closed" => Color::DarkGray,
-            "in_progress" => Color::Yellow,
-            _ => Color::White,
+            "open" => state.theme.status_completed,
+            "closed" => state.theme.label_secondary,
+            "in_progress" => state.theme.status_running,
+            _ => state.theme.label_primary,
         };
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
@@ -414,11 +426,13 @@ pub fn worktree_list_item_with_prefix(
 
     if let Some(run) = agent_run {
         let (symbol, color) = match run.status {
-            AgentRunStatus::Running => ("● running", Color::Yellow),
-            AgentRunStatus::WaitingForFeedback => ("⏸ waiting for feedback", Color::Magenta),
-            AgentRunStatus::Completed => ("✓ completed", Color::Green),
-            AgentRunStatus::Failed => ("✗ failed", Color::Red),
-            AgentRunStatus::Cancelled => ("○ cancelled", Color::DarkGray),
+            AgentRunStatus::Running => ("● running", state.theme.status_running),
+            AgentRunStatus::WaitingForFeedback => {
+                ("⏸ waiting for feedback", state.theme.status_waiting)
+            }
+            AgentRunStatus::Completed => ("✓ completed", state.theme.status_completed),
+            AgentRunStatus::Failed => ("✗ failed", state.theme.status_failed),
+            AgentRunStatus::Cancelled => ("○ cancelled", state.theme.status_cancelled),
         };
         spans.push(Span::raw("  "));
         spans.push(Span::styled(symbol, Style::default().fg(color)));
@@ -434,11 +448,13 @@ pub fn worktree_list_item_with_prefix(
     if let Some(wf_run) = state.data.latest_workflow_runs_by_worktree.get(&wt.id) {
         use conductor_core::workflow::WorkflowRunStatus;
         let (symbol, color) = match wf_run.status {
-            WorkflowRunStatus::Running => ("⚙ running", Color::Cyan),
-            WorkflowRunStatus::Waiting => ("⏸ waiting", Color::Magenta),
-            WorkflowRunStatus::Completed => ("✓", Color::DarkGray),
-            WorkflowRunStatus::Failed => ("✗ failed", Color::Red),
-            WorkflowRunStatus::Pending | WorkflowRunStatus::Cancelled => ("", Color::DarkGray),
+            WorkflowRunStatus::Running => ("⚙ running", state.theme.label_accent),
+            WorkflowRunStatus::Waiting => ("⏸ waiting", state.theme.status_waiting),
+            WorkflowRunStatus::Completed => ("✓", state.theme.label_secondary),
+            WorkflowRunStatus::Failed => ("✗ failed", state.theme.status_failed),
+            WorkflowRunStatus::Pending | WorkflowRunStatus::Cancelled => {
+                ("", state.theme.label_secondary)
+            }
         };
         if !symbol.is_empty() {
             let is_wf_active = matches!(
@@ -487,7 +503,7 @@ pub fn worktree_list_item_with_prefix(
             if let (Some(input), Some(output)) = (run.input_tokens, run.output_tokens) {
                 spans.push(Span::styled(
                     format!("  ↑{} ↓{}", fmt_tokens_k(input), fmt_tokens_k(output)),
-                    Style::default().fg(Color::Magenta),
+                    Style::default().fg(state.theme.status_waiting),
                 ));
             }
         }
@@ -625,9 +641,9 @@ pub fn ticket_worktree_dot_span(state: &AppState, ticket_id: &str) -> Span<'stat
         .and_then(|wts| wts.iter().find(|w| w.is_active()))
         .is_some();
     if has_active {
-        Span::styled("● ", Style::default().fg(Color::Green))
+        Span::styled("● ", Style::default().fg(state.theme.status_completed))
     } else {
-        Span::styled("○ ", Style::default().fg(Color::DarkGray))
+        Span::styled("○ ", Style::default().fg(state.theme.label_secondary))
     }
 }
 
@@ -667,7 +683,10 @@ pub fn ticket_agent_total_spans(
     } else {
         format!("{leading}{in_k}↓ {out_k}↑ {}t", totals.total_turns)
     };
-    vec![Span::styled(text, Style::default().fg(Color::Magenta))]
+    vec![Span::styled(
+        text,
+        Style::default().fg(state.theme.status_waiting),
+    )]
 }
 
 /// Truncate a string to at most `max` characters, appending "…" if truncated.

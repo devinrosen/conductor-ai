@@ -1,5 +1,5 @@
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
@@ -23,10 +23,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 .unwrap_or("?");
 
             let state_color = match t.state.as_str() {
-                "open" => Color::Green,
-                "closed" => Color::Red,
-                "in_progress" => Color::Yellow,
-                _ => Color::White,
+                "open" => state.theme.status_completed,
+                "closed" => state.theme.status_failed,
+                "in_progress" => state.theme.status_running,
+                _ => state.theme.label_primary,
             };
 
             let assignee = t.assignee.as_deref().unwrap_or("-");
@@ -35,11 +35,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 super::common::ticket_worktree_dot_span(state, &t.id),
                 Span::styled(
                     format!("{repo_slug:<12} "),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(state.theme.label_secondary),
                 ),
                 Span::styled(
                     format!("#{:<6} ", t.source_id),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(state.theme.group_header),
                 ),
                 Span::styled(format!("{:<30} ", truncate(&t.title, 30)), Style::default()),
                 Span::styled(
@@ -48,7 +48,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 ),
                 Span::styled(
                     format!("{:<12}", assignee),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(state.theme.label_secondary),
                 ),
             ];
 
@@ -62,7 +62,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                         .color
                         .as_deref()
                         .map(super::common::hex_to_color)
-                        .unwrap_or(Color::DarkGray);
+                        .unwrap_or(state.theme.label_secondary);
                     let fg = super::common::label_fg(bg);
                     spans.push(Span::raw(" "));
                     spans.push(Span::styled(
@@ -75,7 +75,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 if remaining > 0 {
                     spans.push(Span::styled(
                         format!(" +{remaining}"),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(state.theme.label_secondary),
                     ));
                 }
             }
@@ -118,12 +118,12 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
+                .border_style(Style::default().fg(state.theme.border_focused))
                 .title(title),
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(state.theme.highlight_bg)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("");

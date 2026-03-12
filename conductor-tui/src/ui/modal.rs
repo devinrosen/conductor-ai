@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Direction, Flex, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
@@ -11,7 +11,9 @@ use conductor_core::issue_source::IssueSource;
 use conductor_core::tickets::{Ticket, TicketLabel};
 use conductor_core::worktree::Worktree;
 
-pub fn render_confirm(frame: &mut Frame, area: Rect, title: &str, message: &str) {
+use crate::theme::Theme;
+
+pub fn render_confirm(frame: &mut Frame, area: Rect, title: &str, message: &str, theme: &Theme) {
     let popup = centered_rect(50, 30, area);
     frame.render_widget(Clear, popup);
 
@@ -23,13 +25,15 @@ pub fn render_confirm(frame: &mut Frame, area: Rect, title: &str, message: &str)
             Span::styled(
                 "  y",
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(theme.status_completed)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("/Enter = confirm    "),
             Span::styled(
                 "n",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.status_failed)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" = cancel"),
         ]),
@@ -37,7 +41,7 @@ pub fn render_confirm(frame: &mut Frame, area: Rect, title: &str, message: &str)
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
+            .border_style(Style::default().fg(theme.label_warning))
             .title(format!(" {title} ")),
     );
 
@@ -51,41 +55,49 @@ pub fn render_confirm_by_name(
     message: &str,
     expected: &str,
     value: &str,
+    theme: &Theme,
 ) {
     let popup = centered_rect(55, 40, area);
     frame.render_widget(Clear, popup);
 
     let matches = value == expected;
-    let border_color = if matches { Color::Green } else { Color::Red };
+    let border_color = if matches {
+        theme.status_completed
+    } else {
+        theme.status_failed
+    };
     let input_style = if matches {
         Style::default()
-            .fg(Color::Green)
+            .fg(theme.status_completed)
             .add_modifier(Modifier::UNDERLINED)
     } else {
         Style::default()
-            .fg(Color::Red)
+            .fg(theme.status_failed)
             .add_modifier(Modifier::UNDERLINED)
     };
 
     let content = Paragraph::new(vec![
         Line::from(""),
-        Line::from(Span::styled(message, Style::default().fg(Color::Yellow))),
+        Line::from(Span::styled(
+            message,
+            Style::default().fg(theme.label_warning),
+        )),
         Line::from(""),
         Line::from(vec![
             Span::raw("  Type "),
             Span::styled(
                 expected,
                 Style::default()
-                    .fg(Color::White)
+                    .fg(theme.label_primary)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" to confirm:"),
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled("> ", Style::default().fg(theme.border_focused)),
             Span::styled(value, input_style),
-            Span::styled("_", Style::default().fg(Color::Cyan)),
+            Span::styled("_", Style::default().fg(theme.border_focused)),
         ]),
         Line::from(""),
         Line::from(if matches {
@@ -93,14 +105,14 @@ pub fn render_confirm_by_name(
                 Span::styled(
                     "  Enter",
                     Style::default()
-                        .fg(Color::Green)
+                        .fg(theme.status_completed)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(" = confirm    "),
                 Span::styled(
                     "Esc",
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme.label_warning)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(" = cancel"),
@@ -108,7 +120,7 @@ pub fn render_confirm_by_name(
         } else {
             vec![Span::styled(
                 "  Esc to cancel",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.label_secondary),
             )]
         }),
     ])
@@ -123,7 +135,14 @@ pub fn render_confirm_by_name(
     frame.render_widget(content, popup);
 }
 
-pub fn render_input(frame: &mut Frame, area: Rect, title: &str, prompt: &str, value: &str) {
+pub fn render_input(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    prompt: &str,
+    value: &str,
+    theme: &Theme,
+) {
     let popup = centered_rect(50, 30, area);
     frame.render_widget(Clear, popup);
 
@@ -132,27 +151,27 @@ pub fn render_input(frame: &mut Frame, area: Rect, title: &str, prompt: &str, va
         Line::from(Span::raw(prompt)),
         Line::from(""),
         Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled("> ", Style::default().fg(theme.border_focused)),
             Span::styled(value, Style::default().add_modifier(Modifier::UNDERLINED)),
-            Span::styled("_", Style::default().fg(Color::Cyan)),
+            Span::styled("_", Style::default().fg(theme.border_focused)),
         ]),
         Line::from(""),
         Line::from(Span::styled(
             "  Enter to submit, Esc to cancel",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.label_secondary),
         )),
     ])
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
+            .border_style(Style::default().fg(theme.border_focused))
             .title(format!(" {title} ")),
     );
 
     frame.render_widget(content, popup);
 }
 
-pub fn render_error(frame: &mut Frame, area: Rect, message: &str) {
+pub fn render_error(frame: &mut Frame, area: Rect, message: &str, theme: &Theme) {
     let popup = centered_rect(60, 50, area);
     frame.render_widget(Clear, popup);
 
@@ -160,42 +179,45 @@ pub fn render_error(frame: &mut Frame, area: Rect, message: &str) {
     for part in message.split('\n') {
         lines.push(Line::from(Span::styled(
             part.to_string(),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.label_error),
         )));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  y: copy  Esc/Enter: dismiss",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.label_secondary),
     )));
 
     let content = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Red))
+            .border_style(Style::default().fg(theme.status_failed))
             .title(" Error "),
     );
 
     frame.render_widget(content, popup);
 }
 
-pub fn render_progress(frame: &mut Frame, area: Rect, message: &str) {
+pub fn render_progress(frame: &mut Frame, area: Rect, message: &str, theme: &Theme) {
     let popup = centered_rect(50, 25, area);
     frame.render_widget(Clear, popup);
 
     let content = Paragraph::new(vec![
         Line::from(""),
-        Line::from(Span::styled(message, Style::default().fg(Color::White))),
+        Line::from(Span::styled(
+            message,
+            Style::default().fg(theme.label_primary),
+        )),
         Line::from(""),
         Line::from(Span::styled(
             "  Please wait…",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.label_secondary),
         )),
     ])
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
+            .border_style(Style::default().fg(theme.status_running))
             .title(" In Progress "),
     );
 
@@ -209,20 +231,21 @@ pub fn render_ticket_info(
     agent_totals: Option<&TicketAgentTotals>,
     worktrees: Option<&Vec<Worktree>>,
     labels: Option<&[TicketLabel]>,
+    theme: &Theme,
 ) {
     let popup = centered_rect(60, 70, area);
     frame.render_widget(Clear, popup);
 
     let label_style = Style::default()
-        .fg(Color::Cyan)
+        .fg(theme.label_accent)
         .add_modifier(Modifier::BOLD);
-    let value_style = Style::default().fg(Color::White);
-    let dim_style = Style::default().fg(Color::DarkGray);
+    let value_style = Style::default().fg(theme.label_primary);
+    let dim_style = Style::default().fg(theme.label_secondary);
 
     let state_color = match ticket.state.as_str() {
-        "open" => Color::Green,
-        "closed" => Color::Red,
-        _ => Color::Yellow,
+        "open" => theme.status_completed,
+        "closed" => theme.status_failed,
+        _ => theme.label_warning,
     };
 
     let body_text = if ticket.body.is_empty() {
@@ -250,7 +273,7 @@ pub fn render_ticket_info(
                     .color
                     .as_deref()
                     .map(super::common::hex_to_color)
-                    .unwrap_or(Color::DarkGray);
+                    .unwrap_or(theme.label_secondary);
                 let fg = super::common::label_fg(bg);
                 if shown > 0 {
                     spans.push(Span::raw(" "));
@@ -265,7 +288,7 @@ pub fn render_ticket_info(
             if remaining > 0 {
                 spans.push(Span::styled(
                     format!(" +{remaining}"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.label_secondary),
                 ));
             }
         } else {
@@ -299,7 +322,7 @@ pub fn render_ticket_info(
         labels_line,
         Line::from(vec![
             Span::styled("  URL:       ", label_style),
-            Span::styled(&ticket.url, Style::default().fg(Color::Blue)),
+            Span::styled(&ticket.url, Style::default().fg(theme.label_accent)),
         ]),
         Line::from(""),
     ];
@@ -324,22 +347,22 @@ pub fn render_ticket_info(
                     fmt_k(totals.total_input_tokens),
                     fmt_k(totals.total_output_tokens)
                 ),
-                Style::default().fg(Color::Magenta),
+                Style::default().fg(theme.status_waiting),
             ),
             Span::styled("   Turns: ", dim_style),
             Span::styled(
                 format!("{}", totals.total_turns),
-                Style::default().fg(Color::Magenta),
+                Style::default().fg(theme.status_waiting),
             ),
             Span::styled("   Time: ", dim_style),
             Span::styled(
                 format!("{}m{:02}s", mins, secs),
-                Style::default().fg(Color::Magenta),
+                Style::default().fg(theme.status_waiting),
             ),
             Span::styled("   Runs: ", dim_style),
             Span::styled(
                 format!("{}", totals.total_runs),
-                Style::default().fg(Color::Magenta),
+                Style::default().fg(theme.status_waiting),
             ),
         ]));
         lines.push(Line::from(""));
@@ -350,9 +373,9 @@ pub fn render_ticket_info(
             lines.push(Line::from(Span::styled("  Worktrees:", label_style)));
             for wt in wts {
                 let (indicator, color) = if wt.is_active() {
-                    ("●", Color::Green)
+                    ("●", theme.status_completed)
                 } else {
-                    ("○", Color::DarkGray)
+                    ("○", theme.label_secondary)
                 };
                 lines.push(Line::from(vec![
                     Span::styled(format!("    {indicator} "), Style::default().fg(color)),
@@ -380,14 +403,14 @@ pub fn render_ticket_info(
         Span::styled(
             "  o",
             Style::default()
-                .fg(Color::Green)
+                .fg(theme.status_completed)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" = open in browser    ", dim_style),
         Span::styled(
             "Esc",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.label_warning)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" = close", dim_style),
@@ -404,7 +427,7 @@ pub fn render_ticket_info(
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
+                .border_style(Style::default().fg(theme.border_focused))
                 .title(title_display),
         )
         .wrap(Wrap { trim: false });
@@ -418,6 +441,7 @@ pub fn render_form(
     title: &str,
     fields: &[crate::state::FormField],
     active_field: usize,
+    theme: &Theme,
 ) {
     let popup = centered_rect(60, 50, area);
     frame.render_widget(Clear, popup);
@@ -428,10 +452,10 @@ pub fn render_form(
         let is_active = i == active_field;
         let label_style = if is_active {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.border_focused)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.label_secondary)
         };
 
         // Build label with required indicator and auto hint
@@ -447,17 +471,17 @@ pub fn render_form(
         // Value line
         if is_active {
             lines.push(Line::from(vec![
-                Span::styled("  > ", Style::default().fg(Color::Cyan)),
+                Span::styled("  > ", Style::default().fg(theme.border_focused)),
                 Span::styled(
                     &field.value,
                     Style::default().add_modifier(Modifier::UNDERLINED),
                 ),
-                Span::styled("_", Style::default().fg(Color::Cyan)),
+                Span::styled("_", Style::default().fg(theme.border_focused)),
             ]));
         } else if field.value.is_empty() {
             lines.push(Line::from(Span::styled(
                 format!("    {}", field.placeholder),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.label_secondary),
             )));
         } else {
             lines.push(Line::from(Span::raw(format!("    {}", field.value))));
@@ -468,13 +492,13 @@ pub fn render_form(
 
     lines.push(Line::from(Span::styled(
         "  Tab next field  Enter submit  Esc cancel",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.label_secondary),
     )));
 
     let content = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
+            .border_style(Style::default().fg(theme.border_focused))
             .title(format!(" {title} ")),
     );
 
@@ -487,6 +511,7 @@ pub fn render_post_create_picker(
     items: &[crate::state::PostCreateChoice],
     selected: usize,
     ticket_source_id: &str,
+    theme: &Theme,
 ) {
     let height = (items.len() as u16 + 6).min(20);
     let percent_y = ((height as f32 / area.height as f32) * 100.0) as u16;
@@ -497,7 +522,7 @@ pub fn render_post_create_picker(
         Line::from(""),
         Line::from(Span::styled(
             format!("  Start work on #{ticket_source_id}?"),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(theme.label_accent),
         )),
         Line::from(""),
     ];
@@ -509,10 +534,10 @@ pub fn render_post_create_picker(
 
         let style = if is_selected {
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.label_warning)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.label_primary)
         };
 
         lines.push(Line::from(vec![
@@ -524,13 +549,13 @@ pub fn render_post_create_picker(
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  1-9 select  Enter confirm  Esc skip",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.label_secondary),
     )));
 
     let content = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
+            .border_style(Style::default().fg(theme.border_focused))
             .title(" Post-Create Actions "),
     );
 
@@ -544,6 +569,7 @@ pub fn render_pr_workflow_picker(
     pr_title: &str,
     workflow_defs: &[conductor_core::workflow::WorkflowDef],
     selected: usize,
+    theme: &Theme,
 ) {
     let height = (workflow_defs.len() as u16 + 7).min(25);
     let percent_y = ((height as f32 / area.height as f32) * 100.0) as u16;
@@ -554,7 +580,7 @@ pub fn render_pr_workflow_picker(
         Line::from(""),
         Line::from(Span::styled(
             format!("  Run workflow on PR #{pr_number}: {pr_title}"),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(theme.label_accent),
         )),
         Line::from(""),
     ];
@@ -565,10 +591,10 @@ pub fn render_pr_workflow_picker(
 
         let style = if is_selected {
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.label_warning)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.label_primary)
         };
 
         let mut row = vec![
@@ -578,7 +604,7 @@ pub fn render_pr_workflow_picker(
         if !def.description.is_empty() {
             row.push(Span::styled(
                 format!("  — {}", def.description),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.label_secondary),
             ));
         }
         lines.push(Line::from(row));
@@ -587,13 +613,13 @@ pub fn render_pr_workflow_picker(
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  Enter confirm  Esc cancel",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.label_secondary),
     )));
 
     let content = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
+            .border_style(Style::default().fg(theme.border_focused))
             .title(" Run Workflow on PR "),
     );
 
@@ -606,6 +632,7 @@ pub fn render_workflow_picker(
     target: &crate::state::WorkflowPickerTarget,
     workflow_defs: &[conductor_core::workflow::WorkflowDef],
     selected: usize,
+    theme: &Theme,
 ) {
     use crate::state::WorkflowPickerTarget;
 
@@ -656,7 +683,10 @@ pub fn render_workflow_picker(
 
     let mut lines = vec![
         Line::from(""),
-        Line::from(Span::styled(subtitle, Style::default().fg(Color::Cyan))),
+        Line::from(Span::styled(
+            subtitle,
+            Style::default().fg(theme.label_accent),
+        )),
         Line::from(""),
     ];
 
@@ -666,10 +696,10 @@ pub fn render_workflow_picker(
 
         let style = if is_selected {
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.label_warning)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.label_primary)
         };
 
         let mut row = vec![
@@ -679,7 +709,7 @@ pub fn render_workflow_picker(
         if !def.description.is_empty() {
             row.push(Span::styled(
                 format!("  — {}", def.description),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.label_secondary),
             ));
         }
         lines.push(Line::from(row));
@@ -688,13 +718,13 @@ pub fn render_workflow_picker(
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  Enter confirm  Esc cancel",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.label_secondary),
     )));
 
     let content = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
+            .border_style(Style::default().fg(theme.border_focused))
             .title(title),
     );
 
@@ -707,6 +737,7 @@ pub fn render_agent_prompt(
     title: &str,
     prompt: &str,
     textarea: &TextArea<'_>,
+    theme: &Theme,
 ) {
     let popup = centered_rect(70, 50, area);
     frame.render_widget(Clear, popup);
@@ -714,7 +745,7 @@ pub fn render_agent_prompt(
     // Outer block for the modal border
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(theme.border_focused))
         .title(format!(" {title} "));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -733,7 +764,7 @@ pub fn render_agent_prompt(
     let prompt_widget = Paragraph::new(vec![
         Line::from(Span::styled(
             format!(" {prompt}"),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(theme.label_accent),
         )),
         Line::from(""),
     ]);
@@ -745,7 +776,7 @@ pub fn render_agent_prompt(
     // Hint line
     let hint = Paragraph::new(Line::from(Span::styled(
         " Enter for newline, Ctrl+S to submit, Ctrl+D to clear, Esc to cancel",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.label_secondary),
     )));
     frame.render_widget(hint, chunks[2]);
 }
@@ -761,15 +792,16 @@ pub fn render_model_picker(
     custom_input: &str,
     custom_active: bool,
     suggested: Option<&str>,
+    theme: &Theme,
 ) {
     use conductor_core::models::KNOWN_MODELS;
 
     let popup = centered_rect(55, 55, area);
     frame.render_widget(Clear, popup);
 
-    let dim = Style::default().fg(Color::DarkGray);
+    let dim = Style::default().fg(theme.label_secondary);
     let cyan_bold = Style::default()
-        .fg(Color::Cyan)
+        .fg(theme.label_accent)
         .add_modifier(Modifier::BOLD);
 
     let mut lines = vec![Line::from("")];
@@ -788,7 +820,7 @@ pub fn render_model_picker(
     };
     lines.push(Line::from(Span::styled(
         format!("  {default_display}"),
-        Style::default().fg(Color::Yellow),
+        Style::default().fg(theme.label_warning),
     )));
     lines.push(Line::from(Span::styled(
         "         \u{2191} override with:",
@@ -813,10 +845,10 @@ pub fn render_model_picker(
 
         let style = if is_selected {
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.label_warning)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme.label_primary)
         };
 
         lines.push(Line::from(vec![
@@ -824,18 +856,18 @@ pub fn render_model_picker(
             Span::styled(
                 format!("{} ", model.tier_stars()),
                 Style::default().fg(match model.tier {
-                    conductor_core::models::ModelTier::Powerful => Color::Magenta,
-                    conductor_core::models::ModelTier::Balanced => Color::Cyan,
-                    conductor_core::models::ModelTier::Fast => Color::Green,
+                    conductor_core::models::ModelTier::Powerful => theme.status_waiting,
+                    conductor_core::models::ModelTier::Balanced => theme.label_accent,
+                    conductor_core::models::ModelTier::Fast => theme.status_completed,
                 }),
             ),
             Span::styled(format!("{:<7}", model.alias), style),
             Span::styled(format!(" \u{2014} {}", model.description), dim),
-            Span::styled(current_marker, Style::default().fg(Color::DarkGray)),
+            Span::styled(current_marker, Style::default().fg(theme.label_secondary)),
             Span::styled(
                 suggested_marker,
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(theme.status_completed)
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
@@ -851,10 +883,10 @@ pub fn render_model_picker(
     };
     let custom_style = if custom_selected || custom_active {
         Style::default()
-            .fg(Color::Yellow)
+            .fg(theme.label_warning)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(theme.label_primary)
     };
 
     if custom_active {
@@ -865,7 +897,7 @@ pub fn render_model_picker(
                 custom_input,
                 Style::default().add_modifier(Modifier::UNDERLINED),
             ),
-            Span::styled("_", Style::default().fg(Color::Cyan)),
+            Span::styled("_", Style::default().fg(theme.border_focused)),
         ]));
     } else {
         lines.push(Line::from(vec![
@@ -887,21 +919,21 @@ pub fn render_model_picker(
         Span::styled(
             "  j/k",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.label_warning)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" navigate  ", dim),
         Span::styled(
             "Enter",
             Style::default()
-                .fg(Color::Green)
+                .fg(theme.status_completed)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" select  ", dim),
         Span::styled(
             "Esc",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.label_warning)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" cancel", dim),
@@ -910,7 +942,7 @@ pub fn render_model_picker(
     let content = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
+            .border_style(Style::default().fg(theme.border_focused))
             .title(" Model Picker "),
     );
 
@@ -923,6 +955,7 @@ pub fn render_issue_source_manager(
     repo_slug: &str,
     sources: &[IssueSource],
     selected: usize,
+    theme: &Theme,
 ) {
     let popup = centered_rect(55, 50, area);
     frame.render_widget(Clear, popup);
@@ -932,7 +965,7 @@ pub fn render_issue_source_manager(
         Line::from(Span::styled(
             format!("  Issue Sources for {repo_slug}"),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.label_accent)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -941,7 +974,7 @@ pub fn render_issue_source_manager(
     if sources.is_empty() {
         lines.push(Line::from(Span::styled(
             "  (no sources configured)",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.label_secondary),
         )));
     } else {
         for (i, source) in sources.iter().enumerate() {
@@ -950,13 +983,13 @@ pub fn render_issue_source_manager(
 
             let style = if is_selected {
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.label_warning)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme.label_primary)
             };
 
-            let config_style = Style::default().fg(Color::DarkGray);
+            let config_style = Style::default().fg(theme.label_secondary);
 
             lines.push(Line::from(vec![
                 Span::styled(format!("  {prefix}"), style),
@@ -978,29 +1011,31 @@ pub fn render_issue_source_manager(
         Span::styled(
             "  a",
             Style::default()
-                .fg(Color::Green)
+                .fg(theme.status_completed)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" add  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" add  ", Style::default().fg(theme.label_secondary)),
         Span::styled(
             "d",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.status_failed)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" delete  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" delete  ", Style::default().fg(theme.label_secondary)),
         Span::styled(
             "Esc",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.label_warning)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" close", Style::default().fg(Color::DarkGray)),
+        Span::styled(" close", Style::default().fg(theme.label_secondary)),
     ]));
 
     let content = Paragraph::new(lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
+                .border_style(Style::default().fg(theme.border_focused))
                 .title(" Issue Source Manager "),
         )
         .wrap(Wrap { trim: false });
@@ -1015,23 +1050,24 @@ pub fn render_github_discover_orgs(
     cursor: usize,
     loading: bool,
     error: Option<&str>,
+    theme: &Theme,
 ) {
     let popup = centered_rect(50, 60, area);
     frame.render_widget(Clear, popup);
 
-    let dim = Style::default().fg(Color::DarkGray);
+    let dim = Style::default().fg(theme.label_secondary);
 
     let mut lines = vec![Line::from("")];
 
     if loading {
         lines.push(Line::from(Span::styled(
             "  Fetching organizations...",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.status_running),
         )));
     } else if let Some(err) = error {
         lines.push(Line::from(Span::styled(
             format!("  Error: {err}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.label_error),
         )));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled("  Esc to close", dim)));
@@ -1039,7 +1075,7 @@ pub fn render_github_discover_orgs(
         lines.push(Line::from(Span::styled(
             "  Select an account or organization:",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.label_accent)
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
@@ -1054,10 +1090,10 @@ pub fn render_github_discover_orgs(
             let prefix = if is_cursor { "▸ " } else { "  " };
             let style = if is_cursor {
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.label_warning)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme.label_primary)
             };
 
             lines.push(Line::from(vec![
@@ -1071,21 +1107,21 @@ pub fn render_github_discover_orgs(
             Span::styled(
                 "  j/k",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.label_warning)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" navigate  ", dim),
             Span::styled(
                 "Enter",
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(theme.status_completed)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" browse repos  ", dim),
             Span::styled(
                 "Esc",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.label_warning)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" cancel", dim),
@@ -1101,7 +1137,7 @@ pub fn render_github_discover_orgs(
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
+                .border_style(Style::default().fg(theme.border_focused))
                 .title(" Discover GitHub Repos "),
         )
         .scroll((scroll_offset, 0));
@@ -1119,13 +1155,14 @@ pub fn render_github_discover(
     cursor: usize,
     loading: bool,
     error: Option<&str>,
+    theme: &Theme,
 ) {
     let popup = centered_rect(65, 75, area);
     frame.render_widget(Clear, popup);
 
-    let dim = Style::default().fg(Color::DarkGray);
+    let dim = Style::default().fg(theme.label_secondary);
     let cyan = Style::default()
-        .fg(Color::Cyan)
+        .fg(theme.label_accent)
         .add_modifier(Modifier::BOLD);
 
     let mut lines = vec![Line::from("")];
@@ -1134,12 +1171,12 @@ pub fn render_github_discover(
     if loading {
         lines.push(Line::from(Span::styled(
             "  Fetching repos from GitHub...",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.status_running),
         )));
     } else if let Some(err) = error {
         lines.push(Line::from(Span::styled(
             format!("  Error: {err}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(theme.label_error),
         )));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled("  Esc to close", dim)));
@@ -1187,23 +1224,23 @@ pub fn render_github_discover(
             };
 
             let checkbox_style = if is_registered {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(theme.label_secondary)
             } else if is_checked {
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(theme.status_completed)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme.label_primary)
             };
 
             let name_style = if is_cursor {
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.label_warning)
                     .add_modifier(Modifier::BOLD)
             } else if is_registered {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(theme.label_secondary)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme.label_primary)
             };
 
             let prefix = if is_cursor { "▸ " } else { "  " };
@@ -1241,35 +1278,35 @@ pub fn render_github_discover(
             Span::styled(
                 "  j/k",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.label_warning)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" navigate  ", dim),
             Span::styled(
                 "Space",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.label_warning)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" toggle  ", dim),
             Span::styled(
                 "a",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.label_warning)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" select all  ", dim),
             Span::styled(
                 "i",
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(theme.status_completed)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(format!(" import ({selected_count})  "), dim),
             Span::styled(
                 "Esc",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.label_warning)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" cancel", dim),
@@ -1284,7 +1321,7 @@ pub fn render_github_discover(
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
+                .border_style(Style::default().fg(theme.border_focused))
                 .title(" Discover GitHub Repos "),
         )
         .scroll((scroll_offset, 0));
@@ -1292,6 +1329,7 @@ pub fn render_github_discover(
     frame.render_widget(content, popup);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_event_detail(
     frame: &mut Frame,
     area: Rect,
@@ -1300,6 +1338,7 @@ pub fn render_event_detail(
     line_count: usize,
     scroll_offset: u16,
     horizontal_offset: u16,
+    theme: &Theme,
 ) {
     let popup = centered_rect(85, 85, area);
     frame.render_widget(Clear, popup);
@@ -1325,7 +1364,7 @@ pub fn render_event_detail(
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(theme.border_focused))
         .title(title_display);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
@@ -1341,7 +1380,7 @@ pub fn render_event_detail(
 
     let hint_widget = Paragraph::new(Line::from(Span::styled(
         hint,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.label_secondary),
     )));
     frame.render_widget(hint_widget, chunks[1]);
 }
@@ -1366,7 +1405,13 @@ fn format_source_config_lines(source: &IssueSource) -> Vec<String> {
     }
 }
 
-pub fn render_gate_action(frame: &mut Frame, area: Rect, gate_prompt: &str, feedback: &str) {
+pub fn render_gate_action(
+    frame: &mut Frame,
+    area: Rect,
+    gate_prompt: &str,
+    feedback: &str,
+    theme: &Theme,
+) {
     let popup = centered_rect(60, 40, area);
     frame.render_widget(Clear, popup);
 
@@ -1375,45 +1420,47 @@ pub fn render_gate_action(frame: &mut Frame, area: Rect, gate_prompt: &str, feed
         Line::from(Span::styled(
             "Gate Prompt:",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.group_header)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::raw(gate_prompt)),
         Line::from(""),
         Line::from(Span::styled(
             "Feedback (optional):",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.label_secondary),
         )),
         Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled("> ", Style::default().fg(theme.border_focused)),
             Span::styled(
                 feedback,
                 Style::default().add_modifier(Modifier::UNDERLINED),
             ),
-            Span::styled("_", Style::default().fg(Color::Cyan)),
+            Span::styled("_", Style::default().fg(theme.border_focused)),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::styled(
                 "  y",
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(theme.status_completed)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" = approve    "),
             Span::styled(
                 "n",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.status_failed)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" = reject    "),
-            Span::styled("Esc", Style::default().fg(Color::DarkGray)),
+            Span::styled("Esc", Style::default().fg(theme.label_secondary)),
             Span::raw(" = cancel"),
         ]),
     ])
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
+            .border_style(Style::default().fg(theme.label_warning))
             .title(" Gate Action "),
     );
 

@@ -39,20 +39,29 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let header_line = if let Some(wt) = selected_wt {
         Line::from(vec![
-            Span::styled("Worktree: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Worktree: ",
+                Style::default().fg(state.theme.label_secondary),
+            ),
             Span::styled(
                 wt.slug.clone(),
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(state.theme.label_accent)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  Branch: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "  Branch: ",
+                Style::default().fg(state.theme.label_secondary),
+            ),
             Span::raw(wt.branch.clone()),
         ])
     } else {
         Line::from(vec![
-            Span::styled("Worktree: ", Style::default().fg(Color::DarkGray)),
-            Span::styled("global", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Worktree: ",
+                Style::default().fg(state.theme.label_secondary),
+            ),
+            Span::styled("global", Style::default().fg(state.theme.label_secondary)),
         ])
     };
     frame.render_widget(Paragraph::new(header_line), header_area);
@@ -69,9 +78,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
     let focused = state.workflows_focus == WorkflowsFocus::Defs;
     let border_color = if focused {
-        Color::Cyan
+        state.theme.border_focused
     } else {
-        Color::DarkGray
+        state.theme.border_inactive
     };
 
     let global_mode = state.selected_worktree_id.is_none();
@@ -103,7 +112,7 @@ fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                 items.push(ListItem::new(Line::from(vec![Span::styled(
                     format!("─ {repo_slug} {fill}"),
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(state.theme.label_secondary)
                         .add_modifier(Modifier::BOLD),
                 )])));
                 prev_repo = repo_slug;
@@ -118,17 +127,20 @@ fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                 ),
                 Span::styled(
                     format!("  {node_count} steps"),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(state.theme.label_warning),
                 ),
             ];
             if !def.targets.is_empty() {
                 let badge = format!("  [{}]", def.targets.join(", "));
-                spans.push(Span::styled(badge, Style::default().fg(Color::Cyan)));
+                spans.push(Span::styled(
+                    badge,
+                    Style::default().fg(state.theme.label_accent),
+                ));
             }
             if input_count > 0 {
                 spans.push(Span::styled(
                     format!("  {input_count} inputs"),
-                    Style::default().fg(Color::Magenta),
+                    Style::default().fg(state.theme.status_waiting),
                 ));
             }
             items.push(ListItem::new(Line::from(spans)));
@@ -152,7 +164,7 @@ fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(state.theme.highlight_bg)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("");
@@ -178,21 +190,24 @@ fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                     ),
                     Span::styled(
                         format!("  {}", truncate(&def.description, 30)),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(state.theme.label_secondary),
                     ),
                     Span::styled(
                         format!("  {node_count} steps"),
-                        Style::default().fg(Color::Yellow),
+                        Style::default().fg(state.theme.label_warning),
                     ),
                 ];
                 if !def.targets.is_empty() {
                     let badge = format!("  [{}]", def.targets.join(", "));
-                    spans.push(Span::styled(badge, Style::default().fg(Color::Cyan)));
+                    spans.push(Span::styled(
+                        badge,
+                        Style::default().fg(state.theme.label_accent),
+                    ));
                 }
                 if input_count > 0 {
                     spans.push(Span::styled(
                         format!("  {input_count} inputs"),
-                        Style::default().fg(Color::Magenta),
+                        Style::default().fg(state.theme.status_waiting),
                     ));
                 }
                 ListItem::new(Line::from(spans))
@@ -208,7 +223,7 @@ fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(state.theme.highlight_bg)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("");
@@ -224,9 +239,9 @@ fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
 fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
     let focused = state.workflows_focus == WorkflowsFocus::Runs;
     let border_color = if focused {
-        Color::Cyan
+        state.theme.border_focused
     } else {
-        Color::DarkGray
+        state.theme.border_inactive
     };
 
     // In global mode (no worktree selected), show worktree context on each run row.
@@ -259,18 +274,18 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                 });
                 spans.push(Span::styled(
                     format!("  {wt_slug}"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(state.theme.label_secondary),
                 ));
             } else {
                 spans.push(Span::styled(
                     format!("  {}", &run.started_at[..19].replace('T', " ")),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(state.theme.label_secondary),
                 ));
             }
 
             spans.push(Span::styled(
                 format!("  {duration}"),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(state.theme.label_accent),
             ));
 
             if run.status == WorkflowRunStatus::Failed {
@@ -278,7 +293,7 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                     let snippet = truncate(summary.lines().next().unwrap_or(""), 50);
                     spans.push(Span::styled(
                         format!("  {snippet}"),
-                        Style::default().fg(Color::Red),
+                        Style::default().fg(state.theme.label_error),
                     ));
                 }
             }
@@ -302,7 +317,7 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(state.theme.highlight_bg)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("");
@@ -357,11 +372,14 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         let summary_display = run.result_summary.as_deref().unwrap_or("—").to_string();
 
         let mut header_lines = vec![Line::from(vec![
-            Span::styled(" Workflow: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                " Workflow: ",
+                Style::default().fg(state.theme.label_secondary),
+            ),
             Span::styled(
                 run.workflow_name.clone(),
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(state.theme.label_accent)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
@@ -370,7 +388,10 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
 
         if let Some(wt) = run_worktree {
             header_lines.push(Line::from(vec![
-                Span::styled(" Branch:   ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    " Branch:   ",
+                    Style::default().fg(state.theme.label_secondary),
+                ),
                 Span::raw(wt.branch.clone()),
             ]));
             let display_path = match state.home_dir.as_deref() {
@@ -378,45 +399,63 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
                 None => wt.path.clone(),
             };
             header_lines.push(Line::from(vec![
-                Span::styled(" Path:     ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    " Path:     ",
+                    Style::default().fg(state.theme.label_secondary),
+                ),
                 Span::raw(display_path),
             ]));
         }
 
         if let Some(ticket) = run_ticket {
             header_lines.push(Line::from(vec![
-                Span::styled(" Ticket:   ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    " Ticket:   ",
+                    Style::default().fg(state.theme.label_secondary),
+                ),
                 Span::styled(
                     format!("#{} — {}", ticket.source_id, ticket.title),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(state.theme.group_header),
                 ),
             ]));
         }
 
         header_lines.push(Line::from(vec![
-            Span::styled(" Started:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                " Started:  ",
+                Style::default().fg(state.theme.label_secondary),
+            ),
             Span::raw(started_display),
             if run.dry_run {
-                Span::styled("  [dry-run]", Style::default().fg(Color::Yellow))
+                Span::styled(
+                    "  [dry-run]",
+                    Style::default().fg(state.theme.label_warning),
+                )
             } else {
                 Span::raw("")
             },
         ]));
         if run.status == WorkflowRunStatus::Failed {
             header_lines.push(Line::from(vec![
-                Span::styled(" Error:    ", Style::default().fg(Color::Red)),
-                Span::styled(summary_display, Style::default().fg(Color::Red)),
+                Span::styled(" Error:    ", Style::default().fg(state.theme.label_error)),
+                Span::styled(
+                    summary_display,
+                    Style::default().fg(state.theme.label_error),
+                ),
             ]));
         } else {
             header_lines.push(Line::from(vec![
-                Span::styled(" Summary:  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    " Summary:  ",
+                    Style::default().fg(state.theme.label_secondary),
+                ),
                 Span::raw(summary_display),
             ]));
         }
 
         let header_block = Block::default()
             .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_style(Style::default().fg(state.theme.border_inactive));
         frame.render_widget(Paragraph::new(header_lines).block(header_block), chunks[0]);
     }
 
@@ -451,9 +490,9 @@ fn render_step_list(
 ) {
     let focused = focus == WorkflowRunDetailFocus::Steps;
     let border_color = if focused {
-        Color::Cyan
+        state.theme.border_focused
     } else {
-        Color::DarkGray
+        state.theme.border_inactive
     };
 
     let items: Vec<ListItem> = state
@@ -472,7 +511,7 @@ fn render_step_list(
             let mut spans = vec![
                 Span::styled(
                     format!(" {:>2}. ", step.position),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(state.theme.label_secondary),
                 ),
                 Span::styled(status_symbol, Style::default().fg(status_color)),
                 Span::raw("  "),
@@ -482,27 +521,30 @@ fn render_step_list(
                 ),
                 Span::styled(
                     format!("  [{:<5}]", step.role),
-                    Style::default().fg(Color::Magenta),
+                    Style::default().fg(state.theme.status_waiting),
                 ),
-                Span::styled(format!("  {duration}"), Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    format!("  {duration}"),
+                    Style::default().fg(state.theme.label_accent),
+                ),
             ];
 
             if step.iteration > 0 {
                 spans.push(Span::styled(
                     format!("  iter:{}", step.iteration),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(state.theme.label_accent),
                 ));
             }
             if step.retry_count > 0 {
                 spans.push(Span::styled(
                     format!("  retries:{}", step.retry_count),
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(state.theme.label_error),
                 ));
             }
             if let Some(ref gate_type) = step.gate_type {
                 spans.push(Span::styled(
                     format!("  gate:{gate_type}"),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(state.theme.label_warning),
                 ));
             }
 
@@ -512,13 +554,13 @@ fn render_step_list(
                     let snippet = truncate(rt.lines().next().unwrap_or(""), 40);
                     spans.push(Span::styled(
                         format!("  → {snippet}"),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(state.theme.label_secondary),
                     ));
                 } else if let Some(ref ctx) = step.context_out {
                     let snippet = truncate(ctx.lines().next().unwrap_or(""), 40);
                     spans.push(Span::styled(
                         format!("  ctx:{snippet}"),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(state.theme.label_secondary),
                     ));
                 }
             }
@@ -526,7 +568,7 @@ fn render_step_list(
             if let Some(ref mk) = step.markers_out {
                 spans.push(Span::styled(
                     format!("  [{mk}]"),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(state.theme.label_accent),
                 ));
             }
 
@@ -556,7 +598,7 @@ fn render_step_list(
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(state.theme.highlight_bg)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("");
@@ -577,9 +619,9 @@ fn render_step_agent_activity(
 ) {
     let focused = focus == WorkflowRunDetailFocus::AgentActivity;
     let border_color = if focused {
-        Color::Cyan
+        state.theme.border_focused
     } else {
-        Color::DarkGray
+        state.theme.border_inactive
     };
     let events = &state.data.step_agent_events;
     let agent_run = &state.data.step_agent_run;
@@ -613,8 +655,11 @@ fn render_step_agent_activity(
         } else {
             "No agent events"
         };
-        let empty = Paragraph::new(Span::styled(msg, Style::default().fg(Color::DarkGray)))
-            .block(activity_block);
+        let empty = Paragraph::new(Span::styled(
+            msg,
+            Style::default().fg(state.theme.label_secondary),
+        ))
+        .block(activity_block);
         frame.render_widget(empty, area);
         return;
     }
@@ -649,9 +694,12 @@ fn render_step_agent_activity(
                 80,
             );
             let spans = vec![
-                Span::styled(format!("{ts} "), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{ts} "),
+                    Style::default().fg(state.theme.label_secondary),
+                ),
                 Span::styled(format!("{:<10}", ev.kind), style),
-                Span::styled(dur, Style::default().fg(Color::DarkGray)),
+                Span::styled(dur, Style::default().fg(state.theme.label_secondary)),
                 Span::raw(" "),
                 Span::styled(summary, style),
             ];
@@ -664,7 +712,7 @@ fn render_step_agent_activity(
             .block(activity_block)
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(state.theme.highlight_bg)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("");

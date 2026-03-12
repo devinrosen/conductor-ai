@@ -38,13 +38,13 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         .and_then(|tid| state.data.ticket_map.get(tid))
     {
         let ticket_state_color = match ticket.state.as_str() {
-            "open" => Color::Green,
-            "closed" => Color::DarkGray,
-            "in_progress" => Color::Yellow,
-            _ => Color::White,
+            "open" => state.theme.status_completed,
+            "closed" => state.theme.label_secondary,
+            "in_progress" => state.theme.status_running,
+            _ => state.theme.label_primary,
         };
         vec![
-            Span::styled("Ticket: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Ticket: ", Style::default().fg(state.theme.label_secondary)),
             Span::raw(format!("#{} — {}", ticket.source_id, ticket.title)),
             Span::raw("  "),
             Span::styled(
@@ -54,42 +54,48 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         ]
     } else {
         vec![
-            Span::styled("Ticket: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Ticket: ", Style::default().fg(state.theme.label_secondary)),
             Span::styled(
                 "None (press Enter to link)",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(state.theme.label_secondary),
             ),
         ]
     };
 
     let status_color = match wt.status {
-        WorktreeStatus::Active => Color::Green,
+        WorktreeStatus::Active => state.theme.status_completed,
         WorktreeStatus::Merged => Color::Blue,
-        WorktreeStatus::Abandoned => Color::Red,
+        WorktreeStatus::Abandoned => state.theme.status_failed,
     };
 
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("Worktree: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Worktree: ",
+                Style::default().fg(state.theme.label_secondary),
+            ),
             Span::styled(&wt.slug, Style::default().add_modifier(Modifier::BOLD)),
         ]),
         Line::from(vec![
-            Span::styled("Repo: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Repo: ", Style::default().fg(state.theme.label_secondary)),
             Span::raw(repo_slug),
         ]),
         Line::from(vec![
-            Span::styled("Branch: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Branch: ", Style::default().fg(state.theme.label_secondary)),
             Span::raw(&wt.branch),
         ]),
         Line::from(vec![
-            Span::styled("Base: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Base: ", Style::default().fg(state.theme.label_secondary)),
             match wt.base_branch.as_deref() {
                 Some(b) => Span::raw(b),
-                None => Span::styled("(repo default)", Style::default().fg(Color::DarkGray)),
+                None => Span::styled(
+                    "(repo default)",
+                    Style::default().fg(state.theme.label_secondary),
+                ),
             },
         ]),
         Line::from(vec![
-            Span::styled("Path: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Path: ", Style::default().fg(state.theme.label_secondary)),
             Span::raw(shorten_paths(
                 &wt.path,
                 "",
@@ -97,22 +103,28 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             )),
         ]),
         Line::from(vec![
-            Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Status: ", Style::default().fg(state.theme.label_secondary)),
             Span::styled(wt.status.to_string(), Style::default().fg(status_color)),
         ]),
         Line::from(vec![
-            Span::styled("Model: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Model: ", Style::default().fg(state.theme.label_secondary)),
             match wt.model.as_deref() {
                 Some(m) => Span::raw(m.to_string()),
-                None => Span::styled("(not set)", Style::default().fg(Color::DarkGray)),
+                None => Span::styled(
+                    "(not set)",
+                    Style::default().fg(state.theme.label_secondary),
+                ),
             },
             Span::styled(
                 " (press Enter to change)",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(state.theme.label_secondary),
             ),
         ]),
         Line::from(vec![
-            Span::styled("Created: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Created: ",
+                Style::default().fg(state.theme.label_secondary),
+            ),
             Span::raw(&wt.created_at),
         ]),
         // TICKET row — index 8, always present so navigation index stays stable
@@ -121,7 +133,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 
     if let Some(ref completed) = wt.completed_at {
         lines.push(Line::from(vec![
-            Span::styled("Completed: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Completed: ",
+                Style::default().fg(state.theme.label_secondary),
+            ),
             Span::raw(completed),
         ]));
     }
@@ -131,19 +146,29 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     // Agent status line and plan checklist from DB poll
     if let Some(run) = state.data.latest_agent_runs.get(&wt.id) {
         lines.push(Line::from(""));
-        lines.push(render_agent_status_line(run, &state.data.agent_totals));
+        lines.push(render_agent_status_line(
+            run,
+            &state.data.agent_totals,
+            &state.theme,
+        ));
 
         // Show pending feedback request prompt
         if let Some(ref fb) = state.data.pending_feedback {
             lines.push(Line::from(vec![
-                Span::styled("  Feedback: ", Style::default().fg(Color::Magenta)),
-                Span::styled(fb.prompt.clone(), Style::default().fg(Color::White)),
+                Span::styled(
+                    "  Feedback: ",
+                    Style::default().fg(state.theme.status_waiting),
+                ),
+                Span::styled(
+                    fb.prompt.clone(),
+                    Style::default().fg(state.theme.label_primary),
+                ),
             ]));
         }
 
         // Show child runs if this is a parent (supervisor) run
         for child in &state.data.child_runs {
-            lines.push(render_child_run_line(child));
+            lines.push(render_child_run_line(child, &state.theme));
         }
 
         // Plan checklist (if a plan was generated for this run)
@@ -151,25 +176,31 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "Plan:",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(state.theme.label_secondary),
             )));
             for step in steps {
                 use conductor_core::agent::StepStatus;
                 let (checkbox, checkbox_color, style) = match step.status {
                     StepStatus::Completed => (
                         "[x]",
-                        Color::Green,
+                        state.theme.status_completed,
                         Style::default()
-                            .fg(Color::Green)
+                            .fg(state.theme.status_completed)
                             .add_modifier(Modifier::DIM),
                     ),
                     StepStatus::InProgress => {
                         ("[>]", Color::Blue, Style::default().fg(Color::Blue))
                     }
-                    StepStatus::Failed => ("[!]", Color::Red, Style::default().fg(Color::Red)),
-                    StepStatus::Pending => {
-                        ("[ ]", Color::DarkGray, Style::default().fg(Color::White))
-                    }
+                    StepStatus::Failed => (
+                        "[!]",
+                        state.theme.status_failed,
+                        Style::default().fg(state.theme.status_failed),
+                    ),
+                    StepStatus::Pending => (
+                        "[ ]",
+                        state.theme.label_secondary,
+                        Style::default().fg(state.theme.label_primary),
+                    ),
                 };
                 lines.push(Line::from(vec![
                     Span::styled(
@@ -187,12 +218,15 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             "Issues created:",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(state.theme.label_secondary),
         )]));
         for issue in &state.data.agent_created_issues {
             lines.push(Line::from(vec![
-                Span::styled("  #", Style::default().fg(Color::DarkGray)),
-                Span::styled(&issue.source_id, Style::default().fg(Color::Cyan)),
+                Span::styled("  #", Style::default().fg(state.theme.label_secondary)),
+                Span::styled(
+                    &issue.source_id,
+                    Style::default().fg(state.theme.label_accent),
+                ),
                 Span::raw(" — "),
                 Span::raw(&issue.title),
             ]));
@@ -215,7 +249,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     };
     lines.push(Line::from(Span::styled(
         actions_text,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(state.theme.label_secondary),
     )));
 
     // Calculate info pane height: lines + 2 for border
@@ -228,9 +262,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     // Top pane: worktree info
     let info_focus = state.worktree_detail_focus == WorktreeDetailFocus::InfoPanel;
     let info_border_color = if info_focus {
-        Color::Cyan
+        state.theme.border_focused
     } else {
-        Color::DarkGray
+        state.theme.border_inactive
     };
     // Highlight the selected row when the info panel has focus
     if info_focus {
@@ -257,9 +291,9 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let log_focus = state.worktree_detail_focus == WorktreeDetailFocus::LogPanel;
     let log_border_color = if log_focus {
-        Color::Cyan
+        state.theme.border_focused
     } else {
-        Color::DarkGray
+        state.theme.border_inactive
     };
     let activity_block = Block::default()
         .borders(Borders::ALL)
@@ -269,7 +303,7 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
     if events.is_empty() {
         let empty = Paragraph::new(Span::styled(
             "No agent activity",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(state.theme.label_secondary),
         ))
         .block(activity_block);
         frame.render_widget(empty, area);
@@ -298,7 +332,7 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
                 items.push(ListItem::new(Line::from(Span::styled(
                     format!("{header}{pad}"),
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(state.theme.label_secondary)
                         .add_modifier(Modifier::DIM),
                 ))));
             }
@@ -311,7 +345,7 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
                         shorten_paths(&ev.summary, worktree_path, state.home_dir.as_deref())
                     });
                     let s = if is_step {
-                        Style::default().fg(Color::Magenta)
+                        Style::default().fg(state.theme.status_waiting)
                     } else {
                         style
                     };
@@ -319,7 +353,7 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
                 } else if conductor_core::agent::parse_feedback_marker(&ev.summary).is_some() {
                     (
                         shorten_paths(&ev.summary, worktree_path, state.home_dir.as_deref()),
-                        Style::default().fg(Color::Magenta),
+                        Style::default().fg(state.theme.status_waiting),
                     )
                 } else {
                     (
@@ -333,7 +367,7 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
                         let dur_s = dur as f64 / 1000.0;
                         spans.push(Span::styled(
                             format!("  ({dur_s:.1}s)"),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(state.theme.label_secondary),
                         ));
                     }
                 }
@@ -401,6 +435,7 @@ fn event_style(kind: &str) -> Style {
 fn render_agent_status_line(
     run: &conductor_core::agent::AgentRun,
     totals: &crate::state::AgentTotals,
+    theme: &crate::theme::Theme,
 ) -> Line<'static> {
     let runs_label = if totals.run_count > 1 {
         format!(" ({} runs)", totals.run_count)
@@ -430,27 +465,30 @@ fn render_agent_status_line(
                 format!(" {turns} turns · {dur_secs:.1}s{runs_label}")
             };
             Line::from(vec![
-                Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
-                Span::styled("[running]", Style::default().fg(Color::Yellow)),
-                Span::styled(stats, Style::default().fg(Color::DarkGray)),
-                Span::styled(" — press x to stop", Style::default().fg(Color::DarkGray)),
+                Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
+                Span::styled("[running]", Style::default().fg(theme.status_running)),
+                Span::styled(stats, Style::default().fg(theme.label_secondary)),
+                Span::styled(
+                    " — press x to stop",
+                    Style::default().fg(theme.label_secondary),
+                ),
             ])
         }
         AgentRunStatus::WaitingForFeedback => Line::from(vec![
-            Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
             Span::styled(
                 "[waiting for feedback]",
-                Style::default().fg(Color::Magenta),
+                Style::default().fg(theme.status_waiting),
             ),
             Span::styled(
                 " — press f to respond, F to dismiss",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.label_secondary),
             ),
         ]),
         AgentRunStatus::Completed => {
             let mut spans = vec![
-                Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
-                Span::styled("[completed]", Style::default().fg(Color::Green)),
+                Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
+                Span::styled("[completed]", Style::default().fg(theme.status_completed)),
             ];
             let turns = totals.total_turns;
             let dur_secs = totals.total_duration_ms as f64 / 1000.0;
@@ -461,45 +499,48 @@ fn render_agent_status_line(
             } else {
                 format!(" {turns} turns · {dur_secs:.1}s{runs_label}")
             };
-            spans.push(Span::styled(stats, Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                stats,
+                Style::default().fg(theme.label_secondary),
+            ));
             if let Some(ref sid) = run.claude_session_id {
                 spans.push(Span::styled(
                     format!("  session: {}", &sid[..13.min(sid.len())]),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.label_secondary),
                 ));
             }
             Line::from(spans)
         }
         AgentRunStatus::Failed => {
             let mut spans = vec![
-                Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
-                Span::styled("[failed]", Style::default().fg(Color::Red)),
+                Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
+                Span::styled("[failed]", Style::default().fg(theme.status_failed)),
             ];
             if run.needs_resume() {
                 let remaining = run.incomplete_plan_steps().len();
                 spans.push(Span::styled(
                     format!(" [{remaining} steps remaining — press r to resume]"),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.label_warning),
                 ));
             } else if let Some(ref err) = run.result_text {
                 let truncated: String = err.chars().take(60).collect();
                 spans.push(Span::styled(
                     format!(" {truncated}"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.label_secondary),
                 ));
             }
             Line::from(spans)
         }
         AgentRunStatus::Cancelled => {
             let mut spans = vec![
-                Span::styled("Agent: ", Style::default().fg(Color::DarkGray)),
-                Span::styled("[cancelled]", Style::default().fg(Color::DarkGray)),
+                Span::styled("Agent: ", Style::default().fg(theme.label_secondary)),
+                Span::styled("[cancelled]", Style::default().fg(theme.status_cancelled)),
             ];
             if run.needs_resume() {
                 let remaining = run.incomplete_plan_steps().len();
                 spans.push(Span::styled(
                     format!(" [{remaining} steps remaining — press r to resume]"),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.label_warning),
                 ));
             }
             Line::from(spans)
@@ -508,14 +549,17 @@ fn render_agent_status_line(
 }
 
 /// Render a single child run as an indented line under the parent agent status.
-fn render_child_run_line(run: &conductor_core::agent::AgentRun) -> Line<'static> {
+fn render_child_run_line(
+    run: &conductor_core::agent::AgentRun,
+    theme: &crate::theme::Theme,
+) -> Line<'static> {
     use conductor_core::agent::AgentRunStatus;
     let (status_text, status_color) = match run.status {
-        AgentRunStatus::Running => ("running", Color::Yellow),
-        AgentRunStatus::Completed => ("completed", Color::Green),
-        AgentRunStatus::Failed => ("failed", Color::Red),
-        AgentRunStatus::Cancelled => ("cancelled", Color::DarkGray),
-        AgentRunStatus::WaitingForFeedback => ("waiting", Color::Magenta),
+        AgentRunStatus::Running => ("running", theme.status_running),
+        AgentRunStatus::Completed => ("completed", theme.status_completed),
+        AgentRunStatus::Failed => ("failed", theme.status_failed),
+        AgentRunStatus::Cancelled => ("cancelled", theme.status_cancelled),
+        AgentRunStatus::WaitingForFeedback => ("waiting", theme.status_waiting),
     };
     let status_str = format!("[{status_text}]");
 
@@ -529,9 +573,12 @@ fn render_child_run_line(run: &conductor_core::agent::AgentRun) -> Line<'static>
     });
 
     let mut spans = vec![
-        Span::styled("  └─ ", Style::default().fg(Color::DarkGray)),
+        Span::styled("  └─ ", Style::default().fg(theme.label_secondary)),
         Span::styled(status_str, Style::default().fg(status_color)),
-        Span::styled(format!(" {prompt}"), Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!(" {prompt}"),
+            Style::default().fg(theme.label_secondary),
+        ),
     ];
 
     let turns = run.num_turns.unwrap_or(0);
@@ -545,7 +592,10 @@ fn render_child_run_line(run: &conductor_core::agent::AgentRun) -> Line<'static>
         } else {
             format!("  {turns}t")
         };
-        spans.push(Span::styled(tok_str, Style::default().fg(Color::Magenta)));
+        spans.push(Span::styled(
+            tok_str,
+            Style::default().fg(theme.status_waiting),
+        ));
     }
 
     Line::from(spans)

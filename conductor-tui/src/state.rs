@@ -43,6 +43,8 @@ use conductor_core::workflow::{
     WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepSummary,
 };
 
+use crate::theme::Theme;
+
 /// A single active item for the global status bar detail line.
 #[derive(Debug, Clone)]
 pub enum GlobalStatusItem {
@@ -815,6 +817,9 @@ pub struct AppState {
     /// When false (default), closed tickets are hidden in all ticket views.
     pub show_closed_tickets: bool,
 
+    /// Semantic colour theme — centralises all Color constants used by the UI.
+    pub theme: Theme,
+
     /// True while a manual ticket sync is running in the background.
     pub ticket_sync_in_progress: bool,
 
@@ -871,6 +876,7 @@ impl AppState {
             ticket_sync_in_progress: false,
             status_bar_expanded: false,
             home_dir: dirs::home_dir().map(|p| p.to_string_lossy().into_owned()),
+            theme: Theme::default(),
         }
     }
 

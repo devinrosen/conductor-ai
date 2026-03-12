@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
@@ -26,9 +26,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 fn render_repos(frame: &mut Frame, area: Rect, state: &AppState) {
     let focused = state.dashboard_focus == DashboardFocus::Repos;
     let border_style = if focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(state.theme.border_focused)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(state.theme.border_inactive)
     };
 
     let items: Vec<ListItem> = state
@@ -43,9 +43,9 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &AppState) {
                 .filter(|wt| wt.repo_id == r.id && wt.is_active())
                 .count();
             let dot = if active > 0 {
-                Span::styled("● ", Style::default().fg(Color::Green))
+                Span::styled("● ", Style::default().fg(state.theme.status_completed))
             } else {
-                Span::styled("○ ", Style::default().fg(Color::DarkGray))
+                Span::styled("○ ", Style::default().fg(state.theme.label_secondary))
             };
             ListItem::new(Line::from(vec![dot, Span::raw(r.slug.clone())]))
         })
@@ -60,7 +60,7 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &AppState) {
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(state.theme.highlight_bg)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("");
@@ -76,9 +76,9 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &AppState) {
 fn render_worktrees(frame: &mut Frame, area: Rect, state: &AppState) {
     let focused = state.dashboard_focus == DashboardFocus::Worktrees;
     let border_style = if focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(state.theme.border_focused)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(state.theme.border_inactive)
     };
 
     // data.worktrees is pre-sorted by (repo_slug, wt_slug) in DataCache::rebuild_maps(),
@@ -105,7 +105,7 @@ fn render_worktrees(frame: &mut Frame, area: Rect, state: &AppState) {
             items.push(ListItem::new(Line::from(vec![Span::styled(
                 repo_slug.clone(),
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(state.theme.label_secondary)
                     .add_modifier(Modifier::BOLD),
             )])));
             prev_repo = repo_slug.clone();
@@ -136,7 +136,7 @@ fn render_worktrees(frame: &mut Frame, area: Rect, state: &AppState) {
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(state.theme.highlight_bg)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("");
@@ -160,9 +160,9 @@ fn render_worktrees(frame: &mut Frame, area: Rect, state: &AppState) {
 fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
     let focused = state.dashboard_focus == DashboardFocus::Tickets;
     let border_style = if focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(state.theme.border_focused)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(state.theme.border_inactive)
     };
 
     let mut items: Vec<ListItem> = Vec::new();
@@ -178,7 +178,7 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
             items.push(ListItem::new(Line::from(vec![Span::styled(
                 repo_slug.to_string(),
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(state.theme.label_secondary)
                     .add_modifier(Modifier::BOLD),
             )])));
             prev_repo_id = t.repo_id.clone();
@@ -188,7 +188,7 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
             super::common::ticket_worktree_dot_span(state, &t.id),
             Span::styled(
                 format!("#{} ", t.source_id),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(state.theme.group_header),
             ),
             Span::raw(t.title.clone()),
             Span::raw("  "),
@@ -220,7 +220,7 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(state.theme.highlight_bg)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("");

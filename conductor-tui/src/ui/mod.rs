@@ -54,33 +54,43 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     match &state.modal {
         Modal::None => {}
         Modal::Help => help::render(frame, area),
-        Modal::Confirm { title, message, .. } => modal::render_confirm(frame, area, title, message),
+        Modal::Confirm { title, message, .. } => {
+            modal::render_confirm(frame, area, title, message, &state.theme)
+        }
         Modal::ConfirmByName {
             title,
             message,
             expected,
             value,
             ..
-        } => modal::render_confirm_by_name(frame, area, title, message, expected, value),
+        } => modal::render_confirm_by_name(
+            frame,
+            area,
+            title,
+            message,
+            expected,
+            value,
+            &state.theme,
+        ),
         Modal::Input {
             title,
             prompt,
             value,
             ..
-        } => modal::render_input(frame, area, title, prompt, value),
+        } => modal::render_input(frame, area, title, prompt, value, &state.theme),
         Modal::AgentPrompt {
             title,
             prompt,
             textarea,
             ..
-        } => modal::render_agent_prompt(frame, area, title, prompt, textarea),
+        } => modal::render_agent_prompt(frame, area, title, prompt, textarea, &state.theme),
         Modal::Form {
             title,
             fields,
             active_field,
             ..
-        } => modal::render_form(frame, area, title, fields, *active_field),
-        Modal::Error { message } => modal::render_error(frame, area, message),
+        } => modal::render_form(frame, area, title, fields, *active_field, &state.theme),
+        Modal::Error { message } => modal::render_error(frame, area, message, &state.theme),
         Modal::TicketInfo { ticket } => {
             let agent_totals = state.data.ticket_agent_totals.get(&ticket.id);
             let worktrees = state.data.ticket_worktrees.get(&ticket.id);
@@ -89,7 +99,15 @@ pub fn render(frame: &mut Frame, state: &AppState) {
                 .ticket_labels
                 .get(&ticket.id)
                 .map(|v| v.as_slice());
-            modal::render_ticket_info(frame, area, ticket, agent_totals, worktrees, labels);
+            modal::render_ticket_info(
+                frame,
+                area,
+                ticket,
+                agent_totals,
+                worktrees,
+                labels,
+                &state.theme,
+            );
         }
         Modal::PostCreatePicker {
             items,
@@ -103,14 +121,21 @@ pub fn render(frame: &mut Frame, state: &AppState) {
                 .get(ticket_id)
                 .map(|t| t.source_id.as_str())
                 .unwrap_or("?");
-            modal::render_post_create_picker(frame, area, items, *selected, source_id)
+            modal::render_post_create_picker(frame, area, items, *selected, source_id, &state.theme)
         }
         Modal::IssueSourceManager {
             repo_slug,
             sources,
             selected,
             ..
-        } => modal::render_issue_source_manager(frame, area, repo_slug, sources, *selected),
+        } => modal::render_issue_source_manager(
+            frame,
+            area,
+            repo_slug,
+            sources,
+            *selected,
+            &state.theme,
+        ),
         Modal::ModelPicker {
             context_label,
             effective_default,
@@ -130,12 +155,13 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             custom_input,
             *custom_active,
             suggested.as_deref(),
+            &state.theme,
         ),
         Modal::GateAction {
             gate_prompt,
             feedback,
             ..
-        } => modal::render_gate_action(frame, area, gate_prompt, feedback),
+        } => modal::render_gate_action(frame, area, gate_prompt, feedback, &state.theme),
         Modal::EventDetail {
             title,
             body,
@@ -150,6 +176,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             *line_count,
             *scroll_offset,
             *horizontal_offset,
+            &state.theme,
         ),
         Modal::GithubDiscoverOrgs {
             orgs,
@@ -163,6 +190,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             *cursor,
             *loading,
             error.as_deref(),
+            &state.theme,
         ),
         Modal::GithubDiscover {
             repos,
@@ -181,6 +209,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             *cursor,
             *loading,
             error.as_deref(),
+            &state.theme,
         ),
         Modal::PrWorkflowPicker {
             pr_number,
@@ -194,12 +223,20 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             pr_title,
             workflow_defs,
             *selected,
+            &state.theme,
         ),
         Modal::WorkflowPicker {
             target,
             workflow_defs,
             selected,
-        } => modal::render_workflow_picker(frame, area, target, workflow_defs, *selected),
-        Modal::Progress { message } => modal::render_progress(frame, area, message),
+        } => modal::render_workflow_picker(
+            frame,
+            area,
+            target,
+            workflow_defs,
+            *selected,
+            &state.theme,
+        ),
+        Modal::Progress { message } => modal::render_progress(frame, area, message, &state.theme),
     }
 }

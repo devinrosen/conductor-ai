@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
@@ -49,55 +49,79 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     // Repo info header
     let info_focused = state.repo_detail_focus == RepoDetailFocus::Info;
     let info_border_color = if info_focused {
-        Color::Cyan
+        state.theme.border_focused
     } else {
-        Color::DarkGray
+        state.theme.border_inactive
     };
     let home_dir = dirs::home_dir();
     let home_str = home_dir.as_deref().and_then(|p| p.to_str());
 
     let mut lines: Vec<Line> = vec![
         Line::from(vec![
-            Span::styled("Repo:          ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Repo:          ",
+                Style::default().fg(state.theme.label_secondary),
+            ),
             Span::styled(&repo.slug, Style::default().add_modifier(Modifier::BOLD)),
         ]),
         Line::from(vec![
-            Span::styled("Remote:        ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Remote:        ",
+                Style::default().fg(state.theme.label_secondary),
+            ),
             Span::raw(&repo.remote_url),
         ]),
         Line::from(vec![
-            Span::styled("Branch:        ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Branch:        ",
+                Style::default().fg(state.theme.label_secondary),
+            ),
             Span::raw(&repo.default_branch),
         ]),
         Line::from(vec![
-            Span::styled("Path:          ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Path:          ",
+                Style::default().fg(state.theme.label_secondary),
+            ),
             Span::raw(shorten_paths(&repo.local_path, "", home_str)),
         ]),
         Line::from(vec![
-            Span::styled("Worktrees Dir: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Worktrees Dir: ",
+                Style::default().fg(state.theme.label_secondary),
+            ),
             Span::raw(shorten_paths(&repo.workspace_dir, "", home_str)),
         ]),
         Line::from(vec![
-            Span::styled("Model:         ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Model:         ",
+                Style::default().fg(state.theme.label_secondary),
+            ),
             match repo.model.as_deref() {
                 Some(m) => Span::raw(m.to_string()),
-                None => Span::styled("(not set)", Style::default().fg(Color::DarkGray)),
+                None => Span::styled(
+                    "(not set)",
+                    Style::default().fg(state.theme.label_secondary),
+                ),
             },
             Span::styled(
                 " (press Enter to change)",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(state.theme.label_secondary),
             ),
         ]),
         Line::from(vec![
-            Span::styled("Agent Issues:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Agent Issues:  ",
+                Style::default().fg(state.theme.label_secondary),
+            ),
             if repo.allow_agent_issue_creation {
-                Span::styled("Enabled", Style::default().fg(Color::Green))
+                Span::styled("Enabled", Style::default().fg(state.theme.status_completed))
             } else {
-                Span::styled("Disabled", Style::default().fg(Color::DarkGray))
+                Span::styled("Disabled", Style::default().fg(state.theme.label_secondary))
             },
             Span::styled(
                 " (press Enter to toggle)",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(state.theme.label_secondary),
             ),
         ]),
     ];
@@ -122,9 +146,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     // Scoped worktrees
     let wt_focused = state.repo_detail_focus == RepoDetailFocus::Worktrees;
     let wt_border = if wt_focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(state.theme.border_focused)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(state.theme.border_inactive)
     };
     let wt_items: Vec<ListItem> = state
         .detail_worktrees
@@ -141,7 +165,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(state.theme.highlight_bg)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("");
@@ -161,9 +185,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     // Scoped tickets
     let ticket_focused = state.repo_detail_focus == RepoDetailFocus::Tickets;
     let ticket_border = if ticket_focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(state.theme.border_focused)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(state.theme.border_inactive)
     };
     let detail_filter = state.detail_ticket_filter.as_query();
     let ticket_items: Vec<ListItem> = state
@@ -174,7 +198,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 super::common::ticket_worktree_dot_span(state, &t.id),
                 Span::styled(
                     format!("#{} ", t.source_id),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(state.theme.group_header),
                 ),
                 Span::raw(&t.title),
             ];
@@ -219,7 +243,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(state.theme.highlight_bg)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("");
@@ -233,9 +257,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     // PRs pane
     let pr_focused = state.repo_detail_focus == RepoDetailFocus::Prs;
     let pr_border = if pr_focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(state.theme.border_focused)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(state.theme.border_inactive)
     };
 
     let pr_items: Vec<ListItem> = if state.detail_prs.is_empty() {
@@ -246,7 +270,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         };
         vec![ListItem::new(Line::from(Span::styled(
             placeholder,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(state.theme.label_secondary),
         )))]
     } else {
         let mut items: Vec<ListItem> = Vec::new();
@@ -257,16 +281,16 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 items.push(ListItem::new(Line::from(Span::styled(
                     group,
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(state.theme.label_secondary)
                         .add_modifier(Modifier::BOLD),
                 ))));
                 prev_group = group;
             }
             let (badge_text, badge_color) = match group {
-                "Changes Requested" => ("[changes requested]", Color::Red),
-                "Approved" => ("[approved]", Color::Green),
-                "Draft" => ("[draft]", Color::DarkGray),
-                _ => ("[review required]", Color::Yellow),
+                "Changes Requested" => ("[changes requested]", state.theme.status_failed),
+                "Approved" => ("[approved]", state.theme.status_completed),
+                "Draft" => ("[draft]", state.theme.label_secondary),
+                _ => ("[review required]", state.theme.label_warning),
             };
             let branch = &pr.head_ref_name;
             let branch_display = if branch.chars().count() > 30 {
@@ -285,14 +309,14 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 Span::raw("\u{2514} "),
                 Span::styled(
                     format!("#{} ", pr.number),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(state.theme.group_header),
                 ),
                 Span::raw(&pr.title),
                 Span::raw("  "),
                 Span::styled(badge_text, Style::default().fg(badge_color)),
                 Span::styled(
                     format!("  {branch_display}"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(state.theme.label_secondary),
                 ),
             ];
             items.push(ListItem::new(Line::from(spans)));
@@ -315,7 +339,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(state.theme.highlight_bg)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("");
