@@ -3826,7 +3826,10 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
     // Cache the installation token so we don't make a live HTTPS call on every
     // poll iteration.  Installation tokens are valid for 1 hour; we refresh
     // after 55 minutes to stay well inside that window.
-    let gate_token_cache: std::cell::RefCell<Option<(String, std::time::Instant)>> =
+    // Cache entry: (token_or_none, fetched_at).  `None` token means the last
+    // fetch failed; those entries use a short 30-second TTL so we don't
+    // hammer a misconfigured GitHub App key on every 5-second poll tick.
+    let gate_token_cache: std::cell::RefCell<Option<(Option<String>, std::time::Instant)>> =
         std::cell::RefCell::new(None);
     let resolve_gate_token = || -> Option<String> {
         if gate_effective_bot.is_none() && gate_config.github.app.is_none() {
@@ -3835,7 +3838,15 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
         let mut cache = gate_token_cache.borrow_mut();
         let needs_refresh = cache
             .as_ref()
-            .map(|(_, fetched_at)| fetched_at.elapsed() > Duration::from_secs(55 * 60))
+            .map(|(cached_token, fetched_at)| {
+                let ttl = if cached_token.is_some() {
+                    Duration::from_secs(55 * 60)
+                } else {
+                    // Short retry TTL for failed fetches.
+                    Duration::from_secs(30)
+                };
+                fetched_at.elapsed() > ttl
+            })
             .unwrap_or(true);
         if needs_refresh {
             let token = crate::github_app::resolve_named_app_token(
@@ -3845,12 +3856,12 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
             )
             .token()
             .map(String::from);
-            if let Some(ref t) = token {
-                *cache = Some((t.clone(), std::time::Instant::now()));
-            }
+            // Always write to cache — on failure we store None with a short
+            // TTL so repeated poll ticks don't retrigger the subprocess call.
+            *cache = Some((token.clone(), std::time::Instant::now()));
             token
         } else {
-            cache.as_ref().map(|(t, _)| t.clone())
+            cache.as_ref().and_then(|(t, _)| t.clone())
         }
     };
 

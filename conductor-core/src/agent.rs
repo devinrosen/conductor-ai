@@ -4121,6 +4121,28 @@ mod tests {
     }
 
     #[test]
+    fn test_agent_run_bot_name_non_null_round_trip() {
+        // Verify that a concrete bot_name value survives a write→read round-trip
+        // through the DB.  A typo in the column name or SELECT list would cause
+        // bot_name to come back as None, which this test would catch.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let parent = mgr.create_run(Some("w1"), "Parent", None, None).unwrap();
+        let run = mgr
+            .create_child_run(Some("w1"), "Task", None, None, &parent.id, Some("my-bot"))
+            .unwrap();
+        assert_eq!(run.bot_name.as_deref(), Some("my-bot"));
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.bot_name.as_deref(),
+            Some("my-bot"),
+            "bot_name should round-trip through the DB unchanged"
+        );
+    }
+
+    #[test]
     fn test_attach_agent_window_nonexistent_returns_error() {
         // A clearly nonexistent window name should always produce an error:
         //   - if tmux is not installed: spawn failure → ConductorError::Agent("could not execute tmux: …")
