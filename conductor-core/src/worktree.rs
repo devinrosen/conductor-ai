@@ -159,9 +159,10 @@ impl<'a> WorktreeManager<'a> {
 
         // (branch_name, base_branch_for_db, warnings)
         let (branch, base_for_db, warnings) = if let Some(pr_number) = from_pr {
-            // --from-pr path: fetch the PR branch and use it directly.
-            let pr_branch = fetch_pr_branch(&repo.local_path, pr_number)?;
-            (pr_branch, None, Vec::new())
+            // --from-pr path: fetch the PR branch and record the PR's base branch
+            // so that create_pr can target the correct base.
+            let (pr_branch, pr_base) = fetch_pr_branch(&repo.local_path, pr_number)?;
+            (pr_branch, Some(pr_base), Vec::new())
         } else {
             // Normal path: resolve base, ensure it's up to date, create a new branch.
             let base = from_branch
@@ -827,17 +828,47 @@ fn clone_repo(remote_url: &str, local_path: &str) -> Result<()> {
 /// For same-repo PRs the branch is fetched from `origin`.  For fork PRs the
 /// fork remote is added temporarily (or reused if it already exists) and the
 /// branch is fetched from there.
-fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<String> {
-    // 1. Resolve the PR's head branch name and repository info
+/// Parse the raw output of the `gh pr view` jq expression used in
+/// `fetch_pr_branch`.  The expected format is:
+///
+/// ```text
+/// <head_branch>|<base_branch>|<head_owner>/<head_repo>|<base_owner>/<base_repo>
+/// ```
+///
+/// Returns `(head_branch, base_branch, is_fork)`.
+fn parse_pr_view_output(raw: &str) -> Result<(String, String, bool)> {
+    let raw = raw.trim();
+    let parts: Vec<&str> = raw.splitn(4, '|').collect();
+    if parts.len() < 4 {
+        return Err(ConductorError::Git(format!(
+            "unexpected gh pr view output: {raw}"
+        )));
+    }
+    let head_branch = parts[0].to_string();
+    let base_branch = parts[1].to_string();
+    let head_repo = parts[2];
+    let base_repo = parts[3];
+    let is_fork = head_repo != base_repo;
+    Ok((head_branch, base_branch, is_fork))
+}
+
+/// Fetch a PR's branch from the appropriate remote and return `(head_branch,
+/// base_branch)`.
+///
+/// For same-repo PRs the branch is fetched from `origin`.  For fork PRs the
+/// fork remote is added temporarily (or reused if it already exists) and the
+/// branch is fetched from there.
+fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String, String)> {
+    // 1. Resolve the PR's head branch name, base branch, and repository info
     let output = Command::new("gh")
         .args([
             "pr",
             "view",
             &pr_number.to_string(),
             "--json",
-            "headRefName,headRepository,baseRepository",
+            "headRefName,baseRefName,headRepository,baseRepository",
             "--jq",
-            ".headRefName + \"|\" + .headRepository.owner.login + \"/\" + .headRepository.name + \"|\" + .baseRepository.owner.login + \"/\" + .baseRepository.name",
+            ".headRefName + \"|\" + .baseRefName + \"|\" + .headRepository.owner.login + \"/\" + .headRepository.name + \"|\" + .baseRepository.owner.login + \"/\" + .baseRepository.name",
         ])
         .current_dir(repo_path)
         .output()?;
@@ -850,22 +881,14 @@ fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<String> {
     }
 
     let raw = String::from_utf8_lossy(&output.stdout);
-    let raw = raw.trim();
-    let parts: Vec<&str> = raw.splitn(3, '|').collect();
-    if parts.len() < 3 {
-        return Err(ConductorError::Git(format!(
-            "unexpected gh pr view output: {raw}"
-        )));
-    }
-    let branch = parts[0].to_string();
-    let head_repo = parts[1];
-    let base_repo = parts[2];
-
-    let is_fork = head_repo != base_repo;
+    let (head_branch, base_branch, is_fork) = parse_pr_view_output(&raw)?;
 
     if is_fork {
         // For fork PRs: add the fork as a named remote (using the owner login)
         // and fetch from it.
+        let raw = raw.trim();
+        let parts: Vec<&str> = raw.splitn(4, '|').collect();
+        let head_repo = parts[2];
         let fork_owner = head_repo.split('/').next().unwrap_or(head_repo);
 
         // Look up the fork's clone URL via gh api
@@ -891,13 +914,21 @@ fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<String> {
             .output();
 
         // Fetch the branch from the fork remote
-        check_output(git_in(repo_path).args(["fetch", fork_owner, &format!("{branch}:{branch}")]))?;
+        check_output(git_in(repo_path).args([
+            "fetch",
+            fork_owner,
+            &format!("{head_branch}:{head_branch}"),
+        ]))?;
     } else {
         // Same-repo PR: fetch from origin
-        check_output(git_in(repo_path).args(["fetch", "origin", &format!("{branch}:{branch}")]))?;
+        check_output(git_in(repo_path).args([
+            "fetch",
+            "origin",
+            &format!("{head_branch}:{head_branch}"),
+        ]))?;
     }
 
-    Ok(branch)
+    Ok((head_branch, base_branch))
 }
 
 /// Detect package manager and install dependencies if applicable.
@@ -1516,5 +1547,61 @@ mod tests {
             )
             .unwrap();
         assert!(completed_at.is_some());
+    }
+
+    // ── parse_pr_view_output tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_pr_view_output_same_repo() {
+        let raw = "feat/my-feature|main|owner/repo|owner/repo";
+        let (head, base, is_fork) = parse_pr_view_output(raw).unwrap();
+        assert_eq!(head, "feat/my-feature");
+        assert_eq!(base, "main");
+        assert!(!is_fork);
+    }
+
+    #[test]
+    fn test_parse_pr_view_output_fork() {
+        let raw = "feat/my-feature|main|fork-user/repo|owner/repo";
+        let (head, base, is_fork) = parse_pr_view_output(raw).unwrap();
+        assert_eq!(head, "feat/my-feature");
+        assert_eq!(base, "main");
+        assert!(is_fork);
+    }
+
+    #[test]
+    fn test_parse_pr_view_output_non_default_base() {
+        // PR targeting a release branch rather than the repo default
+        let raw = "feat/my-feature|release/v2|owner/repo|owner/repo";
+        let (head, base, is_fork) = parse_pr_view_output(raw).unwrap();
+        assert_eq!(head, "feat/my-feature");
+        assert_eq!(base, "release/v2");
+        assert!(!is_fork);
+    }
+
+    #[test]
+    fn test_parse_pr_view_output_bad_format() {
+        let raw = "incomplete|data";
+        let result = parse_pr_view_output(raw);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("unexpected gh pr view output"));
+    }
+
+    #[test]
+    fn test_parse_pr_view_output_empty() {
+        let result = parse_pr_view_output("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fetch_pr_branch_fails_without_github_remote() {
+        // A local-only repo has no GitHub remote, so gh pr view will fail.
+        // This exercises the error path of fetch_pr_branch.
+        let (_tmp, _, local) = setup_repo_with_remote();
+        let result = fetch_pr_branch(local.to_str().unwrap(), 999);
+        assert!(result.is_err(), "expected error for non-GitHub repo");
     }
 }

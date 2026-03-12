@@ -3835,7 +3835,11 @@ impl App {
             return;
         };
         self.state.modal = Modal::Progress {
-            message: "Creating worktree…".to_string(),
+            message: if from_pr.is_some() {
+                "Fetching PR branch…".to_string()
+            } else {
+                "Creating worktree…".to_string()
+            },
         };
         let config = self.config.clone();
         std::thread::spawn(move || {
