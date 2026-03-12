@@ -113,6 +113,11 @@ pub enum Action {
     // Model configuration
     SetModel,
 
+    // Theme picker
+    ShowThemePicker,
+    /// Temporarily apply the theme at this index (live preview while browsing).
+    ThemePreview(usize),
+
     // Agent issue creation toggle (repo-level)
     ToggleAgentIssues,
 

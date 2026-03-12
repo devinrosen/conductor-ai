@@ -407,6 +407,13 @@ pub enum Modal {
     Progress {
         message: String,
     },
+    /// In-TUI theme picker: browse named themes with live preview.
+    ThemePicker {
+        /// Index into `KNOWN_THEMES`.
+        selected: usize,
+        /// Theme active when the picker was opened; restored on Esc.
+        original_theme: crate::theme::Theme,
+    },
 }
 
 impl fmt::Debug for Modal {
@@ -456,6 +463,9 @@ impl fmt::Debug for Modal {
             }
             Modal::Progress { message } => {
                 write!(f, "Modal::Progress({message:?})")
+            }
+            Modal::ThemePicker { selected, .. } => {
+                write!(f, "Modal::ThemePicker(selected={selected})")
             }
         }
     }

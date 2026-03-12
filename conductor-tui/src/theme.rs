@@ -23,6 +23,18 @@ pub struct Theme {
     pub group_header: Color,     // Yellow    — repo/section group headers
 }
 
+/// All built-in named themes: `(internal_name, display_label)`.
+///
+/// This is the single authoritative list used by the theme picker modal and
+/// `Theme::from_name()`. Adding a new theme requires entries here and in
+/// `from_name()`'s match arms.
+pub const KNOWN_THEMES: &[(&str, &str)] = &[
+    ("conductor", "Conductor (default)"),
+    ("nord", "Nord"),
+    ("gruvbox", "Gruvbox"),
+    ("catppuccin_mocha", "Catppuccin Mocha"),
+];
+
 impl Default for Theme {
     fn default() -> Self {
         Self::conductor()

@@ -238,5 +238,22 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             &state.theme,
         ),
         Modal::Progress { message } => modal::render_progress(frame, area, message, &state.theme),
+        Modal::ThemePicker {
+            selected,
+            original_theme,
+        } => {
+            // Derive the original theme name by matching KNOWN_THEMES against the saved theme.
+            // We compare a distinguishing field (border_focused) as a proxy, falling back to "conductor".
+            let original_name = crate::theme::KNOWN_THEMES
+                .iter()
+                .find(|(name, _)| {
+                    crate::theme::Theme::from_name(name)
+                        .map(|t| t.border_focused == original_theme.border_focused)
+                        .unwrap_or(false)
+                })
+                .map(|(name, _)| *name)
+                .unwrap_or("conductor");
+            modal::render_theme_picker(frame, area, *selected, original_name, &state.theme)
+        }
     }
 }

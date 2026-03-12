@@ -406,6 +406,10 @@ impl App {
                 if matches!(self.state.modal, Modal::Progress { .. }) {
                     return true;
                 }
+                // Esc on ThemePicker restores the theme that was active before preview
+                if let Modal::ThemePicker { ref original_theme, .. } = self.state.modal {
+                    self.state.theme = *original_theme;
+                }
                 self.state.modal = Modal::None;
             }
             Action::CopyErrorMessage => {
@@ -527,6 +531,10 @@ impl App {
             Action::GithubDiscoverImport => self.handle_github_discover_import(),
             // Model configuration
             Action::SetModel => self.handle_set_model(),
+
+            // Theme picker
+            Action::ShowThemePicker => self.handle_show_theme_picker(),
+            Action::ThemePreview(idx) => self.handle_theme_preview(idx),
 
             // Agent issue creation toggle
             Action::ToggleAgentIssues => self.handle_toggle_agent_issues(),
@@ -1983,6 +1991,12 @@ impl App {
     }
 
     fn handle_input_submit(&mut self) {
+        // ThemePicker: persist the selected theme to config
+        if let Modal::ThemePicker { selected, .. } = self.state.modal {
+            self.handle_theme_picker_confirm(selected);
+            return;
+        }
+
         // PrWorkflowPicker: confirm the selected workflow
         if matches!(self.state.modal, Modal::PrWorkflowPicker { .. }) {
             self.handle_pr_workflow_picker_confirm();
@@ -3311,6 +3325,63 @@ impl App {
             }
             PostCreateChoice::Skip => {
                 // No-op — modal already dismissed
+            }
+        }
+    }
+
+    // ── Theme picker ───────────────────────────────────────────────────
+
+    fn handle_show_theme_picker(&mut self) {
+        use crate::theme::KNOWN_THEMES;
+        // Find the index in KNOWN_THEMES that matches the current config theme name.
+        let current_name = self
+            .config
+            .general
+            .theme
+            .as_deref()
+            .unwrap_or("conductor");
+        let selected = KNOWN_THEMES
+            .iter()
+            .position(|(name, _)| *name == current_name)
+            .unwrap_or(0);
+        self.state.modal = Modal::ThemePicker {
+            selected,
+            original_theme: self.state.theme,
+        };
+    }
+
+    fn handle_theme_preview(&mut self, idx: usize) {
+        use crate::theme::KNOWN_THEMES;
+        if let Some((name, _)) = KNOWN_THEMES.get(idx) {
+            self.state.theme = crate::theme::Theme::from_name(name).unwrap_or_default();
+        }
+        // Also advance the cursor in the modal so the highlight tracks correctly.
+        if let Modal::ThemePicker { ref mut selected, .. } = self.state.modal {
+            *selected = idx;
+        }
+    }
+
+    fn handle_theme_picker_confirm(&mut self, selected: usize) {
+        use crate::theme::KNOWN_THEMES;
+        let Some((name, _)) = KNOWN_THEMES.get(selected) else {
+            self.state.modal = Modal::None;
+            return;
+        };
+        let name = name.to_string();
+        // Persist the selection to config. Also clear theme_path so the named
+        // theme wins on next startup (theme_path takes precedence over theme when
+        // both are set, so leaving it set would appear to ignore this selection).
+        self.config.general.theme = Some(name.clone());
+        self.config.general.theme_path = None;
+        match conductor_core::config::save_config(&self.config) {
+            Ok(()) => {
+                self.state.modal = Modal::None;
+                self.state.status_message = Some(format!("Theme set to \"{name}\""));
+            }
+            Err(e) => {
+                self.state.modal = Modal::Error {
+                    message: format!("Failed to save theme: {e}"),
+                };
             }
         }
     }

@@ -111,6 +111,22 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::ThemePicker { selected, .. } => {
+            let len = crate::theme::KNOWN_THEMES.len();
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let new_idx = if *selected == 0 { len - 1 } else { selected - 1 };
+                    return Action::ThemePreview(new_idx);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let new_idx = (selected + 1) % len;
+                    return Action::ThemePreview(new_idx);
+                }
+                KeyCode::Enter => return Action::InputSubmit,
+                KeyCode::Esc => return Action::DismissModal,
+                _ => {}
+            }
+        }
         Modal::IssueSourceManager { .. } => {
             return match key.code {
                 KeyCode::Esc => Action::DismissModal,
@@ -430,6 +446,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         // Toggle global status bar expansion (useful when 4+ items are active)
         KeyCode::Char('!') => Action::ToggleStatusBar,
+
+        // Open the in-TUI theme picker
+        KeyCode::Char('T') => Action::ShowThemePicker,
 
         // CRUD actions
         KeyCode::Char('a') => Action::AddRepo,

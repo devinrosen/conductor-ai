@@ -1467,6 +1467,72 @@ pub fn render_gate_action(
     frame.render_widget(content, popup);
 }
 
+/// Render the in-TUI theme picker modal.
+///
+/// `selected` is the hovered index into `KNOWN_THEMES`.
+/// `original_name` is the theme name that was active when the picker opened
+/// (used to show the `(current)` marker).
+/// `theme` is the *current live preview* theme (may differ from `original_name`).
+pub fn render_theme_picker(
+    frame: &mut Frame,
+    area: Rect,
+    selected: usize,
+    original_name: &str,
+    theme: &Theme,
+) {
+    use crate::theme::KNOWN_THEMES;
+
+    let popup = centered_rect(40, 50, area);
+    frame.render_widget(Clear, popup);
+
+    let dim = Style::default().fg(theme.label_secondary);
+    let hint_style = Style::default().fg(theme.label_accent);
+
+    let mut lines = vec![Line::from("")];
+
+    // Hint line
+    lines.push(Line::from(Span::styled(
+        "  [\u{2191}\u{2193}] browse  [\u{23ce}] apply  [Esc] cancel",
+        hint_style,
+    )));
+    lines.push(Line::from(""));
+
+    // Theme list
+    for (i, (name, label)) in KNOWN_THEMES.iter().enumerate() {
+        let is_selected = i == selected;
+        let is_original = *name == original_name;
+
+        let prefix = if is_selected { "\u{25b8} " } else { "  " };
+        let current_marker = if is_original { " (current)" } else { "" };
+
+        let style = if is_selected {
+            Style::default()
+                .fg(theme.label_warning)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.label_primary)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {prefix}{label}"), style),
+            Span::styled(current_marker, dim),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+
+    let content = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_focused))
+                .title(" Theme Picker "),
+        )
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(content, popup);
+}
+
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
     let vertical = Layout::vertical([Constraint::Percentage(percent_y)])
         .flex(Flex::Center)
