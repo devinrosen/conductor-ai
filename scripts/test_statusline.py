@@ -15,8 +15,6 @@ from statusline import (
     format_elapsed,
     format_status_line,
     get_runs,
-    _batch_worktree_labels,
-    _batch_repo_labels,
     _batch_gate_steps,
 )
 
@@ -44,7 +42,8 @@ def make_db() -> sqlite3.Connection:
             ended_at TEXT,
             worktree_id TEXT,
             repo_id TEXT,
-            parent_workflow_run_id TEXT
+            parent_workflow_run_id TEXT,
+            target_label TEXT
         );
         CREATE TABLE workflow_run_steps (
             id TEXT PRIMARY KEY,
@@ -93,12 +92,12 @@ class TestGetRuns(unittest.TestCase):
     def test_returns_active_runs(self):
         conn = make_db()
         conn.execute(
-            "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?)",
-            ("r1", "deploy", "running", "2024-01-01T00:00:00", None, None, None, None),
+            "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?,?)",
+            ("r1", "deploy", "running", "2024-01-01T00:00:00", None, None, None, None, None),
         )
         conn.execute(
-            "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?)",
-            ("r2", "release", "waiting", "2024-01-01T01:00:00", None, None, None, None),
+            "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?,?)",
+            ("r2", "release", "waiting", "2024-01-01T01:00:00", None, None, None, None, None),
         )
         conn.commit()
         runs = get_runs(conn)
@@ -109,12 +108,12 @@ class TestGetRuns(unittest.TestCase):
     def test_excludes_child_runs(self):
         conn = make_db()
         conn.execute(
-            "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?)",
-            ("parent", "wf", "running", "2024-01-01T00:00:00", None, None, None, None),
+            "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?,?)",
+            ("parent", "wf", "running", "2024-01-01T00:00:00", None, None, None, None, None),
         )
         conn.execute(
-            "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?)",
-            ("child", "wf-child", "running", "2024-01-01T00:00:00", None, None, None, "parent"),
+            "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?,?)",
+            ("child", "wf-child", "running", "2024-01-01T00:00:00", None, None, None, "parent", None),
         )
         conn.commit()
         runs = get_runs(conn)
@@ -131,61 +130,39 @@ class TestGetRuns(unittest.TestCase):
         for i in range(20):
             ts = (now - timedelta(seconds=i)).isoformat()
             conn.execute(
-                "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?)",
-                (f"completed_{i}", "wf", "completed", ts, ts, None, None, None),
+                "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?,?)",
+                (f"completed_{i}", "wf", "completed", ts, ts, None, None, None, None),
             )
         # Insert one active run with an old timestamp
         old_ts = (now - timedelta(hours=5)).isoformat()
         conn.execute(
-            "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?)",
-            ("active_old", "wf", "running", old_ts, None, None, None, None),
+            "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?,?)",
+            ("active_old", "wf", "running", old_ts, None, None, None, None, None),
         )
         conn.commit()
         runs = get_runs(conn)
         ids = {r["id"] for r in runs}
         self.assertIn("active_old", ids, "Active run must appear even when 20 completed runs exist")
 
-
-class TestBatchWorktreeLabels(unittest.TestCase):
-    def test_returns_repo_slash_worktree(self):
+    def test_target_label_returned_from_db(self):
+        """target_label column is fetched and returned by get_runs."""
         conn = make_db()
-        conn.execute("INSERT INTO repos VALUES (?,?)", ("repo1", "my-repo"))
-        conn.execute("INSERT INTO worktrees VALUES (?,?,?)", ("wt1", "repo1", "feat-branch"))
+        conn.execute(
+            "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?,?)",
+            ("r1", "deploy", "running", "2024-01-01T00:00:00", None, None, None, None, "my-repo/feat-x"),
+        )
         conn.commit()
-        runs = [{"worktree_id": "wt1"}]
-        labels = _batch_worktree_labels(conn, runs)
-        self.assertEqual(labels["wt1"], "my-repo/feat-branch")
-
-    def test_empty_when_no_worktree_ids(self):
-        conn = make_db()
-        labels = _batch_worktree_labels(conn, [{"worktree_id": None}])
-        self.assertEqual(labels, {})
-
-
-class TestBatchRepoLabels(unittest.TestCase):
-    def test_returns_repo_slug(self):
-        conn = make_db()
-        conn.execute("INSERT INTO repos VALUES (?,?)", ("repo1", "conductor"))
-        conn.commit()
-        runs = [{"worktree_id": None, "repo_id": "repo1"}]
-        labels = _batch_repo_labels(conn, runs)
-        self.assertEqual(labels["repo1"], "conductor")
-
-    def test_skips_runs_with_worktree(self):
-        conn = make_db()
-        conn.execute("INSERT INTO repos VALUES (?,?)", ("repo1", "conductor"))
-        conn.commit()
-        runs = [{"worktree_id": "wt1", "repo_id": "repo1"}]
-        labels = _batch_repo_labels(conn, runs)
-        self.assertEqual(labels, {})
+        runs = get_runs(conn)
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["target_label"], "my-repo/feat-x")
 
 
 class TestBatchGateSteps(unittest.TestCase):
     def test_returns_waiting_step_name(self):
         conn = make_db()
         conn.execute(
-            "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?)",
-            ("run1", "wf", "waiting", "2024-01-01T00:00:00", None, None, None, None),
+            "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?,?)",
+            ("run1", "wf", "waiting", "2024-01-01T00:00:00", None, None, None, None, None),
         )
         conn.execute(
             "INSERT INTO workflow_run_steps VALUES (?,?,?,?)",
@@ -213,7 +190,7 @@ class TestFormatStatusLine(unittest.TestCase):
         conn = make_db()
         runs = [{"id": "r1", "status": "completed", "workflow_name": "wf",
                  "started_at": "2024-01-01T00:00:00", "ended_at": "2024-01-01T01:00:00",
-                 "worktree_id": None, "repo_id": None}]
+                 "worktree_id": None, "repo_id": None, "target_label": None}]
         result = format_status_line(runs, conn)
         self.assertEqual(result, "")
 
@@ -221,7 +198,7 @@ class TestFormatStatusLine(unittest.TestCase):
         conn = make_db()
         runs = [{"id": "r1", "status": "running", "workflow_name": "deploy",
                  "started_at": "2024-01-01T00:00:00", "ended_at": None,
-                 "worktree_id": None, "repo_id": None}]
+                 "worktree_id": None, "repo_id": None, "target_label": None}]
         result = format_status_line(runs, conn)
         self.assertIn("1 running", result)
         self.assertIn("deploy", result)
@@ -229,8 +206,8 @@ class TestFormatStatusLine(unittest.TestCase):
     def test_waiting_run_shows_gate_waiting(self):
         conn = make_db()
         conn.execute(
-            "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?)",
-            ("run1", "release", "waiting", "2024-01-01T00:00:00", None, None, None, None),
+            "INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?,?)",
+            ("run1", "release", "waiting", "2024-01-01T00:00:00", None, None, None, None, None),
         )
         conn.execute(
             "INSERT INTO workflow_run_steps VALUES (?,?,?,?)",
@@ -239,7 +216,7 @@ class TestFormatStatusLine(unittest.TestCase):
         conn.commit()
         runs = [{"id": "run1", "status": "waiting", "workflow_name": "release",
                  "started_at": "2024-01-01T00:00:00", "ended_at": None,
-                 "worktree_id": None, "repo_id": None}]
+                 "worktree_id": None, "repo_id": None, "target_label": None}]
         result = format_status_line(runs, conn)
         self.assertIn("1 gate waiting", result)
         self.assertIn("approve-deploy", result)
@@ -248,18 +225,15 @@ class TestFormatStatusLine(unittest.TestCase):
         conn = make_db()
         runs = [{"id": "r1", "status": "failed", "workflow_name": "ci",
                  "started_at": "2024-01-01T00:00:00", "ended_at": "2024-01-01T01:00:00",
-                 "worktree_id": None, "repo_id": None}]
+                 "worktree_id": None, "repo_id": None, "target_label": None}]
         result = format_status_line(runs, conn)
         self.assertIn("1 failed", result)
 
-    def test_worktree_label_shown(self):
+    def test_target_label_shown_in_output(self):
         conn = make_db()
-        conn.execute("INSERT INTO repos VALUES (?,?)", ("repo1", "myrepo"))
-        conn.execute("INSERT INTO worktrees VALUES (?,?,?)", ("wt1", "repo1", "feat-x"))
-        conn.commit()
         runs = [{"id": "r1", "status": "running", "workflow_name": "wf",
                  "started_at": "2024-01-01T00:00:00", "ended_at": None,
-                 "worktree_id": "wt1", "repo_id": "repo1"}]
+                 "worktree_id": None, "repo_id": None, "target_label": "myrepo/feat-x"}]
         result = format_status_line(runs, conn)
         self.assertIn("myrepo/feat-x", result)
 
@@ -268,10 +242,10 @@ class TestFormatStatusLine(unittest.TestCase):
         runs = [
             {"id": "r1", "status": "waiting", "workflow_name": "wf1",
              "started_at": "2024-01-01T00:00:00", "ended_at": None,
-             "worktree_id": None, "repo_id": None},
+             "worktree_id": None, "repo_id": None, "target_label": None},
             {"id": "r2", "status": "waiting", "workflow_name": "wf2",
              "started_at": "2024-01-01T00:00:00", "ended_at": None,
-             "worktree_id": None, "repo_id": None},
+             "worktree_id": None, "repo_id": None, "target_label": None},
         ]
         result = format_status_line(runs, conn)
         self.assertIn("2 gates waiting", result)
@@ -280,7 +254,7 @@ class TestFormatStatusLine(unittest.TestCase):
         conn = make_db()
         runs = [{"id": "r1", "status": "running", "workflow_name": "wf",
                  "started_at": "2024-01-01T00:00:00", "ended_at": None,
-                 "worktree_id": None, "repo_id": None}]
+                 "worktree_id": None, "repo_id": None, "target_label": None}]
         result = format_status_line(runs, conn)
         self.assertIn("conductor", result)
 
