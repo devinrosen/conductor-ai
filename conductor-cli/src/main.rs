@@ -142,20 +142,23 @@ enum WorkflowCommands {
     },
     /// Run a workflow
     #[command(
-        after_help = "Examples:\n  conductor workflow run my-repo my-worktree ticket-to-pr\n  conductor workflow run draft-release-notes --pr https://github.com/org/repo/pull/42\n  conductor workflow run publish-docs --pr org/repo#42 --input force=true"
+        after_help = "Examples:\n  conductor workflow run my-repo my-worktree ticket-to-pr\n  conductor workflow run my-repo my-worktree ticket-to-pr --input key=value\n  conductor workflow run draft-release-notes --pr https://github.com/org/repo/pull/42\n  conductor workflow run publish-docs --pr org/repo#42 --input force=true\n  conductor workflow run draft-release-notes --repo my-repo"
     )]
     Run {
-        /// Repo slug (required unless --pr is used)
-        #[arg(required_unless_present = "pr")]
+        /// Repo slug (required unless --pr or --repo is used)
+        #[arg(required_unless_present_any = &["pr", "repo_flag"])]
         repo: Option<String>,
-        /// Worktree slug (required unless --pr is used)
-        #[arg(required_unless_present = "pr")]
+        /// Worktree slug (required unless --pr or --repo is used)
+        #[arg(required_unless_present_any = &["pr", "repo_flag"])]
         worktree: Option<String>,
         /// Workflow name (must match a .conductor/workflows/<name>.wf file)
         name: String,
         /// Run the workflow against a GitHub PR URL or reference (e.g. https://github.com/owner/repo/pull/123)
         #[arg(long, conflicts_with_all = &["repo", "worktree"])]
         pr: Option<String>,
+        /// Run a repo-targeted workflow without a worktree (conflicts with positional repo/worktree and --pr)
+        #[arg(long = "repo", conflicts_with_all = &["repo", "worktree", "pr"])]
+        repo_flag: Option<String>,
         /// Model to use for agent steps
         #[arg(long)]
         model: Option<String>,
@@ -1146,6 +1149,7 @@ fn main() -> Result<()> {
                 worktree,
                 name,
                 pr,
+                repo_flag,
                 model,
                 dry_run,
                 no_fail_fast,
@@ -1193,6 +1197,55 @@ fn main() -> Result<()> {
                         exec_config,
                         input_map,
                         dry_run,
+                    ) {
+                        Ok(result) => report_workflow_result(result),
+                        Err(e) => {
+                            eprintln!("Workflow execution failed: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                } else if let Some(repo_slug) = repo_flag {
+                    // Repo-targeted workflow run (no worktree)
+                    let repo_mgr = RepoManager::new(&conn, &config);
+                    let r = repo_mgr.get_by_slug(&repo_slug)?;
+
+                    let workflow =
+                        WorkflowManager::load_def_by_name(&r.local_path, &r.local_path, &name)?;
+
+                    if !workflow.targets.contains(&"repo".to_string()) {
+                        eprintln!(
+                            "Warning: workflow '{}' targets {:?}, not 'repo'. Proceeding anyway.",
+                            name, workflow.targets
+                        );
+                    }
+
+                    conductor_core::workflow::apply_workflow_input_defaults(
+                        &workflow,
+                        &mut input_map,
+                    )?;
+
+                    let node_count = workflow.total_nodes();
+                    println!(
+                        "Running workflow '{}' ({} nodes) on repo '{}'...",
+                        workflow.name, node_count, repo_slug
+                    );
+
+                    match conductor_core::workflow::execute_workflow(
+                        &conductor_core::workflow::WorkflowExecInput {
+                            conn: &conn,
+                            config: &config,
+                            workflow: &workflow,
+                            worktree_id: None,
+                            working_dir: &r.local_path,
+                            repo_path: &r.local_path,
+                            ticket_id: None,
+                            repo_id: Some(&r.id),
+                            model: model.as_deref(),
+                            exec_config: &exec_config,
+                            inputs: input_map,
+                            depth: 0,
+                            parent_workflow_run_id: None,
+                        },
                     ) {
                         Ok(result) => report_workflow_result(result),
                         Err(e) => {
