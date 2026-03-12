@@ -29,7 +29,7 @@ use conductor_core::worktree::WorktreeManager;
 const CONDUCTOR_RUN_ID_ENV: &str = "CONDUCTOR_RUN_ID";
 
 #[derive(Parser)]
-#[command(name = "conductor", about = "Multi-repo orchestration tool")]
+#[command(name = "conductor", about = "Multi-repo orchestration tool", version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -130,12 +130,20 @@ enum WorkflowCommands {
     },
     /// List available workflow definitions for a repo/worktree
     List {
-        /// Repo slug
-        repo: String,
-        /// Worktree slug
-        worktree: String,
+        /// Repo slug (required unless --path is given)
+        #[arg(required_unless_present = "path")]
+        repo: Option<String>,
+        /// Worktree slug (required unless --path is given)
+        #[arg(required_unless_present = "path")]
+        worktree: Option<String>,
+        /// Path to a repo root directory; skips DB lookup
+        #[arg(long, conflicts_with_all = &["repo", "worktree"])]
+        path: Option<String>,
     },
     /// Run a workflow
+    #[command(
+        after_help = "Examples:\n  conductor workflow run my-repo my-worktree ticket-to-pr\n  conductor workflow run draft-release-notes --pr https://github.com/org/repo/pull/42\n  conductor workflow run publish-docs --pr org/repo#42 --input force=true"
+    )]
     Run {
         /// Repo slug (required unless --pr is used)
         #[arg(required_unless_present = "pr")]
@@ -165,7 +173,8 @@ enum WorkflowCommands {
         inputs: Vec<String>,
     },
     /// Show details of a workflow run
-    Show {
+    #[command(name = "run-show", alias = "show")]
+    RunShow {
         /// Workflow run ID
         id: String,
     },
@@ -184,6 +193,9 @@ enum WorkflowCommands {
         path: Option<String>,
     },
     /// Resume a failed or stalled workflow run
+    #[command(
+        after_help = "Examples:\n  conductor workflow resume 01ABC123 --restart\n  conductor workflow resume 01ABC123 --from-step run-tests\n  # Find run IDs: conductor workflow runs my-repo"
+    )]
     Resume {
         /// Workflow run ID
         id: String,
@@ -203,20 +215,29 @@ enum WorkflowCommands {
         id: String,
     },
     /// Approve a pending human gate
+    #[command(
+        after_help = "A gate pauses the workflow at a checkpoint waiting for human approval.\nFind the RUN_ID with: conductor workflow runs <repo>"
+    )]
     GateApprove {
-        /// Workflow run ID
+        /// Workflow run ID — find it with: conductor workflow runs <repo>
         #[arg(value_name = "RUN_ID")]
         run_id: String,
     },
     /// Reject a pending human gate (fails the workflow)
+    #[command(
+        after_help = "A gate pauses the workflow at a checkpoint waiting for human approval.\nFind the RUN_ID with: conductor workflow runs <repo>"
+    )]
     GateReject {
-        /// Workflow run ID
+        /// Workflow run ID — find it with: conductor workflow runs <repo>
         #[arg(value_name = "RUN_ID")]
         run_id: String,
     },
     /// Provide feedback and approve a pending human gate
+    #[command(
+        after_help = "A gate pauses the workflow at a checkpoint waiting for human approval.\nFind the RUN_ID with: conductor workflow runs <repo>"
+    )]
     GateFeedback {
-        /// Workflow run ID
+        /// Workflow run ID — find it with: conductor workflow runs <repo>
         #[arg(value_name = "RUN_ID")]
         run_id: String,
         /// Feedback text
@@ -318,6 +339,9 @@ enum SourceCommands {
 #[derive(Subcommand)]
 enum WorktreeCommands {
     /// Create a new worktree
+    #[command(
+        after_help = "Examples:\n  conductor worktree create my-repo --ticket PROJ-42\n  conductor worktree create my-repo --from main\n  conductor worktree create my-repo --ticket PROJ-42 --auto-agent"
+    )]
     Create {
         /// Repo slug
         repo: String,
@@ -408,6 +432,23 @@ enum TicketCommands {
     },
 }
 
+fn check_prerequisites() {
+    let mut missing = Vec::new();
+    if Command::new("gh").arg("--version").output().is_err() {
+        missing.push("  - gh (GitHub CLI): https://cli.github.com");
+    }
+    if Command::new("tmux").arg("-V").output().is_err() {
+        missing.push("  - tmux: https://github.com/tmux/tmux");
+    }
+    if std::env::var("ANTHROPIC_API_KEY").is_err() {
+        missing.push("  - ANTHROPIC_API_KEY (get a key at https://console.anthropic.com)");
+    }
+    if !missing.is_empty() {
+        eprintln!("conductor: missing prerequisites:\n{}", missing.join("\n"));
+        eprintln!("Some commands may not work until these are resolved.\n");
+    }
+}
+
 fn report_workflow_result(result: conductor_core::workflow::WorkflowResult) {
     println!(
         "\nTotal: ${:.4}, {} turns, {:.1}s",
@@ -440,6 +481,8 @@ fn main() -> Result<()> {
 
     let db_path = conductor_core::config::db_path();
     let conn = open_database(&db_path)?;
+
+    check_prerequisites();
 
     match cli.command {
         Commands::Repo { command } => match command {
@@ -1054,14 +1097,23 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            WorkflowCommands::List { repo, worktree } => {
-                let repo_mgr = RepoManager::new(&conn, &config);
-                let r = repo_mgr.get_by_slug(&repo)?;
-                let wt_mgr = WorktreeManager::new(&conn, &config);
-                let wt = wt_mgr.get_by_slug(&r.id, &worktree)?;
+            WorkflowCommands::List {
+                repo,
+                worktree,
+                path,
+            } => {
+                let (wt_path, repo_path) = if let Some(ref dir) = path {
+                    (dir.clone(), dir.clone())
+                } else {
+                    let repo_mgr = RepoManager::new(&conn, &config);
+                    let r = repo_mgr.get_by_slug(repo.as_deref().unwrap())?;
+                    let wt_mgr = WorktreeManager::new(&conn, &config);
+                    let wt = wt_mgr.get_by_slug(&r.id, worktree.as_deref().unwrap())?;
+                    (wt.path, r.local_path)
+                };
 
                 // Try new .wf files first, fall back to legacy .md
-                let wf_defs = WorkflowManager::list_defs(&wt.path, &r.local_path)?;
+                let wf_defs = WorkflowManager::list_defs(&wt_path, &repo_path)?;
                 if !wf_defs.is_empty() {
                     for def in &wf_defs {
                         let node_count = def.total_nodes();
@@ -1071,7 +1123,7 @@ fn main() -> Result<()> {
                         );
                     }
                 } else {
-                    let defs = workflow_config::load_workflow_defs(&wt.path, &r.local_path)?;
+                    let defs = workflow_config::load_workflow_defs(&wt_path, &repo_path)?;
                     if defs.is_empty() {
                         println!(
                             "No workflows found. Create .conductor/workflows/<name>.wf in your repo."
@@ -1199,7 +1251,7 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            WorkflowCommands::Show { id } => {
+            WorkflowCommands::RunShow { id } => {
                 let wf_mgr = WorkflowManager::new(&conn);
                 match wf_mgr.get_workflow_run(&id)? {
                     Some(run) => {
