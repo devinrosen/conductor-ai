@@ -1,0 +1,35 @@
+workflow merge-when-ready {
+  meta {
+    description = "Verify CI, approvals, and review comments are clear, then merge and close"
+    trigger     = "manual"
+    targets     = ["worktree"] // not "pr": merge-and-close runs `gh pr merge` from the branch checkout; the ephemeral --pr shallow clone has no push remote configured so the merge step would fail
+  }
+
+  inputs {
+    pr_url required
+  }
+
+  gate pr_checks {
+    timeout    = "2h"
+    on_timeout = fail
+  }
+
+  gate pr_approval {
+    min_approvals = 1
+    timeout       = "72h"
+    on_timeout    = fail
+  }
+
+  call verify-review-comments
+
+  if verify-review-comments.has_unresolved_comments {
+    call summarize-unresolved
+    gate human_review {
+      prompt     = "There are unresolved review comments on this PR. See the summarize-unresolved step for details. Approve to merge anyway or reject to abort."
+      timeout    = "24h"
+      on_timeout = fail
+    }
+  }
+
+  call merge-and-close
+}
