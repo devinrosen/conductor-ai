@@ -185,7 +185,7 @@ mod tests {
         let raw = fs::read_to_string(&settings).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
         // Original key preserved
-        assert_eq!(v["someOtherKey"].as_bool().unwrap(), true);
+        assert!(v["someOtherKey"].as_bool().unwrap());
         // statusLineTool set
         assert!(v["statusLineTool"].is_string());
     }
