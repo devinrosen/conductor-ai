@@ -798,6 +798,8 @@ fn main() -> Result<()> {
             {
                 let agent_mgr = AgentManager::new(&conn);
                 let _ = agent_mgr.reap_orphaned_runs();
+                let wf_mgr = WorkflowManager::new(&conn);
+                let _ = wf_mgr.reap_orphaned_workflow_runs();
             }
 
             match command {

@@ -39,6 +39,17 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Reap orphaned workflow runs on startup.
+    {
+        use conductor_core::workflow::WorkflowManager;
+        let wf_mgr = WorkflowManager::new(&conn);
+        if let Ok(n) = wf_mgr.reap_orphaned_workflow_runs() {
+            if n > 0 {
+                tracing::info!("Reaped {n} orphaned workflow run(s) on startup");
+            }
+        }
+    }
+
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         config: Arc::new(RwLock::new(config)),
@@ -62,7 +73,9 @@ async fn main() -> Result<()> {
                 mgr.reap_orphaned_runs()?;
                 let cfg = cfg.blocking_read();
                 let wt_mgr = conductor_core::worktree::WorktreeManager::new(&conn, &cfg);
-                wt_mgr.reap_stale_worktrees()
+                wt_mgr.reap_stale_worktrees()?;
+                let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
+                wf_mgr.reap_orphaned_workflow_runs()
             })
             .await;
         }
