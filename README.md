@@ -8,6 +8,11 @@ A local-first orchestration tool for managing multiple git repos, worktrees, tic
 - [Node.js](https://nodejs.org/) (for the web UI frontend)
 - [GitHub CLI (`gh`)](https://cli.github.com/) — installed and authenticated (for GitHub issue sync)
 - [tmux](https://github.com/tmux/tmux) (for AI agent sessions)
+- `ANTHROPIC_API_KEY` — set in your shell environment (get a key at https://console.anthropic.com)
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."  # add to ~/.zshrc or ~/.bashrc
+```
 
 ## Build
 
