@@ -823,11 +823,6 @@ fn clone_repo(remote_url: &str, local_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Fetch a PR's branch from the appropriate remote and return the branch name.
-///
-/// For same-repo PRs the branch is fetched from `origin`.  For fork PRs the
-/// fork remote is added temporarily (or reused if it already exists) and the
-/// branch is fetched from there.
 /// Parse the raw output of the `gh pr view` jq expression used in
 /// `fetch_pr_branch`.  The expected format is:
 ///
@@ -835,8 +830,8 @@ fn clone_repo(remote_url: &str, local_path: &str) -> Result<()> {
 /// <head_branch>|<base_branch>|<head_owner>/<head_repo>|<base_owner>/<base_repo>
 /// ```
 ///
-/// Returns `(head_branch, base_branch, is_fork)`.
-fn parse_pr_view_output(raw: &str) -> Result<(String, String, bool)> {
+/// Returns `(head_branch, base_branch, head_repo, is_fork)`.
+fn parse_pr_view_output(raw: &str) -> Result<(String, String, String, bool)> {
     let raw = raw.trim();
     let parts: Vec<&str> = raw.splitn(4, '|').collect();
     if parts.len() < 4 {
@@ -846,10 +841,10 @@ fn parse_pr_view_output(raw: &str) -> Result<(String, String, bool)> {
     }
     let head_branch = parts[0].to_string();
     let base_branch = parts[1].to_string();
-    let head_repo = parts[2];
+    let head_repo = parts[2].to_string();
     let base_repo = parts[3];
     let is_fork = head_repo != base_repo;
-    Ok((head_branch, base_branch, is_fork))
+    Ok((head_branch, base_branch, head_repo, is_fork))
 }
 
 /// Fetch a PR's branch from the appropriate remote and return `(head_branch,
@@ -881,15 +876,12 @@ fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String, String)> 
     }
 
     let raw = String::from_utf8_lossy(&output.stdout);
-    let (head_branch, base_branch, is_fork) = parse_pr_view_output(&raw)?;
+    let (head_branch, base_branch, head_repo, is_fork) = parse_pr_view_output(&raw)?;
 
     if is_fork {
         // For fork PRs: add the fork as a named remote (using the owner login)
         // and fetch from it.
-        let raw = raw.trim();
-        let parts: Vec<&str> = raw.splitn(4, '|').collect();
-        let head_repo = parts[2];
-        let fork_owner = head_repo.split('/').next().unwrap_or(head_repo);
+        let fork_owner = head_repo.split('/').next().unwrap_or(&head_repo);
 
         // Look up the fork's clone URL via gh api
         let url_output = Command::new("gh")
@@ -1554,18 +1546,20 @@ mod tests {
     #[test]
     fn test_parse_pr_view_output_same_repo() {
         let raw = "feat/my-feature|main|owner/repo|owner/repo";
-        let (head, base, is_fork) = parse_pr_view_output(raw).unwrap();
+        let (head, base, head_repo, is_fork) = parse_pr_view_output(raw).unwrap();
         assert_eq!(head, "feat/my-feature");
         assert_eq!(base, "main");
+        assert_eq!(head_repo, "owner/repo");
         assert!(!is_fork);
     }
 
     #[test]
     fn test_parse_pr_view_output_fork() {
         let raw = "feat/my-feature|main|fork-user/repo|owner/repo";
-        let (head, base, is_fork) = parse_pr_view_output(raw).unwrap();
+        let (head, base, head_repo, is_fork) = parse_pr_view_output(raw).unwrap();
         assert_eq!(head, "feat/my-feature");
         assert_eq!(base, "main");
+        assert_eq!(head_repo, "fork-user/repo");
         assert!(is_fork);
     }
 
@@ -1573,7 +1567,7 @@ mod tests {
     fn test_parse_pr_view_output_non_default_base() {
         // PR targeting a release branch rather than the repo default
         let raw = "feat/my-feature|release/v2|owner/repo|owner/repo";
-        let (head, base, is_fork) = parse_pr_view_output(raw).unwrap();
+        let (head, base, _head_repo, is_fork) = parse_pr_view_output(raw).unwrap();
         assert_eq!(head, "feat/my-feature");
         assert_eq!(base, "release/v2");
         assert!(!is_fork);
@@ -1603,5 +1597,34 @@ mod tests {
         let (_tmp, _, local) = setup_repo_with_remote();
         let result = fetch_pr_branch(local.to_str().unwrap(), 999);
         assert!(result.is_err(), "expected error for non-GitHub repo");
+    }
+
+    #[test]
+    fn test_create_from_pr_propagates_fetch_error() {
+        // Verify that create() with from_pr = Some(n) takes the from_pr branch,
+        // calls fetch_pr_branch, and propagates the error when gh is unavailable.
+        let (_tmp, _, local) = setup_repo_with_remote();
+        let local_str = local.to_str().unwrap().to_string();
+
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+
+        // Point the test repo at the real local path so clone check passes
+        conn.execute(
+            "UPDATE repos SET local_path = ?1, workspace_dir = ?2 WHERE id = 'r1'",
+            params![
+                local_str,
+                local.parent().unwrap().join("ws").to_str().unwrap()
+            ],
+        )
+        .unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let result = mgr.create("test-repo", "from-pr-test", None, None, Some(42));
+        // fetch_pr_branch will fail because the local repo has no GitHub remote
+        assert!(
+            result.is_err(),
+            "expected error when gh pr view is unavailable"
+        );
     }
 }
