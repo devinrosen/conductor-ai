@@ -1,0 +1,10 @@
+workflow draft-release-notes {
+  meta {
+    description = "Analyze a PR and produce a draft release notes entry"
+    trigger     = "manual"
+    targets     = ["pr"]
+  }
+
+  call fetch-pr-context
+  call draft-release-notes
+}
