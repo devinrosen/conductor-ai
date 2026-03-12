@@ -367,7 +367,7 @@ enum SourceCommands {
 enum WorktreeCommands {
     /// Create a new worktree
     #[command(
-        after_help = "Examples:\n  conductor worktree create my-repo --ticket PROJ-42\n  conductor worktree create my-repo --from main\n  conductor worktree create my-repo --ticket PROJ-42 --auto-agent"
+        after_help = "Examples:\n  conductor worktree create my-repo --ticket PROJ-42\n  conductor worktree create my-repo --from main\n  conductor worktree create my-repo --ticket PROJ-42 --auto-agent\n  conductor worktree create my-repo pr-42-fix --from-pr 42"
     )]
     Create {
         /// Repo slug
@@ -375,8 +375,11 @@ enum WorktreeCommands {
         /// Worktree name (e.g., smart-playlists, fix-scan-crash)
         name: String,
         /// Base branch
-        #[arg(long, short)]
+        #[arg(long, short, conflicts_with = "from_pr")]
         from: Option<String>,
+        /// Checkout an existing PR branch by PR number
+        #[arg(long, conflicts_with = "from")]
+        from_pr: Option<u32>,
         /// Link to a ticket ID
         #[arg(long)]
         ticket: Option<String>,
@@ -701,12 +704,13 @@ fn main() -> Result<()> {
                     repo,
                     name,
                     from,
+                    from_pr,
                     ticket,
                     auto_agent,
                 } => {
                     let mgr = WorktreeManager::new(&conn, &config);
                     let (wt, warnings) =
-                        mgr.create(&repo, &name, from.as_deref(), ticket.as_deref())?;
+                        mgr.create(&repo, &name, from.as_deref(), ticket.as_deref(), from_pr)?;
                     for warning in &warnings {
                         eprintln!("warning: {warning}");
                     }

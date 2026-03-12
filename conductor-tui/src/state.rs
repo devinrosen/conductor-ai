@@ -502,6 +502,7 @@ pub enum ConfirmAction {
         repo_slug: String,
         wt_name: String,
         ticket_id: Option<String>,
+        from_pr: Option<u32>,
     },
     DeleteWorktree {
         repo_slug: String,
@@ -549,6 +550,12 @@ pub enum FormAction {
 pub enum InputAction {
     CreateWorktree {
         repo_slug: String,
+        ticket_id: Option<String>,
+    },
+    /// Second step of worktree creation: user optionally enters a PR number.
+    CreateWorktreePrStep {
+        repo_slug: String,
+        wt_name: String,
         ticket_id: Option<String>,
     },
     LinkTicket {
