@@ -133,7 +133,7 @@ fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("");
 
     let mut list_state = ListState::default();
     if !state.data.workflow_defs.is_empty() {
@@ -226,7 +226,7 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("");
 
     let mut list_state = ListState::default();
     if !state.data.workflow_runs.is_empty() {
@@ -480,7 +480,7 @@ fn render_step_list(
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("");
 
     let mut list_state = ListState::default();
     if !state.data.workflow_steps.is_empty() {
@@ -588,7 +588,7 @@ fn render_step_agent_activity(
                     .bg(Color::DarkGray)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("> ");
+            .highlight_symbol("");
         let mut list_state = ListState::default();
         if !events.is_empty() {
             list_state.select(Some(state.step_agent_event_index));

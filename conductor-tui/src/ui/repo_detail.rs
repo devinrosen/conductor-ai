@@ -130,7 +130,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("");
 
     let mut wt_state = ListState::default();
     if wt_focused && !state.detail_worktrees.is_empty() {
@@ -208,7 +208,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("");
 
     let mut ticket_state = ListState::default();
     if ticket_focused && !state.filtered_detail_tickets.is_empty() {
@@ -284,7 +284,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("");
 
     let mut pr_list_state = ListState::default();
     if pr_focused && !state.detail_prs.is_empty() {

@@ -62,27 +62,12 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &AppState) {
                 .iter()
                 .filter(|wt| wt.repo_id == r.id && wt.is_active())
                 .count();
-            let total = state
-                .data
-                .repo_worktree_count
-                .get(&r.id)
-                .copied()
-                .unwrap_or(0);
-            let done = total - active;
-            let count_text = if done > 0 {
-                format!("  ({active} active, {done} done)")
+            let dot = if active > 0 {
+                Span::styled("● ", Style::default().fg(Color::Green))
             } else {
-                format!("  ({active} worktrees)")
+                Span::styled("○ ", Style::default().fg(Color::DarkGray))
             };
-            let slug_style = if active == 0 && done == 0 {
-                Style::default().fg(Color::DarkGray)
-            } else {
-                Style::default().add_modifier(Modifier::BOLD)
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(r.slug.clone(), slug_style),
-                Span::raw(count_text),
-            ]))
+            ListItem::new(Line::from(vec![dot, Span::raw(r.slug.clone())]))
         })
         .collect();
 
@@ -98,7 +83,7 @@ fn render_repos(frame: &mut Frame, area: Rect, state: &AppState) {
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("");
 
     let mut list_state = ListState::default();
     if focused && !state.data.repos.is_empty() {
@@ -174,7 +159,7 @@ fn render_worktrees(frame: &mut Frame, area: Rect, state: &AppState) {
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("");
 
     let mut list_state = ListState::default();
     if focused && !state.data.worktrees.is_empty() {
@@ -258,7 +243,7 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("");
 
     let mut list_state = ListState::default();
     if focused && !state.filtered_tickets.is_empty() {
