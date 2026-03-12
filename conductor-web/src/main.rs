@@ -67,7 +67,7 @@ async fn main() -> Result<()> {
             interval.tick().await;
             let db = reaper_state.db.clone();
             let cfg = reaper_config.clone();
-            let _ = tokio::task::spawn_blocking(move || {
+            let result = tokio::task::spawn_blocking(move || {
                 let conn = db.blocking_lock();
                 let mgr = AgentManager::new(&conn);
                 mgr.reap_orphaned_runs()?;
@@ -78,6 +78,9 @@ async fn main() -> Result<()> {
                 wf_mgr.reap_orphaned_workflow_runs()
             })
             .await;
+            if let Ok(Err(e)) = result {
+                tracing::warn!("periodic reaper failed: {e}");
+            }
         }
     });
 
