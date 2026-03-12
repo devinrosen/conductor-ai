@@ -15,17 +15,28 @@ Steps:
    - **Clean**: All reviewers found no blocking issues (no critical or warning findings).
    - **Blocking**: One or more reviewers found critical or warning issues that must be addressed.
 3. Get the PR number: `gh pr view --json number -q .number`
-4. Submit a formal GitHub PR review using `gh pr review` (skip this step if `{{dry_run}}` is `true`):
+4. Post the aggregated summary and submit a formal GitHub PR review (skip all `gh` calls in this step if `{{dry_run}}` is `true`):
 
-   **If all reviewers approve:**
+   Format the review body using the templates below, then:
+
+   **Step 4a — always post as a PR comment first (survives self-review restriction):**
+   ```
+   gh pr comment <number> --body "<aggregated summary>"
+   ```
+
+   **Step 4b — attempt formal review (best-effort; may fail if the bot opened the PR):**
+
+   If all reviewers approve:
    ```
    gh pr review <number> --approve --body "<aggregated summary>"
    ```
 
-   **If any reviewer has blocking issues:**
+   If any reviewer has blocking issues:
    ```
    gh pr review <number> --request-changes --body "<aggregated summary with blocking findings>"
    ```
+
+   If `gh pr review` exits non-zero, note the failure in your CONDUCTOR_OUTPUT context but do not treat it as a blocking error — the comment posted in step 4a already captured the findings.
 
    Format the review body as:
 
