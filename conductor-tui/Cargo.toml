@@ -20,5 +20,9 @@ dirs = "6"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde_json = "1"
 tui-textarea = "0.7"
+toml = "0.8"
 tracing = "0.1"
 ulid = "1"
+
+[dev-dependencies]
+tempfile = "3"

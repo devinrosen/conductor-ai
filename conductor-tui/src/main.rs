@@ -24,12 +24,25 @@ fn main() -> Result<()> {
     let config = load_config()?;
     ensure_dirs(&config)?;
 
-    let theme = match config.general.theme.as_deref() {
-        Some(name) => Theme::from_name(name).unwrap_or_else(|e| {
-            eprintln!("{e}");
+    let theme = if let Some(raw_path) = config.general.theme_path.as_deref() {
+        let expanded = if raw_path.starts_with('~') {
+            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+            home.join(raw_path.trim_start_matches("~/").trim_start_matches('~'))
+        } else {
+            std::path::PathBuf::from(raw_path)
+        };
+        Theme::from_base16_file(&expanded).unwrap_or_else(|e| {
+            eprintln!("theme error: {e}");
             std::process::exit(1);
-        }),
-        None => Theme::default(),
+        })
+    } else {
+        match config.general.theme.as_deref() {
+            Some(name) => Theme::from_name(name).unwrap_or_else(|e| {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }),
+            None => Theme::default(),
+        }
     };
 
     let db = db_path();
