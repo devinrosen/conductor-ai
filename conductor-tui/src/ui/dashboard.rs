@@ -220,6 +220,7 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
         }
         let mut spans = vec![
             Span::raw("\u{2514} "),
+            super::common::ticket_worktree_dot_span(state, &t.id),
             Span::styled(
                 format!("#{} ", t.source_id),
                 Style::default().fg(Color::Yellow),
@@ -234,9 +235,6 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
         spans.extend(super::common::ticket_label_spans_compact(labels));
-        spans.extend(super::common::ticket_worktree_spans(
-            state, &t.id, "  ", true,
-        ));
         spans.extend(super::common::ticket_agent_total_spans(
             state, &t.id, "  ", false,
         ));

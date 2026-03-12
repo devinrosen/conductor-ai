@@ -32,6 +32,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             let assignee = t.assignee.as_deref().unwrap_or("-");
 
             let mut spans = vec![
+                super::common::ticket_worktree_dot_span(state, &t.id),
                 Span::styled(
                     format!("{repo_slug:<12} "),
                     Style::default().fg(Color::DarkGray),
@@ -79,9 +80,6 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 }
             }
 
-            spans.extend(super::common::ticket_worktree_spans(
-                state, &t.id, " ", false,
-            ));
             spans.extend(super::common::ticket_agent_total_spans(
                 state, &t.id, " ", true,
             ));

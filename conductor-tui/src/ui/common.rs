@@ -613,45 +613,22 @@ pub fn build_workflow_breadcrumb(
     }
 }
 
-/// Build optional worktree-indicator spans for a ticket row.
+/// Build a single worktree-indicator dot span for a ticket row.
 ///
-/// Returns spans like `  ● feat-auth` (green, active) or `  ○ fix-bug`
-/// (gray, merged/abandoned).  When multiple worktrees are linked the
-/// label shows the count instead, e.g. `  ● 3 worktrees`.
-///
-/// Pass `leading_space` to control the whitespace before the indicator
-/// (single space for the padded Tickets view, double for compact views).
-///
-/// When `compact=true`, returns only the indicator dot with no slug text.
-pub fn ticket_worktree_spans(
-    state: &AppState,
-    ticket_id: &str,
-    leading: &str,
-    compact: bool,
-) -> Vec<Span<'static>> {
-    let Some(wts) = state.data.ticket_worktrees.get(ticket_id) else {
-        return Vec::new();
-    };
-    let Some(best) = wts.iter().find(|w| w.is_active()).or(wts.first()) else {
-        return Vec::new();
-    };
-
-    let (indicator, color) = if best.is_active() {
-        ("●", Color::Green)
+/// Always returns a span — `●` (green) when an active worktree exists,
+/// `○` (dark gray) otherwise — so columns stay aligned.
+pub fn ticket_worktree_dot_span(state: &AppState, ticket_id: &str) -> Span<'static> {
+    let has_active = state
+        .data
+        .ticket_worktrees
+        .get(ticket_id)
+        .and_then(|wts| wts.iter().find(|w| w.is_active()))
+        .is_some();
+    if has_active {
+        Span::styled("● ", Style::default().fg(Color::Green))
     } else {
-        ("○", Color::DarkGray)
-    };
-    let label = if compact {
-        indicator.to_string()
-    } else if wts.len() > 1 {
-        format!("{indicator} {} worktrees", wts.len())
-    } else {
-        format!("{indicator} {}", best.slug)
-    };
-    vec![Span::styled(
-        format!("{leading}{label}"),
-        Style::default().fg(color),
-    )]
+        Span::styled("○ ", Style::default().fg(Color::DarkGray))
+    }
 }
 
 /// Format a token count as `X.Xk` for values ≥ 1000, or plain integer otherwise.
