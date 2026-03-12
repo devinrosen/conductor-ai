@@ -116,8 +116,9 @@ fn render_worktrees(frame: &mut Frame, area: Rect, state: &AppState) {
         Style::default().fg(Color::DarkGray)
     };
 
-    // Build sorted list of (repo_slug, worktree) pairs
-    let mut sorted_wts: Vec<(String, &conductor_core::worktree::Worktree)> = state
+    // data.worktrees is pre-sorted by (repo_slug, wt_slug) in DataCache::rebuild_maps(),
+    // so state.worktree_index directly indexes this list (matching selection actions).
+    let wts_with_slug: Vec<(String, &conductor_core::worktree::Worktree)> = state
         .data
         .worktrees
         .iter()
@@ -131,13 +132,10 @@ fn render_worktrees(frame: &mut Frame, area: Rect, state: &AppState) {
             (slug, wt)
         })
         .collect();
-    sorted_wts.sort_by(|(a_slug, a_wt), (b_slug, b_wt)| {
-        a_slug.cmp(b_slug).then_with(|| a_wt.slug.cmp(&b_wt.slug))
-    });
 
     let mut items: Vec<ListItem> = Vec::new();
     let mut prev_repo = String::new();
-    for (repo_slug, wt) in &sorted_wts {
+    for (repo_slug, wt) in &wts_with_slug {
         if *repo_slug != prev_repo {
             items.push(ListItem::new(Line::from(vec![Span::styled(
                 repo_slug.clone(),
@@ -180,9 +178,14 @@ fn render_worktrees(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let mut list_state = ListState::default();
     if focused && !state.data.worktrees.is_empty() {
-        let logical_idx = state.worktree_index.min(sorted_wts.len().saturating_sub(1));
-        let visual_idx =
-            visual_idx_with_headers(&sorted_wts, |(repo_slug, _)| repo_slug.clone(), logical_idx);
+        let logical_idx = state
+            .worktree_index
+            .min(wts_with_slug.len().saturating_sub(1));
+        let visual_idx = visual_idx_with_headers(
+            &wts_with_slug,
+            |(repo_slug, _)| repo_slug.clone(),
+            logical_idx,
+        );
         list_state.select(Some(visual_idx));
     }
 
