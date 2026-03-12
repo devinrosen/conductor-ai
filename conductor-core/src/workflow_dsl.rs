@@ -1231,7 +1231,7 @@ impl Parser {
 // ---------------------------------------------------------------------------
 
 /// Parse a human-readable duration string like "2h", "48h", "30m" into seconds.
-fn parse_duration_str(s: &str) -> std::result::Result<u64, String> {
+pub(crate) fn parse_duration_str(s: &str) -> std::result::Result<u64, String> {
     let s = s.trim().trim_matches('"');
     if let Some(hours) = s.strip_suffix('h') {
         let n: u64 = hours

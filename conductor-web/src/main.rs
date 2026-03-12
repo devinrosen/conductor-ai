@@ -22,20 +22,31 @@ async fn main() -> Result<()> {
 
     // Reap orphaned agent runs on startup.
     let agent_mgr = AgentManager::new(&conn);
-    if let Ok(n) = agent_mgr.reap_orphaned_runs() {
-        if n > 0 {
-            tracing::info!("Reaped {n} orphaned agent run(s) on startup");
-        }
+    match agent_mgr.reap_orphaned_runs() {
+        Ok(n) if n > 0 => tracing::info!("Reaped {n} orphaned agent run(s) on startup"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("reap_orphaned_runs failed on startup: {e}"),
     }
 
     // Reap stale worktrees on startup.
     {
         use conductor_core::worktree::WorktreeManager;
         let wt_mgr = WorktreeManager::new(&conn, &config);
-        if let Ok(n) = wt_mgr.reap_stale_worktrees() {
-            if n > 0 {
-                tracing::info!("Reaped {n} stale worktree(s) on startup");
-            }
+        match wt_mgr.reap_stale_worktrees() {
+            Ok(n) if n > 0 => tracing::info!("Reaped {n} stale worktree(s) on startup"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("reap_stale_worktrees failed on startup: {e}"),
+        }
+    }
+
+    // Reap orphaned workflow runs on startup.
+    {
+        use conductor_core::workflow::WorkflowManager;
+        let wf_mgr = WorkflowManager::new(&conn);
+        match wf_mgr.reap_orphaned_workflow_runs() {
+            Ok(n) if n > 0 => tracing::info!("Reaped {n} orphaned workflow run(s) on startup"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!("reap_orphaned_workflow_runs failed on startup: {e}"),
         }
     }
 
@@ -56,15 +67,22 @@ async fn main() -> Result<()> {
             interval.tick().await;
             let db = reaper_state.db.clone();
             let cfg = reaper_config.clone();
-            let _ = tokio::task::spawn_blocking(move || {
+            let result = tokio::task::spawn_blocking(move || {
                 let conn = db.blocking_lock();
                 let mgr = AgentManager::new(&conn);
                 mgr.reap_orphaned_runs()?;
                 let cfg = cfg.blocking_read();
                 let wt_mgr = conductor_core::worktree::WorktreeManager::new(&conn, &cfg);
-                wt_mgr.reap_stale_worktrees()
+                wt_mgr.reap_stale_worktrees()?;
+                let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
+                wf_mgr.reap_orphaned_workflow_runs()
             })
             .await;
+            match result {
+                Ok(Err(e)) => tracing::warn!("periodic reaper failed: {e}"),
+                Err(join_err) => tracing::warn!("periodic reaper panicked: {join_err}"),
+                Ok(Ok(_)) => {}
+            }
         }
     });
 

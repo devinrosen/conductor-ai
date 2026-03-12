@@ -9,7 +9,7 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -1028,6 +1028,112 @@ impl<'a> WorkflowManager<'a> {
         }
 
         Ok(recovered)
+    }
+
+    /// Reap workflow runs that are stuck in `waiting` status because the executor
+    /// process died while polling a gate.
+    ///
+    /// A root run (`parent_workflow_run_id IS NULL`) is considered orphaned when:
+    /// - Its parent agent run is in a terminal state (`completed`, `failed`, or
+    ///   `cancelled`), meaning the executor loop that owned this run is gone, OR
+    /// - The active gate step's timeout has elapsed based on wall-clock time since
+    ///   `started_at`.
+    ///
+    /// Orphaned runs have their active gate step marked `timed_out` and the run
+    /// itself marked `cancelled` with a descriptive summary.
+    pub fn reap_orphaned_workflow_runs(&self) -> Result<usize> {
+        // Query all root runs in 'waiting' status.
+        let waiting_runs: Vec<(String, String)> = query_collect(
+            self.conn,
+            "SELECT id, parent_run_id FROM workflow_runs \
+             WHERE status = 'waiting' AND parent_workflow_run_id IS NULL",
+            params![],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+
+        let mut reaped = 0usize;
+        let now = Utc::now();
+
+        for (run_id, parent_run_id) in waiting_runs {
+            // Check if the parent agent run is in a terminal state.
+            let parent_status: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT status FROM agent_runs WHERE id = ?1",
+                    params![parent_run_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+
+            // A missing parent (None) is also treated as dead — if the agent run
+            // has been purged from the DB its executor is certainly gone.
+            let dead_parent = !matches!(
+                parent_status.as_deref(),
+                Some("running") | Some("waiting_for_feedback")
+            );
+
+            // Check if the active gate step's timeout has elapsed.
+            let gate_step = self.find_waiting_gate(&run_id)?;
+            let gate_timed_out = gate_step.as_ref().is_some_and(|step| {
+                let timeout_secs = step.gate_timeout.as_deref().and_then(|s| {
+                    match crate::workflow_dsl::parse_duration_str(s) {
+                        Ok(n) => i64::try_from(n).ok(),
+                        Err(_) => {
+                            tracing::warn!(
+                                run_id = %run_id,
+                                gate_timeout = %s,
+                                "gate_timeout value could not be parsed — timeout will not be enforced"
+                            );
+                            None
+                        }
+                    }
+                });
+                let started_at = step.started_at.as_deref().and_then(|s| {
+                    match DateTime::parse_from_rfc3339(s) {
+                        Ok(dt) => Some(dt.with_timezone(&Utc)),
+                        Err(_) => {
+                            tracing::warn!(
+                                run_id = %run_id,
+                                started_at = %s,
+                                "gate step started_at could not be parsed — timeout will not be enforced"
+                            );
+                            None
+                        }
+                    }
+                });
+                match (timeout_secs, started_at) {
+                    (Some(secs), Some(start)) => (now - start).num_seconds() >= secs,
+                    _ => false,
+                }
+            });
+
+            if !dead_parent && !gate_timed_out {
+                continue;
+            }
+
+            // Mark the active gate step as timed_out.
+            if let Some(ref step) = gate_step {
+                let now_str = now.to_rfc3339();
+                self.conn.execute(
+                    "UPDATE workflow_run_steps SET status = 'timed_out', ended_at = ?1 \
+                     WHERE id = ?2",
+                    params![now_str, step.id],
+                )?;
+            }
+
+            self.update_workflow_status(
+                &run_id,
+                WorkflowRunStatus::Cancelled,
+                Some(
+                    "Orphaned: executor died while waiting for gate \
+                     — run was automatically cancelled",
+                ),
+            )?;
+            tracing::info!(run_id = %run_id, "Reaped orphaned workflow run");
+            reaped += 1;
+        }
+
+        Ok(reaped)
     }
 
     /// Find the waiting gate step for a workflow run.
@@ -8807,5 +8913,205 @@ And here is my actual output:
                 .contains("has no associated worktree or repo"),
             "expected missing-targets error, got: {err}"
         );
+    }
+
+    // ── reap_orphaned_workflow_runs ───────────────────────────────────────────
+
+    /// Insert a workflow run in 'waiting' status with a waiting gate step.
+    /// The parent agent run is created with the given `parent_status`.
+    /// Returns `(run_id, step_id)`.
+    fn insert_waiting_run_with_gate(
+        conn: &Connection,
+        run_id: &str,
+        parent_status: &str,
+        gate_timeout: Option<&str>,
+        step_started_at: Option<&str>,
+    ) -> String {
+        let agent_mgr = AgentManager::new(conn);
+        let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+
+        // Set the parent agent run to the requested status directly.
+        conn.execute(
+            "UPDATE agent_runs SET status = ?1 WHERE id = ?2",
+            params![parent_status, parent.id],
+        )
+        .unwrap();
+
+        // Create the workflow run in 'waiting' status.
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+              started_at, parent_workflow_run_id) \
+             VALUES (?1, 'test-wf', NULL, ?2, 'waiting', 0, 'manual', \
+                     '2025-01-01T00:00:00Z', NULL)",
+            params![run_id, parent.id],
+        )
+        .unwrap();
+
+        // Insert a waiting gate step.
+        let step_id = ulid::Ulid::new().to_string();
+        let started = step_started_at.unwrap_or("2025-01-01T00:00:00Z");
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, position, status, iteration, \
+              gate_type, gate_timeout, started_at) \
+             VALUES (?1, ?2, 'approval-gate', 'gate', 0, 'waiting', 1, \
+                     'human_approval', ?3, ?4)",
+            params![step_id, run_id, gate_timeout, started],
+        )
+        .unwrap();
+
+        step_id
+    }
+
+    #[test]
+    fn test_reap_orphaned_workflow_runs_dead_parent() {
+        let conn = setup_db();
+        let run_id = "run-dead-parent";
+        insert_waiting_run_with_gate(&conn, run_id, "failed", Some("86400s"), None);
+
+        let mgr = WorkflowManager::new(&conn);
+        let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
+        assert_eq!(reaped, 1);
+
+        // Run should be cancelled.
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                params![run_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "cancelled");
+
+        // Gate step should be timed_out.
+        let step_status: String = conn
+            .query_row(
+                "SELECT status FROM workflow_run_steps WHERE workflow_run_id = ?1",
+                params![run_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(step_status, "timed_out");
+    }
+
+    #[test]
+    fn test_reap_orphaned_workflow_runs_gate_timeout_elapsed() {
+        let conn = setup_db();
+        let run_id = "run-gate-timeout";
+        // Parent is still running but gate started long ago with a 1s timeout.
+        insert_waiting_run_with_gate(
+            &conn,
+            run_id,
+            "running",
+            Some("1s"),
+            Some("2020-01-01T00:00:00Z"), // well in the past
+        );
+
+        let mgr = WorkflowManager::new(&conn);
+        let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
+        assert_eq!(reaped, 1);
+
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                params![run_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "cancelled");
+    }
+
+    #[test]
+    fn test_reap_orphaned_workflow_runs_skips_active_parent() {
+        let conn = setup_db();
+        let run_id = "run-active-parent";
+        // Parent is running, gate timeout is huge — not orphaned.
+        // Use a future started_at to ensure the timeout check also passes.
+        insert_waiting_run_with_gate(
+            &conn,
+            run_id,
+            "running",
+            Some("999999999s"),
+            Some("2099-01-01T00:00:00Z"),
+        );
+
+        let mgr = WorkflowManager::new(&conn);
+        let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
+        assert_eq!(reaped, 0);
+
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                params![run_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "waiting", "run must remain waiting");
+    }
+
+    #[test]
+    fn test_reap_orphaned_workflow_runs_skips_terminal() {
+        let conn = setup_db();
+        // Insert a completed run — must not be touched.
+        insert_workflow_run(&conn, "run-completed", "test-wf", "completed", None);
+        // Insert a cancelled run — must not be touched.
+        insert_workflow_run(&conn, "run-cancelled", "test-wf", "cancelled", None);
+
+        let mgr = WorkflowManager::new(&conn);
+        let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
+        assert_eq!(reaped, 0);
+    }
+
+    #[test]
+    fn test_reap_orphaned_workflow_runs_purged_parent() {
+        // A workflow run whose parent agent run no longer exists in the DB
+        // must still be reaped (parent_status == None → treat as dead).
+        // We insert the workflow run with FK checks disabled so we can
+        // reference a non-existent agent_run ID, simulating a purged parent.
+        let conn = setup_db();
+        let run_id = "run-purged-parent";
+        let ghost_parent_id = "ghost-agent-run-does-not-exist";
+
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+              started_at, parent_workflow_run_id) \
+             VALUES (?1, 'test-wf', NULL, ?2, 'waiting', 0, 'manual', \
+                     '2025-01-01T00:00:00Z', NULL)",
+            params![run_id, ghost_parent_id],
+        )
+        .unwrap();
+
+        let step_id = ulid::Ulid::new().to_string();
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, position, status, iteration, \
+              gate_type, gate_timeout, started_at) \
+             VALUES (?1, ?2, 'approval-gate', 'gate', 0, 'waiting', 1, \
+                     'human_approval', '999999999s', '2099-01-01T00:00:00Z')",
+            params![step_id, run_id],
+        )
+        .unwrap();
+
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
+        assert_eq!(
+            reaped, 1,
+            "purged parent should cause the workflow run to be reaped"
+        );
+
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                params![run_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "cancelled");
     }
 }

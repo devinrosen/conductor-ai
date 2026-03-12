@@ -60,6 +60,11 @@ pub fn poll_data() -> Option<Action> {
                 Ok(_) => {}
                 Err(e) => tracing::warn!("recover_stuck_steps failed: {e}"),
             }
+            match wf_mgr.reap_orphaned_workflow_runs() {
+                Ok(n) if n > 0 => tracing::debug!("Reaped {n} orphaned workflow run(s)"),
+                Ok(_) => {}
+                Err(e) => tracing::warn!("reap_orphaned_workflow_runs failed: {e}"),
+            }
         }
     }
 

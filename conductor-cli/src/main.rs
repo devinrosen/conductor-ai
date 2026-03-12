@@ -797,7 +797,13 @@ fn main() -> Result<()> {
             // Reap orphaned runs before handling any agent command.
             {
                 let agent_mgr = AgentManager::new(&conn);
-                let _ = agent_mgr.reap_orphaned_runs();
+                if let Err(e) = agent_mgr.reap_orphaned_runs() {
+                    eprintln!("Warning: reap_orphaned_runs failed: {e}");
+                }
+                let wf_mgr = WorkflowManager::new(&conn);
+                if let Err(e) = wf_mgr.reap_orphaned_workflow_runs() {
+                    eprintln!("Warning: reap_orphaned_workflow_runs failed: {e}");
+                }
             }
 
             match command {
