@@ -1076,9 +1076,17 @@ impl<'a> WorkflowManager<'a> {
             let gate_step = self.find_waiting_gate(&run_id)?;
             let gate_timed_out = gate_step.as_ref().is_some_and(|step| {
                 let timeout_secs = step.gate_timeout.as_deref().and_then(|s| {
-                    crate::workflow_dsl::parse_duration_str(s)
-                        .ok()
-                        .and_then(|n| i64::try_from(n).ok())
+                    match crate::workflow_dsl::parse_duration_str(s) {
+                        Ok(n) => i64::try_from(n).ok(),
+                        Err(_) => {
+                            tracing::warn!(
+                                run_id = %run_id,
+                                gate_timeout = %s,
+                                "gate_timeout value could not be parsed — timeout will not be enforced"
+                            );
+                            None
+                        }
+                    }
                 });
                 let started_at = step
                     .started_at

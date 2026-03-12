@@ -78,8 +78,10 @@ async fn main() -> Result<()> {
                 wf_mgr.reap_orphaned_workflow_runs()
             })
             .await;
-            if let Ok(Err(e)) = result {
-                tracing::warn!("periodic reaper failed: {e}");
+            match result {
+                Ok(Err(e)) => tracing::warn!("periodic reaper failed: {e}"),
+                Err(join_err) => tracing::warn!("periodic reaper panicked: {join_err}"),
+                Ok(Ok(_)) => {}
             }
         }
     });
