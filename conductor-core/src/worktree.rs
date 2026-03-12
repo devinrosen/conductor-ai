@@ -827,8 +827,10 @@ fn clone_repo(remote_url: &str, local_path: &str) -> Result<()> {
 /// `fetch_pr_branch`.  The expected format is:
 ///
 /// ```text
-/// <head_branch>|<base_branch>|<head_owner>/<head_repo>|<base_owner>/<base_repo>
+/// <head_branch>|<base_branch>|<head_owner>/<head_repo>|<true|false>
 /// ```
+///
+/// The fourth field is the value of `isCrossRepository` (true for fork PRs).
 ///
 /// Returns `(head_branch, base_branch, head_repo, is_fork)`.
 fn parse_pr_view_output(raw: &str) -> Result<(String, String, String, bool)> {
@@ -842,8 +844,7 @@ fn parse_pr_view_output(raw: &str) -> Result<(String, String, String, bool)> {
     let head_branch = parts[0].to_string();
     let base_branch = parts[1].to_string();
     let head_repo = parts[2].to_string();
-    let base_repo = parts[3];
-    let is_fork = head_repo != base_repo;
+    let is_fork = parts[3].trim() == "true";
     Ok((head_branch, base_branch, head_repo, is_fork))
 }
 
@@ -861,9 +862,9 @@ fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String, String)> 
             "view",
             &pr_number.to_string(),
             "--json",
-            "headRefName,baseRefName,headRepository,baseRepository",
+            "headRefName,baseRefName,headRepository,isCrossRepository",
             "--jq",
-            ".headRefName + \"|\" + .baseRefName + \"|\" + .headRepository.owner.login + \"/\" + .headRepository.name + \"|\" + .baseRepository.owner.login + \"/\" + .baseRepository.name",
+            ".headRefName + \"|\" + .baseRefName + \"|\" + .headRepository.owner.login + \"/\" + .headRepository.name + \"|\" + (.isCrossRepository | tostring)",
         ])
         .current_dir(repo_path)
         .output()?;
@@ -1545,7 +1546,7 @@ mod tests {
 
     #[test]
     fn test_parse_pr_view_output_same_repo() {
-        let raw = "feat/my-feature|main|owner/repo|owner/repo";
+        let raw = "feat/my-feature|main|owner/repo|false";
         let (head, base, head_repo, is_fork) = parse_pr_view_output(raw).unwrap();
         assert_eq!(head, "feat/my-feature");
         assert_eq!(base, "main");
@@ -1555,7 +1556,7 @@ mod tests {
 
     #[test]
     fn test_parse_pr_view_output_fork() {
-        let raw = "feat/my-feature|main|fork-user/repo|owner/repo";
+        let raw = "feat/my-feature|main|fork-user/repo|true";
         let (head, base, head_repo, is_fork) = parse_pr_view_output(raw).unwrap();
         assert_eq!(head, "feat/my-feature");
         assert_eq!(base, "main");
@@ -1566,7 +1567,7 @@ mod tests {
     #[test]
     fn test_parse_pr_view_output_non_default_base() {
         // PR targeting a release branch rather than the repo default
-        let raw = "feat/my-feature|release/v2|owner/repo|owner/repo";
+        let raw = "feat/my-feature|release/v2|owner/repo|false";
         let (head, base, _head_repo, is_fork) = parse_pr_view_output(raw).unwrap();
         assert_eq!(head, "feat/my-feature");
         assert_eq!(base, "release/v2");
