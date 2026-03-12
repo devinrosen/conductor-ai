@@ -153,19 +153,23 @@ pub fn render_input(frame: &mut Frame, area: Rect, title: &str, prompt: &str, va
 }
 
 pub fn render_error(frame: &mut Frame, area: Rect, message: &str) {
-    let popup = centered_rect(50, 25, area);
+    let popup = centered_rect(60, 50, area);
     frame.render_widget(Clear, popup);
 
-    let content = Paragraph::new(vec![
-        Line::from(""),
-        Line::from(Span::styled(message, Style::default().fg(Color::Red))),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  Press Esc or Enter to dismiss",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ])
-    .block(
+    let mut lines: Vec<Line> = vec![Line::from("")];
+    for part in message.split('\n') {
+        lines.push(Line::from(Span::styled(
+            part.to_string(),
+            Style::default().fg(Color::Red),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  y: copy  Esc/Enter: dismiss",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let content = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Red))

@@ -65,6 +65,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         Modal::Error { .. } => {
             return match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => Action::DismissModal,
+                KeyCode::Char('y') => Action::CopyErrorMessage,
                 _ => Action::None,
             };
         }

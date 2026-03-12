@@ -389,6 +389,11 @@ impl App {
                 }
                 self.state.modal = Modal::None;
             }
+            Action::CopyErrorMessage => {
+                if let Modal::Error { ref message } = self.state.modal {
+                    self.copy_text_to_clipboard(message.clone());
+                }
+            }
             Action::OpenTicketUrl => self.handle_open_ticket_url(),
             Action::CopyTicketUrl => self.handle_copy_ticket_url(),
             Action::OpenRepoUrl => self.handle_open_repo_url(),
@@ -5338,13 +5343,26 @@ impl App {
             }
         };
 
-        let pr_defs: Vec<conductor_core::workflow::WorkflowDef> = self
+        // Load defs directly from the selected repo's local path so the PR workflow
+        // picker works even when no worktrees are registered (the background poller
+        // only scans worktrees, leaving workflow_defs empty in that case).
+        let repo_local_path = self
             .state
-            .data
-            .workflow_defs
-            .iter()
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
+            .map(|r| r.local_path.clone());
+
+        let all_defs: Vec<conductor_core::workflow::WorkflowDef> =
+            if let Some(ref rp) = repo_local_path {
+                conductor_core::workflow::WorkflowManager::list_defs(rp, rp).unwrap_or_default()
+            } else {
+                self.state.data.workflow_defs.clone()
+            };
+
+        let pr_defs: Vec<conductor_core::workflow::WorkflowDef> = all_defs
+            .into_iter()
             .filter(|d| d.targets.iter().any(|t| t == "pr"))
-            .cloned()
             .collect();
 
         if pr_defs.is_empty() {

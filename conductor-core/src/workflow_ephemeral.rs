@@ -133,7 +133,9 @@ pub fn checkout_pr(pr: &PrRef, dir: &Path) -> Result<String> {
         )));
     }
 
-    // Step 2: checkout the PR branch
+    // Step 2: checkout the PR branch (detached HEAD avoids tracking-setup failures
+    // that occur in shallow clones where the remote-tracking ref exists but git
+    // refuses to create a local tracking branch from it).
     let output = Command::new("gh")
         .args([
             "pr",
@@ -141,7 +143,7 @@ pub fn checkout_pr(pr: &PrRef, dir: &Path) -> Result<String> {
             &pr.number.to_string(),
             "--repo",
             &repo_slug,
-            "--force",
+            "--detach",
         ])
         .current_dir(dir)
         .output()
@@ -213,6 +215,17 @@ pub fn run_workflow_on_pr(
                 workflow_name
             ))
         })?;
+
+    // Inject implicit PR context variables (do not overwrite user-provided values)
+    inputs.entry("pr_url".to_string()).or_insert_with(|| {
+        format!(
+            "https://github.com/{}/{}/pull/{}",
+            pr_ref.owner, pr_ref.repo, pr_ref.number
+        )
+    });
+    inputs
+        .entry("pr_number".to_string())
+        .or_insert_with(|| pr_ref.number.to_string());
 
     // Validate required inputs and apply defaults (shared helper)
     apply_workflow_input_defaults(&workflow, &mut inputs)?;
