@@ -405,6 +405,7 @@ Each step receives:
 
 - `{{prior_context}}` — the `context` string from the immediately preceding step
 - `{{prior_contexts}}` — JSON array of all context entries accumulated so far:
+- `{{dry_run}}` — `"true"` or `"false"` string reflecting whether the workflow was started with `--dry-run`. Non-committing agents (`can_commit: false`) can use this to skip GitHub side effects (e.g., `gh pr review`, `gh issue create`) and instead describe what they *would* have done.
 
 ```json
 [
@@ -427,13 +428,15 @@ agents detect repeated failures on the same issue.
 
 | Construct | Dry-run behavior |
 |---|---|
-| `call` with `can_commit = false` | Runs normally |
-| `call` with `can_commit = true` | Prepends "DO NOT commit or push" to prompt |
+| `call` with `can_commit = false` | Runs normally; `{{dry_run}}` is `"true"` so the agent can skip GitHub side effects |
+| `call` with `can_commit = true` | Prepends "DO NOT commit or push" to prompt; `{{dry_run}}` is `"true"` |
 | Human gates | Auto-approved; `{{gate_feedback}}` is empty |
 | Automated gates | Skipped (treated as satisfied) |
 | `always` | Runs normally |
 
 Dry-run status is stored on the run record so history clearly identifies them.
+
+The `{{dry_run}}` template variable is always available to agent prompts — `"true"` when running with `--dry-run`, `"false"` otherwise. Agents that have GitHub side effects (posting reviews, filing issues) should check this variable and skip or simulate those calls accordingly.
 
 ---
 
