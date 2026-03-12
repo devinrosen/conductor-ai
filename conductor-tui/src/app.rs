@@ -675,8 +675,19 @@ impl App {
             Action::PendingG => unreachable!(),
 
             // Background results
-            Action::PrsRefreshed { repo_id, prs } => {
+            Action::PrsRefreshed { repo_id, mut prs } => {
                 if self.state.selected_repo_id.as_deref() == Some(&repo_id) {
+                    prs.sort_by_key(|pr| {
+                        if pr.is_draft {
+                            3u8
+                        } else {
+                            match pr.review_decision.as_deref() {
+                                Some("CHANGES_REQUESTED") => 0,
+                                Some("APPROVED") => 1,
+                                _ => 2,
+                            }
+                        }
+                    });
                     self.state.detail_prs = prs;
                     self.state.detail_pr_index = 0;
                     self.state.pr_last_fetched_at = Some(std::time::Instant::now());

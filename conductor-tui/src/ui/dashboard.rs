@@ -23,26 +23,6 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     render_tickets(frame, vert[1], state);
 }
 
-/// Given a flat list sorted by repo (get_repo returns an owned String key),
-/// return the visual row index (including interleaved header rows) for
-/// the item at `logical_idx`.
-fn visual_idx_with_headers<T>(
-    items: &[T],
-    get_repo: impl Fn(&T) -> String,
-    logical_idx: usize,
-) -> usize {
-    let mut headers = 0usize;
-    let mut prev = String::new();
-    for item in items.iter().take(logical_idx + 1) {
-        let repo = get_repo(item);
-        if repo != prev {
-            headers += 1;
-            prev = repo;
-        }
-    }
-    logical_idx + headers
-}
-
 fn render_repos(frame: &mut Frame, area: Rect, state: &AppState) {
     let focused = state.dashboard_focus == DashboardFocus::Repos;
     let border_style = if focused {
@@ -166,7 +146,7 @@ fn render_worktrees(frame: &mut Frame, area: Rect, state: &AppState) {
         let logical_idx = state
             .worktree_index
             .min(wts_with_slug.len().saturating_sub(1));
-        let visual_idx = visual_idx_with_headers(
+        let visual_idx = super::helpers::visual_idx_with_headers(
             &wts_with_slug,
             |(repo_slug, _)| repo_slug.clone(),
             logical_idx,
@@ -250,7 +230,7 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
         let logical_idx = state
             .ticket_index
             .min(state.filtered_tickets.len().saturating_sub(1));
-        let visual_idx = visual_idx_with_headers(
+        let visual_idx = super::helpers::visual_idx_with_headers(
             &state.filtered_tickets,
             |t| {
                 state
