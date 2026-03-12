@@ -19,11 +19,11 @@ from datetime import datetime, timezone
 DB_PATH = os.path.expanduser("~/.conductor/conductor.db")
 
 # Status display order (lower = higher priority)
-STATUS_ORDER = {"waiting_gate": 0, "running": 1, "failed": 2, "completed": 3}
+STATUS_ORDER = {"waiting": 0, "running": 1, "failed": 2, "completed": 3}
 
 # Icons per status
 ICONS = {
-    "waiting_gate": "⏳",
+    "waiting": "⏳",
     "running": "▶ ",
     "failed": "✗ ",
     "completed": "✓ ",
@@ -85,8 +85,10 @@ def get_runs(conn: sqlite3.Connection) -> list[dict]:
                 repo_id
             FROM workflow_runs
             WHERE parent_workflow_run_id IS NULL
-              AND status IN ('running', 'waiting_gate', 'failed', 'completed')
-            ORDER BY started_at DESC
+              AND status IN ('running', 'waiting', 'failed', 'completed')
+            ORDER BY
+                CASE WHEN status IN ('running', 'waiting') THEN 0 ELSE 1 END,
+                started_at DESC
             LIMIT 20
             """
         )
@@ -152,7 +154,7 @@ def _batch_gate_steps(
     conn: sqlite3.Connection, runs: list[dict]
 ) -> dict[str, str]:
     """Return {run_id: step_name} for all waiting_gate runs."""
-    run_ids = [r["id"] for r in runs if r["status"] == "waiting_gate"]
+    run_ids = [r["id"] for r in runs if r["status"] == "waiting"]
     steps: dict[str, str] = {}
     if not run_ids:
         return steps
@@ -164,7 +166,7 @@ def _batch_gate_steps(
             SELECT workflow_run_id, step_name
             FROM workflow_run_steps
             WHERE workflow_run_id IN ({placeholders})
-              AND status = 'waiting_gate'
+              AND status = 'waiting'
             """,
             run_ids,
         )
@@ -191,8 +193,8 @@ def format_status_line(runs: list[dict], conn: sqlite3.Connection) -> str:
     parts = []
     if counts.get("running", 0):
         parts.append(f"{counts['running']} running")
-    if counts.get("waiting_gate", 0):
-        n = counts["waiting_gate"]
+    if counts.get("waiting", 0):
+        n = counts["waiting"]
         parts.append(f"{n} gate{'s' if n > 1 else ''} waiting")
     if counts.get("failed", 0):
         parts.append(f"{counts['failed']} failed")
@@ -231,13 +233,13 @@ def format_status_line(runs: list[dict], conn: sqlite3.Connection) -> str:
             label = ""
 
         elapsed = ""
-        if status in ("running", "waiting_gate", "failed"):
+        if status in ("running", "waiting", "failed"):
             elapsed = format_elapsed(run.get("started_at"))
 
-        gate_step = gate_steps.get(run["id"], "") if status == "waiting_gate" else ""
+        gate_step = gate_steps.get(run["id"], "") if status == "waiting" else ""
 
         # Build detail line
-        if status == "waiting_gate" and gate_step:
+        if status == "waiting" and gate_step:
             detail = f"{icon}  gate:{gate_step:<20}  {wf_name:<24}  {label:<28}  waiting {elapsed}"
         elif status == "failed":
             detail = f"{icon}  {wf_name:<26}                            {label:<28}  failed  {elapsed}"
