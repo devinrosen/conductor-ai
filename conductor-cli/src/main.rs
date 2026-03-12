@@ -25,6 +25,8 @@ use conductor_core::workflow::{
 use conductor_core::workflow_config;
 use conductor_core::worktree::WorktreeManager;
 
+mod statusline;
+
 /// Environment variable name used to pass the current agent run ID to subprocesses.
 const CONDUCTOR_RUN_ID_ENV: &str = "CONDUCTOR_RUN_ID";
 
@@ -62,6 +64,19 @@ enum Commands {
         #[command(subcommand)]
         command: WorkflowCommands,
     },
+    /// Manage Claude Code status line integration
+    Statusline {
+        #[command(subcommand)]
+        command: StatuslineCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum StatuslineCommands {
+    /// Install the conductor status line into Claude Code
+    Install,
+    /// Uninstall the conductor status line from Claude Code
+    Uninstall,
 }
 
 #[derive(Subcommand)]
@@ -1761,6 +1776,10 @@ fn main() -> Result<()> {
                     println!("Purged {count} workflow run(s).");
                 }
             }
+        },
+        Commands::Statusline { command } => match command {
+            StatuslineCommands::Install => statusline::install()?,
+            StatuslineCommands::Uninstall => statusline::uninstall()?,
         },
     }
 

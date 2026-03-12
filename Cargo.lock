@@ -316,6 +316,7 @@ dependencies = [
  "chrono",
  "clap",
  "conductor-core",
+ "dirs",
  "rusqlite",
  "serde",
  "serde_json",

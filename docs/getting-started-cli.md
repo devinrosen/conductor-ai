@@ -156,6 +156,28 @@ If your team wants to run conductor workflows directly from a project repo witho
 
 For PR-targeted workflows using `--pr`, no registration is needed at all — conductor resolves everything from the PR URL.
 
+## Claude Code integration
+
+Conductor can show live workflow run status directly in the Claude Code status bar.
+
+```bash
+# Install (writes ~/.conductor/statusline.py and updates ~/.claude/settings.json):
+conductor statusline install
+
+# Uninstall (removes the statusLineTool entry from ~/.claude/settings.json):
+conductor statusline uninstall
+```
+
+After installing, restart Claude Code. The status bar will show active workflow runs:
+
+```
+⬡ conductor   2 running  ·  1 gate waiting
+⏳  gate:pr_checks       merge-when-ready     umbrella/feat-login     waiting 1h 23m
+▶   implement            ticket-to-pr         umbrella/fix-crash      running 4m 12s
+```
+
+Re-running `conductor statusline install` upgrades the script automatically.
+
 ## Tips
 
 - **Model override:** Pass `--model claude-opus-4-6` to any `workflow run` to use a specific model for all agent steps.
