@@ -14,7 +14,6 @@ Conductor exists to make AI-assisted development repeatable and observable. The 
 - [GitHub CLI (`gh`)](https://cli.github.com/) — installed and authenticated
 - [tmux](https://github.com/tmux/tmux)
 - [Node.js](https://nodejs.org/) (only needed if touching the web UI)
-- Claude Code — `npm install -g @anthropic-ai/claude-code`
 
 ### 2. Clone and build
 
@@ -24,14 +23,6 @@ cd conductor-ai
 git config core.hooksPath .githooks   # enforces cargo fmt on commit
 ./build.sh
 ```
-
-### 3. Enable the pre-commit hook
-
-```bash
-git config core.hooksPath .githooks
-```
-
-This runs `cargo fmt --all --check` before every commit. CI enforces the same check, so enabling it locally saves a round-trip.
 
 ---
 
@@ -46,7 +37,7 @@ This runs `cargo fmt --all --check` before every commit. CI enforces the same ch
 
 ## The preferred workflow: ticket-to-pr
 
-If you have conductor set up, use it to work on conductor.
+If you have conductor set up, use it to work on conductor. You'll also need [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`npm install -g @anthropic-ai/claude-code`) for agent runs.
 
 ```bash
 # Register the repo (one-time)

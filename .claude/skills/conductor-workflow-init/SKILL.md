@@ -32,7 +32,6 @@ mkdir -p <target_dir>/.conductor/agents
 mkdir -p <target_dir>/.conductor/workflows
 mkdir -p <target_dir>/.conductor/prompts
 mkdir -p <target_dir>/.conductor/schemas
-mkdir -p <target_dir>/.conductor/reviewers
 ```
 
 ### 2. Add `.gitkeep` files to empty directories
@@ -40,7 +39,7 @@ mkdir -p <target_dir>/.conductor/reviewers
 For each directory, add a `.gitkeep` only if the directory contains no other files (so existing content is never overwritten):
 
 ```bash
-for dir in agents workflows prompts schemas reviewers; do
+for dir in agents workflows prompts schemas; do
   target="<target_dir>/.conductor/$dir"
   if [ -z "$(ls -A "$target" 2>/dev/null)" ]; then
     touch "$target/.gitkeep"
@@ -50,7 +49,7 @@ done
 
 ### 3. Report results
 
-For each of the five directories, report whether it was:
+For each of the four directories, report whether it was:
 - **Created** — directory did not exist before this run
 - **Already existed** — directory was already in place (idempotent)
 - **`.gitkeep` added** — directory was new or empty, `.gitkeep` was placed
@@ -62,7 +61,6 @@ Example output:
 .conductor/workflows/   created, .gitkeep added
 .conductor/prompts/     created, .gitkeep added
 .conductor/schemas/     created, .gitkeep added
-.conductor/reviewers/   created, .gitkeep added
 ```
 
 ## Notes

@@ -3019,8 +3019,8 @@ workflow parent {
             meta { targets = ["worktree"] }
             parallel {
                 with = ["review-diff-scope"]
-                call ".conductor/reviewers/architecture.md"
-                call ".conductor/reviewers/db-migrations.md" { with = ["migration-rules"] }
+                call ".conductor/agents/review-architecture.md"
+                call ".conductor/agents/review-db-migrations.md" { with = ["migration-rules"] }
             }
         }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
