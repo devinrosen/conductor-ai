@@ -1348,7 +1348,11 @@ pub fn load_workflow_defs(
         match parse_workflow_file(&path) {
             Ok(def) => defs.push(def),
             Err(e) => {
-                let msg = format!("Failed to parse workflow {:?}: {e}", path);
+                let filename = path
+                    .file_name()
+                    .unwrap_or(path.as_os_str())
+                    .to_string_lossy();
+                let msg = format!("Failed to parse {filename}: {e}");
                 tracing::warn!("{msg}");
                 warnings.push(msg);
             }
@@ -2039,6 +2043,40 @@ workflow ticket-to-pr {
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].name, "simple");
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_load_partial_failure_returns_successes_and_warnings() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let wf_dir = tmp.path().join(".conductor").join("workflows");
+        fs::create_dir_all(&wf_dir).unwrap();
+        // Valid workflow
+        fs::write(
+            wf_dir.join("good.wf"),
+            "workflow good { meta { targets = [\"worktree\"] } call build }",
+        )
+        .unwrap();
+        // Invalid workflow (syntax error)
+        fs::write(
+            wf_dir.join("bad.wf"),
+            "this is not valid workflow syntax !!!",
+        )
+        .unwrap();
+
+        let (defs, warnings) =
+            load_workflow_defs(tmp.path().to_str().unwrap(), "/nonexistent").unwrap();
+        // The good workflow is returned despite the bad one failing
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "good");
+        // One warning for the bad file
+        assert_eq!(warnings.len(), 1);
+        // Warning includes the filename without debug-format quotes
+        assert!(warnings[0].contains("bad.wf"), "warning: {}", warnings[0]);
+        assert!(
+            !warnings[0].contains('"'),
+            "warning should not contain quotes: {}",
+            warnings[0]
+        );
     }
 
     #[test]

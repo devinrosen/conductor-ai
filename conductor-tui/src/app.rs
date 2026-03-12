@@ -676,10 +676,15 @@ impl App {
                 self.state.init_collapse_state();
                 if !payload.workflow_parse_warnings.is_empty() {
                     let count = payload.workflow_parse_warnings.len();
+                    // Warning format: "Failed to parse <filename>: <error>"
                     let names: Vec<&str> = payload
                         .workflow_parse_warnings
                         .iter()
-                        .filter_map(|w| w.split('"').nth(1).or_else(|| w.split_whitespace().last()))
+                        .filter_map(|w| {
+                            w.strip_prefix("Failed to parse ")
+                                .and_then(|s| s.split(": ").next())
+                                .or_else(|| w.split_whitespace().last())
+                        })
                         .collect();
                     let label = if names.is_empty() {
                         format!("{count} workflow(s) failed to parse")
@@ -4738,9 +4743,14 @@ impl App {
                 self.state.data.workflow_defs = defs;
                 if !warnings.is_empty() {
                     let count = warnings.len();
+                    // Warning format: "Failed to parse <filename>: <error>"
                     let names: Vec<&str> = warnings
                         .iter()
-                        .filter_map(|w| w.split('"').nth(1).or_else(|| w.split_whitespace().last()))
+                        .filter_map(|w| {
+                            w.strip_prefix("Failed to parse ")
+                                .and_then(|s| s.split(": ").next())
+                                .or_else(|| w.split_whitespace().last())
+                        })
                         .collect();
                     let label = if names.is_empty() {
                         format!("{count} workflow(s) failed to parse")
