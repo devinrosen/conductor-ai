@@ -1075,7 +1075,11 @@ impl<'a> WorkflowManager<'a> {
             // Check if the active gate step's timeout has elapsed.
             let gate_step = self.find_waiting_gate(&run_id)?;
             let gate_timed_out = gate_step.as_ref().is_some_and(|step| {
-                let timeout_secs = step.gate_timeout.as_deref().and_then(parse_duration_secs);
+                let timeout_secs = step.gate_timeout.as_deref().and_then(|s| {
+                    crate::workflow_dsl::parse_duration_str(s)
+                        .ok()
+                        .and_then(|n| i64::try_from(n).ok())
+                });
                 let started_at = step
                     .started_at
                     .as_deref()
@@ -1334,22 +1338,6 @@ impl<'a> WorkflowManager<'a> {
             }
         }
         Ok(map)
-    }
-}
-
-/// Parse a duration string like `"86400s"`, `"30m"`, or `"2h"` into seconds.
-///
-/// Returns `None` on parse failure — callers treat this as "skip timeout check"
-/// (fail open: never cancel a run with an unparseable timeout).
-fn parse_duration_secs(s: &str) -> Option<i64> {
-    if let Some(n) = s.strip_suffix('s') {
-        n.parse::<i64>().ok()
-    } else if let Some(n) = s.strip_suffix('m') {
-        n.parse::<i64>().ok().map(|n| n * 60)
-    } else if let Some(n) = s.strip_suffix('h') {
-        n.parse::<i64>().ok().map(|n| n * 3600)
-    } else {
-        None
     }
 }
 
