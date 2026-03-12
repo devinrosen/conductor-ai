@@ -91,7 +91,11 @@ pub async fn list_workflow_defs(
     let wt = wt_mgr.get_by_id(&worktree_id)?;
     let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
 
-    let defs = WorkflowManager::list_defs(&wt.path, &repo.local_path).unwrap_or_default();
+    let (defs, warnings) =
+        WorkflowManager::list_defs(&wt.path, &repo.local_path).unwrap_or_default();
+    for w in &warnings {
+        tracing::warn!("Failed to parse {}: {}", w.file, w.message);
+    }
     let summaries: Vec<WorkflowDefSummary> = defs.iter().map(WorkflowDefSummary::from).collect();
     Ok(Json(summaries))
 }

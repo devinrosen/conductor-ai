@@ -70,6 +70,15 @@ impl WorkflowDef {
     }
 }
 
+/// A structured parse warning produced when a `.wf` file fails to load.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowWarning {
+    /// The filename (e.g. `bad.wf`) that failed to parse.
+    pub file: String,
+    /// Human-readable description of the parse error.
+    pub message: String,
+}
+
 /// Trigger type for when a workflow should run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1318,10 +1327,17 @@ pub fn parse_workflow_str(input: &str, source_path: &str) -> Result<WorkflowDef>
 }
 
 /// Load all workflow definitions from `.conductor/workflows/*.wf`.
-pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<WorkflowDef>> {
+///
+/// Returns `(defs, warnings)` where `warnings` contains one [`WorkflowWarning`]
+/// per file that failed to parse. Callers receive all successfully-parsed
+/// definitions even when some files are broken.
+pub fn load_workflow_defs(
+    worktree_path: &str,
+    repo_path: &str,
+) -> Result<(Vec<WorkflowDef>, Vec<WorkflowWarning>)> {
     let workflows_dir = match resolve_conductor_subdir(worktree_path, repo_path, "workflows") {
         Some(dir) => dir,
-        None => return Ok(Vec::new()),
+        None => return Ok((Vec::new(), Vec::new())),
     };
 
     let mut entries: Vec<_> = fs::read_dir(&workflows_dir)
@@ -1335,10 +1351,26 @@ pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<Wo
     entries.sort_by_key(|e| e.file_name());
 
     let mut defs = Vec::new();
+    let mut warnings = Vec::new();
     for entry in entries {
-        defs.push(parse_workflow_file(&entry.path())?);
+        let path = entry.path();
+        match parse_workflow_file(&path) {
+            Ok(def) => defs.push(def),
+            Err(e) => {
+                let file = path
+                    .file_name()
+                    .unwrap_or(path.as_os_str())
+                    .to_string_lossy()
+                    .into_owned();
+                tracing::warn!("Failed to parse {file}: {e}");
+                warnings.push(WorkflowWarning {
+                    file,
+                    message: e.to_string(),
+                });
+            }
+        }
     }
-    Ok(defs)
+    Ok((defs, warnings))
 }
 
 /// Validate that a workflow name is safe for use in filesystem paths.
@@ -2018,9 +2050,41 @@ workflow ticket-to-pr {
         )
         .unwrap();
 
-        let defs = load_workflow_defs(tmp.path().to_str().unwrap(), "/nonexistent").unwrap();
+        let (defs, warnings) =
+            load_workflow_defs(tmp.path().to_str().unwrap(), "/nonexistent").unwrap();
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].name, "simple");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_load_partial_failure_returns_successes_and_warnings() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let wf_dir = tmp.path().join(".conductor").join("workflows");
+        fs::create_dir_all(&wf_dir).unwrap();
+        // Valid workflow
+        fs::write(
+            wf_dir.join("good.wf"),
+            "workflow good { meta { targets = [\"worktree\"] } call build }",
+        )
+        .unwrap();
+        // Invalid workflow (syntax error)
+        fs::write(
+            wf_dir.join("bad.wf"),
+            "this is not valid workflow syntax !!!",
+        )
+        .unwrap();
+
+        let (defs, warnings) =
+            load_workflow_defs(tmp.path().to_str().unwrap(), "/nonexistent").unwrap();
+        // The good workflow is returned despite the bad one failing
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "good");
+        // One warning for the bad file
+        assert_eq!(warnings.len(), 1);
+        // Warning carries the filename in the structured `file` field
+        assert_eq!(warnings[0].file, "bad.wf");
+        assert!(!warnings[0].message.is_empty());
     }
 
     #[test]

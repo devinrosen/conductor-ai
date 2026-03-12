@@ -4,7 +4,9 @@ use conductor_core::agent::{AgentRun, AgentRunEvent, TicketAgentTotals};
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::{Ticket, TicketLabel};
-use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStep, WorkflowStepSummary};
+use conductor_core::workflow::{
+    WorkflowDef, WorkflowRun, WorkflowRunStep, WorkflowStepSummary, WorkflowWarning,
+};
 use conductor_core::worktree::Worktree;
 use crossterm::event::KeyEvent;
 
@@ -31,6 +33,8 @@ pub struct WorkflowDataPayload {
     pub step_agent_events: Vec<AgentRunEvent>,
     /// Agent run metadata for the selected step's child_run_id
     pub step_agent_run: Option<AgentRun>,
+    /// Structured parse warnings for any `.wf` files that failed to load
+    pub workflow_parse_warnings: Vec<WorkflowWarning>,
 }
 
 /// Payload for the DataRefreshed action (boxed to keep Action enum small).
