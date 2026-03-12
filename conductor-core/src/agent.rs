@@ -44,6 +44,33 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
 const FEEDBACK_SELECT: &str =
     "SELECT id, run_id, prompt, response, status, created_at, responded_at FROM feedback_requests";
 
+/// Shared SELECT column list for the `agent_runs` table (plain, unaliased form).
+/// Aliased `a.` variants used in JOINs/CTEs are left inline — they require table
+/// prefixes and/or intentional column substitutions (e.g. `NULL` for `plan`).
+const AGENT_RUN_SELECT: &str =
+    "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
+     cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
+     model, plan, parent_run_id, \
+     input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
+     bot_name FROM agent_runs";
+
+/// Shared SELECT column list for the `agent_run_steps` table.
+const AGENT_RUN_STEPS_SELECT: &str =
+    "SELECT id, run_id, position, description, status, started_at, completed_at \
+     FROM agent_run_steps";
+
+/// Shared SELECT column list for the `agent_run_events` table (plain, unaliased form).
+/// The aliased `e.` variant used in the JOIN query is left inline.
+const AGENT_RUN_EVENTS_SELECT: &str =
+    "SELECT id, run_id, kind, summary, started_at, ended_at, metadata \
+     FROM agent_run_events";
+
+/// Shared SELECT column list for the `agent_created_issues` table (plain, unaliased form).
+/// The aliased `aci.` variant used in the JOIN query is left inline.
+const AGENT_CREATED_ISSUES_SELECT: &str =
+    "SELECT id, agent_run_id, repo_id, source_type, source_id, title, url, created_at \
+     FROM agent_created_issues";
+
 /// Parsed result event from an agent log file or streaming JSON.
 pub struct LogResult {
     pub result_text: Option<String>,
@@ -766,12 +793,7 @@ impl<'a> AgentManager<'a> {
 
     pub fn get_run(&self, run_id: &str) -> Result<Option<AgentRun>> {
         let result = self.conn.query_row(
-            "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
-             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan, parent_run_id, \
-             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
-             bot_name \
-             FROM agent_runs WHERE id = ?1",
+            &format!("{AGENT_RUN_SELECT} WHERE id = ?1"),
             params![run_id],
             row_to_agent_run,
         );
@@ -804,14 +826,7 @@ impl<'a> AgentManager<'a> {
             placeholders.push('?');
             placeholders.push_str(&i.to_string());
         }
-        let sql = format!(
-            "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
-             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan, parent_run_id, \
-             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
-             bot_name \
-             FROM agent_runs WHERE id IN ({placeholders})"
-        );
+        let sql = format!("{AGENT_RUN_SELECT} WHERE id IN ({placeholders})");
         let params: Vec<&dyn rusqlite::types::ToSql> = ids
             .iter()
             .map(|id| id as &dyn rusqlite::types::ToSql)
@@ -1061,8 +1076,7 @@ impl<'a> AgentManager<'a> {
     pub fn get_run_steps(&self, run_id: &str) -> Result<Vec<PlanStep>> {
         query_collect(
             self.conn,
-            "SELECT id, run_id, position, description, status, started_at, completed_at \
-             FROM agent_run_steps WHERE run_id = ?1 ORDER BY position ASC",
+            &format!("{AGENT_RUN_STEPS_SELECT} WHERE run_id = ?1 ORDER BY position ASC"),
             params![run_id],
             row_to_plan_step,
         )
@@ -1078,8 +1092,7 @@ impl<'a> AgentManager<'a> {
         let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
         let placeholders: String = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
-            "SELECT id, run_id, position, description, status, started_at, completed_at \
-             FROM agent_run_steps WHERE run_id IN ({placeholders}) ORDER BY position ASC"
+            "{AGENT_RUN_STEPS_SELECT} WHERE run_id IN ({placeholders}) ORDER BY position ASC"
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(&ids), |row| {
@@ -1105,12 +1118,7 @@ impl<'a> AgentManager<'a> {
     pub fn list_for_worktree(&self, worktree_id: &str) -> Result<Vec<AgentRun>> {
         let mut runs = query_collect(
             self.conn,
-            "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
-             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan, parent_run_id, \
-             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
-             bot_name \
-             FROM agent_runs WHERE worktree_id = ?1 ORDER BY started_at DESC",
+            &format!("{AGENT_RUN_SELECT} WHERE worktree_id = ?1 ORDER BY started_at DESC"),
             params![worktree_id],
             row_to_agent_run,
         )?;
@@ -1120,6 +1128,9 @@ impl<'a> AgentManager<'a> {
 
     /// List all agent runs for a repo (across all its worktrees), newest first.
     pub fn list_for_repo(&self, repo_id: &str) -> Result<Vec<AgentRun>> {
+        // Cannot use AGENT_RUN_SELECT here: the JOIN requires the `a.` alias, and
+        // col 15 is intentionally `NULL` for `plan` (populated separately via
+        // `populate_plans` to avoid loading steps for every row in the JOIN).
         let mut runs = query_collect(
             self.conn,
             "SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, a.result_text, \
@@ -1150,12 +1161,7 @@ impl<'a> AgentManager<'a> {
 
     pub fn latest_for_worktree(&self, worktree_id: &str) -> Result<Option<AgentRun>> {
         let result = self.conn.query_row(
-            "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
-             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan, parent_run_id, \
-             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
-             bot_name \
-             FROM agent_runs WHERE worktree_id = ?1 ORDER BY started_at DESC LIMIT 1",
+            &format!("{AGENT_RUN_SELECT} WHERE worktree_id = ?1 ORDER BY started_at DESC LIMIT 1"),
             params![worktree_id],
             row_to_agent_run,
         );
@@ -1259,8 +1265,7 @@ impl<'a> AgentManager<'a> {
     pub fn list_events_for_run(&self, run_id: &str) -> Result<Vec<AgentRunEvent>> {
         query_collect(
             self.conn,
-            "SELECT id, run_id, kind, summary, started_at, ended_at, metadata \
-             FROM agent_run_events WHERE run_id = ?1 ORDER BY started_at ASC",
+            &format!("{AGENT_RUN_EVENTS_SELECT} WHERE run_id = ?1 ORDER BY started_at ASC"),
             params![run_id],
             row_to_agent_run_event,
         )
@@ -1268,6 +1273,7 @@ impl<'a> AgentManager<'a> {
 
     /// List all events across all runs for a worktree, in chronological order.
     pub fn list_events_for_worktree(&self, worktree_id: &str) -> Result<Vec<AgentRunEvent>> {
+        // Cannot use AGENT_RUN_EVENTS_SELECT here: the JOIN requires the `e.` alias.
         query_collect(
             self.conn,
             "SELECT e.id, e.run_id, e.kind, e.summary, e.started_at, e.ended_at, e.metadata \
@@ -1330,8 +1336,9 @@ impl<'a> AgentManager<'a> {
     ) -> Result<Vec<AgentCreatedIssue>> {
         query_collect(
             self.conn,
-            "SELECT id, agent_run_id, repo_id, source_type, source_id, title, url, created_at \
-             FROM agent_created_issues WHERE agent_run_id = ?1 ORDER BY created_at ASC",
+            &format!(
+                "{AGENT_CREATED_ISSUES_SELECT} WHERE agent_run_id = ?1 ORDER BY created_at ASC"
+            ),
             params![agent_run_id],
             row_to_agent_created_issue,
         )
@@ -1342,6 +1349,7 @@ impl<'a> AgentManager<'a> {
         &self,
         worktree_id: &str,
     ) -> Result<Vec<AgentCreatedIssue>> {
+        // Cannot use AGENT_CREATED_ISSUES_SELECT here: the JOIN requires the `aci.` alias.
         query_collect(
             self.conn,
             "SELECT aci.id, aci.agent_run_id, aci.repo_id, aci.source_type, \
@@ -1387,12 +1395,7 @@ impl<'a> AgentManager<'a> {
     pub fn list_child_runs(&self, parent_run_id: &str) -> Result<Vec<AgentRun>> {
         let mut runs = query_collect(
             self.conn,
-            "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
-             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan, parent_run_id, \
-             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
-             bot_name \
-             FROM agent_runs WHERE parent_run_id = ?1 ORDER BY started_at DESC",
+            &format!("{AGENT_RUN_SELECT} WHERE parent_run_id = ?1 ORDER BY started_at DESC"),
             params![parent_run_id],
             row_to_agent_run,
         )?;
@@ -1405,6 +1408,7 @@ impl<'a> AgentManager<'a> {
     /// the tree using `parent_run_id` references.
     pub fn get_run_tree(&self, root_run_id: &str) -> Result<Vec<AgentRun>> {
         // SQLite supports recursive CTEs, which are perfect for tree traversal.
+        // Cannot use AGENT_RUN_SELECT here: the CTE requires the `a.` alias throughout.
         let mut runs = query_collect(
             self.conn,
             "WITH RECURSIVE tree(id) AS ( \
@@ -1431,13 +1435,10 @@ impl<'a> AgentManager<'a> {
     pub fn list_root_runs_for_worktree(&self, worktree_id: &str) -> Result<Vec<AgentRun>> {
         let mut runs = query_collect(
             self.conn,
-            "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
-             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan, parent_run_id, \
-             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
-             bot_name \
-             FROM agent_runs WHERE worktree_id = ?1 AND parent_run_id IS NULL \
-             ORDER BY started_at DESC",
+            &format!(
+                "{AGENT_RUN_SELECT} WHERE worktree_id = ?1 AND parent_run_id IS NULL \
+                 ORDER BY started_at DESC"
+            ),
             params![worktree_id],
             row_to_agent_run,
         )?;
@@ -1695,12 +1696,7 @@ impl<'a> AgentManager<'a> {
     pub fn reap_orphaned_runs(&self) -> Result<usize> {
         let active_runs: Vec<AgentRun> = query_collect(
             self.conn,
-            "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
-             cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
-             model, plan, parent_run_id, \
-             input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
-             bot_name \
-             FROM agent_runs WHERE status IN ('running', 'waiting_for_feedback')",
+            &format!("{AGENT_RUN_SELECT} WHERE status IN ('running', 'waiting_for_feedback')"),
             [],
             row_to_agent_run,
         )?;
