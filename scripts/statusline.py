@@ -55,15 +55,22 @@ def format_elapsed(started_at: str | None) -> str:
         return ""
 
 
-def get_runs() -> list[dict]:
-    """Query active workflow runs from the conductor DB."""
+def open_db() -> sqlite3.Connection | None:
+    """Open the conductor DB in read-only mode. Returns None if unavailable."""
     if not os.path.exists(DB_PATH):
-        return []
-
+        return None
     uri = f"file:{DB_PATH}?mode=ro"
     try:
         conn = sqlite3.connect(uri, uri=True, timeout=0.5)
         conn.row_factory = sqlite3.Row
+        return conn
+    except sqlite3.OperationalError:
+        return None
+
+
+def get_runs(conn: sqlite3.Connection) -> list[dict]:
+    """Query active workflow runs from the conductor DB."""
+    try:
         cursor = conn.cursor()
         # Fetch root runs (no parent) that are active or recently completed
         cursor.execute(
@@ -83,9 +90,7 @@ def get_runs() -> list[dict]:
             LIMIT 20
             """
         )
-        rows = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return rows
+        return [dict(row) for row in cursor.fetchall()]
     except sqlite3.OperationalError:
         return []
 
@@ -172,7 +177,7 @@ def _batch_gate_steps(
     return steps
 
 
-def format_status_line(runs: list[dict]) -> str:
+def format_status_line(runs: list[dict], conn: sqlite3.Connection) -> str:
     """Build the multi-line status output."""
     if not runs:
         return ""
@@ -206,48 +211,40 @@ def format_status_line(runs: list[dict]) -> str:
     display_runs = sorted_runs[:5]
 
     # Batch auxiliary lookups to avoid N+1 queries
-    uri = f"file:{DB_PATH}?mode=ro"
-    try:
-        conn = sqlite3.connect(uri, uri=True, timeout=0.5)
+    worktree_labels = _batch_worktree_labels(conn, display_runs)
+    repo_labels = _batch_repo_labels(conn, display_runs)
+    gate_steps = _batch_gate_steps(conn, display_runs)
 
-        worktree_labels = _batch_worktree_labels(conn, display_runs)
-        repo_labels = _batch_repo_labels(conn, display_runs)
-        gate_steps = _batch_gate_steps(conn, display_runs)
+    for run in display_runs:
+        status = run["status"]
+        icon = ICONS.get(status, "  ")
+        wf_name = (run["workflow_name"] or "")[:24]
 
-        for run in display_runs:
-            status = run["status"]
-            icon = ICONS.get(status, "  ")
-            wf_name = (run["workflow_name"] or "")[:24]
+        # Resolve label: prefer worktree label, fall back to repo label
+        wt_id = run.get("worktree_id")
+        repo_id = run.get("repo_id")
+        if wt_id and wt_id in worktree_labels:
+            label = worktree_labels[wt_id]
+        elif repo_id and repo_id in repo_labels:
+            label = repo_labels[repo_id]
+        else:
+            label = ""
 
-            # Resolve label: prefer worktree label, fall back to repo label
-            wt_id = run.get("worktree_id")
-            repo_id = run.get("repo_id")
-            if wt_id and wt_id in worktree_labels:
-                label = worktree_labels[wt_id]
-            elif repo_id and repo_id in repo_labels:
-                label = repo_labels[repo_id]
-            else:
-                label = ""
+        elapsed = ""
+        if status in ("running", "waiting_gate", "failed"):
+            elapsed = format_elapsed(run.get("started_at"))
 
-            elapsed = ""
-            if status in ("running", "waiting_gate", "failed"):
-                elapsed = format_elapsed(run.get("started_at"))
+        gate_step = gate_steps.get(run["id"], "") if status == "waiting_gate" else ""
 
-            gate_step = gate_steps.get(run["id"], "") if status == "waiting_gate" else ""
+        # Build detail line
+        if status == "waiting_gate" and gate_step:
+            detail = f"{icon}  gate:{gate_step:<20}  {wf_name:<24}  {label:<28}  waiting {elapsed}"
+        elif status == "failed":
+            detail = f"{icon}  {wf_name:<26}                            {label:<28}  failed  {elapsed}"
+        else:
+            detail = f"{icon}  {wf_name:<26}                            {label:<28}  {status} {elapsed}"
 
-            # Build detail line
-            if status == "waiting_gate" and gate_step:
-                detail = f"{icon}  gate:{gate_step:<20}  {wf_name:<24}  {label:<28}  waiting {elapsed}"
-            elif status == "failed":
-                detail = f"{icon}  {wf_name:<26}                            {label:<28}  failed  {elapsed}"
-            else:
-                detail = f"{icon}  {wf_name:<26}                            {label:<28}  {status} {elapsed}"
-
-            lines.append(detail.rstrip())
-
-        conn.close()
-    except sqlite3.OperationalError:
-        pass
+        lines.append(detail.rstrip())
 
     return "\n".join(lines)
 
@@ -261,8 +258,14 @@ def main() -> None:
     except (json.JSONDecodeError, OSError):
         pass
 
-    runs = get_runs()
-    output = format_status_line(runs)
+    conn = open_db()
+    if conn is None:
+        return
+    try:
+        runs = get_runs(conn)
+        output = format_status_line(runs, conn)
+    finally:
+        conn.close()
     if output:
         print(output)
 

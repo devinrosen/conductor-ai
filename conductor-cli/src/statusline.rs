@@ -144,6 +144,11 @@ mod tests {
     fn temp_dir() -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("conductor_statusline_test_{n}"));
+        // Remove any stale directory from a prior test run so tests never see
+        // leftover files (e.g. invalid JSON from install_rejects_invalid_json_in_settings).
+        if dir.exists() {
+            fs::remove_dir_all(&dir).unwrap();
+        }
         fs::create_dir_all(&dir).unwrap();
         dir
     }
