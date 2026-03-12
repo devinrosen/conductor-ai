@@ -1,13 +1,18 @@
 workflow lint-fix {
   meta {
-    description = "Analyze lint errors and apply fixes"
+    description = "Analyze lint errors and apply fixes, re-verifying until clean"
     trigger     = "manual"
     targets     = ["worktree"]
   }
 
-  call analyze-lint
+  do {
+    max_iterations = 3
+    on_max_iter    = fail
 
-  if analyze-lint.has_lint_errors {
-    call lint-fix-impl
-  }
+    call analyze-lint
+
+    if analyze-lint.has_lint_errors {
+      call lint-fix-impl
+    }
+  } while analyze-lint.has_lint_errors
 }
