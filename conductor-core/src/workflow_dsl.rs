@@ -3758,4 +3758,145 @@ workflow test {
             "expected conflict error, got: {err}"
         );
     }
+
+    #[test]
+    fn test_parse_call_with_bot_name() {
+        let input = r#"
+            workflow test {
+                meta { targets = ["worktree"] }
+                call my_agent { as = "developer" }
+            }
+        "#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let node = def.body.first().unwrap();
+        match node {
+            WorkflowNode::Call(c) => {
+                assert_eq!(c.bot_name.as_deref(), Some("developer"));
+            }
+            other => panic!("Expected Call node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_call_without_bot_name() {
+        let input = r#"
+            workflow test {
+                meta { targets = ["worktree"] }
+                call my_agent {}
+            }
+        "#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let node = def.body.first().unwrap();
+        match node {
+            WorkflowNode::Call(c) => {
+                assert!(c.bot_name.is_none(), "bot_name should be None when omitted");
+            }
+            other => panic!("Expected Call node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_call_workflow_with_bot_name() {
+        let input = r#"
+            workflow test {
+                meta { targets = ["worktree"] }
+                call workflow sub-workflow { as = "reviewer" }
+            }
+        "#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let node = def.body.first().unwrap();
+        match node {
+            WorkflowNode::CallWorkflow(cw) => {
+                assert_eq!(cw.bot_name.as_deref(), Some("reviewer"));
+            }
+            other => panic!("Expected CallWorkflow node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_call_workflow_without_bot_name() {
+        let input = r#"
+            workflow test {
+                meta { targets = ["worktree"] }
+                call workflow sub-workflow {}
+            }
+        "#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let node = def.body.first().unwrap();
+        match node {
+            WorkflowNode::CallWorkflow(cw) => {
+                assert!(
+                    cw.bot_name.is_none(),
+                    "bot_name should be None when omitted"
+                );
+            }
+            other => panic!("Expected CallWorkflow node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_gate_with_bot_name() {
+        let input = r#"
+            workflow test {
+                meta { targets = ["worktree"] }
+                gate pr_approval {
+                    mode = "review_decision"
+                    timeout = "1h"
+                    as = "reviewer"
+                }
+            }
+        "#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let node = def.body.first().unwrap();
+        match node {
+            WorkflowNode::Gate(g) => {
+                assert_eq!(g.bot_name.as_deref(), Some("reviewer"));
+            }
+            other => panic!("Expected Gate node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_gate_without_bot_name() {
+        let input = r#"
+            workflow test {
+                meta { targets = ["worktree"] }
+                gate pr_checks {
+                    timeout = "30m"
+                }
+            }
+        "#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let node = def.body.first().unwrap();
+        match node {
+            WorkflowNode::Gate(g) => {
+                assert!(g.bot_name.is_none(), "bot_name should be None when omitted");
+            }
+            other => panic!("Expected Gate node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_call_bot_name_serde_roundtrip() {
+        let input = r#"
+            workflow test {
+                meta { targets = ["worktree"] }
+                call my_agent { as = "developer" }
+                call workflow sub { as = "reviewer" }
+            }
+        "#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let json = serde_json::to_string(&def).unwrap();
+        let restored: WorkflowDef = serde_json::from_str(&json).unwrap();
+        match restored.body.first().unwrap() {
+            WorkflowNode::Call(c) => assert_eq!(c.bot_name.as_deref(), Some("developer")),
+            other => panic!("Expected Call, got {other:?}"),
+        }
+        match restored.body.get(1).unwrap() {
+            WorkflowNode::CallWorkflow(cw) => {
+                assert_eq!(cw.bot_name.as_deref(), Some("reviewer"))
+            }
+            other => panic!("Expected CallWorkflow, got {other:?}"),
+        }
+    }
 }

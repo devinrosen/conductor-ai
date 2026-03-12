@@ -182,7 +182,13 @@ pub fn resolve_named_app_token(
                 }
             };
         }
-        // Named app not configured — fall through to singleton
+        // Named app not configured — warn and fall through to singleton
+        tracing::warn!(
+            context,
+            name = n,
+            "Named GitHub App '{}' not found in [github.apps], falling back to singleton [github.app]",
+            n
+        );
     }
     // Fall back to the singleton [github.app]
     let app_config = match config.github.app.as_ref() {

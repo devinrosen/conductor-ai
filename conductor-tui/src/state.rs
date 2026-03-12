@@ -1409,6 +1409,7 @@ mod tests {
             repo_id: None,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         }
     }
 
@@ -1893,6 +1894,7 @@ mod tests {
             repo_id: Some("repo-1".into()),
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         state
             .data
@@ -1945,6 +1947,7 @@ mod tests {
             repo_id: None,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         state
             .data
@@ -1994,6 +1997,7 @@ mod tests {
             repo_id: None,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         state.data.active_non_worktree_workflow_runs.push(run);
         let gs = state.global_status();

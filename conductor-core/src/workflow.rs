@@ -63,7 +63,7 @@ const STEP_COLUMNS: &str =
 const RUN_COLUMNS: &str =
     "id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
      started_at, ended_at, result_summary, definition_snapshot, inputs, ticket_id, repo_id, \
-     parent_workflow_run_id, target_label";
+     parent_workflow_run_id, target_label, default_bot_name";
 
 /// Instruction appended to every agent prompt for structured output.
 pub const CONDUCTOR_OUTPUT_INSTRUCTION: &str = r#"
@@ -302,6 +302,9 @@ pub struct WorkflowRun {
     pub parent_workflow_run_id: Option<String>,
     /// Human-readable label for the target (e.g. `repo_slug/wt_slug`, `owner/repo#N`).
     pub target_label: Option<String>,
+    /// Default named GitHub App bot identity for this run.
+    /// Set when the run is invoked via `call workflow { as = "..." }`.
+    pub default_bot_name: Option<String>,
 }
 
 /// A workflow step execution record from the database.
@@ -595,7 +598,17 @@ impl<'a> WorkflowManager<'a> {
             repo_id: repo_id.map(String::from),
             parent_workflow_run_id: parent_workflow_run_id.map(String::from),
             target_label: target_label.map(String::from),
+            default_bot_name: None,
         })
+    }
+
+    /// Persist the default bot name for a workflow run.
+    pub fn set_workflow_run_default_bot_name(&self, run_id: &str, bot_name: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workflow_runs SET default_bot_name = ?1 WHERE id = ?2",
+            params![bot_name, run_id],
+        )?;
+        Ok(())
     }
 
     /// Persist the input variables for a workflow run.
@@ -1405,6 +1418,7 @@ fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
     let repo_id: Option<String> = row.get(13)?;
     let parent_workflow_run_id: Option<String> = row.get(14)?;
     let target_label: Option<String> = row.get(15)?;
+    let default_bot_name: Option<String> = row.get(16)?;
     Ok(WorkflowRun {
         id: row.get(0)?,
         workflow_name: row.get(1)?,
@@ -1422,6 +1436,7 @@ fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
         repo_id,
         parent_workflow_run_id,
         target_label,
+        default_bot_name,
     })
 }
 
@@ -1757,6 +1772,11 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         input.parent_workflow_run_id,
         input.target_label,
     )?;
+
+    // Persist default_bot_name so it can be restored on resume.
+    if let Some(ref bot_name) = input.default_bot_name {
+        wf_mgr.set_workflow_run_default_bot_name(&wf_run.id, bot_name)?;
+    }
 
     // Build inputs map, injecting implicit ticket/repo variables
     let mut merged_inputs = input.inputs.clone();
@@ -2238,7 +2258,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         block_output: None,
         block_with: Vec::new(),
         resume_ctx,
-        default_bot_name: None,
+        default_bot_name: wf_run.default_bot_name.clone(),
     };
 
     run_workflow_engine(&mut state, &workflow)
@@ -3796,16 +3816,22 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
         None,
     )?;
 
-    // Resolve bot token once for this gate (used in PrApproval/PrChecks gh calls).
-    let gate_bot_token: Option<String> = {
-        let effective_bot = node
-            .bot_name
-            .as_deref()
-            .or(state.default_bot_name.as_deref());
-        if effective_bot.is_some() || state.config.github.app.is_some() {
-            crate::github_app::resolve_named_app_token(state.config, effective_bot, "gate")
-                .token()
-                .map(String::from)
+    // Capture the bot name used for this gate (resolved fresh on each poll to avoid
+    // using an expired installation token in long-running gate loops).
+    let gate_effective_bot: Option<String> = node
+        .bot_name
+        .clone()
+        .or_else(|| state.default_bot_name.clone());
+    let gate_config = state.config;
+    let resolve_gate_token = || -> Option<String> {
+        if gate_effective_bot.is_some() || gate_config.github.app.is_some() {
+            crate::github_app::resolve_named_app_token(
+                gate_config,
+                gate_effective_bot.as_deref(),
+                "gate",
+            )
+            .token()
+            .map(String::from)
         } else {
             None
         }
@@ -3896,6 +3922,7 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                     return handle_gate_timeout(state, &step_id, node);
                 }
 
+                let gate_bot_token = resolve_gate_token();
                 match node.approval_mode {
                     ApprovalMode::MinApprovals => {
                         // Poll gh pr view for raw approval count
@@ -3999,6 +4026,7 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                     return handle_gate_timeout(state, &step_id, node);
                 }
 
+                let gate_bot_token = resolve_gate_token();
                 let mut cmd = Command::new("gh");
                 cmd.args(["pr", "checks", "--json", "state"])
                     .current_dir(&state.working_dir);
