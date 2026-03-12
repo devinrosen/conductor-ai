@@ -1,6 +1,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -17,14 +17,31 @@ fn claude_settings_path() -> Result<PathBuf> {
     Ok(home.join(".claude").join("settings.json"))
 }
 
-/// Install the conductor status line into Claude Code.
-///
-/// Writes `~/.conductor/statusline.py`, marks it executable, then updates
-/// `~/.claude/settings.json` to set `statusLineTool` to that path.
-pub fn install() -> Result<()> {
-    // 1. Write the embedded script to ~/.conductor/statusline.py
-    let conductor_dir = conductor_dir()?;
-    fs::create_dir_all(&conductor_dir)
+/// Read and parse `~/.claude/settings.json` (or `path`), returning the JSON
+/// value. Returns `Value::Object({})` if the file does not exist.
+fn read_settings(path: &Path) -> Result<serde_json::Value> {
+    let raw = if path.exists() {
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?
+    } else {
+        "{}".to_string()
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("invalid JSON in {}", path.display()))?;
+    Ok(value)
+}
+
+/// Serialize `value` and write it to `path`.
+fn write_settings(path: &Path, value: &serde_json::Value) -> Result<()> {
+    let updated =
+        serde_json::to_string_pretty(value).context("failed to serialize settings.json")?;
+    fs::write(path, updated).with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(())
+}
+
+/// Core install logic, parameterised for testability.
+fn install_to(conductor_dir: &Path, settings_path: &Path) -> Result<()> {
+    // 1. Write the embedded script to <conductor_dir>/statusline.py
+    fs::create_dir_all(conductor_dir)
         .with_context(|| format!("failed to create {}", conductor_dir.display()))?;
 
     let script_path = conductor_dir.join("statusline.py");
@@ -39,22 +56,13 @@ pub fn install() -> Result<()> {
     fs::set_permissions(&script_path, perms)
         .with_context(|| format!("failed to chmod {}", script_path.display()))?;
 
-    // 3. Read (or create) ~/.claude/settings.json
-    let settings_path = claude_settings_path()?;
+    // 3. Read (or create) settings.json
     if let Some(parent) = settings_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
 
-    let existing = if settings_path.exists() {
-        fs::read_to_string(&settings_path)
-            .with_context(|| format!("failed to read {}", settings_path.display()))?
-    } else {
-        "{}".to_string()
-    };
-
-    let mut value: serde_json::Value = serde_json::from_str(&existing)
-        .with_context(|| format!("invalid JSON in {}", settings_path.display()))?;
+    let mut value = read_settings(settings_path)?;
 
     if !value.is_object() {
         anyhow::bail!(
@@ -70,10 +78,7 @@ pub fn install() -> Result<()> {
     value["statusLineTool"] = serde_json::Value::String(script_path_str.to_string());
 
     // 5. Write settings back
-    let updated =
-        serde_json::to_string_pretty(&value).context("failed to serialize settings.json")?;
-    fs::write(&settings_path, updated)
-        .with_context(|| format!("failed to write {}", settings_path.display()))?;
+    write_settings(settings_path, &value)?;
 
     println!("Conductor status line installed.");
     println!("  Script:  {}", script_path.display());
@@ -84,13 +89,8 @@ pub fn install() -> Result<()> {
     Ok(())
 }
 
-/// Uninstall the conductor status line from Claude Code.
-///
-/// Removes `statusLineTool` from `~/.claude/settings.json`.
-/// Leaves `~/.conductor/statusline.py` in place for fast reinstall.
-pub fn uninstall() -> Result<()> {
-    let settings_path = claude_settings_path()?;
-
+/// Core uninstall logic, parameterised for testability.
+fn uninstall_from(settings_path: &Path) -> Result<()> {
     if !settings_path.exists() {
         println!(
             "Nothing to uninstall: {} not found.",
@@ -99,11 +99,7 @@ pub fn uninstall() -> Result<()> {
         return Ok(());
     }
 
-    let existing = fs::read_to_string(&settings_path)
-        .with_context(|| format!("failed to read {}", settings_path.display()))?;
-
-    let mut value: serde_json::Value = serde_json::from_str(&existing)
-        .with_context(|| format!("invalid JSON in {}", settings_path.display()))?;
+    let mut value = read_settings(settings_path)?;
 
     if value.get("statusLineTool").is_none() {
         println!("statusLineTool is not set in {}.", settings_path.display());
@@ -114,13 +110,171 @@ pub fn uninstall() -> Result<()> {
         obj.remove("statusLineTool");
     }
 
-    let updated =
-        serde_json::to_string_pretty(&value).context("failed to serialize settings.json")?;
-    fs::write(&settings_path, updated)
-        .with_context(|| format!("failed to write {}", settings_path.display()))?;
+    write_settings(settings_path, &value)?;
 
     println!("Conductor status line uninstalled.");
     println!("  Removed statusLineTool from {}", settings_path.display());
 
     Ok(())
+}
+
+/// Install the conductor status line into Claude Code.
+///
+/// Writes `~/.conductor/statusline.py`, marks it executable, then updates
+/// `~/.claude/settings.json` to set `statusLineTool` to that path.
+pub fn install() -> Result<()> {
+    install_to(&conductor_dir()?, &claude_settings_path()?)
+}
+
+/// Uninstall the conductor status line from Claude Code.
+///
+/// Removes `statusLineTool` from `~/.claude/settings.json`.
+/// Leaves `~/.conductor/statusline.py` in place for fast reinstall.
+pub fn uninstall() -> Result<()> {
+    uninstall_from(&claude_settings_path()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    fn temp_dir() -> PathBuf {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("conductor_statusline_test_{n}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn install_creates_script_and_sets_statusline_tool() {
+        let root = temp_dir();
+        let conductor = root.join("conductor");
+        let settings = root.join("settings.json");
+
+        install_to(&conductor, &settings).unwrap();
+
+        // Script should exist and be executable
+        let script = conductor.join("statusline.py");
+        assert!(script.exists(), "statusline.py was not created");
+        let mode = fs::metadata(&script).unwrap().permissions().mode();
+        assert!(mode & 0o111 != 0, "statusline.py is not executable");
+
+        // settings.json should have statusLineTool set to the script path
+        let raw = fs::read_to_string(&settings).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            v["statusLineTool"].as_str().unwrap(),
+            script.to_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn install_updates_existing_settings_json() {
+        let root = temp_dir();
+        let conductor = root.join("conductor");
+        let settings = root.join("settings.json");
+
+        // Pre-existing settings with another key
+        fs::write(&settings, r#"{"someOtherKey": true}"#).unwrap();
+
+        install_to(&conductor, &settings).unwrap();
+
+        let raw = fs::read_to_string(&settings).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        // Original key preserved
+        assert_eq!(v["someOtherKey"].as_bool().unwrap(), true);
+        // statusLineTool set
+        assert!(v["statusLineTool"].is_string());
+    }
+
+    #[test]
+    fn install_rejects_non_object_settings_json() {
+        let root = temp_dir();
+        let conductor = root.join("conductor");
+        let settings = root.join("settings.json");
+
+        fs::write(&settings, r#"["not", "an", "object"]"#).unwrap();
+
+        let err = install_to(&conductor, &settings).unwrap_err();
+        assert!(
+            err.to_string().contains("not an object"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn install_rejects_invalid_json_in_settings() {
+        let root = temp_dir();
+        let conductor = root.join("conductor");
+        let settings = root.join("settings.json");
+
+        fs::write(&settings, "not json at all").unwrap();
+
+        let err = install_to(&conductor, &settings).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid JSON"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn uninstall_removes_statusline_tool() {
+        let root = temp_dir();
+        let conductor = root.join("conductor");
+        let settings = root.join("settings.json");
+
+        // Install first
+        install_to(&conductor, &settings).unwrap();
+
+        // Now uninstall
+        uninstall_from(&settings).unwrap();
+
+        let raw = fs::read_to_string(&settings).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(
+            v.get("statusLineTool").is_none(),
+            "statusLineTool should have been removed"
+        );
+    }
+
+    #[test]
+    fn uninstall_is_idempotent_when_key_absent() {
+        let root = temp_dir();
+        let settings = root.join("settings.json");
+        fs::write(&settings, r#"{"otherKey": 1}"#).unwrap();
+
+        // Should succeed without error even though statusLineTool is not set
+        uninstall_from(&settings).unwrap();
+
+        let raw = fs::read_to_string(&settings).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["otherKey"].as_i64().unwrap(), 1);
+    }
+
+    #[test]
+    fn uninstall_succeeds_when_settings_file_absent() {
+        let root = temp_dir();
+        let settings = root.join("nonexistent_settings.json");
+
+        // Should succeed without error
+        uninstall_from(&settings).unwrap();
+    }
+
+    #[test]
+    fn install_then_reinstall_updates_script() {
+        let root = temp_dir();
+        let conductor = root.join("conductor");
+        let settings = root.join("settings.json");
+
+        install_to(&conductor, &settings).unwrap();
+        // Second install should succeed (idempotent)
+        install_to(&conductor, &settings).unwrap();
+
+        let raw = fs::read_to_string(&settings).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(v["statusLineTool"].is_string());
+    }
 }

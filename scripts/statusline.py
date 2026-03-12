@@ -90,53 +90,86 @@ def get_runs() -> list[dict]:
         return []
 
 
-def get_waiting_gate_step(conn: sqlite3.Connection, run_id: str) -> str | None:
-    """Return the gate step name for a waiting_gate run."""
+def _batch_worktree_labels(
+    conn: sqlite3.Connection, runs: list[dict]
+) -> dict[str, str]:
+    """Return {worktree_id: 'repo_slug/wt_slug'} for all worktree_ids in runs."""
+    worktree_ids = [r["worktree_id"] for r in runs if r.get("worktree_id")]
+    labels: dict[str, str] = {}
+    if not worktree_ids:
+        return labels
     try:
+        placeholders = ",".join("?" * len(worktree_ids))
         cursor = conn.cursor()
         cursor.execute(
-            """
-            SELECT step_name FROM workflow_run_steps
-            WHERE workflow_run_id = ? AND status = 'waiting_gate'
-            LIMIT 1
+            f"""
+            SELECT w.id, w.slug, r.slug AS repo_slug
+            FROM worktrees w
+            JOIN repos r ON w.repo_id = r.id
+            WHERE w.id IN ({placeholders})
             """,
-            (run_id,),
+            worktree_ids,
         )
-        row = cursor.fetchone()
-        return row[0] if row else None
-    except sqlite3.OperationalError:
-        return None
-
-
-def get_worktree_label(
-    conn: sqlite3.Connection, worktree_id: str | None, repo_id: str | None
-) -> str:
-    """Return a short label like 'umbrella/feat-login' for a worktree."""
-    if not worktree_id and not repo_id:
-        return ""
-    try:
-        cursor = conn.cursor()
-        if worktree_id:
-            cursor.execute(
-                """
-                SELECT w.slug, r.slug as repo_slug
-                FROM worktrees w
-                JOIN repos r ON w.repo_id = r.id
-                WHERE w.id = ?
-                """,
-                (worktree_id,),
-            )
-            row = cursor.fetchone()
-            if row:
-                return f"{row[1]}/{row[0]}"
-        if repo_id:
-            cursor.execute("SELECT slug FROM repos WHERE id = ?", (repo_id,))
-            row = cursor.fetchone()
-            if row:
-                return row[0]
+        for row in cursor.fetchall():
+            labels[row[0]] = f"{row[2]}/{row[1]}"
     except sqlite3.OperationalError:
         pass
-    return ""
+    return labels
+
+
+def _batch_repo_labels(
+    conn: sqlite3.Connection, runs: list[dict]
+) -> dict[str, str]:
+    """Return {repo_id: 'repo_slug'} for runs that have no worktree_id."""
+    repo_ids = [
+        r["repo_id"]
+        for r in runs
+        if not r.get("worktree_id") and r.get("repo_id")
+    ]
+    labels: dict[str, str] = {}
+    if not repo_ids:
+        return labels
+    try:
+        placeholders = ",".join("?" * len(repo_ids))
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT id, slug FROM repos WHERE id IN ({placeholders})",
+            repo_ids,
+        )
+        for row in cursor.fetchall():
+            labels[row[0]] = row[1]
+    except sqlite3.OperationalError:
+        pass
+    return labels
+
+
+def _batch_gate_steps(
+    conn: sqlite3.Connection, runs: list[dict]
+) -> dict[str, str]:
+    """Return {run_id: step_name} for all waiting_gate runs."""
+    run_ids = [r["id"] for r in runs if r["status"] == "waiting_gate"]
+    steps: dict[str, str] = {}
+    if not run_ids:
+        return steps
+    try:
+        placeholders = ",".join("?" * len(run_ids))
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT workflow_run_id, step_name
+            FROM workflow_run_steps
+            WHERE workflow_run_id IN ({placeholders})
+              AND status = 'waiting_gate'
+            """,
+            run_ids,
+        )
+        for row in cursor.fetchall():
+            # Keep first gate step per run (there should only be one active)
+            if row[0] not in steps:
+                steps[row[0]] = row[1]
+    except sqlite3.OperationalError:
+        pass
+    return steps
 
 
 def format_status_line(runs: list[dict]) -> str:
@@ -170,27 +203,37 @@ def format_status_line(runs: list[dict]) -> str:
         runs, key=lambda r: (STATUS_ORDER.get(r["status"], 99), r.get("started_at") or "")
     )
 
-    # Open a second connection for auxiliary queries (still read-only)
+    display_runs = sorted_runs[:5]
+
+    # Batch auxiliary lookups to avoid N+1 queries
     uri = f"file:{DB_PATH}?mode=ro"
     try:
         conn = sqlite3.connect(uri, uri=True, timeout=0.5)
 
-        for run in sorted_runs[:5]:
+        worktree_labels = _batch_worktree_labels(conn, display_runs)
+        repo_labels = _batch_repo_labels(conn, display_runs)
+        gate_steps = _batch_gate_steps(conn, display_runs)
+
+        for run in display_runs:
             status = run["status"]
             icon = ICONS.get(status, "  ")
             wf_name = (run["workflow_name"] or "")[:24]
 
-            label = get_worktree_label(conn, run.get("worktree_id"), run.get("repo_id"))
+            # Resolve label: prefer worktree label, fall back to repo label
+            wt_id = run.get("worktree_id")
+            repo_id = run.get("repo_id")
+            if wt_id and wt_id in worktree_labels:
+                label = worktree_labels[wt_id]
+            elif repo_id and repo_id in repo_labels:
+                label = repo_labels[repo_id]
+            else:
+                label = ""
 
             elapsed = ""
-            if status in ("running", "waiting_gate"):
-                elapsed = format_elapsed(run.get("started_at"))
-            elif status == "failed":
+            if status in ("running", "waiting_gate", "failed"):
                 elapsed = format_elapsed(run.get("started_at"))
 
-            gate_step = ""
-            if status == "waiting_gate":
-                gate_step = get_waiting_gate_step(conn, run["id"]) or ""
+            gate_step = gate_steps.get(run["id"], "") if status == "waiting_gate" else ""
 
             # Build detail line
             if status == "waiting_gate" and gate_step:
