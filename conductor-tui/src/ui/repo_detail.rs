@@ -4,8 +4,22 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use super::helpers::shorten_paths;
+use conductor_core::github::GithubPr;
+
+use super::helpers::{shorten_paths, visual_idx_with_headers};
 use crate::state::{AppState, RepoDetailFocus};
+
+fn pr_group_key(pr: &GithubPr) -> &'static str {
+    if pr.is_draft {
+        "Draft"
+    } else {
+        match pr.review_decision.as_deref() {
+            Some("CHANGES_REQUESTED") => "Changes Requested",
+            Some("APPROVED") => "Approved",
+            _ => "Review Required",
+        }
+    }
+}
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let repo = state
@@ -235,35 +249,55 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             Style::default().fg(Color::DarkGray),
         )))]
     } else {
-        state
-            .detail_prs
-            .iter()
-            .map(|pr| {
-                let state_color = if pr.state.eq_ignore_ascii_case("open") {
-                    Color::Green
-                } else {
-                    Color::White
-                };
-                let spans = vec![
-                    Span::styled(
-                        format!("#{} ", pr.number),
-                        Style::default().fg(Color::Yellow),
-                    ),
-                    Span::raw(&pr.title),
-                    Span::raw("  "),
-                    Span::styled(format!("[{}]", pr.state), Style::default().fg(state_color)),
-                    Span::styled(
-                        format!("  @{}", pr.author),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                    Span::styled(
-                        format!("  {}", pr.head_ref_name),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ];
-                ListItem::new(Line::from(spans))
-            })
-            .collect()
+        let mut items: Vec<ListItem> = Vec::new();
+        let mut prev_group = "";
+        for pr in &state.detail_prs {
+            let group = pr_group_key(pr);
+            if group != prev_group {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    group,
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                ))));
+                prev_group = group;
+            }
+            let (badge_text, badge_color) = match group {
+                "Changes Requested" => ("[changes requested]", Color::Red),
+                "Approved" => ("[approved]", Color::Green),
+                "Draft" => ("[draft]", Color::DarkGray),
+                _ => ("[review required]", Color::Yellow),
+            };
+            let branch = &pr.head_ref_name;
+            let branch_display = if branch.chars().count() > 30 {
+                format!(
+                    "{}\u{2026}",
+                    &branch[..branch
+                        .char_indices()
+                        .nth(30)
+                        .map(|(i, _)| i)
+                        .unwrap_or(branch.len())]
+                )
+            } else {
+                branch.clone()
+            };
+            let spans = vec![
+                Span::raw("\u{2514} "),
+                Span::styled(
+                    format!("#{} ", pr.number),
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::raw(&pr.title),
+                Span::raw("  "),
+                Span::styled(badge_text, Style::default().fg(badge_color)),
+                Span::styled(
+                    format!("  {branch_display}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ];
+            items.push(ListItem::new(Line::from(spans)));
+        }
+        items
     };
 
     let pr_title = if pr_focused && !state.detail_prs.is_empty() {
@@ -288,7 +322,14 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let mut pr_list_state = ListState::default();
     if pr_focused && !state.detail_prs.is_empty() {
-        pr_list_state.select(Some(state.detail_pr_index));
+        let visual_idx = visual_idx_with_headers(
+            &state.detail_prs,
+            pr_group_key,
+            state
+                .detail_pr_index
+                .min(state.detail_prs.len().saturating_sub(1)),
+        );
+        pr_list_state.select(Some(visual_idx));
     }
     frame.render_stateful_widget(pr_list, bottom[1], &mut pr_list_state);
 }
