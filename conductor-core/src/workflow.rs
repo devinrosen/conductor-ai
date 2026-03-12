@@ -1088,11 +1088,19 @@ impl<'a> WorkflowManager<'a> {
                         }
                     }
                 });
-                let started_at = step
-                    .started_at
-                    .as_deref()
-                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                    .map(|dt| dt.with_timezone(&Utc));
+                let started_at = step.started_at.as_deref().and_then(|s| {
+                    match DateTime::parse_from_rfc3339(s) {
+                        Ok(dt) => Some(dt.with_timezone(&Utc)),
+                        Err(_) => {
+                            tracing::warn!(
+                                run_id = %run_id,
+                                started_at = %s,
+                                "gate step started_at could not be parsed — timeout will not be enforced"
+                            );
+                            None
+                        }
+                    }
+                });
                 match (timeout_secs, started_at) {
                     (Some(secs), Some(start)) => (now - start).num_seconds() >= secs,
                     _ => false,
