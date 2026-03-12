@@ -1260,30 +1260,7 @@ fn main() -> Result<()> {
                 } else if let Some(run_id) = workflow_run {
                     // Workflow-run targeted run (e.g. postmortem workflows)
                     let wf_mgr = WorkflowManager::new(&conn);
-                    let prior_run = wf_mgr
-                        .get_workflow_run(&run_id)?
-                        .ok_or_else(|| anyhow::anyhow!("Workflow run '{}' not found", run_id))?;
-
-                    // Resolve working_dir from the prior run's worktree or repo
-                    let (working_dir, repo_path) = if let Some(ref wt_id) = prior_run.worktree_id {
-                        let wt_mgr = WorktreeManager::new(&conn, &config);
-                        let wt = wt_mgr.get_by_id(wt_id)?;
-                        if !std::path::Path::new(&wt.path).exists() {
-                            anyhow::bail!("Worktree path '{}' no longer exists on disk", wt.path);
-                        }
-                        let repo_mgr = RepoManager::new(&conn, &config);
-                        let r = repo_mgr.get_by_id(&wt.repo_id)?;
-                        (wt.path, r.local_path)
-                    } else if let Some(ref repo_id) = prior_run.repo_id {
-                        let repo_mgr = RepoManager::new(&conn, &config);
-                        let r = repo_mgr.get_by_id(repo_id)?;
-                        (r.local_path.clone(), r.local_path)
-                    } else {
-                        anyhow::bail!(
-                            "Workflow run '{}' has no associated worktree or repo",
-                            run_id
-                        );
-                    };
+                    let ctx = wf_mgr.resolve_run_context(&run_id, &config)?;
 
                     // Auto-inject the workflow_run_id input (user --input flags merge after)
                     input_map
@@ -1291,7 +1268,7 @@ fn main() -> Result<()> {
                         .or_insert_with(|| run_id.clone());
 
                     let workflow =
-                        WorkflowManager::load_def_by_name(&working_dir, &repo_path, &name)?;
+                        WorkflowManager::load_def_by_name(&ctx.working_dir, &ctx.repo_path, &name)?;
 
                     conductor_core::workflow::apply_workflow_input_defaults(
                         &workflow,
@@ -1309,11 +1286,11 @@ fn main() -> Result<()> {
                             conn: &conn,
                             config: &config,
                             workflow: &workflow,
-                            worktree_id: None,
-                            working_dir: &working_dir,
-                            repo_path: &repo_path,
+                            worktree_id: ctx.worktree_id.as_deref(),
+                            working_dir: &ctx.working_dir,
+                            repo_path: &ctx.repo_path,
                             ticket_id: None,
-                            repo_id: None,
+                            repo_id: ctx.repo_id.as_deref(),
                             model: model.as_deref(),
                             exec_config: &exec_config,
                             inputs: input_map,

@@ -346,6 +346,20 @@ pub struct WorkflowStepSummary {
     pub workflow_chain: Vec<String>,
 }
 
+/// Resolved execution context for a workflow that targets a prior workflow run.
+/// Returned by [`WorkflowManager::resolve_run_context`].
+#[derive(Debug, Clone)]
+pub struct WorkflowRunContext {
+    /// Directory the workflow should execute in (worktree path, or repo root if no worktree).
+    pub working_dir: String,
+    /// Root path of the repository.
+    pub repo_path: String,
+    /// Worktree ID from the prior run (if any).
+    pub worktree_id: Option<String>,
+    /// Repo ID from the prior run (if any).
+    pub repo_id: Option<String>,
+}
+
 /// A single entry in a step's metadata, either a key-value field or a
 /// multi-line section with a heading and body.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -789,6 +803,47 @@ impl<'a> WorkflowManager<'a> {
             Ok(run) => Ok(Some(run)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Resolve the execution context (working directory, repo path, and IDs) for
+    /// a workflow that targets a prior workflow run.
+    ///
+    /// The prior run must have either a `worktree_id` or a `repo_id` set.
+    /// Returns an error if the run is not found or its paths no longer exist on disk.
+    pub fn resolve_run_context(&self, run_id: &str, config: &Config) -> Result<WorkflowRunContext> {
+        let prior_run = self.get_workflow_run(run_id)?.ok_or_else(|| {
+            ConductorError::Workflow(format!("workflow run '{run_id}' not found"))
+        })?;
+
+        if let Some(ref wt_id) = prior_run.worktree_id {
+            let wt_mgr = WorktreeManager::new(self.conn, config);
+            let wt = wt_mgr.get_by_id(wt_id)?;
+            if !std::path::Path::new(&wt.path).exists() {
+                return Err(ConductorError::Workflow(format!(
+                    "worktree path '{}' no longer exists on disk",
+                    wt.path
+                )));
+            }
+            let repo = crate::repo::RepoManager::new(self.conn, config).get_by_id(&wt.repo_id)?;
+            Ok(WorkflowRunContext {
+                working_dir: wt.path,
+                repo_path: repo.local_path,
+                worktree_id: Some(wt_id.clone()),
+                repo_id: Some(wt.repo_id),
+            })
+        } else if let Some(ref repo_id) = prior_run.repo_id {
+            let repo = crate::repo::RepoManager::new(self.conn, config).get_by_id(repo_id)?;
+            Ok(WorkflowRunContext {
+                working_dir: repo.local_path.clone(),
+                repo_path: repo.local_path,
+                worktree_id: None,
+                repo_id: Some(repo_id.clone()),
+            })
+        } else {
+            Err(ConductorError::Workflow(format!(
+                "workflow run '{run_id}' has no associated worktree or repo"
+            )))
         }
     }
 
