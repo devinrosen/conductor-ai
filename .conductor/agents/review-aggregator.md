@@ -40,7 +40,7 @@ Steps:
 
    If `gh pr review` exits non-zero, note the failure in your CONDUCTOR_OUTPUT context but do not treat it as a blocking error — the comment posted in step 4a already captured the findings.
 
-   Format the review body as:
+   **IMPORTANT: Use EXACTLY the templates below. Do not add extra sections, change headings, add columns to the table, or write narrative prose. The only variation allowed is filling in reviewer names, verdicts, findings, and suggestions.**
 
    **If all reviewers approve:**
    ```
@@ -52,8 +52,11 @@ Steps:
    | security | :white_check_mark: approve |
    | ... | ... |
 
-   All reviewers passed with no blocking findings.
+   ### Suggestions (non-blocking)
+   - **<reviewer>**: <suggestion text>
+   - **<reviewer>**: <suggestion text>
    ```
+   (Omit the `### Suggestions` section entirely if there are no suggestions.)
 
    **If any reviewer has blocking issues:**
    ```
@@ -75,8 +78,9 @@ Steps:
    </details>
 
    ### Suggestions (non-blocking)
-   - ...
+   - **<reviewer>**: <suggestion text>
    ```
+   (Omit the `### Suggestions` section entirely if there are no suggestions.)
 
 5. Collect and file off-diff findings (skip all `gh` calls in this step if `{{dry_run}}` is `true`):
 
