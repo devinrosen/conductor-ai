@@ -313,7 +313,7 @@ fn poll_workflow_data(
                 .into_iter()
                 .map(|r| (r.id, r.local_path))
                 .collect();
-            let mut seen_source_paths: std::collections::HashSet<String> =
+            let mut seen: std::collections::HashSet<(String, String)> =
                 std::collections::HashSet::new();
             for wt in wt_mgr.list(None, true).unwrap_or_default() {
                 let rp = repo_paths
@@ -321,10 +321,10 @@ fn poll_workflow_data(
                     .map(|s| s.as_str())
                     .unwrap_or("");
                 let mut wt_defs = WorkflowManager::list_defs(&wt.path, rp).unwrap_or_default();
-                // Deduplicate: drop defs whose source_path was already seen (repo-level
-                // workflows fall back to the same dir for every worktree, so without this
-                // they would be appended once per worktree).
-                wt_defs.retain(|d| seen_source_paths.insert(d.source_path.clone()));
+                // Deduplicate by (repo_id, workflow_name): each worktree has its own
+                // filesystem copy of .conductor/workflows/, so source_path differs per
+                // worktree even for the same logical workflow.
+                wt_defs.retain(|d| seen.insert((wt.repo_id.clone(), d.name.clone())));
                 all_defs.append(&mut wt_defs);
             }
         }
