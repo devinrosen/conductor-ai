@@ -1803,8 +1803,9 @@ impl App {
                 repo_slug,
                 wt_name,
                 ticket_id,
+                from_pr,
             } => {
-                self.spawn_worktree_create(repo_slug, wt_name, ticket_id);
+                self.spawn_worktree_create(repo_slug, wt_name, ticket_id, from_pr);
             }
             ConfirmAction::DeleteWorktree { repo_slug, wt_slug } => {
                 let Some(bg_tx) = self.bg_tx.clone() else {
@@ -2051,6 +2052,41 @@ impl App {
                 if value.is_empty() {
                     return;
                 }
+                // Show a second prompt asking for an optional PR number.
+                self.state.modal = Modal::Input {
+                    title: "From PR (optional)".to_string(),
+                    prompt: "PR number to check out (leave blank for new branch):".to_string(),
+                    value: String::new(),
+                    on_submit: InputAction::CreateWorktreePrStep {
+                        repo_slug,
+                        wt_name: value,
+                        ticket_id,
+                    },
+                };
+            }
+            InputAction::CreateWorktreePrStep {
+                repo_slug,
+                wt_name,
+                ticket_id,
+            } => {
+                // Parse optional PR number (blank → None, non-numeric → error).
+                let from_pr: Option<u32> = if value.trim().is_empty() {
+                    None
+                } else {
+                    match value.trim().parse::<u32>() {
+                        Ok(n) => Some(n),
+                        Err(_) => {
+                            self.state.modal = Modal::Error {
+                                message: format!(
+                                    "Invalid PR number '{}': must be a positive integer",
+                                    value.trim()
+                                ),
+                            };
+                            return;
+                        }
+                    }
+                };
+
                 // Check if the repo needs to be cloned first.
                 let needs_clone = self
                     .state
@@ -2070,12 +2106,13 @@ impl App {
                         ),
                         on_confirm: ConfirmAction::CreateWorktree {
                             repo_slug,
-                            wt_name: value,
+                            wt_name,
                             ticket_id,
+                            from_pr,
                         },
                     };
                 } else {
-                    self.spawn_worktree_create(repo_slug, value, ticket_id);
+                    self.spawn_worktree_create(repo_slug, wt_name, ticket_id, from_pr);
                 }
             }
             InputAction::LinkTicket { worktree_id } => {
@@ -3789,6 +3826,7 @@ impl App {
         repo_slug: String,
         name: String,
         ticket_id: Option<String>,
+        from_pr: Option<u32>,
     ) {
         // Guard before setting the non-dismissable Progress modal: if bg_tx is
         // None (only possible before init() completes), skip rather than
@@ -3797,7 +3835,11 @@ impl App {
             return;
         };
         self.state.modal = Modal::Progress {
-            message: "Creating worktree…".to_string(),
+            message: if from_pr.is_some() {
+                "Fetching PR branch…".to_string()
+            } else {
+                "Creating worktree…".to_string()
+            },
         };
         let config = self.config.clone();
         std::thread::spawn(move || {
@@ -3806,7 +3848,7 @@ impl App {
                 let conn = conductor_core::db::open_database(&db)?;
                 let wt_mgr = WorktreeManager::new(&conn, &config);
                 let (wt, warnings) =
-                    wt_mgr.create(&repo_slug, &name, None, ticket_id.as_deref())?;
+                    wt_mgr.create(&repo_slug, &name, None, ticket_id.as_deref(), from_pr)?;
                 Ok((wt, warnings))
             })();
             match result {

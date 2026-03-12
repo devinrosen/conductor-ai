@@ -65,6 +65,7 @@ pub async fn create_worktree(
         &body.name,
         body.from_branch.as_deref(),
         body.ticket_id.as_deref(),
+        None,
     )?;
     state.events.emit(ConductorEvent::WorktreeCreated {
         id: wt.id.clone(),
