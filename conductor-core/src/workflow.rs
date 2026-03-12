@@ -3823,17 +3823,34 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
         .clone()
         .or_else(|| state.default_bot_name.clone());
     let gate_config = state.config;
+    // Cache the installation token so we don't make a live HTTPS call on every
+    // poll iteration.  Installation tokens are valid for 1 hour; we refresh
+    // after 55 minutes to stay well inside that window.
+    let gate_token_cache: std::cell::RefCell<Option<(String, std::time::Instant)>> =
+        std::cell::RefCell::new(None);
     let resolve_gate_token = || -> Option<String> {
-        if gate_effective_bot.is_some() || gate_config.github.app.is_some() {
-            crate::github_app::resolve_named_app_token(
+        if gate_effective_bot.is_none() && gate_config.github.app.is_none() {
+            return None;
+        }
+        let mut cache = gate_token_cache.borrow_mut();
+        let needs_refresh = cache
+            .as_ref()
+            .map(|(_, fetched_at)| fetched_at.elapsed() > Duration::from_secs(55 * 60))
+            .unwrap_or(true);
+        if needs_refresh {
+            let token = crate::github_app::resolve_named_app_token(
                 gate_config,
                 gate_effective_bot.as_deref(),
                 "gate",
             )
             .token()
-            .map(String::from)
+            .map(String::from);
+            if let Some(ref t) = token {
+                *cache = Some((t.clone(), std::time::Instant::now()));
+            }
+            token
         } else {
-            None
+            cache.as_ref().map(|(t, _)| t.clone())
         }
     };
 
@@ -7650,6 +7667,87 @@ And here is my actual output:
             Some("value2")
         );
         assert_eq!(fetched.inputs.len(), 2);
+    }
+
+    #[test]
+    fn test_set_workflow_run_default_bot_name_round_trip() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run(
+                "test-wf",
+                Some("w1"),
+                &parent.id,
+                false,
+                "manual",
+                Some("{}"),
+            )
+            .unwrap();
+
+        // Initially default_bot_name should be None
+        let fetched = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert!(
+            fetched.default_bot_name.is_none(),
+            "Expected no default_bot_name initially"
+        );
+
+        // Write a bot name and read it back
+        wf_mgr
+            .set_workflow_run_default_bot_name(&run.id, "reviewer-bot")
+            .unwrap();
+
+        let fetched = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.default_bot_name.as_deref(),
+            Some("reviewer-bot"),
+            "default_bot_name should persist after set"
+        );
+    }
+
+    #[test]
+    fn test_default_bot_name_persists_through_suspend_and_resume() {
+        // Verify that default_bot_name written by set_workflow_run_default_bot_name is
+        // correctly loaded back when resume_workflow reads the run from the DB — this
+        // exercises the full store → retrieve invariant for multi-stage bot identity.
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run(
+                "test-wf",
+                Some("w1"),
+                &parent.id,
+                false,
+                "manual",
+                Some("{}"),
+            )
+            .unwrap();
+
+        // Simulate what execute_workflow does when a default_bot_name is set
+        wf_mgr
+            .set_workflow_run_default_bot_name(&run.id, "deploy-bot")
+            .unwrap();
+
+        // Simulate a suspend by marking the run as waiting
+        wf_mgr
+            .update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None)
+            .unwrap();
+
+        // Load the run as resume_workflow would — the bot name must survive the round-trip
+        let restored = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert_eq!(
+            restored.default_bot_name.as_deref(),
+            Some("deploy-bot"),
+            "default_bot_name must survive a suspend/resume DB round-trip"
+        );
+        assert_eq!(restored.status, WorkflowRunStatus::Waiting);
     }
 
     #[test]
