@@ -117,6 +117,10 @@ pub enum Action {
     ShowThemePicker,
     /// Temporarily apply the theme at this index (live preview while browsing).
     ThemePreview(usize),
+    /// Background result: config write after theme selection completed.
+    ThemeSaveComplete {
+        result: Result<String, String>,
+    },
 
     // Agent issue creation toggle (repo-level)
     ToggleAgentIssues,
