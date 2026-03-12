@@ -8,7 +8,7 @@ use conductor_core::workflow::{WorkflowDef, WorkflowRunStatus};
 use conductor_core::worktree::Worktree;
 
 use super::common::truncate;
-use super::helpers::shorten_paths;
+use super::helpers::{shorten_paths, visual_idx_with_headers};
 use crate::state::AppState;
 use crate::state::WorkflowRunDetailFocus;
 use crate::state::WorkflowsFocus;
@@ -20,49 +20,6 @@ fn worktree_slug(worktrees: &[Worktree], predicate: impl Fn(&Worktree) -> bool) 
         .find(|wt| predicate(wt))
         .map(|wt| wt.slug.as_str())
         .unwrap_or("?")
-}
-
-/// Translate a logical index (into a flat list of items) to a visual index that
-/// accounts for non-selectable section header rows inserted before each new group.
-fn visual_idx_with_headers<T>(
-    items: &[T],
-    get_repo: impl Fn(&T) -> String,
-    logical_idx: usize,
-) -> usize {
-    let mut headers = 0usize;
-    let mut prev = String::new();
-    for item in items.iter().take(logical_idx + 1) {
-        let repo = get_repo(item);
-        if repo != prev {
-            headers += 1;
-            prev = repo;
-        }
-    }
-    logical_idx + headers
-}
-
-/// Resolve the repo slug for a workflow def by matching its `source_path`
-/// against known repo local paths, falling back to worktree paths.
-fn get_repo_slug_for_def<'a>(def: &WorkflowDef, state: &'a AppState) -> &'a str {
-    if let Some(repo) = state
-        .data
-        .repos
-        .iter()
-        .find(|r| def.source_path.starts_with(&r.local_path))
-    {
-        return &repo.slug;
-    }
-    if let Some(wt) = state
-        .data
-        .worktrees
-        .iter()
-        .find(|wt| def.source_path.starts_with(&wt.path))
-    {
-        if let Some(slug) = state.data.repo_slug_map.get(&wt.repo_id) {
-            return slug.as_str();
-        }
-    }
-    "?"
 }
 
 /// Render the Workflows split-pane view: defs (left) + runs (right).
@@ -120,12 +77,22 @@ fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
     let global_mode = state.selected_worktree_id.is_none();
 
     if global_mode {
-        // Build (repo_slug, def) pairs so we can group by repo with section headers.
+        // Use pre-computed (repo_slug, def) pairs from state (populated by background thread).
+        let fallback = String::from("?");
         let defs_with_slug: Vec<(&str, &WorkflowDef)> = state
             .data
             .workflow_defs
             .iter()
-            .map(|def| (get_repo_slug_for_def(def, state), def))
+            .enumerate()
+            .map(|(i, def)| {
+                let slug = state
+                    .data
+                    .workflow_def_slugs
+                    .get(i)
+                    .unwrap_or(&fallback)
+                    .as_str();
+                (slug, def)
+            })
             .collect();
 
         let mut items: Vec<ListItem> = Vec::new();

@@ -291,50 +291,55 @@ fn poll_workflow_data(
     selected_run_id: Option<&str>,
     selected_step_child_run_id: Option<&str>,
 ) -> Option<Action> {
-    use conductor_core::workflow::WorkflowManager;
+    use conductor_core::workflow::{WorkflowDef, WorkflowManager};
 
     let db = db_path();
     let conn = open_database(&db).ok()?;
 
     // Skip FS scan when a run is selected — defs don't change during a run.
-    let defs: Option<Vec<_>> = if selected_run_id.is_some() {
-        None
+    let (defs, def_slugs): (Option<Vec<_>>, Option<Vec<String>>) = if selected_run_id.is_some() {
+        (None, None)
     } else if let Some(wt_path) = worktree_path {
-        Some(WorkflowManager::list_defs(wt_path, repo_path.unwrap_or("")).unwrap_or_default())
+        let defs = WorkflowManager::list_defs(wt_path, repo_path.unwrap_or("")).unwrap_or_default();
+        (Some(defs), Some(Vec::new()))
     } else {
         // Global mode: scan every registered worktree for workflow definitions.
         let mut all_defs = Vec::new();
+        let mut all_slugs = Vec::new();
         if let Ok(config) = conductor_core::config::load_config() {
             let wt_mgr = conductor_core::worktree::WorktreeManager::new(&conn, &config);
             let repo_mgr = conductor_core::repo::RepoManager::new(&conn, &config);
-            let repo_paths: std::collections::HashMap<String, String> = repo_mgr
+            let repos: std::collections::HashMap<String, (String, String)> = repo_mgr
                 .list()
                 .unwrap_or_default()
                 .into_iter()
-                .map(|r| (r.id, r.local_path))
+                .map(|r| (r.id, (r.slug, r.local_path)))
                 .collect();
             let mut seen: std::collections::HashSet<(String, String)> =
                 std::collections::HashSet::new();
-            let mut tagged = Vec::new();
+            let mut tagged: Vec<(String, String, WorkflowDef)> = Vec::new();
             for wt in wt_mgr.list(None, true).unwrap_or_default() {
-                let rp = repo_paths
+                let (repo_slug, rp) = repos
                     .get(&wt.repo_id)
-                    .map(|s| s.as_str())
-                    .unwrap_or("");
+                    .map(|(s, p)| (s.as_str(), p.as_str()))
+                    .unwrap_or(("?", ""));
                 let mut wt_defs = WorkflowManager::list_defs(&wt.path, rp).unwrap_or_default();
                 // Deduplicate by (repo_id, workflow_name): each worktree has its own
                 // filesystem copy of .conductor/workflows/, so source_path differs per
                 // worktree even for the same logical workflow.
                 wt_defs.retain(|d| seen.insert((wt.repo_id.clone(), d.name.clone())));
                 for d in wt_defs {
-                    tagged.push((wt.repo_id.clone(), d));
+                    tagged.push((wt.repo_id.clone(), repo_slug.to_string(), d));
                 }
             }
             // Sort by repo_id so defs are contiguous per repo for grouping in the renderer.
             tagged.sort_by(|a, b| a.0.cmp(&b.0));
-            all_defs = tagged.into_iter().map(|(_, d)| d).collect();
+            for (_, slug, d) in tagged {
+                all_slugs.push(slug);
+                all_defs.push(d);
+            }
         }
-        Some(all_defs)
+        (Some(all_defs), Some(all_slugs))
     };
     let wf_mgr = WorkflowManager::new(&conn);
     let runs = wf_mgr
@@ -362,6 +367,7 @@ fn poll_workflow_data(
     Some(Action::WorkflowDataRefreshed(Box::new(
         WorkflowDataPayload {
             workflow_defs: defs,
+            workflow_def_slugs: def_slugs,
             workflow_runs: runs,
             workflow_steps: steps,
             step_agent_events,
