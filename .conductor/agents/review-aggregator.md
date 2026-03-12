@@ -30,12 +30,12 @@ Steps:
 
    If all reviewers approve:
    ```
-   gh pr review <number> --approve --body "<aggregated summary>"
+   gh pr review <number> --approve --body "All reviewers approved. See PR comment for full summary."
    ```
 
    If any reviewer has blocking issues:
    ```
-   gh pr review <number> --request-changes --body "<aggregated summary with blocking findings>"
+   gh pr review <number> --request-changes --body "Changes requested. See PR comment for full details."
    ```
 
    If `gh pr review` exits non-zero, note the failure in your CONDUCTOR_OUTPUT context but do not treat it as a blocking error — the comment posted in step 4a already captured the findings.
@@ -100,7 +100,7 @@ Steps:
           --label "conductor-off-diff" \
           --body "**Severity:** <severity>\n**Location:** <file>:<line>\n**Found by:** <reviewer agent>\n**PR branch:** <branch>\n\n<body>"
         ```
-   e. If any off-diff issues were filed, append the following section to the PR review body posted in step 4:
+   e. If any off-diff issues were filed, append the following section to the PR comment body posted in step 4a:
       ```markdown
       ### Off-diff findings (filed as issues, not blocking this PR)
       - [#<number> — <title>](<url>) — `<file>:<line>` (<severity>)
