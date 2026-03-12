@@ -19,14 +19,13 @@ from datetime import datetime, timezone
 DB_PATH = os.path.expanduser("~/.conductor/conductor.db")
 
 # Status display order (lower = higher priority)
-STATUS_ORDER = {"waiting": 0, "running": 1, "failed": 2, "completed": 3}
+STATUS_ORDER = {"waiting": 0, "running": 1, "failed": 2}
 
 # Icons per status
 ICONS = {
     "waiting": "⏳",
     "running": "▶ ",
     "failed": "✗ ",
-    "completed": "✓ ",
 }
 
 
@@ -72,7 +71,8 @@ def get_runs(conn: sqlite3.Connection) -> list[dict]:
     """Query active workflow runs from the conductor DB."""
     try:
         cursor = conn.cursor()
-        # Fetch root runs (no parent) that are active or recently completed
+        # Fetch root runs that are active, or failed with an active sibling
+        # (same repo_id or worktree_id has a running/waiting run).
         cursor.execute(
             """
             SELECT
@@ -85,7 +85,21 @@ def get_runs(conn: sqlite3.Connection) -> list[dict]:
                 repo_id
             FROM workflow_runs
             WHERE parent_workflow_run_id IS NULL
-              AND status IN ('running', 'waiting', 'failed', 'completed')
+              AND (
+                status IN ('running', 'waiting')
+                OR (
+                  status = 'failed'
+                  AND EXISTS (
+                    SELECT 1 FROM workflow_runs s
+                    WHERE s.parent_workflow_run_id IS NULL
+                      AND s.status IN ('running', 'waiting')
+                      AND (
+                        (s.repo_id IS NOT NULL AND s.repo_id = workflow_runs.repo_id)
+                        OR (s.worktree_id IS NOT NULL AND s.worktree_id = workflow_runs.worktree_id)
+                      )
+                  )
+                )
+              )
             ORDER BY
                 CASE WHEN status IN ('running', 'waiting') THEN 0 ELSE 1 END,
                 started_at DESC
@@ -148,6 +162,45 @@ def _batch_repo_labels(
     except sqlite3.OperationalError:
         pass
     return labels
+
+
+def _format_tokens(n: int | None) -> str:
+    """Format a token count compactly: 1234 → '1.2k', 123456 → '123k'."""
+    if n is None or n == 0:
+        return ""
+    if n >= 1000:
+        return f"{n / 1000:.0f}k"
+    return str(n)
+
+
+def _batch_token_counts(
+    conn: sqlite3.Connection, runs: list[dict]
+) -> dict[str, tuple[int, int]]:
+    """Return {run_id: (input_tokens, output_tokens)} summed across all steps."""
+    run_ids = [r["id"] for r in runs]
+    counts: dict[str, tuple[int, int]] = {}
+    if not run_ids:
+        return counts
+    try:
+        placeholders = ",".join("?" * len(run_ids))
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT wrs.workflow_run_id,
+                   COALESCE(SUM(ar.input_tokens), 0),
+                   COALESCE(SUM(ar.output_tokens), 0)
+            FROM workflow_run_steps wrs
+            JOIN agent_runs ar ON wrs.child_run_id = ar.id
+            WHERE wrs.workflow_run_id IN ({placeholders})
+            GROUP BY wrs.workflow_run_id
+            """,
+            run_ids,
+        )
+        for row in cursor.fetchall():
+            counts[row[0]] = (row[1], row[2])
+    except sqlite3.OperationalError:
+        pass
+    return counts
 
 
 def _batch_gate_steps(
@@ -216,6 +269,7 @@ def format_status_line(runs: list[dict], conn: sqlite3.Connection) -> str:
     worktree_labels = _batch_worktree_labels(conn, display_runs)
     repo_labels = _batch_repo_labels(conn, display_runs)
     gate_steps = _batch_gate_steps(conn, display_runs)
+    token_counts = _batch_token_counts(conn, display_runs)
 
     for run in display_runs:
         status = run["status"]
@@ -232,19 +286,22 @@ def format_status_line(runs: list[dict], conn: sqlite3.Connection) -> str:
         else:
             label = ""
 
-        elapsed = ""
-        if status in ("running", "waiting", "failed"):
-            elapsed = format_elapsed(run.get("started_at"))
+        elapsed = format_elapsed(run.get("started_at"))
 
         gate_step = gate_steps.get(run["id"], "") if status == "waiting" else ""
 
+        inp, out = token_counts.get(run["id"], (0, 0))
+        tok_str = ""
+        if inp or out:
+            tok_str = f"  ↑{_format_tokens(inp)} ↓{_format_tokens(out)}"
+
         # Build detail line
         if status == "waiting" and gate_step:
-            detail = f"{icon}  gate:{gate_step:<20}  {wf_name:<24}  {label:<28}  waiting {elapsed}"
+            detail = f"{icon}  gate:{gate_step:<20}  {wf_name:<24}  {label:<28}  waiting {elapsed}{tok_str}"
         elif status == "failed":
-            detail = f"{icon}  {wf_name:<26}                            {label:<28}  failed  {elapsed}"
+            detail = f"{icon}  {wf_name:<26}                            {label:<28}  failed  {elapsed}{tok_str}"
         else:
-            detail = f"{icon}  {wf_name:<26}                            {label:<28}  {status} {elapsed}"
+            detail = f"{icon}  {wf_name:<26}                            {label:<28}  {status} {elapsed}{tok_str}"
 
         lines.append(detail.rstrip())
 
