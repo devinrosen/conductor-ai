@@ -138,8 +138,11 @@ impl<'a> RepoManager<'a> {
                     })
                 },
             )
-            .map_err(|_| ConductorError::RepoNotFound {
-                slug: id.to_string(),
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ConductorError::RepoNotFound {
+                    slug: id.to_string(),
+                },
+                _ => ConductorError::Database(e),
             })
     }
 
@@ -166,8 +169,11 @@ impl<'a> RepoManager<'a> {
                     })
                 },
             )
-            .map_err(|_| ConductorError::RepoNotFound {
-                slug: slug.to_string(),
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ConductorError::RepoNotFound {
+                    slug: slug.to_string(),
+                },
+                _ => ConductorError::Database(e),
             })
     }
 

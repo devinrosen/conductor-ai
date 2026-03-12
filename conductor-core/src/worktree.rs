@@ -215,8 +215,11 @@ impl<'a> WorktreeManager<'a> {
                 params![id],
                 map_worktree_row,
             )
-            .map_err(|_| ConductorError::WorktreeNotFound {
-                slug: id.to_string(),
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
+                    slug: id.to_string(),
+                },
+                _ => ConductorError::Database(e),
             })
     }
 
@@ -229,8 +232,11 @@ impl<'a> WorktreeManager<'a> {
                 params![repo_id, slug],
                 map_worktree_row,
             )
-            .map_err(|_| ConductorError::WorktreeNotFound {
-                slug: slug.to_string(),
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
+                    slug: slug.to_string(),
+                },
+                _ => ConductorError::Database(e),
             })
     }
 
@@ -299,8 +305,11 @@ impl<'a> WorktreeManager<'a> {
                 params![repo.id, name],
                 map_worktree_row,
             )
-            .map_err(|_| ConductorError::WorktreeNotFound {
-                slug: name.to_string(),
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
+                    slug: name.to_string(),
+                },
+                _ => ConductorError::Database(e),
             })?;
 
         self.delete_internal(&repo, worktree, None)
@@ -454,8 +463,11 @@ impl<'a> WorktreeManager<'a> {
                 params![repo.id, wt_slug],
                 map_worktree_row,
             )
-            .map_err(|_| ConductorError::WorktreeNotFound {
-                slug: wt_slug.to_string(),
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
+                    slug: wt_slug.to_string(),
+                },
+                _ => ConductorError::Database(e),
             })?;
 
         if !worktree.is_active() {

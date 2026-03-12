@@ -230,8 +230,11 @@ impl<'a> TicketSyncer<'a> {
                 params![ticket_id],
                 map_ticket_row,
             )
-            .map_err(|_| ConductorError::TicketNotFound {
-                id: ticket_id.to_string(),
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ConductorError::TicketNotFound {
+                    id: ticket_id.to_string(),
+                },
+                _ => ConductorError::Database(e),
             })
     }
 
