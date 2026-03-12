@@ -171,14 +171,14 @@ enum WorkflowCommands {
     },
     /// Validate a workflow definition (check all agents exist)
     Validate {
+        /// Workflow name
+        name: String,
         /// Repo slug (required unless --path is given)
         #[arg(required_unless_present = "path")]
         repo: Option<String>,
         /// Worktree slug (required unless --path is given)
         #[arg(required_unless_present = "path")]
         worktree: Option<String>,
-        /// Workflow name
-        name: String,
         /// Path to a repo root directory; skips DB lookup
         #[arg(long, conflicts_with_all = &["repo", "worktree"])]
         path: Option<String>,
