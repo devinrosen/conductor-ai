@@ -7,6 +7,7 @@ use tracing::warn;
 
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
+use crate::github::has_merged_pr;
 use crate::worktree::WorktreeManager;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,7 +70,7 @@ pub struct TicketSyncer<'a> {
     conn: &'a Connection,
 }
 
-const CLOSED_TICKET_ARTIFACTS_SQL: &str = "SELECT r.local_path, w.path, w.branch
+const CLOSED_TICKET_ARTIFACTS_SQL: &str = "SELECT r.local_path, w.path, w.branch, r.remote_url
      FROM worktrees w
      JOIN repos r ON r.id = w.repo_id
      WHERE w.repo_id = ?1
@@ -309,30 +310,43 @@ impl<'a> TicketSyncer<'a> {
     /// After syncing tickets, mark any linked worktrees whose ticket is now
     /// closed by setting their status to `'merged'`. Also removes the git
     /// worktree directory and branch for each affected worktree (best-effort).
+    /// Only removes artifacts for worktrees whose PR has actually merged —
+    /// a closed ticket is necessary but not sufficient (CI may still be pending).
     /// Called as part of the ticket sync flow, typically after
     /// [`TicketSyncer::close_missing_tickets`].
     /// Returns the number of worktrees updated.
     pub fn mark_worktrees_for_closed_tickets(&self, repo_id: &str) -> Result<usize> {
+        self.mark_worktrees_for_closed_tickets_with_merge_check(repo_id, has_merged_pr)
+    }
+
+    fn mark_worktrees_for_closed_tickets_with_merge_check(
+        &self,
+        repo_id: &str,
+        merge_check: impl Fn(&str, &str) -> bool,
+    ) -> Result<usize> {
         // Collect git paths before updating so we can clean up worktree dirs and branches.
-        let artifacts: Vec<(String, String, String)> = query_collect(
+        let artifacts: Vec<(String, String, String, String)> = query_collect(
             self.conn,
             CLOSED_TICKET_ARTIFACTS_SQL,
             params![repo_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
 
         let now = Utc::now().to_rfc3339();
-        let count = self.conn.execute(
-            "UPDATE worktrees SET status = 'merged', completed_at = ?2
-             WHERE repo_id = ?1
-             AND status != 'merged'
-             AND ticket_id IS NOT NULL
-             AND ticket_id IN (SELECT id FROM tickets WHERE state = 'closed')",
-            params![repo_id, now],
-        )?;
+        let mut count = 0usize;
 
-        for (repo_path, worktree_path, branch) in artifacts {
-            WorktreeManager::remove_artifacts(&repo_path, &worktree_path, &branch);
+        for (repo_path, worktree_path, branch, remote_url) in &artifacts {
+            if !merge_check(remote_url, branch) {
+                // Ticket is closed but PR not yet merged — leave the worktree alone.
+                continue;
+            }
+            self.conn.execute(
+                "UPDATE worktrees SET status = 'merged', completed_at = ?1
+                 WHERE path = ?2 AND status != 'merged'",
+                params![now, worktree_path],
+            )?;
+            count += 1;
+            WorktreeManager::remove_artifacts(repo_path, worktree_path, branch);
         }
 
         Ok(count)
@@ -443,13 +457,15 @@ mod tests {
             .unwrap();
         insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
 
-        // Second sync: only issue 2 remains open → issue 1 closed, worktree merged
+        // Second sync: only issue 2 remains open → issue 1 closed
+        // The worktree is left active because has_merged_pr returns false in test environments.
         let second = vec![make_ticket("2", "Issue 2")];
         let (synced2, closed2) = syncer.sync_and_close_tickets("r1", "github", &second);
         assert_eq!(synced2, 1);
         assert_eq!(closed2, 1);
         assert_eq!(get_ticket_state(&conn, "1"), "closed");
-        assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
+        // Worktree stays active: PR merge check skips cleanup when gh CLI is unavailable.
+        assert_eq!(get_worktree_status(&conn, "wt1"), "active");
     }
 
     #[test]
@@ -614,7 +630,9 @@ mod tests {
             .close_missing_tickets("r1", "github", &["999"])
             .unwrap();
 
-        let count = syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
+        let count = syncer
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
     }
@@ -636,7 +654,9 @@ mod tests {
             .close_missing_tickets("r1", "github", &["999"])
             .unwrap();
 
-        let count = syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
+        let count = syncer
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
     }
@@ -694,11 +714,11 @@ mod tests {
             .unwrap();
 
         // Use the same constant the implementation uses so this test stays in sync.
-        let artifacts: Vec<(String, String, String)> = conn
+        let artifacts: Vec<(String, String, String, String)> = conn
             .prepare(CLOSED_TICKET_ARTIFACTS_SQL)
             .unwrap()
             .query_map(rusqlite::params!["r1"], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             })
             .unwrap()
             .collect::<rusqlite::Result<_>>()
@@ -730,11 +750,11 @@ mod tests {
             .unwrap();
 
         // Use the same constant the implementation uses so this test stays in sync.
-        let artifacts: Vec<(String, String, String)> = conn
+        let artifacts: Vec<(String, String, String, String)> = conn
             .prepare(CLOSED_TICKET_ARTIFACTS_SQL)
             .unwrap()
             .query_map(rusqlite::params!["r1"], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             })
             .unwrap()
             .collect::<rusqlite::Result<_>>()
@@ -764,7 +784,9 @@ mod tests {
             .close_missing_tickets("r1", "github", &["999"])
             .unwrap();
 
-        let count = syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
+        let count = syncer
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
     }
@@ -796,7 +818,9 @@ mod tests {
         syncer
             .close_missing_tickets("r1", "github", &["999"])
             .unwrap();
-        syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
+        syncer
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .unwrap();
 
         let after: Option<String> = conn
             .query_row(
@@ -871,10 +895,62 @@ mod tests {
             .close_missing_tickets("repo2", "github", &["999"])
             .unwrap();
 
-        let count = syncer.mark_worktrees_for_closed_tickets("r1").unwrap();
+        let count = syncer
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .unwrap();
         assert_eq!(count, 1);
         assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
         assert_eq!(get_worktree_status(&conn, "wt2"), "active");
+    }
+
+    #[test]
+    fn test_mark_worktrees_skips_unmerged_pr() {
+        // When the merge check returns false, a closed ticket's worktree must not be touched.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![make_ticket("1", "Issue 1")];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
+        syncer
+            .close_missing_tickets("r1", "github", &["999"])
+            .unwrap();
+
+        let count = syncer
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| false)
+            .unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(get_worktree_status(&conn, "wt1"), "active");
+    }
+
+    #[test]
+    fn test_mark_worktrees_removes_when_pr_merged() {
+        // When the merge check returns true, a closed ticket's worktree must be updated.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![make_ticket("1", "Issue 1")];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+        let ticket_id: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        insert_worktree(&conn, "wt1", "r1", Some(&ticket_id), "active");
+        syncer
+            .close_missing_tickets("r1", "github", &["999"])
+            .unwrap();
+
+        let count = syncer
+            .mark_worktrees_for_closed_tickets_with_merge_check("r1", |_, _| true)
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(get_worktree_status(&conn, "wt1"), "merged");
     }
 
     #[test]
