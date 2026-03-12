@@ -180,6 +180,8 @@ pub struct CallNode {
     /// Prompt snippet references to append to the agent prompt.
     #[serde(default)]
     pub with: Vec<String>,
+    /// Named GitHub App bot identity to use for this call (matches `[github.apps.<name>]`).
+    pub bot_name: Option<String>,
 }
 
 /// A sub-workflow invocation node.
@@ -191,6 +193,8 @@ pub struct CallWorkflowNode {
     #[serde(default)]
     pub retries: u32,
     pub on_fail: Option<AgentRef>,
+    /// Named GitHub App bot identity inherited by child call nodes.
+    pub bot_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -287,6 +291,8 @@ pub struct GateNode {
     pub approval_mode: ApprovalMode,
     pub timeout_secs: u64,
     pub on_timeout: OnTimeout,
+    /// Named GitHub App bot identity used for `gh` calls inside this gate.
+    pub bot_name: Option<String>,
 }
 
 fn default_one() -> u32 {
@@ -869,6 +875,7 @@ impl Parser {
         let mut on_fail = None;
         let mut output = None;
         let mut with = Vec::new();
+        let mut bot_name = None;
 
         if self.peek() == &Token::LBrace {
             self.advance();
@@ -890,6 +897,9 @@ impl Parser {
             if let Some(w) = kvs.remove("with") {
                 with = w.into_string_array();
             }
+            if let Some(b) = kvs.remove("as") {
+                bot_name = Some(b.into_string());
+            }
         }
 
         Ok(CallNode {
@@ -898,6 +908,7 @@ impl Parser {
             on_fail,
             output,
             with,
+            bot_name,
         })
     }
 
@@ -909,6 +920,7 @@ impl Parser {
         let mut inputs = HashMap::new();
         let mut retries = 0u32;
         let mut on_fail = None;
+        let mut bot_name = None;
 
         if self.peek() == &Token::LBrace {
             self.advance();
@@ -924,7 +936,7 @@ impl Parser {
                 }
             }
 
-            // Parse remaining kvs (retries, on_fail)
+            // Parse remaining kvs (retries, on_fail, as)
             let mut kvs = self.parse_kvs()?;
             self.expect(&Token::RBrace)?;
 
@@ -937,6 +949,9 @@ impl Parser {
             if let Some(f) = kvs.remove("on_fail") {
                 on_fail = Some(f.into_agent_ref());
             }
+            if let Some(b) = kvs.remove("as") {
+                bot_name = Some(b.into_string());
+            }
         }
 
         Ok(CallWorkflowNode {
@@ -944,6 +959,7 @@ impl Parser {
             inputs,
             retries,
             on_fail,
+            bot_name,
         })
     }
 
@@ -1201,6 +1217,8 @@ impl Parser {
             Some(other) => return Err(format!("Invalid on_timeout: {other}")),
         };
 
+        let bot_name = kvs.get("as").map(|v| v.as_str().to_string());
+
         Ok(GateNode {
             name,
             gate_type,
@@ -1209,6 +1227,7 @@ impl Parser {
             approval_mode,
             timeout_secs,
             on_timeout,
+            bot_name,
         })
     }
 

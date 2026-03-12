@@ -1434,6 +1434,7 @@ mod tests {
             output_tokens: None,
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
+            bot_name: None,
         }
     }
 
@@ -1803,6 +1804,7 @@ mod tests {
             output_tokens: None,
             cache_read_input_tokens: None,
             cache_creation_input_tokens: None,
+            bot_name: None,
         };
         // Insert under an arbitrary key to exercise the global_status iteration path.
         state.data.latest_agent_runs.insert("run-eph".into(), run);

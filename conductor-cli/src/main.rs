@@ -101,6 +101,9 @@ enum AgentCommands {
         /// Model to use (e.g. "sonnet", "claude-opus-4-6"). Overrides per-worktree and global defaults.
         #[arg(long)]
         model: Option<String>,
+        /// Named GitHub App bot identity to use (matches [github.apps.<name>] in config).
+        #[arg(long)]
+        bot_name: Option<String>,
     },
     /// Orchestrate child agents: spawn a child run for each plan step
     Orchestrate {
@@ -733,7 +736,9 @@ fn main() -> Result<()> {
                                         Some(&wt.slug),
                                         model,
                                     )?;
-                                    run_agent(&conn, &run.id, &wt.path, &prompt, None, model)?;
+                                    run_agent(
+                                        &conn, &run.id, &wt.path, &prompt, None, model, None,
+                                    )?;
                                 }
                                 Err(e) => {
                                     eprintln!(
@@ -814,6 +819,7 @@ fn main() -> Result<()> {
                     prompt_file,
                     resume,
                     model,
+                    bot_name,
                 } => {
                     let resolved_prompt = match (prompt, prompt_file) {
                         (Some(p), _) => p,
@@ -830,6 +836,7 @@ fn main() -> Result<()> {
                         &resolved_prompt,
                         resume.as_deref(),
                         model.as_deref(),
+                        bot_name.as_deref(),
                     )?;
                 }
                 AgentCommands::Orchestrate {
@@ -1273,6 +1280,7 @@ fn main() -> Result<()> {
                             depth: 0,
                             parent_workflow_run_id: None,
                             target_label: Some(r.slug.as_str()),
+                            default_bot_name: None,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1321,6 +1329,7 @@ fn main() -> Result<()> {
                             depth: 0,
                             parent_workflow_run_id: None,
                             target_label: Some(run_id.as_str()),
+                            default_bot_name: None,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1369,6 +1378,7 @@ fn main() -> Result<()> {
                             depth: 0,
                             parent_workflow_run_id: None,
                             target_label: Some(repo.slug.as_str()),
+                            default_bot_name: None,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1420,6 +1430,7 @@ fn main() -> Result<()> {
                             depth: 0,
                             parent_workflow_run_id: None,
                             target_label: Some(&wt_label),
+                            default_bot_name: None,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1878,6 +1889,7 @@ fn run_agent(
     prompt: &str,
     resume_session_id: Option<&str>,
     model: Option<&str>,
+    bot_name: Option<&str>,
 ) -> Result<()> {
     let mgr = AgentManager::new(conn);
 
@@ -1966,7 +1978,7 @@ fn run_agent(
     // Inject GH_TOKEN from the GitHub App installation token so all `gh` calls
     // made by the agent (including `gh pr create`) use the bot identity rather
     // than the human `gh` CLI user. Fall back gracefully when not configured.
-    match github_app::resolve_app_token(&config, "agent-run") {
+    match github_app::resolve_named_app_token(&config, bot_name, "agent-run") {
         github_app::TokenResolution::AppToken(token) => {
             cmd.env("GH_TOKEN", token);
         }

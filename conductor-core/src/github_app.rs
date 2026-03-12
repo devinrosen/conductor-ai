@@ -157,11 +157,34 @@ impl TokenResolution {
     }
 }
 
-/// Attempt to obtain a GitHub App installation token from the config.
+/// Resolve a GitHub App installation token, optionally looking up a named identity.
 ///
-/// Returns a [`TokenResolution`] that tells callers exactly which identity
-/// is being used and why, instead of silently falling back to `None`.
-pub fn resolve_app_token(config: &Config, context: &str) -> TokenResolution {
+/// Resolution order:
+/// 1. If `name` is `Some(n)`, look up `config.github.apps[n]` and obtain a token.
+/// 2. If not found or `name` is `None`, fall back to `config.github.app`.
+/// 3. If neither is configured, return [`TokenResolution::NotConfigured`].
+pub fn resolve_named_app_token(
+    config: &Config,
+    name: Option<&str>,
+    context: &str,
+) -> TokenResolution {
+    // Try named app first
+    if let Some(n) = name {
+        if let Some(app_config) = config.github.apps.get(n) {
+            return match get_app_token(app_config) {
+                Ok(token) => TokenResolution::AppToken(token),
+                Err(e) => {
+                    tracing::warn!(context, name = n, error = %e,
+                        "Named GitHub App token failed, falling back to gh user");
+                    TokenResolution::Fallback {
+                        reason: e.to_string(),
+                    }
+                }
+            };
+        }
+        // Named app not configured — fall through to singleton
+    }
+    // Fall back to the singleton [github.app]
     let app_config = match config.github.app.as_ref() {
         Some(c) => c,
         None => return TokenResolution::NotConfigured,
@@ -175,6 +198,16 @@ pub fn resolve_app_token(config: &Config, context: &str) -> TokenResolution {
             }
         }
     }
+}
+
+/// Attempt to obtain a GitHub App installation token from the config.
+///
+/// Returns a [`TokenResolution`] that tells callers exactly which identity
+/// is being used and why, instead of silently falling back to `None`.
+///
+/// This is a thin wrapper around [`resolve_named_app_token`] with `name = None`.
+pub fn resolve_app_token(config: &Config, context: &str) -> TokenResolution {
+    resolve_named_app_token(config, None, context)
 }
 
 /// Expand `~` at the start of a path to the user's home directory.
@@ -245,6 +278,45 @@ mod tests {
     fn test_resolve_app_token_not_configured() {
         let config = Config::default();
         let res = resolve_app_token(&config, "test");
+        assert_eq!(res, TokenResolution::NotConfigured);
+    }
+
+    #[test]
+    fn test_resolve_named_app_token_uses_named_app() {
+        let mut config = Config::default();
+        config.github.apps.insert(
+            "developer".to_string(),
+            GitHubAppConfig {
+                app_id: 11111,
+                client_id: None,
+                private_key_path: "/nonexistent/dev.pem".to_string(),
+                installation_id: 22222,
+            },
+        );
+        let res = resolve_named_app_token(&config, Some("developer"), "test");
+        // No real key, so should return Fallback (not NotConfigured)
+        assert!(res.is_fallback());
+    }
+
+    #[test]
+    fn test_resolve_named_app_token_falls_back_to_singleton() {
+        // Named app not configured, but singleton is
+        let mut config = Config::default();
+        config.github.app = Some(GitHubAppConfig {
+            app_id: 99999,
+            client_id: None,
+            private_key_path: "/nonexistent/singleton.pem".to_string(),
+            installation_id: 88888,
+        });
+        let res = resolve_named_app_token(&config, Some("developer"), "test");
+        // Named "developer" not in apps, falls back to singleton → Fallback (bad key)
+        assert!(res.is_fallback());
+    }
+
+    #[test]
+    fn test_resolve_named_app_token_not_configured_when_nothing() {
+        let config = Config::default();
+        let res = resolve_named_app_token(&config, Some("developer"), "test");
         assert_eq!(res, TokenResolution::NotConfigured);
     }
 

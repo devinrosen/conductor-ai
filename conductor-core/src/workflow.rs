@@ -1614,6 +1614,8 @@ struct ExecutionState<'a> {
     block_with: Vec<String>,
     /// Resume context — `None` for fresh runs, `Some` when resuming.
     resume_ctx: Option<ResumeContext>,
+    /// Default named GitHub App bot identity inherited from a parent `call workflow { as = "..." }`.
+    default_bot_name: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1663,6 +1665,9 @@ pub struct WorkflowExecInput<'a> {
     pub parent_workflow_run_id: Option<&'a str>,
     /// Human-readable label for the target (e.g. `repo_slug/wt_slug`, `owner/repo#N`).
     pub target_label: Option<&'a str>,
+    /// Default named GitHub App bot identity for call nodes that have no explicit `as =`.
+    /// Set by a `call workflow { as = "..." }` node when it invokes a sub-workflow.
+    pub default_bot_name: Option<String>,
 }
 
 /// Execute a workflow definition against a worktree.
@@ -1819,6 +1824,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         block_output: None,
         block_with: Vec::new(),
         resume_ctx: None,
+        default_bot_name: input.default_bot_name.clone(),
     };
 
     run_workflow_engine(&mut state, workflow)
@@ -1956,6 +1962,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         depth: 0,
         parent_workflow_run_id: None,
         target_label: params.target_label.as_deref(),
+        default_bot_name: None,
     };
 
     execute_workflow(&input)
@@ -2231,6 +2238,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         block_output: None,
         block_with: Vec::new(),
         resume_ctx,
+        default_bot_name: None,
     };
 
     run_workflow_engine(&mut state, &workflow)
@@ -2307,6 +2315,7 @@ fn run_on_fail_agent(
         on_fail: None,
         output: None,
         with: Vec::new(),
+        bot_name: None,
     };
     if let Err(e) = execute_call(state, &on_fail_node, iteration) {
         tracing::warn!("on_fail agent '{}' also failed: {e}", on_fail_agent.label(),);
@@ -2541,12 +2550,17 @@ fn execute_call_with_schema(
             state.worktree_slug.as_str()
         };
         let child_window = sanitize_tmux_name(&format!("{}-wf-{}", window_prefix, agent_label));
+        let effective_bot_name = node
+            .bot_name
+            .as_deref()
+            .or(state.default_bot_name.as_deref());
         let child_run = state.agent_mgr.create_child_run(
             state.worktree_id.as_deref(),
             &prompt,
             Some(&child_window),
             step_model,
             &state.parent_run_id,
+            effective_bot_name,
         )?;
 
         state.wf_mgr.update_step_status(
@@ -2574,6 +2588,7 @@ fn execute_call_with_schema(
             &prompt,
             step_model,
             &child_window,
+            effective_bot_name,
         ) {
             tracing::warn!("Failed to spawn child: {e}");
             let _ = state
@@ -2847,6 +2862,10 @@ fn execute_call_workflow(
             depth: child_depth,
             parent_workflow_run_id: Some(&state.workflow_run_id),
             target_label: state.target_label.as_deref(),
+            default_bot_name: node
+                .bot_name
+                .clone()
+                .or_else(|| state.default_bot_name.clone()),
         };
 
         match execute_workflow(&child_input) {
@@ -3447,6 +3466,7 @@ fn execute_parallel(
             Some(&window_name),
             step_model,
             &state.parent_run_id,
+            state.default_bot_name.as_deref(),
         )?;
 
         state.wf_mgr.update_step_status(
@@ -3465,6 +3485,7 @@ fn execute_parallel(
             &prompt,
             step_model,
             &window_name,
+            state.default_bot_name.as_deref(),
         ) {
             tracing::warn!("Failed to spawn parallel agent '{agent_label}': {e}");
             let _ = state
@@ -3775,6 +3796,21 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
         None,
     )?;
 
+    // Resolve bot token once for this gate (used in PrApproval/PrChecks gh calls).
+    let gate_bot_token: Option<String> = {
+        let effective_bot = node
+            .bot_name
+            .as_deref()
+            .or(state.default_bot_name.as_deref());
+        if effective_bot.is_some() || state.config.github.app.is_some() {
+            crate::github_app::resolve_named_app_token(state.config, effective_bot, "gate")
+                .token()
+                .map(String::from)
+        } else {
+            None
+        }
+    };
+
     match node.gate_type {
         GateType::HumanApproval | GateType::HumanReview => {
             tracing::info!("Gate '{}' waiting for human action:", node.name);
@@ -3863,10 +3899,13 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                 match node.approval_mode {
                     ApprovalMode::MinApprovals => {
                         // Poll gh pr view for raw approval count
-                        let output = Command::new("gh")
-                            .args(["pr", "view", "--json", "reviews,author"])
-                            .current_dir(&state.working_dir)
-                            .output();
+                        let mut cmd = Command::new("gh");
+                        cmd.args(["pr", "view", "--json", "reviews,author"])
+                            .current_dir(&state.working_dir);
+                        if let Some(ref token) = gate_bot_token {
+                            cmd.env("GH_TOKEN", token);
+                        }
+                        let output = cmd.output();
 
                         if let Ok(out) = output {
                             if out.status.success() {
@@ -3913,10 +3952,13 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                     }
                     ApprovalMode::ReviewDecision => {
                         // Poll gh pr view for GitHub's branch-protection-aware reviewDecision
-                        let output = Command::new("gh")
-                            .args(["pr", "view", "--json", "reviewDecision"])
-                            .current_dir(&state.working_dir)
-                            .output();
+                        let mut cmd = Command::new("gh");
+                        cmd.args(["pr", "view", "--json", "reviewDecision"])
+                            .current_dir(&state.working_dir);
+                        if let Some(ref token) = gate_bot_token {
+                            cmd.env("GH_TOKEN", token);
+                        }
+                        let output = cmd.output();
 
                         if let Ok(out) = output {
                             if out.status.success() {
@@ -3957,10 +3999,13 @@ fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32)
                     return handle_gate_timeout(state, &step_id, node);
                 }
 
-                let output = Command::new("gh")
-                    .args(["pr", "checks", "--json", "state"])
-                    .current_dir(&state.working_dir)
-                    .output();
+                let mut cmd = Command::new("gh");
+                cmd.args(["pr", "checks", "--json", "state"])
+                    .current_dir(&state.working_dir);
+                if let Some(ref token) = gate_bot_token {
+                    cmd.env("GH_TOKEN", token);
+                }
+                let output = cmd.output();
 
                 if let Ok(out) = output {
                     if out.status.success() {
@@ -4618,6 +4663,7 @@ mod tests {
             approval_mode: ApprovalMode::default(),
             timeout_secs: 1,
             on_timeout,
+            bot_name: None,
         }
     }
 
@@ -4668,6 +4714,7 @@ mod tests {
             block_output: None,
             block_with: Vec::new(),
             resume_ctx: None,
+            default_bot_name: None,
         };
         (state, run_id)
     }
@@ -5538,6 +5585,7 @@ And here is my actual output:
             block_output: None,
             block_with: Vec::new(),
             resume_ctx: None,
+            default_bot_name: None,
         }
     }
 
@@ -5945,6 +5993,7 @@ And here is my actual output:
             block_output: None,
             block_with: Vec::new(),
             resume_ctx: None,
+            default_bot_name: None,
         }
     }
 
@@ -6083,6 +6132,7 @@ And here is my actual output:
                 approval_mode: ApprovalMode::default(),
                 timeout_secs: 1,
                 on_timeout: OnTimeout::Fail,
+                bot_name: None,
             })],
         };
 
@@ -6299,6 +6349,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let err = execute_workflow(&input).unwrap_err();
         assert!(
@@ -6340,6 +6391,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         // Guard should pass; empty workflow completes successfully.
         let result = execute_workflow(&input);
@@ -6383,6 +6435,7 @@ And here is my actual output:
             depth: 1,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result = execute_workflow(&input);
         assert!(
@@ -6435,6 +6488,7 @@ And here is my actual output:
                 approval_mode: ApprovalMode::default(),
                 timeout_secs: 1,
                 on_timeout: OnTimeout::Fail,
+                bot_name: None,
             })],
         };
 
@@ -6465,6 +6519,7 @@ And here is my actual output:
                 on_fail: None,
                 output: None,
                 with: vec![],
+                bot_name: None,
             })],
         };
 
@@ -6499,6 +6554,7 @@ And here is my actual output:
                     approval_mode: ApprovalMode::default(),
                     timeout_secs: 1,
                     on_timeout: OnTimeout::Fail,
+                    bot_name: None,
                 }),
                 WorkflowNode::Gate(GateNode {
                     name: "g2".into(),
@@ -6508,6 +6564,7 @@ And here is my actual output:
                     approval_mode: ApprovalMode::default(),
                     timeout_secs: 1,
                     on_timeout: OnTimeout::Fail,
+                    bot_name: None,
                 }),
             ],
         };
@@ -6542,6 +6599,7 @@ And here is my actual output:
                     approval_mode: ApprovalMode::default(),
                     timeout_secs: 1,
                     on_timeout: OnTimeout::Fail,
+                    bot_name: None,
                 })],
             })],
         };
@@ -6577,6 +6635,7 @@ And here is my actual output:
                     approval_mode: ApprovalMode::default(),
                     timeout_secs: 1,
                     on_timeout: OnTimeout::Fail,
+                    bot_name: None,
                 })],
             })],
         };
@@ -6606,6 +6665,7 @@ And here is my actual output:
             on_fail: None,
             output: None,
             with: vec!["call-snippet".into()],
+            bot_name: None,
         };
 
         // Call will error on load_agent, but the merging logic should execute
@@ -6636,6 +6696,7 @@ And here is my actual output:
             on_fail: None,
             output: Some("call-schema".into()),
             with: vec![],
+            bot_name: None,
         };
 
         let result = execute_call(&mut state, &node, 0);
@@ -6927,6 +6988,7 @@ And here is my actual output:
                 on_fail: None,
                 output: None,
                 with: vec![],
+                bot_name: None,
             })],
         };
 
@@ -6960,6 +7022,7 @@ And here is my actual output:
                 on_fail: None,
                 output: None,
                 with: vec![],
+                bot_name: None,
             })],
         };
 
@@ -7018,6 +7081,7 @@ And here is my actual output:
                     on_fail: None,
                     output: None,
                     with: vec![],
+                    bot_name: None,
                 }),
                 WorkflowNode::Call(CallNode {
                     agent: crate::workflow_dsl::AgentRef::Name("step-b".to_string()),
@@ -7025,6 +7089,7 @@ And here is my actual output:
                     on_fail: None,
                     output: None,
                     with: vec![],
+                    bot_name: None,
                 }),
             ],
         };
@@ -7078,6 +7143,7 @@ And here is my actual output:
                     approval_mode: ApprovalMode::default(),
                     timeout_secs: 300,
                     on_timeout: crate::workflow_dsl::OnTimeout::Fail,
+                    bot_name: None,
                 }),
             ],
         };
@@ -8027,6 +8093,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result1 = execute_workflow(&input1);
         assert!(
@@ -8055,6 +8122,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result2 = execute_workflow(&input2);
         assert!(
@@ -8342,6 +8410,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8389,6 +8458,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8440,6 +8510,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8478,6 +8549,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         assert!(
             execute_workflow(&input).is_err(),
@@ -8507,6 +8579,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         assert!(
             execute_workflow(&input).is_err(),
@@ -8574,6 +8647,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8625,6 +8699,7 @@ And here is my actual output:
             depth: 0,
             parent_workflow_run_id: None,
             target_label: None,
+            default_bot_name: None,
         };
         let result = execute_workflow(&input).unwrap();
 

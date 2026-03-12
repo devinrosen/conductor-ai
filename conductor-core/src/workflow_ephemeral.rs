@@ -251,6 +251,7 @@ pub fn run_workflow_on_pr(
         depth: 0,
         parent_workflow_run_id: None,
         target_label: Some(&pr_target_label),
+        default_bot_name: None,
     };
 
     // `temp_dir` is dropped after execute_workflow returns, cleaning up the cloned repo.

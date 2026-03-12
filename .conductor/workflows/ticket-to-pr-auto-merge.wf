@@ -10,6 +10,7 @@ workflow ticket-to-pr-auto-merge {
   }
 
   call workflow ticket-to-pr {
+    as = "developer"
     inputs {
       ticket_id = "{{ticket_id}}"
     }
@@ -21,10 +22,13 @@ workflow ticket-to-pr-auto-merge {
   }
 
   gate pr_approval {
+    as            = "reviewer"
     min_approvals = 1
     timeout       = "72h"
     on_timeout    = fail
   }
 
-  call merge-and-close
+  call merge-and-close {
+    as = "merger"
+  }
 }
