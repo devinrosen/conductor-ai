@@ -56,6 +56,13 @@ pub fn install() -> Result<()> {
     let mut value: serde_json::Value = serde_json::from_str(&existing)
         .with_context(|| format!("invalid JSON in {}", settings_path.display()))?;
 
+    if !value.is_object() {
+        anyhow::bail!(
+            "{} contains valid JSON but is not an object; refusing to modify it",
+            settings_path.display()
+        );
+    }
+
     // 4. Set statusLineTool
     let script_path_str = script_path
         .to_str()
