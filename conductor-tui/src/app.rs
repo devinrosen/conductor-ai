@@ -3826,6 +3826,7 @@ impl App {
                 Ok(defs) => defs
                     .into_iter()
                     .filter(|d| d.trigger == WorkflowTrigger::Manual)
+                    .filter(|d| d.targets.iter().any(|t| t == "worktree"))
                     .collect(),
                 Err(e) => {
                     tracing::warn!("failed to list workflow defs: {e}");
