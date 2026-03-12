@@ -5473,9 +5473,9 @@ impl App {
             );
 
             if let Some(ref tx) = bg_tx {
-                let msg = match result {
+                match result {
                     Ok(WorkflowResult { all_succeeded, .. }) => {
-                        if all_succeeded {
+                        let msg = if all_succeeded {
                             format!(
                                 "Workflow '{workflow_name}' on {pr_label} completed successfully"
                             )
@@ -5483,11 +5483,17 @@ impl App {
                             format!(
                                 "Workflow '{workflow_name}' on {pr_label} completed with failures"
                             )
-                        }
+                        };
+                        let _ = tx.send(Action::BackgroundSuccess { message: msg });
                     }
-                    Err(e) => format!("Workflow '{workflow_name}' on {pr_label} failed: {e}"),
-                };
-                let _ = tx.send(Action::BackgroundSuccess { message: msg });
+                    Err(e) => {
+                        let _ = tx.send(Action::BackgroundError {
+                            message: format!(
+                                "Workflow '{workflow_name}' on {pr_label} failed: {e}"
+                            ),
+                        });
+                    }
+                }
             }
         });
 
