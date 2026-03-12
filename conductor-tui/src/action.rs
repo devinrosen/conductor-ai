@@ -31,6 +31,8 @@ pub struct WorkflowDataPayload {
     pub step_agent_events: Vec<AgentRunEvent>,
     /// Agent run metadata for the selected step's child_run_id
     pub step_agent_run: Option<AgentRun>,
+    /// Parse error messages for any `.wf` files that failed to load
+    pub workflow_parse_warnings: Vec<String>,
 }
 
 /// Payload for the DataRefreshed action (boxed to keep Action enum small).

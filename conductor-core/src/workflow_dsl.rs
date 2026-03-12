@@ -1318,10 +1318,17 @@ pub fn parse_workflow_str(input: &str, source_path: &str) -> Result<WorkflowDef>
 }
 
 /// Load all workflow definitions from `.conductor/workflows/*.wf`.
-pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<WorkflowDef>> {
+///
+/// Returns `(defs, warnings)` where `warnings` contains one message per file
+/// that failed to parse. Callers receive all successfully-parsed definitions
+/// even when some files are broken.
+pub fn load_workflow_defs(
+    worktree_path: &str,
+    repo_path: &str,
+) -> Result<(Vec<WorkflowDef>, Vec<String>)> {
     let workflows_dir = match resolve_conductor_subdir(worktree_path, repo_path, "workflows") {
         Some(dir) => dir,
-        None => return Ok(Vec::new()),
+        None => return Ok((Vec::new(), Vec::new())),
     };
 
     let mut entries: Vec<_> = fs::read_dir(&workflows_dir)
@@ -1335,10 +1342,19 @@ pub fn load_workflow_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<Wo
     entries.sort_by_key(|e| e.file_name());
 
     let mut defs = Vec::new();
+    let mut warnings = Vec::new();
     for entry in entries {
-        defs.push(parse_workflow_file(&entry.path())?);
+        let path = entry.path();
+        match parse_workflow_file(&path) {
+            Ok(def) => defs.push(def),
+            Err(e) => {
+                let msg = format!("Failed to parse workflow {:?}: {e}", path);
+                tracing::warn!("{msg}");
+                warnings.push(msg);
+            }
+        }
     }
-    Ok(defs)
+    Ok((defs, warnings))
 }
 
 /// Validate that a workflow name is safe for use in filesystem paths.
@@ -2018,9 +2034,11 @@ workflow ticket-to-pr {
         )
         .unwrap();
 
-        let defs = load_workflow_defs(tmp.path().to_str().unwrap(), "/nonexistent").unwrap();
+        let (defs, warnings) =
+            load_workflow_defs(tmp.path().to_str().unwrap(), "/nonexistent").unwrap();
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].name, "simple");
+        assert!(warnings.is_empty());
     }
 
     #[test]

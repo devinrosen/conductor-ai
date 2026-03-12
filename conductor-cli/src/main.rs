@@ -1152,7 +1152,10 @@ fn main() -> Result<()> {
                 };
 
                 // Try new .wf files first, fall back to legacy .md
-                let wf_defs = WorkflowManager::list_defs(&wt_path, &repo_path)?;
+                let (wf_defs, wf_warnings) = WorkflowManager::list_defs(&wt_path, &repo_path)?;
+                for w in &wf_warnings {
+                    eprintln!("warning: {w}");
+                }
                 if !wf_defs.is_empty() {
                     for def in &wf_defs {
                         let node_count = def.total_nodes();

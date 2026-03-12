@@ -674,6 +674,22 @@ impl App {
                 self.state.data.step_agent_events = payload.step_agent_events;
                 self.state.data.step_agent_run = payload.step_agent_run;
                 self.state.init_collapse_state();
+                if !payload.workflow_parse_warnings.is_empty() {
+                    let count = payload.workflow_parse_warnings.len();
+                    let names: Vec<&str> = payload
+                        .workflow_parse_warnings
+                        .iter()
+                        .filter_map(|w| w.split('"').nth(1).or_else(|| w.split_whitespace().last()))
+                        .collect();
+                    let label = if names.is_empty() {
+                        format!("{count} workflow(s) failed to parse")
+                    } else {
+                        names.join(", ")
+                    };
+                    self.state.status_message = Some(format!(
+                        "⚠ {count} workflow file(s) failed to parse: {label}"
+                    ));
+                }
                 self.clamp_workflow_indices();
                 return matches!(self.state.view, View::Workflows | View::WorkflowRunDetail);
             }
@@ -3930,7 +3946,7 @@ impl App {
         std::thread::spawn(move || {
             use conductor_core::workflow::{WorkflowManager, WorkflowTrigger};
             let manual_defs: Vec<_> = match WorkflowManager::list_defs(&wt_path, &rp) {
-                Ok(defs) => defs
+                Ok((defs, _warnings)) => defs
                     .into_iter()
                     .filter(|d| d.trigger == WorkflowTrigger::Manual)
                     .filter(|d| d.targets.iter().any(|t| t == "worktree"))
@@ -4717,8 +4733,24 @@ impl App {
         if let Some(ref wt_id) = self.state.selected_worktree_id.clone() {
             // Worktree-scoped: load defs from FS
             if let Some((wt_path, rp)) = self.resolve_worktree_paths(wt_id) {
-                self.state.data.workflow_defs =
+                let (defs, warnings) =
                     WorkflowManager::list_defs(&wt_path, &rp).unwrap_or_default();
+                self.state.data.workflow_defs = defs;
+                if !warnings.is_empty() {
+                    let count = warnings.len();
+                    let names: Vec<&str> = warnings
+                        .iter()
+                        .filter_map(|w| w.split('"').nth(1).or_else(|| w.split_whitespace().last()))
+                        .collect();
+                    let label = if names.is_empty() {
+                        format!("{count} workflow(s) failed to parse")
+                    } else {
+                        names.join(", ")
+                    };
+                    self.state.status_message = Some(format!(
+                        "⚠ {count} workflow file(s) failed to parse: {label}"
+                    ));
+                }
             }
         } else {
             // Global mode: defs are cross-worktree, cleared here and populated by background poller
@@ -5025,6 +5057,7 @@ impl App {
             WorkflowPickerTarget::Ticket { repo_path, .. } => {
                 conductor_core::workflow::WorkflowManager::list_defs("", repo_path)
                     .unwrap_or_default()
+                    .0
                     .into_iter()
                     .filter(|d| d.targets.iter().any(|t| t == "ticket"))
                     .collect()
@@ -5032,6 +5065,7 @@ impl App {
             WorkflowPickerTarget::Repo { repo_path, .. } => {
                 conductor_core::workflow::WorkflowManager::list_defs("", repo_path)
                     .unwrap_or_default()
+                    .0
                     .into_iter()
                     .filter(|d| d.targets.iter().any(|t| t == "repo"))
                     .collect()
@@ -5039,6 +5073,7 @@ impl App {
             WorkflowPickerTarget::WorkflowRun { repo_path, .. } => {
                 conductor_core::workflow::WorkflowManager::list_defs("", repo_path)
                     .unwrap_or_default()
+                    .0
                     .into_iter()
                     .filter(|d| d.targets.iter().any(|t| t == "workflow_run"))
                     .collect()
@@ -5501,7 +5536,9 @@ impl App {
 
         let all_defs: Vec<conductor_core::workflow::WorkflowDef> =
             if let Some(ref rp) = repo_local_path {
-                conductor_core::workflow::WorkflowManager::list_defs(rp, rp).unwrap_or_default()
+                conductor_core::workflow::WorkflowManager::list_defs(rp, rp)
+                    .unwrap_or_default()
+                    .0
             } else {
                 self.state.data.workflow_defs.clone()
             };

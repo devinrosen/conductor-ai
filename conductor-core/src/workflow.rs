@@ -1178,7 +1178,14 @@ impl<'a> WorkflowManager<'a> {
     ///
     /// Wraps `workflow_dsl::load_workflow_defs` so consumers don't need to
     /// reach into the low-level DSL module directly.
-    pub fn list_defs(worktree_path: &str, repo_path: &str) -> Result<Vec<WorkflowDef>> {
+    ///
+    /// Returns `(defs, warnings)` — warnings contain one message per `.wf`
+    /// file that failed to parse. Successfully-parsed definitions are always
+    /// returned even when some files are broken.
+    pub fn list_defs(
+        worktree_path: &str,
+        repo_path: &str,
+    ) -> Result<(Vec<WorkflowDef>, Vec<String>)> {
         workflow_dsl::load_workflow_defs(worktree_path, repo_path)
     }
 
