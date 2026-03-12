@@ -15,6 +15,8 @@ workflow ticket-to-pr {
     retries = 2
   }
 
+  call workflow lint-fix
+
   call push-and-pr
 
   call workflow iterate-pr
