@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use conductor_core::workflow::WorkflowRunStatus;
+use conductor_core::workflow::{WorkflowDef, WorkflowRunStatus};
 use conductor_core::worktree::Worktree;
 
 use super::common::truncate;
@@ -20,6 +20,49 @@ fn worktree_slug(worktrees: &[Worktree], predicate: impl Fn(&Worktree) -> bool) 
         .find(|wt| predicate(wt))
         .map(|wt| wt.slug.as_str())
         .unwrap_or("?")
+}
+
+/// Translate a logical index (into a flat list of items) to a visual index that
+/// accounts for non-selectable section header rows inserted before each new group.
+fn visual_idx_with_headers<T>(
+    items: &[T],
+    get_repo: impl Fn(&T) -> String,
+    logical_idx: usize,
+) -> usize {
+    let mut headers = 0usize;
+    let mut prev = String::new();
+    for item in items.iter().take(logical_idx + 1) {
+        let repo = get_repo(item);
+        if repo != prev {
+            headers += 1;
+            prev = repo;
+        }
+    }
+    logical_idx + headers
+}
+
+/// Resolve the repo slug for a workflow def by matching its `source_path`
+/// against known repo local paths, falling back to worktree paths.
+fn get_repo_slug_for_def<'a>(def: &WorkflowDef, state: &'a AppState) -> &'a str {
+    if let Some(repo) = state
+        .data
+        .repos
+        .iter()
+        .find(|r| def.source_path.starts_with(&r.local_path))
+    {
+        return &repo.slug;
+    }
+    if let Some(wt) = state
+        .data
+        .worktrees
+        .iter()
+        .find(|wt| def.source_path.starts_with(&wt.path))
+    {
+        if let Some(slug) = state.data.repo_slug_map.get(&wt.repo_id) {
+            return slug.as_str();
+        }
+    }
+    "?"
 }
 
 /// Render the Workflows split-pane view: defs (left) + runs (right).
@@ -76,70 +119,139 @@ fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let global_mode = state.selected_worktree_id.is_none();
 
-    let items: Vec<ListItem> = state
-        .data
-        .workflow_defs
-        .iter()
-        .map(|def| {
+    if global_mode {
+        // Build (repo_slug, def) pairs so we can group by repo with section headers.
+        let defs_with_slug: Vec<(&str, &WorkflowDef)> = state
+            .data
+            .workflow_defs
+            .iter()
+            .map(|def| (get_repo_slug_for_def(def, state), def))
+            .collect();
+
+        let mut items: Vec<ListItem> = Vec::new();
+        let mut prev_repo = "";
+        for (repo_slug, def) in &defs_with_slug {
+            if *repo_slug != prev_repo {
+                let fill = format!("{:─<30}", "");
+                items.push(ListItem::new(Line::from(vec![Span::styled(
+                    format!("─ {repo_slug} {fill}"),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                )])));
+                prev_repo = repo_slug;
+            }
             let node_count = def.body.len();
             let input_count = def.inputs.len();
-            let mut spans = vec![Span::styled(
-                format!("{:<20}", def.name),
-                Style::default().add_modifier(Modifier::BOLD),
-            )];
-            if global_mode {
-                // Derive worktree slug from source_path by matching against known worktrees
-                let wt_slug = worktree_slug(&state.data.worktrees, |wt| {
-                    def.source_path.starts_with(&wt.path)
-                });
-                spans.push(Span::styled(
-                    format!("  {wt_slug}"),
-                    Style::default().fg(Color::DarkGray),
-                ));
-            } else {
-                spans.push(Span::styled(
-                    format!("  {}", truncate(&def.description, 30)),
-                    Style::default().fg(Color::DarkGray),
-                ));
+            let mut spans = vec![
+                Span::raw("  \u{2514} "),
+                Span::styled(
+                    format!("{:<20}", def.name),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  {node_count} steps"),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ];
+            if !def.targets.is_empty() {
+                let badge = format!("  [{}]", def.targets.join(", "));
+                spans.push(Span::styled(badge, Style::default().fg(Color::Cyan)));
             }
-            spans.push(Span::styled(
-                format!("  {node_count} steps"),
-                Style::default().fg(Color::Yellow),
-            ));
             if input_count > 0 {
                 spans.push(Span::styled(
                     format!("  {input_count} inputs"),
                     Style::default().fg(Color::Magenta),
                 ));
             }
-            ListItem::new(Line::from(spans))
-        })
-        .collect();
+            items.push(ListItem::new(Line::from(spans)));
+        }
 
-    let defs_title = if global_mode {
-        " All Workflow Definitions "
+        let visual_idx = if !state.data.workflow_defs.is_empty() {
+            let logical_idx = state
+                .workflow_def_index
+                .min(defs_with_slug.len().saturating_sub(1));
+            visual_idx_with_headers(&defs_with_slug, |(slug, _)| slug.to_string(), logical_idx)
+        } else {
+            0
+        };
+
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(border_color))
+                    .title(" All Workflow Definitions "),
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("");
+
+        let mut list_state = ListState::default();
+        if !state.data.workflow_defs.is_empty() {
+            list_state.select(Some(visual_idx));
+        }
+        frame.render_stateful_widget(list, area, &mut list_state);
     } else {
-        " Workflow Definitions "
-    };
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color))
-                .title(defs_title),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("");
+        // Single-worktree mode: flat list with description and target badges.
+        let items: Vec<ListItem> = state
+            .data
+            .workflow_defs
+            .iter()
+            .map(|def| {
+                let node_count = def.body.len();
+                let input_count = def.inputs.len();
+                let mut spans = vec![
+                    Span::styled(
+                        format!("{:<20}", def.name),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("  {}", truncate(&def.description, 30)),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        format!("  {node_count} steps"),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ];
+                if !def.targets.is_empty() {
+                    let badge = format!("  [{}]", def.targets.join(", "));
+                    spans.push(Span::styled(badge, Style::default().fg(Color::Cyan)));
+                }
+                if input_count > 0 {
+                    spans.push(Span::styled(
+                        format!("  {input_count} inputs"),
+                        Style::default().fg(Color::Magenta),
+                    ));
+                }
+                ListItem::new(Line::from(spans))
+            })
+            .collect();
 
-    let mut list_state = ListState::default();
-    if !state.data.workflow_defs.is_empty() {
-        list_state.select(Some(state.workflow_def_index));
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(border_color))
+                    .title(" Workflow Definitions "),
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("");
+
+        let mut list_state = ListState::default();
+        if !state.data.workflow_defs.is_empty() {
+            list_state.select(Some(state.workflow_def_index));
+        }
+        frame.render_stateful_widget(list, area, &mut list_state);
     }
-    frame.render_stateful_widget(list, area, &mut list_state);
 }
 
 fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {

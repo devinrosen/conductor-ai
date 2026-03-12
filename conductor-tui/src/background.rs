@@ -315,6 +315,7 @@ fn poll_workflow_data(
                 .collect();
             let mut seen: std::collections::HashSet<(String, String)> =
                 std::collections::HashSet::new();
+            let mut tagged = Vec::new();
             for wt in wt_mgr.list(None, true).unwrap_or_default() {
                 let rp = repo_paths
                     .get(&wt.repo_id)
@@ -325,8 +326,13 @@ fn poll_workflow_data(
                 // filesystem copy of .conductor/workflows/, so source_path differs per
                 // worktree even for the same logical workflow.
                 wt_defs.retain(|d| seen.insert((wt.repo_id.clone(), d.name.clone())));
-                all_defs.append(&mut wt_defs);
+                for d in wt_defs {
+                    tagged.push((wt.repo_id.clone(), d));
+                }
             }
+            // Sort by repo_id so defs are contiguous per repo for grouping in the renderer.
+            tagged.sort_by(|a, b| a.0.cmp(&b.0));
+            all_defs = tagged.into_iter().map(|(_, d)| d).collect();
         }
         Some(all_defs)
     };
