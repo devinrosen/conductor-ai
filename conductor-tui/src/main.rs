@@ -11,6 +11,7 @@ use anyhow::Result;
 
 use conductor_core::config::{db_path, ensure_dirs, load_config};
 use conductor_core::db::open_database;
+use conductor_core::text_util::expand_tilde;
 use theme::Theme;
 
 fn main() -> Result<()> {
@@ -25,12 +26,10 @@ fn main() -> Result<()> {
     ensure_dirs(&config)?;
 
     let theme = if let Some(raw_path) = config.general.theme_path.as_deref() {
-        let expanded = if raw_path.starts_with('~') {
-            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-            home.join(raw_path.trim_start_matches("~/").trim_start_matches('~'))
-        } else {
-            std::path::PathBuf::from(raw_path)
-        };
+        let expanded = expand_tilde(raw_path).unwrap_or_else(|e| {
+            eprintln!("theme error: {e}");
+            std::process::exit(1);
+        });
         Theme::from_base16_file(&expanded).unwrap_or_else(|e| {
             eprintln!("theme error: {e}");
             std::process::exit(1);
