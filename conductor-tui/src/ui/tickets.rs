@@ -126,7 +126,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("> ");
+        .highlight_symbol("");
 
     let mut list_state = ListState::default();
     if !state.filtered_tickets.is_empty() {
