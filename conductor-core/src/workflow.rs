@@ -8622,4 +8622,123 @@ And here is my actual output:
             "no running step → no entry in map"
         );
     }
+
+    // --- resolve_run_context tests ---
+
+    /// Helper: create a minimal workflow_run row with explicit worktree_id / repo_id.
+    fn insert_workflow_run_with_targets(
+        conn: &Connection,
+        worktree_id: Option<&str>,
+        repo_id: Option<&str>,
+    ) -> String {
+        let agent_mgr = AgentManager::new(conn);
+        let parent = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+        let mgr = WorkflowManager::new(conn);
+        let run = mgr
+            .create_workflow_run_with_targets(
+                "test-wf",
+                worktree_id,
+                None,
+                repo_id,
+                &parent.id,
+                false,
+                "manual",
+                None,
+                None,
+            )
+            .unwrap();
+        run.id
+    }
+
+    #[test]
+    fn test_resolve_run_context_run_not_found() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = WorkflowManager::new(&conn);
+        let err = mgr
+            .resolve_run_context("nonexistent-id", &config)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("not found"),
+            "expected 'not found' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_run_context_worktree_path_exists() {
+        let conn = setup_db();
+        let config = Config::default();
+
+        // Create a real temp directory so the disk-existence guard passes.
+        let tmp = std::env::temp_dir().join("conductor_test_wt_path_exists");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let wt_path = tmp.to_string_lossy().to_string();
+
+        // Insert a worktree pointing at the real temp dir.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt-exists', 'r1', 'test-wt', 'feat/test', ?1, 'active', '2024-01-01T00:00:00Z')",
+            params![wt_path],
+        )
+        .unwrap();
+
+        let run_id = insert_workflow_run_with_targets(&conn, Some("wt-exists"), None);
+        let mgr = WorkflowManager::new(&conn);
+        let ctx = mgr.resolve_run_context(&run_id, &config).unwrap();
+
+        assert_eq!(ctx.working_dir, wt_path);
+        assert_eq!(ctx.repo_path, "/tmp/repo"); // repo r1 from setup_db
+        assert_eq!(ctx.worktree_id.as_deref(), Some("wt-exists"));
+        assert_eq!(ctx.repo_id.as_deref(), Some("r1"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_resolve_run_context_worktree_path_missing() {
+        let conn = setup_db();
+        let config = Config::default();
+
+        // setup_db inserts worktree w1 at /tmp/ws/feat-test which does not exist.
+        // Verify the guard rejects it.
+        let run_id = insert_workflow_run_with_targets(&conn, Some("w1"), None);
+        let mgr = WorkflowManager::new(&conn);
+        let err = mgr.resolve_run_context(&run_id, &config).unwrap_err();
+        assert!(
+            err.to_string().contains("no longer exists on disk"),
+            "expected disk-existence error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_run_context_repo_only() {
+        let conn = setup_db();
+        let config = Config::default();
+
+        // Run with only repo_id (no worktree).
+        let run_id = insert_workflow_run_with_targets(&conn, None, Some("r1"));
+        let mgr = WorkflowManager::new(&conn);
+        let ctx = mgr.resolve_run_context(&run_id, &config).unwrap();
+
+        assert_eq!(ctx.working_dir, "/tmp/repo");
+        assert_eq!(ctx.repo_path, "/tmp/repo");
+        assert!(ctx.worktree_id.is_none());
+        assert_eq!(ctx.repo_id.as_deref(), Some("r1"));
+    }
+
+    #[test]
+    fn test_resolve_run_context_no_worktree_no_repo() {
+        let conn = setup_db();
+        let config = Config::default();
+
+        // Run with neither worktree nor repo.
+        let run_id = insert_workflow_run_with_targets(&conn, None, None);
+        let mgr = WorkflowManager::new(&conn);
+        let err = mgr.resolve_run_context(&run_id, &config).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("has no associated worktree or repo"),
+            "expected missing-targets error, got: {err}"
+        );
+    }
 }
