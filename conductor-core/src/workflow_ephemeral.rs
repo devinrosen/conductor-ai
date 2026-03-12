@@ -235,6 +235,7 @@ pub fn run_workflow_on_pr(
         ..exec_config
     };
 
+    let pr_target_label = format!("{}/{}#{}", pr_ref.owner, pr_ref.repo, pr_ref.number);
     let input = WorkflowExecInput {
         conn,
         config,
@@ -249,6 +250,7 @@ pub fn run_workflow_on_pr(
         inputs,
         depth: 0,
         parent_workflow_run_id: None,
+        target_label: Some(&pr_target_label),
     };
 
     // `temp_dir` is dropped after execute_workflow returns, cleaning up the cloned repo.

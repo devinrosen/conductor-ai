@@ -3186,12 +3186,28 @@ impl App {
             PostCreateChoice::RunWorkflow { def, .. } => {
                 let mut inputs = std::collections::HashMap::new();
                 inputs.insert("ticket_id".to_string(), ticket_id);
+                let post_create_target_label = self
+                    .state
+                    .data
+                    .worktrees
+                    .iter()
+                    .find(|w| w.id == worktree_id)
+                    .and_then(|w| {
+                        self.state
+                            .data
+                            .repos
+                            .iter()
+                            .find(|r| r.id == w.repo_id)
+                            .map(|r| format!("{}/{}", r.slug, w.slug))
+                    })
+                    .unwrap_or_else(|| worktree_slug.clone());
                 self.spawn_workflow_in_background(
                     def,
                     worktree_id,
                     worktree_path,
                     repo_path,
                     inputs,
+                    post_create_target_label,
                 );
             }
             PostCreateChoice::Skip => {
@@ -5015,12 +5031,28 @@ impl App {
                     }
                 }
 
+                let wt_target_label = self
+                    .state
+                    .data
+                    .worktrees
+                    .iter()
+                    .find(|w| w.id == worktree_id)
+                    .and_then(|w| {
+                        self.state
+                            .data
+                            .repos
+                            .iter()
+                            .find(|r| r.id == w.repo_id)
+                            .map(|r| format!("{}/{}", r.slug, w.slug))
+                    })
+                    .unwrap_or_default();
                 self.spawn_workflow_in_background(
                     def,
                     worktree_id,
                     worktree_path,
                     repo_path,
                     std::collections::HashMap::new(),
+                    wt_target_label,
                 );
             }
             WorkflowPickerTarget::Pr { pr_number, .. } => {
@@ -5063,11 +5095,18 @@ impl App {
             }
             WorkflowPickerTarget::Ticket {
                 ticket_id,
+                ticket_title,
                 repo_id,
                 repo_path,
                 ..
             } => {
-                self.spawn_ticket_workflow_in_background(def, ticket_id, repo_id, repo_path);
+                self.spawn_ticket_workflow_in_background(
+                    def,
+                    ticket_id,
+                    repo_id,
+                    repo_path,
+                    ticket_title,
+                );
             }
             WorkflowPickerTarget::Repo {
                 repo_id,
@@ -5084,12 +5123,24 @@ impl App {
                 ..
             } => {
                 let mut inputs = std::collections::HashMap::new();
-                inputs.insert("workflow_run_id".to_string(), workflow_run_id);
+                inputs.insert("workflow_run_id".to_string(), workflow_run_id.clone());
                 let working_dir = worktree_path.unwrap_or_else(|| repo_path.clone());
                 if let Some(wt_id) = worktree_id {
-                    self.spawn_workflow_in_background(def, wt_id, working_dir, repo_path, inputs);
+                    self.spawn_workflow_in_background(
+                        def,
+                        wt_id,
+                        working_dir,
+                        repo_path,
+                        inputs,
+                        workflow_run_id,
+                    );
                 } else {
-                    self.spawn_workflow_run_target_in_background(def, repo_path, inputs);
+                    self.spawn_workflow_run_target_in_background(
+                        def,
+                        repo_path,
+                        inputs,
+                        workflow_run_id,
+                    );
                 }
             }
         }
@@ -5122,13 +5173,13 @@ impl App {
             }
         };
 
-        let repo_path = self
+        let (repo_path, repo_slug) = self
             .state
             .data
             .repos
             .iter()
             .find(|r| r.id == wt.repo_id)
-            .map(|r| r.local_path.clone())
+            .map(|r| (r.local_path.clone(), r.slug.clone()))
             .unwrap_or_default();
 
         // Block if a workflow run is already active on this worktree
@@ -5152,12 +5203,14 @@ impl App {
             }
         }
 
+        let wt_target_label = format!("{repo_slug}/{}", wt.slug);
         self.spawn_workflow_in_background(
             def,
             wt.id,
             wt.path,
             repo_path,
             std::collections::HashMap::new(),
+            wt_target_label,
         );
     }
 
@@ -5169,6 +5222,7 @@ impl App {
         worktree_path: String,
         repo_path: String,
         inputs: std::collections::HashMap<String, String>,
+        target_label: String,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -5194,6 +5248,7 @@ impl App {
                     ..WorkflowExecConfig::default()
                 },
                 inputs,
+                target_label: Some(target_label),
             };
 
             let result = execute_workflow_standalone(&params);
@@ -5211,6 +5266,7 @@ impl App {
         ticket_id: String,
         repo_id: String,
         repo_path: String,
+        target_label: String,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -5238,6 +5294,7 @@ impl App {
                     ..WorkflowExecConfig::default()
                 },
                 inputs: std::collections::HashMap::new(),
+                target_label: Some(target_label),
             };
 
             let result = execute_workflow_standalone(&params);
@@ -5254,7 +5311,7 @@ impl App {
         def: conductor_core::workflow::WorkflowDef,
         repo_id: String,
         repo_path: String,
-        _repo_name: String,
+        repo_name: String,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -5280,6 +5337,7 @@ impl App {
                     ..WorkflowExecConfig::default()
                 },
                 inputs: std::collections::HashMap::new(),
+                target_label: Some(repo_name),
             };
 
             let result = execute_workflow_standalone(&params);
@@ -5296,6 +5354,7 @@ impl App {
         def: conductor_core::workflow::WorkflowDef,
         repo_path: String,
         inputs: std::collections::HashMap<String, String>,
+        target_label: String,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -5321,6 +5380,7 @@ impl App {
                     ..WorkflowExecConfig::default()
                 },
                 inputs,
+                target_label: Some(target_label),
             };
 
             let result = execute_workflow_standalone(&params);

@@ -1272,6 +1272,7 @@ fn main() -> Result<()> {
                             inputs: input_map,
                             depth: 0,
                             parent_workflow_run_id: None,
+                            target_label: Some(r.slug.as_str()),
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1319,6 +1320,7 @@ fn main() -> Result<()> {
                             inputs: input_map,
                             depth: 0,
                             parent_workflow_run_id: None,
+                            target_label: Some(run_id.as_str()),
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1366,6 +1368,7 @@ fn main() -> Result<()> {
                             inputs: input_map,
                             depth: 0,
                             parent_workflow_run_id: None,
+                            target_label: Some(repo.slug.as_str()),
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1400,6 +1403,7 @@ fn main() -> Result<()> {
                         workflow.name, node_count, repo_slug, worktree_slug
                     );
 
+                    let wt_label = format!("{repo_slug}/{worktree_slug}");
                     match conductor_core::workflow::execute_workflow(
                         &conductor_core::workflow::WorkflowExecInput {
                             conn: &conn,
@@ -1415,6 +1419,7 @@ fn main() -> Result<()> {
                             inputs: input_map,
                             depth: 0,
                             parent_workflow_run_id: None,
+                            target_label: Some(&wt_label),
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),

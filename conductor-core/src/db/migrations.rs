@@ -582,6 +582,17 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 32)?;
     }
 
+    // Migration 033: add target_label column to workflow_runs.
+    let has_target_label: bool = conn
+        .prepare("SELECT target_label FROM workflow_runs LIMIT 0")
+        .is_ok();
+    if !has_target_label {
+        conn.execute_batch(include_str!("migrations/033_workflow_target_label.sql"))?;
+    }
+    if version < 33 {
+        bump_version(conn, 33)?;
+    }
+
     Ok(())
 }
 

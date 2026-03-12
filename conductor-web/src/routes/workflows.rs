@@ -103,7 +103,7 @@ pub async fn run_workflow(
     Json(req): Json<RunWorkflowRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     // Validate inputs while holding the lock
-    let (wt_path, repo_path, model) = {
+    let (wt_path, wt_slug, repo_path, repo_slug, model) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
         let wt_mgr = WorktreeManager::new(&db, &config);
@@ -131,7 +131,13 @@ pub async fn run_workflow(
             .or_else(|| repo.model.clone())
             .or_else(|| config.general.model.clone());
 
-        (wt.path.clone(), repo.local_path.clone(), model)
+        (
+            wt.path.clone(),
+            wt.slug.clone(),
+            repo.local_path.clone(),
+            repo.slug.clone(),
+            model,
+        )
     };
 
     let workflow_name = req.name.clone();
@@ -166,6 +172,7 @@ pub async fn run_workflow(
                 ..Default::default()
             };
 
+            let wt_target_label = format!("{repo_slug}/{wt_slug}");
             let input = WorkflowExecInput {
                 conn: &db,
                 config: &config,
@@ -180,6 +187,7 @@ pub async fn run_workflow(
                 inputs: inputs.clone(),
                 depth: 0,
                 parent_workflow_run_id: None,
+                target_label: Some(&wt_target_label),
             };
 
             execute_workflow(&input)

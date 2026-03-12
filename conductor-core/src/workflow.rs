@@ -63,7 +63,7 @@ const STEP_COLUMNS: &str =
 const RUN_COLUMNS: &str =
     "id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
      started_at, ended_at, result_summary, definition_snapshot, inputs, ticket_id, repo_id, \
-     parent_workflow_run_id";
+     parent_workflow_run_id, target_label";
 
 /// Instruction appended to every agent prompt for structured output.
 pub const CONDUCTOR_OUTPUT_INSTRUCTION: &str = r#"
@@ -300,6 +300,8 @@ pub struct WorkflowRun {
     pub repo_id: Option<String>,
     /// Link to the parent workflow run when this is a sub-workflow invocation.
     pub parent_workflow_run_id: Option<String>,
+    /// Human-readable label for the target (e.g. `repo_slug/wt_slug`, `owner/repo#N`).
+    pub target_label: Option<String>,
 }
 
 /// A workflow step execution record from the database.
@@ -532,6 +534,7 @@ impl<'a> WorkflowManager<'a> {
             trigger,
             definition_snapshot,
             None,
+            None,
         )
     }
 
@@ -548,6 +551,7 @@ impl<'a> WorkflowManager<'a> {
         trigger: &str,
         definition_snapshot: Option<&str>,
         parent_workflow_run_id: Option<&str>,
+        target_label: Option<&str>,
     ) -> Result<WorkflowRun> {
         let id = ulid::Ulid::new().to_string();
         let now = Utc::now().to_rfc3339();
@@ -555,8 +559,8 @@ impl<'a> WorkflowManager<'a> {
         self.conn.execute(
             "INSERT INTO workflow_runs (id, workflow_name, worktree_id, ticket_id, repo_id, \
              parent_run_id, status, dry_run, trigger, started_at, definition_snapshot, \
-             parent_workflow_run_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+             parent_workflow_run_id, target_label) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 id,
                 workflow_name,
@@ -570,6 +574,7 @@ impl<'a> WorkflowManager<'a> {
                 now,
                 definition_snapshot,
                 parent_workflow_run_id,
+                target_label,
             ],
         )?;
 
@@ -589,6 +594,7 @@ impl<'a> WorkflowManager<'a> {
             ticket_id: ticket_id.map(String::from),
             repo_id: repo_id.map(String::from),
             parent_workflow_run_id: parent_workflow_run_id.map(String::from),
+            target_label: target_label.map(String::from),
         })
     }
 
@@ -1398,6 +1404,7 @@ fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
     let ticket_id: Option<String> = row.get(12)?;
     let repo_id: Option<String> = row.get(13)?;
     let parent_workflow_run_id: Option<String> = row.get(14)?;
+    let target_label: Option<String> = row.get(15)?;
     Ok(WorkflowRun {
         id: row.get(0)?,
         workflow_name: row.get(1)?,
@@ -1414,6 +1421,7 @@ fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
         ticket_id,
         repo_id,
         parent_workflow_run_id,
+        target_label,
     })
 }
 
@@ -1587,6 +1595,8 @@ struct ExecutionState<'a> {
     parent_run_id: String,
     /// Current nesting depth (0 = top-level workflow).
     depth: u32,
+    /// Human-readable label for the target (inherited by sub-workflows).
+    target_label: Option<String>,
     // Runtime
     step_results: HashMap<String, StepResult>,
     contexts: Vec<ContextEntry>,
@@ -1651,6 +1661,8 @@ pub struct WorkflowExecInput<'a> {
     pub depth: u32,
     /// The parent workflow run ID when this is a sub-workflow invocation.
     pub parent_workflow_run_id: Option<&'a str>,
+    /// Human-readable label for the target (e.g. `repo_slug/wt_slug`, `owner/repo#N`).
+    pub target_label: Option<&'a str>,
 }
 
 /// Execute a workflow definition against a worktree.
@@ -1738,6 +1750,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         &workflow.trigger.to_string(),
         Some(&snapshot_json),
         input.parent_workflow_run_id,
+        input.target_label,
     )?;
 
     // Build inputs map, injecting implicit ticket/repo variables
@@ -1793,6 +1806,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         wf_mgr: WorkflowManager::new(conn),
         parent_run_id: parent_run.id.clone(),
         depth: input.depth,
+        target_label: input.target_label.map(String::from),
         step_results: HashMap::new(),
         contexts: Vec::new(),
         position: 0,
@@ -1916,6 +1930,8 @@ pub struct WorkflowExecStandalone {
     pub model: Option<String>,
     pub exec_config: WorkflowExecConfig,
     pub inputs: HashMap<String, String>,
+    /// Human-readable label for the target (e.g. `repo_slug/wt_slug`, `owner/repo#N`).
+    pub target_label: Option<String>,
 }
 
 /// Execute a workflow in a self-contained manner: opens its own database
@@ -1939,6 +1955,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         inputs: params.inputs.clone(),
         depth: 0,
         parent_workflow_run_id: None,
+        target_label: params.target_label.as_deref(),
     };
 
     execute_workflow(&input)
@@ -2201,6 +2218,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         wf_mgr: WorkflowManager::new(conn),
         parent_run_id: wf_run.parent_run_id.clone(),
         depth: 0,
+        target_label: wf_run.target_label.clone(),
         step_results: HashMap::new(),
         contexts: Vec::new(),
         position: 0,
@@ -2828,6 +2846,7 @@ fn execute_call_workflow(
             inputs: child_inputs,
             depth: child_depth,
             parent_workflow_run_id: Some(&state.workflow_run_id),
+            target_label: state.target_label.as_deref(),
         };
 
         match execute_workflow(&child_input) {
@@ -4335,6 +4354,7 @@ mod tests {
                 "manual",
                 None,
                 None,
+                None,
             )
             .unwrap();
 
@@ -4368,6 +4388,7 @@ mod tests {
                 &parent.id,
                 false,
                 "manual",
+                None,
                 None,
                 None,
             )
@@ -4634,6 +4655,7 @@ mod tests {
             wf_mgr: WorkflowManager::new(conn),
             parent_run_id: parent.id,
             depth: 0,
+            target_label: None,
             step_results: HashMap::new(),
             contexts: Vec::new(),
             position: 0,
@@ -5503,6 +5525,7 @@ And here is my actual output:
             wf_mgr: WorkflowManager::new(conn),
             parent_run_id: String::new(),
             depth: 0,
+            target_label: None,
             step_results: HashMap::new(),
             contexts: Vec::new(),
             position: 0,
@@ -5909,6 +5932,7 @@ And here is my actual output:
             wf_mgr: WorkflowManager::new(conn),
             parent_run_id: parent.id,
             depth: 0,
+            target_label: None,
             step_results: HashMap::new(),
             contexts: Vec::new(),
             position: 0,
@@ -6274,6 +6298,7 @@ And here is my actual output:
             inputs: HashMap::new(),
             depth: 0,
             parent_workflow_run_id: None,
+            target_label: None,
         };
         let err = execute_workflow(&input).unwrap_err();
         assert!(
@@ -6314,6 +6339,7 @@ And here is my actual output:
             inputs: HashMap::new(),
             depth: 0,
             parent_workflow_run_id: None,
+            target_label: None,
         };
         // Guard should pass; empty workflow completes successfully.
         let result = execute_workflow(&input);
@@ -6356,6 +6382,7 @@ And here is my actual output:
             inputs: HashMap::new(),
             depth: 1,
             parent_workflow_run_id: None,
+            target_label: None,
         };
         let result = execute_workflow(&input);
         assert!(
@@ -7999,6 +8026,7 @@ And here is my actual output:
             inputs: HashMap::new(),
             depth: 0,
             parent_workflow_run_id: None,
+            target_label: None,
         };
         let result1 = execute_workflow(&input1);
         assert!(
@@ -8026,6 +8054,7 @@ And here is my actual output:
             inputs: HashMap::new(),
             depth: 0,
             parent_workflow_run_id: None,
+            target_label: None,
         };
         let result2 = execute_workflow(&input2);
         assert!(
@@ -8312,6 +8341,7 @@ And here is my actual output:
             inputs: HashMap::new(),
             depth: 0,
             parent_workflow_run_id: None,
+            target_label: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8358,6 +8388,7 @@ And here is my actual output:
             inputs: HashMap::new(),
             depth: 0,
             parent_workflow_run_id: None,
+            target_label: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8408,6 +8439,7 @@ And here is my actual output:
             inputs: explicit_inputs,
             depth: 0,
             parent_workflow_run_id: None,
+            target_label: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8445,6 +8477,7 @@ And here is my actual output:
             inputs: HashMap::new(),
             depth: 0,
             parent_workflow_run_id: None,
+            target_label: None,
         };
         assert!(
             execute_workflow(&input).is_err(),
@@ -8473,6 +8506,7 @@ And here is my actual output:
             inputs: HashMap::new(),
             depth: 0,
             parent_workflow_run_id: None,
+            target_label: None,
         };
         assert!(
             execute_workflow(&input).is_err(),
@@ -8539,6 +8573,7 @@ And here is my actual output:
             inputs: HashMap::new(),
             depth: 0,
             parent_workflow_run_id: None,
+            target_label: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8589,6 +8624,7 @@ And here is my actual output:
             inputs: HashMap::new(),
             depth: 0,
             parent_workflow_run_id: None,
+            target_label: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8816,6 +8852,7 @@ And here is my actual output:
                 &parent.id,
                 false,
                 "manual",
+                None,
                 None,
                 None,
             )

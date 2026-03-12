@@ -1382,6 +1382,7 @@ mod tests {
             ticket_id: None,
             repo_id: None,
             parent_workflow_run_id: None,
+            target_label: None,
         }
     }
 
@@ -1863,6 +1864,7 @@ mod tests {
             ticket_id: None,
             repo_id: Some("repo-1".into()),
             parent_workflow_run_id: None,
+            target_label: None,
         };
         state
             .data
@@ -1914,6 +1916,7 @@ mod tests {
             ticket_id: Some("ticket-1".into()),
             repo_id: None,
             parent_workflow_run_id: None,
+            target_label: None,
         };
         state
             .data
@@ -1962,6 +1965,7 @@ mod tests {
             ticket_id: None,
             repo_id: None,
             parent_workflow_run_id: None,
+            target_label: None,
         };
         state.data.active_non_worktree_workflow_runs.push(run);
         let gs = state.global_status();

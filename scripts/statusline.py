@@ -82,7 +82,8 @@ def get_runs(conn: sqlite3.Connection) -> list[dict]:
                 started_at,
                 ended_at,
                 worktree_id,
-                repo_id
+                repo_id,
+                target_label
             FROM workflow_runs
             WHERE parent_workflow_run_id IS NULL
               AND (
@@ -109,59 +110,6 @@ def get_runs(conn: sqlite3.Connection) -> list[dict]:
         return [dict(row) for row in cursor.fetchall()]
     except sqlite3.OperationalError:
         return []
-
-
-def _batch_worktree_labels(
-    conn: sqlite3.Connection, runs: list[dict]
-) -> dict[str, str]:
-    """Return {worktree_id: 'repo_slug/wt_slug'} for all worktree_ids in runs."""
-    worktree_ids = [r["worktree_id"] for r in runs if r.get("worktree_id")]
-    labels: dict[str, str] = {}
-    if not worktree_ids:
-        return labels
-    try:
-        placeholders = ",".join("?" * len(worktree_ids))
-        cursor = conn.cursor()
-        cursor.execute(
-            f"""
-            SELECT w.id, w.slug, r.slug AS repo_slug
-            FROM worktrees w
-            JOIN repos r ON w.repo_id = r.id
-            WHERE w.id IN ({placeholders})
-            """,
-            worktree_ids,
-        )
-        for row in cursor.fetchall():
-            labels[row[0]] = f"{row[2]}/{row[1]}"
-    except sqlite3.OperationalError:
-        pass
-    return labels
-
-
-def _batch_repo_labels(
-    conn: sqlite3.Connection, runs: list[dict]
-) -> dict[str, str]:
-    """Return {repo_id: 'repo_slug'} for runs that have no worktree_id."""
-    repo_ids = [
-        r["repo_id"]
-        for r in runs
-        if not r.get("worktree_id") and r.get("repo_id")
-    ]
-    labels: dict[str, str] = {}
-    if not repo_ids:
-        return labels
-    try:
-        placeholders = ",".join("?" * len(repo_ids))
-        cursor = conn.cursor()
-        cursor.execute(
-            f"SELECT id, slug FROM repos WHERE id IN ({placeholders})",
-            repo_ids,
-        )
-        for row in cursor.fetchall():
-            labels[row[0]] = row[1]
-    except sqlite3.OperationalError:
-        pass
-    return labels
 
 
 def _format_tokens(n: int | None) -> str:
@@ -266,8 +214,6 @@ def format_status_line(runs: list[dict], conn: sqlite3.Connection) -> str:
     display_runs = sorted_runs[:5]
 
     # Batch auxiliary lookups to avoid N+1 queries
-    worktree_labels = _batch_worktree_labels(conn, display_runs)
-    repo_labels = _batch_repo_labels(conn, display_runs)
     gate_steps = _batch_gate_steps(conn, display_runs)
     token_counts = _batch_token_counts(conn, display_runs)
 
@@ -276,15 +222,7 @@ def format_status_line(runs: list[dict], conn: sqlite3.Connection) -> str:
         icon = ICONS.get(status, "  ")
         wf_name = (run["workflow_name"] or "")[:24]
 
-        # Resolve label: prefer worktree label, fall back to repo label
-        wt_id = run.get("worktree_id")
-        repo_id = run.get("repo_id")
-        if wt_id and wt_id in worktree_labels:
-            label = worktree_labels[wt_id]
-        elif repo_id and repo_id in repo_labels:
-            label = repo_labels[repo_id]
-        else:
-            label = ""
+        label = run.get("target_label") or ""
 
         elapsed = format_elapsed(run.get("started_at"))
 
