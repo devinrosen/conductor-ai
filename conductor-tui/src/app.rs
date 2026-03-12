@@ -26,6 +26,7 @@ use crate::state::{
     InputAction, Modal, PostCreateChoice, RepoDetailFocus, View, WorkflowRunDetailFocus,
     WorkflowsFocus, WorktreeDetailFocus,
 };
+use crate::theme::Theme;
 use crate::ui;
 
 /// Maximum scroll offset for a text body (total lines minus one visible line).
@@ -173,9 +174,11 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(conn: Connection, config: Config) -> Self {
+    pub fn new(conn: Connection, config: Config, theme: Theme) -> Self {
+        let mut state = AppState::new();
+        state.theme = theme;
         Self {
-            state: AppState::new(),
+            state,
             conn,
             config,
             bg_tx: None,

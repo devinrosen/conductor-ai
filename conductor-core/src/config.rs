@@ -105,6 +105,10 @@ pub struct GeneralConfig {
     /// into agent prompts. Defaults to true; set to false to disable.
     #[serde(default = "default_true")]
     pub inject_startup_context: bool,
+    /// TUI color theme. One of: "conductor" (default), "nord", "gruvbox", "catppuccin_mocha".
+    /// Omit to use the default conductor theme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +155,7 @@ impl Default for GeneralConfig {
             auto_start_agent: AutoStartAgent::default(),
             model: None,
             inject_startup_context: true,
+            theme: None,
         }
     }
 }
