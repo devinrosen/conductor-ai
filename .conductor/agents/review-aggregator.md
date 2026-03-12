@@ -14,7 +14,9 @@ Steps:
 2. Classify the overall result:
    - **Clean**: All reviewers found no blocking issues (no critical or warning findings).
    - **Blocking**: One or more reviewers found critical or warning issues that must be addressed.
-3. Get the PR number: `gh pr view --json number -q .number`
+3. Get the PR number:
+   - If `{{pr_number}}` is set and does not contain `{{` (i.e. it was substituted), use it directly.
+   - Otherwise run: `gh pr view --json number -q .number`
 4. Post the aggregated summary and submit a formal GitHub PR review (skip all `gh` calls in this step if `{{dry_run}}` is `true`):
 
    Format the review body using the templates below, then:
