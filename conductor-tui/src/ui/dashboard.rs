@@ -23,7 +23,6 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     render_tickets(frame, vert[1], state);
 }
 
-
 fn render_repos(frame: &mut Frame, area: Rect, state: &AppState) {
     let focused = state.dashboard_focus == DashboardFocus::Repos;
     let border_style = if focused {

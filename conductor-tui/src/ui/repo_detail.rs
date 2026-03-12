@@ -270,7 +270,14 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
             };
             let branch = &pr.head_ref_name;
             let branch_display = if branch.chars().count() > 30 {
-                format!("{}\u{2026}", &branch[..branch.char_indices().nth(30).map(|(i, _)| i).unwrap_or(branch.len())])
+                format!(
+                    "{}\u{2026}",
+                    &branch[..branch
+                        .char_indices()
+                        .nth(30)
+                        .map(|(i, _)| i)
+                        .unwrap_or(branch.len())]
+                )
             } else {
                 branch.clone()
             };
@@ -318,7 +325,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         let visual_idx = visual_idx_with_headers(
             &state.detail_prs,
             pr_group_key,
-            state.detail_pr_index.min(state.detail_prs.len().saturating_sub(1)),
+            state
+                .detail_pr_index
+                .min(state.detail_prs.len().saturating_sub(1)),
         );
         pr_list_state.select(Some(visual_idx));
     }
