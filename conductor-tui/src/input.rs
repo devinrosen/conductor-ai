@@ -340,6 +340,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('e') if state.workflows_focus == crate::state::WorkflowsFocus::Defs => {
                 return Action::EditWorkflowDef;
             }
+            KeyCode::Char(' ') if state.workflows_focus == crate::state::WorkflowsFocus::Runs => {
+                return Action::ToggleWorkflowRunCollapse;
+            }
             _ => {}
         }
     }

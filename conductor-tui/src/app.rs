@@ -670,8 +670,28 @@ impl App {
                 self.state.data.workflow_steps = payload.workflow_steps;
                 self.state.data.step_agent_events = payload.step_agent_events;
                 self.state.data.step_agent_run = payload.step_agent_run;
+                self.state.init_collapse_state();
                 self.clamp_workflow_indices();
                 return matches!(self.state.view, View::Workflows | View::WorkflowRunDetail);
+            }
+
+            Action::ToggleWorkflowRunCollapse => {
+                let visible = self.state.visible_workflow_run_rows();
+                if let Some(crate::state::WorkflowRunRow::Parent { run_id, .. }) =
+                    visible.get(self.state.workflow_run_index)
+                {
+                    let run_id = run_id.clone();
+                    if self.state.collapsed_workflow_run_ids.contains(&run_id) {
+                        self.state.collapsed_workflow_run_ids.remove(&run_id);
+                    } else {
+                        self.state.collapsed_workflow_run_ids.insert(run_id);
+                    }
+                    // Clamp index after visibility change.
+                    let new_len = self.state.visible_workflow_run_rows().len();
+                    if new_len > 0 && self.state.workflow_run_index >= new_len {
+                        self.state.workflow_run_index = new_len - 1;
+                    }
+                }
             }
 
             // PendingG is handled above before the match
@@ -1388,10 +1408,8 @@ impl App {
                     );
                 }
                 WorkflowsFocus::Runs => {
-                    clamp_increment(
-                        &mut self.state.workflow_run_index,
-                        self.state.data.workflow_runs.len(),
-                    );
+                    let visible_len = self.state.visible_workflow_run_rows().len();
+                    clamp_increment(&mut self.state.workflow_run_index, visible_len);
                 }
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
@@ -1528,25 +1546,32 @@ impl App {
                         self.handle_run_workflow();
                     }
                     WorkflowsFocus::Runs => {
-                        // Enter workflow run detail
-                        if let Some(run) = self
-                            .state
-                            .data
-                            .workflow_runs
-                            .get(self.state.workflow_run_index)
-                        {
-                            let run_id = run.id.clone();
-                            // In global mode, set the worktree context from the run
-                            // (ephemeral PR runs have no worktree_id — skip)
-                            if self.state.selected_worktree_id.is_none() {
-                                self.state.selected_worktree_id = run.worktree_id.clone();
+                        // Enter workflow run detail (works for both parent and child rows).
+                        let visible = self.state.visible_workflow_run_rows();
+                        if let Some(row) = visible.get(self.state.workflow_run_index) {
+                            let target_id = row.run_id().to_string();
+                            if let Some(run) = self
+                                .state
+                                .data
+                                .workflow_runs
+                                .iter()
+                                .find(|r| r.id == target_id)
+                            {
+                                let run_id = run.id.clone();
+                                let worktree_id = run.worktree_id.clone();
+                                // In global mode, set the worktree context from the run
+                                // (ephemeral PR runs have no worktree_id — skip)
+                                if self.state.selected_worktree_id.is_none() {
+                                    self.state.selected_worktree_id = worktree_id;
+                                }
+                                self.state.selected_workflow_run_id = Some(run_id);
+                                self.state.view = View::WorkflowRunDetail;
+                                self.state.workflow_step_index = 0;
+                                self.state.workflow_run_detail_focus =
+                                    WorkflowRunDetailFocus::Steps;
+                                self.state.step_agent_event_index = 0;
+                                self.reload_workflow_steps();
                             }
-                            self.state.selected_workflow_run_id = Some(run_id);
-                            self.state.view = View::WorkflowRunDetail;
-                            self.state.workflow_step_index = 0;
-                            self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
-                            self.state.step_agent_event_index = 0;
-                            self.reload_workflow_steps();
                         }
                     }
                 }
@@ -4660,6 +4685,7 @@ impl App {
             .unwrap_or_default();
 
         // Load steps for the currently selected run
+        self.state.init_collapse_state();
         self.reload_workflow_steps();
         self.clamp_workflow_indices();
     }
@@ -4692,7 +4718,7 @@ impl App {
         if def_len > 0 && self.state.workflow_def_index >= def_len {
             self.state.workflow_def_index = def_len - 1;
         }
-        let run_len = self.state.data.workflow_runs.len();
+        let run_len = self.state.visible_workflow_run_rows().len();
         if run_len > 0 && self.state.workflow_run_index >= run_len {
             self.state.workflow_run_index = run_len - 1;
         }

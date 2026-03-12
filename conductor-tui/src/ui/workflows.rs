@@ -1,25 +1,30 @@
+use std::collections::HashMap;
+
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use conductor_core::workflow::{WorkflowDef, WorkflowRunStatus};
+use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStatus};
 use conductor_core::worktree::Worktree;
 
 use super::common::truncate;
 use super::helpers::{shorten_paths, visual_idx_with_headers};
 use crate::state::AppState;
 use crate::state::WorkflowRunDetailFocus;
+use crate::state::WorkflowRunRow;
 use crate::state::WorkflowsFocus;
 
-/// Return the slug of the worktree matching `predicate`, or `"?"` if not found.
-fn worktree_slug(worktrees: &[Worktree], predicate: impl Fn(&Worktree) -> bool) -> &str {
+/// Return the slug of the worktree matching `predicate`, or `None` if not found.
+fn worktree_slug_opt(
+    worktrees: &[Worktree],
+    predicate: impl Fn(&Worktree) -> bool,
+) -> Option<&str> {
     worktrees
         .iter()
         .find(|wt| predicate(wt))
         .map(|wt| wt.slug.as_str())
-        .unwrap_or("?")
 }
 
 /// Render the Workflows split-pane view: defs (left) + runs (right).
@@ -244,14 +249,27 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
         state.theme.border_inactive
     };
 
-    // In global mode (no worktree selected), show worktree context on each run row.
+    // In global mode (no worktree selected), show target context on each run row.
     let global_mode = state.selected_worktree_id.is_none();
 
-    let items: Vec<ListItem> = state
+    let visible = state.visible_workflow_run_rows();
+
+    // Build run_id → WorkflowRun map for O(1) lookup.
+    let run_map: HashMap<&str, &WorkflowRun> = state
         .data
         .workflow_runs
         .iter()
-        .map(|run| {
+        .map(|r| (r.id.as_str(), r))
+        .collect();
+
+    let items: Vec<ListItem> = visible
+        .iter()
+        .map(|row| {
+            let run_id = row.run_id();
+            let Some(run) = run_map.get(run_id) else {
+                return ListItem::new(Line::from(vec![Span::raw("?")]));
+            };
+
             let (status_symbol, status_color) = status_display(&run.status.to_string());
             let duration = if let Some(ref ended) = run.ended_at {
                 format_duration(&run.started_at, ended)
@@ -259,53 +277,120 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                 "…".to_string()
             };
 
-            let mut spans = vec![
-                Span::styled(status_symbol, Style::default().fg(status_color)),
-                Span::raw("  "),
-                Span::styled(
-                    format!("{:<20}", run.workflow_name),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-            ];
+            match row {
+                WorkflowRunRow::Parent {
+                    collapsed,
+                    child_count,
+                    ..
+                } => {
+                    // Prefix: collapse toggle indicator (only when there are children).
+                    let prefix = if *child_count > 0 {
+                        if *collapsed {
+                            "▶ "
+                        } else {
+                            "▼ "
+                        }
+                    } else {
+                        "  "
+                    };
 
-            if global_mode {
-                let wt_slug = worktree_slug(&state.data.worktrees, |w| {
-                    Some(w.id.as_str()) == run.worktree_id.as_deref()
-                });
-                spans.push(Span::styled(
-                    format!("  {wt_slug}"),
-                    Style::default().fg(state.theme.label_secondary),
-                ));
-            } else {
-                spans.push(Span::styled(
-                    format!("  {}", &run.started_at[..19].replace('T', " ")),
-                    Style::default().fg(state.theme.label_secondary),
-                ));
-            }
+                    let mut spans = vec![
+                        Span::raw(prefix),
+                        Span::styled(status_symbol, Style::default().fg(status_color)),
+                        Span::raw("  "),
+                        Span::styled(
+                            format!("{:<20}", truncate(&run.workflow_name, 20)),
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
+                    ];
 
-            spans.push(Span::styled(
-                format!("  {duration}"),
-                Style::default().fg(state.theme.label_accent),
-            ));
+                    if global_mode {
+                        // Prefer target_label, then worktree slug, then "?".
+                        let target = run
+                            .target_label
+                            .as_deref()
+                            .or_else(|| {
+                                worktree_slug_opt(&state.data.worktrees, |w| {
+                                    Some(w.id.as_str()) == run.worktree_id.as_deref()
+                                })
+                            })
+                            .unwrap_or("?");
+                        spans.push(Span::styled(
+                            format!("  {}", truncate(target, 25)),
+                            Style::default().fg(state.theme.label_secondary),
+                        ));
+                    } else {
+                        spans.push(Span::styled(
+                            format!("  {}", &run.started_at[..19].replace('T', " ")),
+                            Style::default().fg(state.theme.label_secondary),
+                        ));
+                    }
 
-            if run.status == WorkflowRunStatus::Failed {
-                if let Some(ref summary) = run.result_summary {
-                    let snippet = truncate(summary.lines().next().unwrap_or(""), 50);
                     spans.push(Span::styled(
-                        format!("  {snippet}"),
-                        Style::default().fg(state.theme.label_error),
+                        format!("  {duration}"),
+                        Style::default().fg(state.theme.label_accent),
                     ));
+
+                    // Child count badge when collapsed.
+                    if *collapsed && *child_count > 0 {
+                        spans.push(Span::styled(
+                            format!("  (+{child_count})"),
+                            Style::default().fg(state.theme.label_secondary),
+                        ));
+                    }
+
+                    if run.status == WorkflowRunStatus::Failed {
+                        if let Some(ref summary) = run.result_summary {
+                            let snippet = truncate(summary.lines().next().unwrap_or(""), 50);
+                            spans.push(Span::styled(
+                                format!("  {snippet}"),
+                                Style::default().fg(state.theme.label_error),
+                            ));
+                        }
+                    }
+
+                    ListItem::new(Line::from(spans))
+                }
+                WorkflowRunRow::Child { .. } => {
+                    let mut spans = vec![
+                        Span::styled(
+                            "  \u{2570} ",
+                            Style::default().fg(state.theme.label_secondary),
+                        ),
+                        Span::styled(status_symbol, Style::default().fg(status_color)),
+                        Span::raw("  "),
+                        Span::styled(
+                            format!("{:<20}", truncate(&run.workflow_name, 20)),
+                            Style::default()
+                                .fg(state.theme.label_secondary)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!("  {duration}"),
+                            Style::default().fg(state.theme.label_accent),
+                        ),
+                    ];
+
+                    if run.status == WorkflowRunStatus::Failed {
+                        if let Some(ref summary) = run.result_summary {
+                            let snippet = truncate(summary.lines().next().unwrap_or(""), 40);
+                            spans.push(Span::styled(
+                                format!("  {snippet}"),
+                                Style::default().fg(state.theme.label_error),
+                            ));
+                        }
+                    }
+
+                    ListItem::new(Line::from(spans))
                 }
             }
-
-            ListItem::new(Line::from(spans))
         })
         .collect();
 
     let runs_title = if global_mode {
-        " All Workflow Runs "
+        " All Workflow Runs (Space=expand/collapse) "
     } else {
-        " Workflow Runs "
+        " Workflow Runs (Space=expand/collapse) "
     };
 
     let list = List::new(items)
@@ -323,7 +408,7 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
         .highlight_symbol("");
 
     let mut list_state = ListState::default();
-    if !state.data.workflow_runs.is_empty() {
+    if !visible.is_empty() {
         list_state.select(Some(state.workflow_run_index));
     }
     frame.render_stateful_widget(list, area, &mut list_state);
