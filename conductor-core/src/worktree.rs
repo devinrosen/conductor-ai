@@ -1351,7 +1351,7 @@ mod tests {
         config.general.workspace_root = tmp.path().to_path_buf();
 
         let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
-        let repo = repo_mgr
+        let _repo = repo_mgr
             .add(
                 "myrepo",
                 missing_local.to_str().unwrap(),
