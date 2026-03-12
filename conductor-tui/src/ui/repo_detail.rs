@@ -156,20 +156,12 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         .filtered_detail_tickets
         .iter()
         .map(|t| {
-            let state_color = match t.state.as_str() {
-                "open" => Color::Green,
-                "closed" => Color::Red,
-                "in_progress" => Color::Yellow,
-                _ => Color::White,
-            };
             let mut spans = vec![
                 Span::styled(
                     format!("#{} ", t.source_id),
                     Style::default().fg(Color::Yellow),
                 ),
                 Span::raw(&t.title),
-                Span::raw("  "),
-                Span::styled(format!("[{}]", t.state), Style::default().fg(state_color)),
             ];
             let labels = state
                 .data
@@ -178,7 +170,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 .map(|v| v.as_slice())
                 .unwrap_or(&[]);
             spans.extend(super::common::ticket_label_spans_compact(labels));
-            spans.extend(super::common::ticket_worktree_spans(state, &t.id, "  "));
+            spans.extend(super::common::ticket_worktree_spans(
+                state, &t.id, "  ", true,
+            ));
             spans.extend(super::common::ticket_agent_total_spans(
                 state, &t.id, "  ", false,
             ));

@@ -172,7 +172,9 @@ fn render_tickets(frame: &mut Frame, area: Rect, state: &AppState) {
                 .map(|v| v.as_slice())
                 .unwrap_or(&[]);
             spans.extend(super::common::ticket_label_spans_compact(labels));
-            spans.extend(super::common::ticket_worktree_spans(state, &t.id, "  "));
+            spans.extend(super::common::ticket_worktree_spans(
+                state, &t.id, "  ", false,
+            ));
             spans.extend(super::common::ticket_agent_total_spans(
                 state, &t.id, "  ", false,
             ));

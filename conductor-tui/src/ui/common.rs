@@ -346,24 +346,36 @@ pub fn worktree_list_item(
         ));
     }
 
-    spans.push(Span::styled(
-        wt.slug.clone(),
-        text_style.add_modifier(if is_active {
-            Modifier::BOLD
-        } else {
-            Modifier::DIM
-        }),
-    ));
-
+    // In repo-detail context (show_branch=true): show branch as primary identifier.
+    // In dashboard context (show_branch=false): show slug as before.
     if show_branch {
-        spans.push(Span::styled(format!("  {}", wt.branch), text_style));
+        spans.push(Span::styled(
+            wt.branch.clone(),
+            text_style.add_modifier(if is_active {
+                Modifier::BOLD
+            } else {
+                Modifier::DIM
+            }),
+        ));
+    } else {
+        spans.push(Span::styled(
+            wt.slug.clone(),
+            text_style.add_modifier(if is_active {
+                Modifier::BOLD
+            } else {
+                Modifier::DIM
+            }),
+        ));
     }
 
-    spans.push(Span::raw("  "));
-    spans.push(Span::styled(
-        format!("[{}]", wt.status),
-        Style::default().fg(status_color),
-    ));
+    // Only show status badge for non-active worktrees ([active] is never informative).
+    if !is_active {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("[{}]", wt.status),
+            Style::default().fg(status_color),
+        ));
+    }
 
     if let Some(ticket) = wt
         .ticket_id
@@ -383,8 +395,10 @@ pub fn worktree_list_item(
         ));
     }
 
-    if let Some(run) = state.data.latest_agent_runs.get(&wt.id) {
-        use conductor_core::agent::AgentRunStatus;
+    use conductor_core::agent::AgentRunStatus;
+    let agent_run = state.data.latest_agent_runs.get(&wt.id);
+
+    if let Some(run) = agent_run {
         let (symbol, color) = match run.status {
             AgentRunStatus::Running => ("● running", Color::Yellow),
             AgentRunStatus::WaitingForFeedback => ("⏸ waiting for feedback", Color::Magenta),
@@ -396,6 +410,13 @@ pub fn worktree_list_item(
         spans.push(Span::styled(symbol, Style::default().fg(color)));
     }
 
+    let has_active_agent = agent_run.is_some_and(|r| {
+        matches!(
+            r.status,
+            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
+        )
+    });
+
     if let Some(wf_run) = state.data.latest_workflow_runs_by_worktree.get(&wt.id) {
         use conductor_core::workflow::WorkflowRunStatus;
         let (symbol, color) = match wf_run.status {
@@ -406,11 +427,20 @@ pub fn worktree_list_item(
             WorkflowRunStatus::Pending | WorkflowRunStatus::Cancelled => ("", Color::DarkGray),
         };
         if !symbol.is_empty() {
-            // For running/waiting runs, append step progress if available.
-            let label = if matches!(
+            let is_wf_active = matches!(
                 wf_run.status,
                 WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
-            ) {
+            );
+            // When both an agent and workflow are active, suppress the ⚙ symbol —
+            // the agent's ● already covers status. Build a compact "name › step" label.
+            let label = if is_wf_active && has_active_agent {
+                state
+                    .data
+                    .workflow_step_summaries
+                    .get(&wf_run.id)
+                    .map(|s| format!("{} › {}", wf_run.workflow_name, s.step_name))
+                    .unwrap_or_else(|| wf_run.workflow_name.clone())
+            } else if is_wf_active {
                 state
                     .data
                     .workflow_step_summaries
@@ -431,6 +461,21 @@ pub fn worktree_list_item(
             };
             spans.push(Span::raw("  "));
             spans.push(Span::styled(label, Style::default().fg(color)));
+        }
+    }
+
+    // Append token counts at end for active agent runs.
+    if let Some(run) = agent_run {
+        if matches!(
+            run.status,
+            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
+        ) {
+            if let (Some(input), Some(output)) = (run.input_tokens, run.output_tokens) {
+                spans.push(Span::styled(
+                    format!("  ↑{} ↓{}", fmt_tokens_k(input), fmt_tokens_k(output)),
+                    Style::default().fg(Color::Magenta),
+                ));
+            }
         }
     }
 
@@ -562,10 +607,13 @@ pub fn build_workflow_breadcrumb(
 ///
 /// Pass `leading_space` to control the whitespace before the indicator
 /// (single space for the padded Tickets view, double for compact views).
+///
+/// When `compact=true`, returns only the indicator dot with no slug text.
 pub fn ticket_worktree_spans(
     state: &AppState,
     ticket_id: &str,
     leading: &str,
+    compact: bool,
 ) -> Vec<Span<'static>> {
     let Some(wts) = state.data.ticket_worktrees.get(ticket_id) else {
         return Vec::new();
@@ -579,7 +627,9 @@ pub fn ticket_worktree_spans(
     } else {
         ("○", Color::DarkGray)
     };
-    let label = if wts.len() > 1 {
+    let label = if compact {
+        indicator.to_string()
+    } else if wts.len() > 1 {
         format!("{indicator} {} worktrees", wts.len())
     } else {
         format!("{indicator} {}", best.slug)

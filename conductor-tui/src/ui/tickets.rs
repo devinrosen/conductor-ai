@@ -79,7 +79,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
                 }
             }
 
-            spans.extend(super::common::ticket_worktree_spans(state, &t.id, " "));
+            spans.extend(super::common::ticket_worktree_spans(
+                state, &t.id, " ", false,
+            ));
             spans.extend(super::common::ticket_agent_total_spans(
                 state, &t.id, " ", true,
             ));
