@@ -325,6 +325,16 @@ pub fn worktree_list_item(
     repo_prefix: Option<&str>,
     show_branch: bool,
 ) -> ListItem<'static> {
+    worktree_list_item_with_prefix(wt, state, repo_prefix, show_branch, "")
+}
+
+pub fn worktree_list_item_with_prefix(
+    wt: &Worktree,
+    state: &AppState,
+    repo_prefix: Option<&str>,
+    show_branch: bool,
+    list_prefix: &'static str,
+) -> ListItem<'static> {
     let is_active = wt.is_active();
     let status_color = match wt.status {
         WorktreeStatus::Active => Color::Green,
@@ -338,6 +348,10 @@ pub fn worktree_list_item(
     };
 
     let mut spans: Vec<Span<'static>> = Vec::new();
+
+    if !list_prefix.is_empty() {
+        spans.push(Span::raw(list_prefix));
+    }
 
     if let Some(prefix) = repo_prefix {
         spans.push(Span::styled(

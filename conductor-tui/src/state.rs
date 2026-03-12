@@ -1111,6 +1111,13 @@ impl AppState {
             .cloned()
             .collect();
 
+        let slug_map = &self.data.repo_slug_map;
+        self.filtered_tickets.sort_by(|a, b| {
+            let sa = slug_map.get(&a.repo_id).map(|s| s.as_str()).unwrap_or("");
+            let sb = slug_map.get(&b.repo_id).map(|s| s.as_str()).unwrap_or("");
+            sa.cmp(sb).then_with(|| a.source_id.cmp(&b.source_id))
+        });
+
         let detail_filter_query = self.detail_ticket_filter.as_query();
         self.filtered_detail_tickets = self
             .detail_tickets
