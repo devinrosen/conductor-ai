@@ -7,6 +7,7 @@ use ratatui::Frame;
 use super::common::truncate;
 use crate::state::AppState;
 
+#[allow(dead_code)]
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let filter = state.filter.as_query();
     let label_filter = state.label_filter.as_query();

@@ -372,19 +372,17 @@ impl App {
             Action::GoToDashboard => {
                 self.state.view = View::Dashboard;
             }
-            Action::GoToTickets => {
-                self.state.view = View::Tickets;
-                self.state.ticket_index = 0;
+            Action::FocusContentColumn => {
+                self.state.column_focus = crate::state::ColumnFocus::Content;
             }
-            Action::GoToWorkflows => {
-                // Navigate to the global workflows view.
-                // If a worktree is already selected (e.g. from WorktreeDetail), keep it
-                // for scoped defs/runs; otherwise show all runs across all worktrees.
-                self.state.view = View::Workflows;
-                self.state.workflows_focus = crate::state::WorkflowsFocus::Runs;
-                self.state.workflow_def_index = 0;
-                self.state.workflow_run_index = 0;
-                self.reload_workflow_data();
+            Action::FocusWorkflowColumn => {
+                self.state.column_focus = crate::state::ColumnFocus::Workflow;
+            }
+            Action::ToggleWorkflowColumn => {
+                self.state.workflow_column_visible = !self.state.workflow_column_visible;
+                if !self.state.workflow_column_visible {
+                    self.state.column_focus = crate::state::ColumnFocus::Content;
+                }
             }
 
             // Filter
@@ -573,11 +571,6 @@ impl App {
                 self.state.detail_ticket_index = 0;
             }
 
-            // Global status bar toggle (expand/collapse detail line for 4+ active items)
-            Action::ToggleStatusBar => {
-                self.state.status_bar_expanded = !self.state.status_bar_expanded;
-            }
-
             // WorktreeDetail panel actions
             Action::WorktreeDetailCopy => self.handle_worktree_detail_copy(),
             Action::WorktreeDetailOpen => self.handle_worktree_detail_open(),
@@ -730,7 +723,7 @@ impl App {
                     self.state.status_message = Some(msg);
                 }
                 self.clamp_workflow_indices();
-                return matches!(self.state.view, View::Workflows | View::WorkflowRunDetail);
+                return true; // Always redraw since workflow column is persistent
             }
 
             Action::ToggleWorkflowRunCollapse => {
@@ -846,15 +839,8 @@ impl App {
                 self.reload_agent_events();
                 self.state.rebuild_filtered_tickets();
                 self.clamp_indices();
-                // Redraw when viewing worktree detail / workflows, or on the
-                // dashboard (which now has a live workflow panel).
-                return matches!(
-                    self.state.view,
-                    View::Dashboard
-                        | View::WorktreeDetail
-                        | View::Workflows
-                        | View::WorkflowRunDetail
-                );
+                // Always redraw since workflow column is persistent across all views.
+                return true;
             }
             Action::TicketSyncComplete { repo_slug, count } => {
                 self.state.status_message = Some(format!("Synced {count} tickets for {repo_slug}"));
@@ -1203,65 +1189,56 @@ impl App {
                 }
                 self.state.selected_worktree_id = None;
             }
-            View::Tickets => {
-                self.state.view = View::Dashboard;
-            }
-            View::Workflows => {
-                // Go back to worktree detail if we came from there
-                if self.state.selected_worktree_id.is_some() {
-                    self.state.view = View::WorktreeDetail;
-                    *self.state.agent_list_state.borrow_mut() = ListState::default();
-                    self.reload_agent_events();
-                } else {
-                    self.state.view = View::Dashboard;
-                }
-            }
             View::WorkflowRunDetail => {
-                self.state.view = View::Workflows;
+                self.state.view = View::Dashboard;
                 self.state.selected_workflow_run_id = None;
             }
         }
     }
 
     fn next_panel(&mut self) {
-        match self.state.view {
-            View::Dashboard => {
-                self.state.dashboard_focus = self.state.dashboard_focus.next();
-            }
-            View::RepoDetail => {
-                self.state.repo_detail_focus = self.state.repo_detail_focus.next();
-            }
-            View::Workflows => {
+        use crate::state::ColumnFocus;
+        match self.state.column_focus {
+            ColumnFocus::Workflow => {
                 self.state.workflows_focus = self.state.workflows_focus.toggle();
             }
-            View::WorkflowRunDetail => {
-                self.toggle_workflow_run_detail_focus();
-            }
-            View::WorktreeDetail => {
-                self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
-            }
-            _ => {}
+            ColumnFocus::Content => match self.state.view {
+                View::Dashboard => {
+                    self.state.dashboard_focus = self.state.dashboard_focus.next();
+                }
+                View::RepoDetail => {
+                    self.state.repo_detail_focus = self.state.repo_detail_focus.next();
+                }
+                View::WorkflowRunDetail => {
+                    self.toggle_workflow_run_detail_focus();
+                }
+                View::WorktreeDetail => {
+                    self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
+                }
+            },
         }
     }
 
     fn prev_panel(&mut self) {
-        match self.state.view {
-            View::Dashboard => {
-                self.state.dashboard_focus = self.state.dashboard_focus.prev();
-            }
-            View::RepoDetail => {
-                self.state.repo_detail_focus = self.state.repo_detail_focus.prev();
-            }
-            View::Workflows => {
+        use crate::state::ColumnFocus;
+        match self.state.column_focus {
+            ColumnFocus::Workflow => {
                 self.state.workflows_focus = self.state.workflows_focus.toggle();
             }
-            View::WorkflowRunDetail => {
-                self.toggle_workflow_run_detail_focus();
-            }
-            View::WorktreeDetail => {
-                self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
-            }
-            _ => {}
+            ColumnFocus::Content => match self.state.view {
+                View::Dashboard => {
+                    self.state.dashboard_focus = self.state.dashboard_focus.prev();
+                }
+                View::RepoDetail => {
+                    self.state.repo_detail_focus = self.state.repo_detail_focus.prev();
+                }
+                View::WorkflowRunDetail => {
+                    self.toggle_workflow_run_detail_focus();
+                }
+                View::WorktreeDetail => {
+                    self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
+                }
+            },
         }
     }
 
@@ -1339,6 +1316,18 @@ impl App {
             }
             _ => {}
         }
+        // When workflow column has focus, navigate workflow panes.
+        if self.state.column_focus == crate::state::ColumnFocus::Workflow {
+            match self.state.workflows_focus {
+                WorkflowsFocus::Defs => {
+                    self.state.workflow_def_index = self.state.workflow_def_index.saturating_sub(1);
+                }
+                WorkflowsFocus::Runs => {
+                    self.state.workflow_run_index = self.state.workflow_run_index.saturating_sub(1);
+                }
+            }
+            return;
+        }
         match self.state.view {
             View::Dashboard => match self.state.dashboard_focus {
                 DashboardFocus::Repos => {
@@ -1346,9 +1335,6 @@ impl App {
                 }
                 DashboardFocus::Worktrees => {
                     self.state.worktree_index = self.state.worktree_index.saturating_sub(1);
-                }
-                DashboardFocus::Tickets => {
-                    self.state.ticket_index = self.state.ticket_index.saturating_sub(1);
                 }
             },
             View::RepoDetail => match self.state.repo_detail_focus {
@@ -1365,17 +1351,6 @@ impl App {
                 }
                 RepoDetailFocus::Prs => {
                     self.state.detail_pr_index = self.state.detail_pr_index.saturating_sub(1);
-                }
-            },
-            View::Tickets => {
-                self.state.ticket_index = self.state.ticket_index.saturating_sub(1);
-            }
-            View::Workflows => match self.state.workflows_focus {
-                WorkflowsFocus::Defs => {
-                    self.state.workflow_def_index = self.state.workflow_def_index.saturating_sub(1);
-                }
-                WorkflowsFocus::Runs => {
-                    self.state.workflow_run_index = self.state.workflow_run_index.saturating_sub(1);
                 }
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
@@ -1469,6 +1444,22 @@ impl App {
             }
             _ => {}
         }
+        // When workflow column has focus, navigate workflow panes.
+        if self.state.column_focus == crate::state::ColumnFocus::Workflow {
+            match self.state.workflows_focus {
+                WorkflowsFocus::Defs => {
+                    clamp_increment(
+                        &mut self.state.workflow_def_index,
+                        self.state.data.workflow_defs.len(),
+                    );
+                }
+                WorkflowsFocus::Runs => {
+                    let visible_len = self.state.visible_workflow_run_rows().len();
+                    clamp_increment(&mut self.state.workflow_run_index, visible_len);
+                }
+            }
+            return;
+        }
         match self.state.view {
             View::Dashboard => match self.state.dashboard_focus {
                 DashboardFocus::Repos => {
@@ -1478,12 +1469,6 @@ impl App {
                     clamp_increment(
                         &mut self.state.worktree_index,
                         self.state.data.worktrees.len(),
-                    );
-                }
-                DashboardFocus::Tickets => {
-                    clamp_increment(
-                        &mut self.state.ticket_index,
-                        self.state.filtered_tickets.len(),
                     );
                 }
             },
@@ -1505,24 +1490,6 @@ impl App {
                 }
                 RepoDetailFocus::Prs => {
                     clamp_increment(&mut self.state.detail_pr_index, self.state.detail_prs.len());
-                }
-            },
-            View::Tickets => {
-                clamp_increment(
-                    &mut self.state.ticket_index,
-                    self.state.filtered_tickets.len(),
-                );
-            }
-            View::Workflows => match self.state.workflows_focus {
-                WorkflowsFocus::Defs => {
-                    clamp_increment(
-                        &mut self.state.workflow_def_index,
-                        self.state.data.workflow_defs.len(),
-                    );
-                }
-                WorkflowsFocus::Runs => {
-                    let visible_len = self.state.visible_workflow_run_rows().len();
-                    clamp_increment(&mut self.state.workflow_run_index, visible_len);
                 }
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
@@ -1557,6 +1524,41 @@ impl App {
     }
 
     fn select(&mut self) {
+        // When workflow column has focus, handle workflow selection.
+        if self.state.column_focus == crate::state::ColumnFocus::Workflow {
+            match self.state.workflows_focus {
+                WorkflowsFocus::Defs => {
+                    self.handle_run_workflow();
+                }
+                WorkflowsFocus::Runs => {
+                    let visible = self.state.visible_workflow_run_rows();
+                    if let Some(row) = visible.get(self.state.workflow_run_index) {
+                        let target_id = row.run_id().to_string();
+                        if let Some(run) = self
+                            .state
+                            .data
+                            .workflow_runs
+                            .iter()
+                            .find(|r| r.id == target_id)
+                        {
+                            let run_id = run.id.clone();
+                            let worktree_id = run.worktree_id.clone();
+                            if self.state.selected_worktree_id.is_none() {
+                                self.state.selected_worktree_id = worktree_id;
+                            }
+                            self.state.selected_workflow_run_id = Some(run_id);
+                            self.state.view = View::WorkflowRunDetail;
+                            self.state.workflow_step_index = 0;
+                            self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
+                            self.state.step_agent_event_index = 0;
+                            self.state.column_focus = crate::state::ColumnFocus::Content;
+                            self.reload_workflow_steps();
+                        }
+                    }
+                }
+            }
+            return;
+        }
         match self.state.view {
             View::Dashboard => match self.state.dashboard_focus {
                 DashboardFocus::Repos => {
@@ -1608,13 +1610,6 @@ impl App {
                         self.reload_agent_events();
                     }
                 }
-                DashboardFocus::Tickets => {
-                    if let Some(ticket) = self.state.filtered_tickets.get(self.state.ticket_index) {
-                        self.state.modal = Modal::TicketInfo {
-                            ticket: Box::new(ticket.clone()),
-                        };
-                    }
-                }
             },
             View::RepoDetail => match self.state.repo_detail_focus {
                 RepoDetailFocus::Info => {
@@ -1645,53 +1640,6 @@ impl App {
                     // No-op: PR selection deferred to a future ticket.
                 }
             },
-            View::Tickets => {
-                if let Some(ticket) = self.state.filtered_tickets.get(self.state.ticket_index) {
-                    self.state.modal = Modal::TicketInfo {
-                        ticket: Box::new(ticket.clone()),
-                    };
-                }
-            }
-            View::Workflows => {
-                match self.state.workflows_focus {
-                    WorkflowsFocus::Defs => {
-                        // Run selected workflow definition
-                        self.handle_run_workflow();
-                    }
-                    WorkflowsFocus::Runs => {
-                        // Enter workflow run detail (works for both parent and child rows).
-                        // Header rows: Enter is a no-op (Space toggles collapse instead).
-                        let visible = self.state.visible_workflow_run_rows();
-                        if let Some(row) = visible.get(self.state.workflow_run_index) {
-                            let Some(target_id) = row.run_id().map(|s| s.to_string()) else {
-                                return; // header row — Enter is a no-op
-                            };
-                            if let Some(run) = self
-                                .state
-                                .data
-                                .workflow_runs
-                                .iter()
-                                .find(|r| r.id == target_id)
-                            {
-                                let run_id = run.id.clone();
-                                let worktree_id = run.worktree_id.clone();
-                                // In global mode, set the worktree context from the run
-                                // (ephemeral PR runs have no worktree_id — skip)
-                                if self.state.selected_worktree_id.is_none() {
-                                    self.state.selected_worktree_id = worktree_id;
-                                }
-                                self.state.selected_workflow_run_id = Some(run_id);
-                                self.state.view = View::WorkflowRunDetail;
-                                self.state.workflow_step_index = 0;
-                                self.state.workflow_run_detail_focus =
-                                    WorkflowRunDetailFocus::Steps;
-                                self.state.step_agent_event_index = 0;
-                                self.reload_workflow_steps();
-                            }
-                        }
-                    }
-                }
-            }
             View::WorkflowRunDetail => {
                 // Build modal title+body from cached data, then assign modal after borrows end
                 let modal = if let Some(step) = self
@@ -1795,12 +1743,8 @@ impl App {
                 .and_then(|tid| self.state.data.ticket_map.get(tid))
                 .map(|t| t.url.clone());
         }
-        // Ticket list views: Dashboard Tickets pane, standalone Tickets view, RepoDetail Tickets pane
+        // Ticket list views: RepoDetail Tickets pane
         let ticket = match self.state.view {
-            View::Dashboard if self.state.dashboard_focus == DashboardFocus::Tickets => {
-                self.state.filtered_tickets.get(self.state.ticket_index)
-            }
-            View::Tickets => self.state.filtered_tickets.get(self.state.ticket_index),
             View::RepoDetail if self.state.repo_detail_focus == RepoDetailFocus::Tickets => self
                 .state
                 .filtered_detail_tickets
@@ -2553,20 +2497,10 @@ impl App {
     fn handle_create(&mut self) {
         // Try to detect ticket context based on current view and focus
         let ticket_context = match self.state.view {
-            View::Dashboard if self.state.dashboard_focus == DashboardFocus::Tickets => self
-                .state
-                .filtered_tickets
-                .get(self.state.ticket_index)
-                .cloned(),
             View::RepoDetail if self.state.repo_detail_focus == RepoDetailFocus::Tickets => self
                 .state
                 .filtered_detail_tickets
                 .get(self.state.detail_ticket_index)
-                .cloned(),
-            View::Tickets => self
-                .state
-                .filtered_tickets
-                .get(self.state.ticket_index)
                 .cloned(),
             _ => None,
         };
@@ -3637,7 +3571,6 @@ impl App {
                             },
                         };
                     }
-                    DashboardFocus::Tickets => {}
                 }
             }
             View::WorktreeDetail => {
@@ -5196,14 +5129,8 @@ impl App {
                 repo_path,
             }
         } else {
-            // Ticket list contexts: target is the selected ticket itself
+            // Ticket list contexts: target is the selected ticket itself (RepoDetail only)
             let ticket = match self.state.view {
-                View::Dashboard
-                    if self.state.dashboard_focus == crate::state::DashboardFocus::Tickets =>
-                {
-                    self.state.filtered_tickets.get(self.state.ticket_index)
-                }
-                View::Tickets => self.state.filtered_tickets.get(self.state.ticket_index),
                 View::RepoDetail
                     if self.state.repo_detail_focus == crate::state::RepoDetailFocus::Tickets =>
                 {

@@ -17,6 +17,7 @@ use crate::state::WorkflowRunRow;
 use crate::state::WorkflowsFocus;
 
 /// Render the Workflows split-pane view: defs (left) + runs (right).
+#[allow(dead_code)]
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     // Always show a 1-line context bar so the user knows which worktree's
     // workflows they are viewing (or that they are in global mode).
@@ -69,7 +70,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     render_runs(frame, chunks[1], state);
 }
 
-fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
+pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
     let focused = state.workflows_focus == WorkflowsFocus::Defs;
     let border_color = if focused {
         state.theme.border_focused
@@ -230,7 +231,7 @@ fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 }
 
-fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
+pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
     let focused = state.workflows_focus == WorkflowsFocus::Runs;
     let border_color = if focused {
         state.theme.border_focused

@@ -47,6 +47,7 @@ use crate::theme::Theme;
 
 /// A single active item for the global status bar detail line.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum GlobalStatusItem {
     Agent {
         worktree_slug: String,
@@ -68,8 +69,9 @@ pub enum GlobalStatusItem {
     },
 }
 
-/// Aggregated global status for the persistent top status bar.
+/// Aggregated global status.
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct GlobalStatus {
     pub running_agents: usize,
     pub waiting_agents: usize,
@@ -80,6 +82,7 @@ pub struct GlobalStatus {
 }
 
 impl GlobalStatus {
+    #[allow(dead_code)]
     pub fn total_active(&self) -> usize {
         self.active_items.len()
     }
@@ -93,8 +96,6 @@ pub enum View {
     Dashboard,
     RepoDetail,
     WorktreeDetail,
-    Tickets,
-    Workflows,
     WorkflowRunDetail,
 }
 
@@ -102,23 +103,20 @@ pub enum View {
 pub enum DashboardFocus {
     Repos,
     Worktrees,
-    Tickets,
 }
 
 impl DashboardFocus {
     pub fn next(self) -> Self {
         match self {
             Self::Repos => Self::Worktrees,
-            Self::Worktrees => Self::Tickets,
-            Self::Tickets => Self::Repos,
+            Self::Worktrees => Self::Repos,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Repos => Self::Tickets,
+            Self::Repos => Self::Worktrees,
             Self::Worktrees => Self::Repos,
-            Self::Tickets => Self::Worktrees,
         }
     }
 }
@@ -135,18 +133,18 @@ impl RepoDetailFocus {
     pub fn next(self) -> Self {
         match self {
             Self::Info => Self::Worktrees,
-            Self::Worktrees => Self::Tickets,
-            Self::Tickets => Self::Prs,
-            Self::Prs => Self::Info,
+            Self::Worktrees => Self::Prs,
+            Self::Prs => Self::Tickets,
+            Self::Tickets => Self::Info,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Info => Self::Prs,
+            Self::Info => Self::Tickets,
             Self::Worktrees => Self::Info,
-            Self::Tickets => Self::Worktrees,
-            Self::Prs => Self::Tickets,
+            Self::Prs => Self::Worktrees,
+            Self::Tickets => Self::Prs,
         }
     }
 }
@@ -290,6 +288,13 @@ impl WorktreeDetailFocus {
             Self::LogPanel => Self::InfoPanel,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColumnFocus {
+    #[default]
+    Content, // left column (repos, worktrees, detail panels)
+    Workflow, // right persistent workflow column
 }
 
 /// Named row indices for the WorktreeDetail info panel.
@@ -965,9 +970,11 @@ pub struct AppState {
     /// True while a manual ticket sync is running in the background.
     pub ticket_sync_in_progress: bool,
 
-    /// When true, force the global status bar detail line to expand even when
-    /// there are 4+ active items (which default to the collapsed 1-line view).
-    pub status_bar_expanded: bool,
+    /// Which column currently has keyboard focus: Content (left) or Workflow (right).
+    pub column_focus: ColumnFocus,
+
+    /// When true, show the persistent workflow column on the right side.
+    pub workflow_column_visible: bool,
 
     /// Cached home directory path for `~` substitution in path display. Never changes.
     pub home_dir: Option<String>,
@@ -1108,7 +1115,8 @@ impl AppState {
             should_quit: false,
             show_closed_tickets: false,
             ticket_sync_in_progress: false,
-            status_bar_expanded: false,
+            column_focus: ColumnFocus::Content,
+            workflow_column_visible: true,
             home_dir: dirs::home_dir().map(|p| p.to_string_lossy().into_owned()),
             theme: Theme::default(),
         }
@@ -1146,6 +1154,7 @@ impl AppState {
     }
 
     /// Compute the current global status from cached data.
+    #[allow(dead_code)]
     pub fn global_status(&self) -> GlobalStatus {
         let slug_map: HashMap<&str, &str> = self
             .data
@@ -1324,25 +1333,6 @@ impl AppState {
         gs
     }
 
-    /// Number of lines the persistent header bar occupies.
-    ///
-    /// - 0 active items  → 1 line (just the Conductor title)
-    /// - 1–3 active items → 2 lines (auto-expanded detail view)
-    /// - 4+ active items  → 1 line by default; 2 lines when `status_bar_expanded`
-    ///
-    /// Accepts a pre-computed `GlobalStatus` so callers that already hold one
-    /// (e.g. the render loop) don't trigger a second full recomputation.
-    pub fn header_height(&self, gs: &GlobalStatus) -> u16 {
-        let total = gs.total_active();
-        if total == 0 {
-            1
-        } else if total <= 3 || self.status_bar_expanded {
-            2
-        } else {
-            1
-        }
-    }
-
     /// Rebuild the pre-filtered ticket vecs from the current source data,
     /// `show_closed_tickets`, and the active text/label filters.  Must be called
     /// whenever any of those inputs change.
@@ -1392,11 +1382,20 @@ impl AppState {
 
     /// Returns (current_index, list_length) for the currently focused pane.
     pub fn focused_index_and_len(&self) -> (usize, usize) {
+        // When workflow column is focused, navigate within workflow panes.
+        if self.column_focus == ColumnFocus::Workflow {
+            return match self.workflows_focus {
+                WorkflowsFocus::Defs => (self.workflow_def_index, self.data.workflow_defs.len()),
+                WorkflowsFocus::Runs => (
+                    self.workflow_run_index,
+                    self.visible_workflow_run_rows().len(),
+                ),
+            };
+        }
         match self.view {
             View::Dashboard => match self.dashboard_focus {
                 DashboardFocus::Repos => (self.repo_index, self.data.repos.len()),
                 DashboardFocus::Worktrees => (self.worktree_index, self.data.worktrees.len()),
-                DashboardFocus::Tickets => (self.ticket_index, self.filtered_tickets.len()),
             },
             View::RepoDetail => match self.repo_detail_focus {
                 RepoDetailFocus::Info => (self.repo_detail_info_row, repo_info_row::COUNT),
@@ -1410,14 +1409,6 @@ impl AppState {
                 let idx = self.agent_list_state.borrow().selected().unwrap_or(0);
                 (idx, self.data.agent_activity_len())
             }
-            View::Tickets => (self.ticket_index, self.filtered_tickets.len()),
-            View::Workflows => match self.workflows_focus {
-                WorkflowsFocus::Defs => (self.workflow_def_index, self.data.workflow_defs.len()),
-                WorkflowsFocus::Runs => (
-                    self.workflow_run_index,
-                    self.visible_workflow_run_rows().len(),
-                ),
-            },
             View::WorkflowRunDetail => match self.workflow_run_detail_focus {
                 WorkflowRunDetailFocus::Steps => {
                     (self.workflow_step_index, self.data.workflow_steps.len())
@@ -1432,11 +1423,18 @@ impl AppState {
 
     /// Sets the index for the currently focused pane.
     pub fn set_focused_index(&mut self, index: usize) {
+        // When workflow column is focused, update workflow pane indices.
+        if self.column_focus == ColumnFocus::Workflow {
+            match self.workflows_focus {
+                WorkflowsFocus::Defs => self.workflow_def_index = index,
+                WorkflowsFocus::Runs => self.workflow_run_index = index,
+            }
+            return;
+        }
         match self.view {
             View::Dashboard => match self.dashboard_focus {
                 DashboardFocus::Repos => self.repo_index = index,
                 DashboardFocus::Worktrees => self.worktree_index = index,
-                DashboardFocus::Tickets => self.ticket_index = index,
             },
             View::RepoDetail => match self.repo_detail_focus {
                 RepoDetailFocus::Info => self.repo_detail_info_row = index,
@@ -1447,11 +1445,6 @@ impl AppState {
             View::WorktreeDetail => {
                 self.agent_list_state.borrow_mut().select(Some(index));
             }
-            View::Tickets => self.ticket_index = index,
-            View::Workflows => match self.workflows_focus {
-                WorkflowsFocus::Defs => self.workflow_def_index = index,
-                WorkflowsFocus::Runs => self.workflow_run_index = index,
-            },
             View::WorkflowRunDetail => match self.workflow_run_detail_focus {
                 WorkflowRunDetailFocus::Steps => self.workflow_step_index = index,
                 WorkflowRunDetailFocus::AgentActivity => self.step_agent_event_index = index,
@@ -1767,17 +1760,17 @@ mod tests {
     #[test]
     fn repo_detail_focus_next_cycles_forward() {
         assert_eq!(RepoDetailFocus::Info.next(), RepoDetailFocus::Worktrees);
-        assert_eq!(RepoDetailFocus::Worktrees.next(), RepoDetailFocus::Tickets);
-        assert_eq!(RepoDetailFocus::Tickets.next(), RepoDetailFocus::Prs);
-        assert_eq!(RepoDetailFocus::Prs.next(), RepoDetailFocus::Info);
+        assert_eq!(RepoDetailFocus::Worktrees.next(), RepoDetailFocus::Prs);
+        assert_eq!(RepoDetailFocus::Prs.next(), RepoDetailFocus::Tickets);
+        assert_eq!(RepoDetailFocus::Tickets.next(), RepoDetailFocus::Info);
     }
 
     #[test]
     fn repo_detail_focus_prev_cycles_backward() {
-        assert_eq!(RepoDetailFocus::Info.prev(), RepoDetailFocus::Prs);
+        assert_eq!(RepoDetailFocus::Info.prev(), RepoDetailFocus::Tickets);
         assert_eq!(RepoDetailFocus::Worktrees.prev(), RepoDetailFocus::Info);
-        assert_eq!(RepoDetailFocus::Prs.prev(), RepoDetailFocus::Tickets);
-        assert_eq!(RepoDetailFocus::Tickets.prev(), RepoDetailFocus::Worktrees);
+        assert_eq!(RepoDetailFocus::Prs.prev(), RepoDetailFocus::Worktrees);
+        assert_eq!(RepoDetailFocus::Tickets.prev(), RepoDetailFocus::Prs);
     }
 
     #[test]
@@ -1971,50 +1964,6 @@ mod tests {
                 ..
             }
         ));
-    }
-
-    #[test]
-    fn header_height_no_active() {
-        let state = AppState::new();
-        assert_eq!(state.header_height(&state.global_status()), 1);
-    }
-
-    #[test]
-    fn header_height_few_active_auto_expands() {
-        let mut state = AppState::new();
-        state
-            .data
-            .latest_agent_runs
-            .insert("wt1".into(), make_agent_run("wt1", AgentRunStatus::Running));
-        let gs = state.global_status();
-        assert_eq!(state.header_height(&gs), 2);
-    }
-
-    #[test]
-    fn header_height_many_active_collapsed_by_default() {
-        let mut state = AppState::new();
-        for i in 0..5 {
-            state.data.latest_agent_runs.insert(
-                format!("wt{i}"),
-                make_agent_run(&format!("wt{i}"), AgentRunStatus::Running),
-            );
-        }
-        let gs = state.global_status();
-        assert_eq!(state.header_height(&gs), 1);
-    }
-
-    #[test]
-    fn header_height_many_active_expanded_when_toggled() {
-        let mut state = AppState::new();
-        for i in 0..5 {
-            state.data.latest_agent_runs.insert(
-                format!("wt{i}"),
-                make_agent_run(&format!("wt{i}"), AgentRunStatus::Running),
-            );
-        }
-        state.status_bar_expanded = true;
-        let gs = state.global_status();
-        assert_eq!(state.header_height(&gs), 2);
     }
 
     #[test]

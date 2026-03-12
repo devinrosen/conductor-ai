@@ -5,6 +5,7 @@ pub(crate) mod helpers;
 mod modal;
 mod repo_detail;
 mod tickets;
+mod workflow_column;
 mod workflows;
 mod worktree_detail;
 
@@ -16,39 +17,26 @@ use crate::state::{AppState, Modal, View};
 pub fn render(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
 
-    // Compute global status once per frame — used for both header height and rendering.
-    let gs = state.global_status();
-
-    // Layout: header (1–2 lines) + body (fill) + status bar (1 line).
-    // Header height is dynamic: 1 line when nothing is active or 4+ items are
-    // collapsed, 2 lines when 1–3 active items or the user has expanded the bar.
-    let header_h = state.header_height(&gs);
-
+    // Layout: body (fill) + footer (1 line).
     let layout = ratatui::layout::Layout::default()
         .direction(ratatui::layout::Direction::Vertical)
         .constraints([
-            ratatui::layout::Constraint::Length(header_h),
             ratatui::layout::Constraint::Min(0),
             ratatui::layout::Constraint::Length(1),
         ])
         .split(area);
 
-    let header_area = layout[0];
-    let body_area = layout[1];
-    let status_area = layout[2];
-
-    common::render_header(frame, header_area, state, &gs);
+    let body_area = layout[0];
+    let footer_area = layout[1];
 
     match state.view {
         View::Dashboard => dashboard::render(frame, body_area, state),
         View::RepoDetail => repo_detail::render(frame, body_area, state),
         View::WorktreeDetail => worktree_detail::render(frame, body_area, state),
-        View::Tickets => tickets::render(frame, body_area, state),
-        View::Workflows => workflows::render(frame, body_area, state),
         View::WorkflowRunDetail => workflows::render_run_detail(frame, body_area, state),
     }
 
-    common::render_status_bar(frame, status_area, state);
+    common::render_footer(frame, footer_area, state);
 
     // Modal overlay on top
     match &state.modal {

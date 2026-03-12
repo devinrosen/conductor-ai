@@ -1,14 +1,12 @@
-use conductor_core::agent::AgentRunStatus;
 use conductor_core::tickets::TicketLabel;
-use conductor_core::workflow::WorkflowRunStatus;
 use conductor_core::worktree::{Worktree, WorktreeStatus};
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{ListItem, Paragraph};
 use ratatui::Frame;
 
-use crate::state::{AppState, GlobalStatusItem, View};
+use crate::state::{AppState, View};
 
 /// Parse a 6-digit hex color string (with or without `#`) into `Color::Rgb`.
 /// Falls back to `Color::DarkGray` on any parse error.
@@ -79,243 +77,19 @@ pub fn ticket_label_spans_compact(labels: &[TicketLabel]) -> Vec<Span<'static>> 
     spans
 }
 
-pub fn render_header(
-    frame: &mut Frame,
-    area: Rect,
-    state: &AppState,
-    gs: &crate::state::GlobalStatus,
-) {
-    let total_active = gs.total_active();
-
-    if area.height >= 2 {
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)])
-            .split(area);
-        render_header_summary(frame, rows[0], state, total_active, gs);
-        render_header_detail(
-            frame,
-            rows[1],
-            gs,
-            state.status_bar_expanded,
-            total_active,
-            &state.theme,
-        );
-    } else {
-        render_header_summary(frame, area, state, total_active, gs);
-    }
-}
-
-fn render_header_summary(
-    frame: &mut Frame,
-    area: Rect,
-    state: &AppState,
-    total_active: usize,
-    gs: &crate::state::GlobalStatus,
-) {
-    let view_name = match state.view {
-        View::Dashboard => "Dashboard",
-        View::RepoDetail => "Repo Detail",
-        View::WorktreeDetail => "Worktree Detail",
-        View::Tickets => "Tickets",
-        View::Workflows => "Workflows",
-        View::WorkflowRunDetail => "Workflow Run",
-    };
-
-    let theme = &state.theme;
-    let mut spans = vec![
-        Span::styled(
-            " Conductor ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(theme.border_focused)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {view_name}"),
-            Style::default()
-                .fg(theme.border_focused)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ];
-
-    if total_active > 0 {
-        spans.push(Span::raw("   "));
-
-        // Waiting items (magenta) — highest priority
-        let waiting = gs.waiting_agents + gs.waiting_workflows;
-        if waiting > 0 {
-            spans.push(Span::styled(
-                format!("⏸ {waiting} waiting"),
-                Style::default()
-                    .fg(theme.status_waiting)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            if gs.running_agents + gs.running_workflows > 0 {
-                spans.push(Span::raw("  "));
-            }
-        }
-
-        // Running items (yellow)
-        let running = gs.running_agents + gs.running_workflows;
-        if running > 0 {
-            spans.push(Span::styled(
-                format!("● {running} running"),
-                Style::default().fg(theme.status_running),
-            ));
-        }
-
-        // For 4+ items show a toggle hint
-        if total_active > 3 {
-            spans.push(Span::raw("  "));
-            let hint = if state.status_bar_expanded {
-                "!:collapse"
-            } else {
-                "!:expand"
-            };
-            spans.push(Span::styled(
-                hint,
-                Style::default().fg(theme.label_secondary),
-            ));
-        }
-    }
-
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-fn render_header_detail(
-    frame: &mut Frame,
-    area: Rect,
-    gs: &crate::state::GlobalStatus,
-    expanded: bool,
-    total_active: usize,
-    theme: &crate::theme::Theme,
-) {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-
-    let limit = if total_active > 3 && expanded {
-        gs.active_items.len()
-    } else {
-        gs.active_items.len().min(3)
-    };
-
-    for (i, item) in gs.active_items.iter().take(limit).enumerate() {
-        if i > 0 {
-            spans.push(Span::raw("  "));
-        }
-        match item {
-            GlobalStatusItem::Agent {
-                worktree_slug,
-                status,
-                elapsed_secs,
-            } => {
-                let (symbol, color) = match status {
-                    AgentRunStatus::WaitingForFeedback => ("⏸", theme.status_waiting),
-                    AgentRunStatus::Running => ("●", theme.status_running),
-                    _ => ("○", theme.label_secondary),
-                };
-                let label = if matches!(status, AgentRunStatus::Running) && *elapsed_secs > 0 {
-                    let elapsed_str = if *elapsed_secs < 60 {
-                        format!("{}s", elapsed_secs)
-                    } else {
-                        format!("{}m", elapsed_secs / 60)
-                    };
-                    format!("{symbol} {worktree_slug} ({elapsed_str})")
-                } else {
-                    format!("{symbol} {worktree_slug}")
-                };
-                spans.push(Span::styled(label, Style::default().fg(color)));
-            }
-            GlobalStatusItem::Workflow {
-                context_label,
-                status,
-                elapsed_secs,
-                current_step,
-                workflow_chain,
-            } => {
-                let (symbol, color) = match status {
-                    WorkflowRunStatus::Waiting => ("⏸", theme.status_waiting),
-                    WorkflowRunStatus::Running => ("⚙", theme.label_accent),
-                    _ => ("○", theme.label_secondary),
-                };
-                // For running/waiting workflows, build the full chain breadcrumb.
-                let label = if matches!(
-                    status,
-                    WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
-                ) {
-                    build_workflow_breadcrumb(
-                        context_label,
-                        workflow_chain,
-                        current_step.as_deref(),
-                        0,
-                        *elapsed_secs,
-                        symbol,
-                    )
-                } else {
-                    format!("{symbol} {context_label}")
-                };
-                spans.push(Span::styled(label, Style::default().fg(color)));
-            }
-        }
-    }
-
-    // Show overflow indicator if items were truncated
-    if gs.active_items.len() > limit {
-        let overflow = gs.active_items.len() - limit;
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            format!("+{overflow} more  !:expand"),
-            Style::default().fg(theme.label_secondary),
-        ));
-    }
-
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-pub fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
+pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
     let msg = if let Some(f) = state.active_filter() {
         format!("/{} ", f.text)
     } else if let Some(ref msg) = state.status_message {
         msg.clone()
     } else {
-        match state.view {
-            View::Dashboard => {
-                "Tab:panel  j/k:nav  Enter:select  a:add repo  c:create  s:sync  ?:help  q:quit"
-                    .to_string()
-            }
-            View::RepoDetail => {
-                "j/k:nav  Enter:select  c:create  d:remove  S:sources  Esc:back  ?:help".to_string()
-            }
-            View::WorktreeDetail => {
-                let has_running = state
-                    .selected_worktree_id
-                    .as_ref()
-                    .and_then(|wt_id| state.data.latest_agent_runs.get(wt_id))
-                    .is_some_and(|run| run.is_active());
-                if has_running {
-                    "p:prompt  x:stop  w:workflow  Esc:back  ?:help".to_string()
-                } else {
-                    "p:prompt  O:orchestrate  w:workflow  d:delete  Esc:back  ?:help".to_string()
-                }
-            }
-            View::Tickets => "j/k:nav  /:filter  Esc:back  ?:help".to_string(),
-            View::Workflows => {
-                "Tab:panel  j/k:nav  Enter:select  r:run  Esc:back  ?:help".to_string()
-            }
-            View::WorkflowRunDetail => {
-                let has_gate = state
-                    .data
-                    .workflow_steps
-                    .iter()
-                    .any(|s| s.status.to_string() == "waiting" && s.gate_type.is_some());
-                if has_gate {
-                    "j/k:nav  Enter:detail  g:gate  w:workflow  x:cancel  Esc:back  ?:help"
-                        .to_string()
-                } else {
-                    "j/k:nav  Enter:detail  w:workflow  x:cancel  Esc:back  ?:help".to_string()
-                }
-            }
-        }
+        let view_name = match state.view {
+            View::Dashboard => "Dashboard",
+            View::RepoDetail => "Repo Detail",
+            View::WorktreeDetail => "Worktree Detail",
+            View::WorkflowRunDetail => "Workflow Run",
+        };
+        format!("[{view_name}]  Tab:panel  Ctrl+h/l:column  \\:workflows  q:quit")
     };
 
     let bar = Paragraph::new(Line::from(Span::styled(
