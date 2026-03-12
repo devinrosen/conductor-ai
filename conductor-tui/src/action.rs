@@ -155,6 +155,7 @@ pub enum Action {
     ShowHelp,
     DismissModal,
     OpenTicketUrl,
+    CopyErrorMessage,
     CopyTicketUrl,
     OpenRepoUrl,
     CopyRepoUrl,
