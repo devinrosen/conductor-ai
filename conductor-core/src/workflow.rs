@@ -1065,9 +1065,11 @@ impl<'a> WorkflowManager<'a> {
                 )
                 .optional()?;
 
-            let dead_parent = matches!(
+            // A missing parent (None) is also treated as dead — if the agent run
+            // has been purged from the DB its executor is certainly gone.
+            let dead_parent = !matches!(
                 parent_status.as_deref(),
-                Some("completed") | Some("failed") | Some("cancelled")
+                Some("running") | Some("waiting_for_feedback")
             );
 
             // Check if the active gate step's timeout has elapsed.
@@ -9055,5 +9057,57 @@ And here is my actual output:
         let mgr = WorkflowManager::new(&conn);
         let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
         assert_eq!(reaped, 0);
+    }
+
+    #[test]
+    fn test_reap_orphaned_workflow_runs_purged_parent() {
+        // A workflow run whose parent agent run no longer exists in the DB
+        // must still be reaped (parent_status == None → treat as dead).
+        // We insert the workflow run with FK checks disabled so we can
+        // reference a non-existent agent_run ID, simulating a purged parent.
+        let conn = setup_db();
+        let run_id = "run-purged-parent";
+        let ghost_parent_id = "ghost-agent-run-does-not-exist";
+
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \
+              started_at, parent_workflow_run_id) \
+             VALUES (?1, 'test-wf', NULL, ?2, 'waiting', 0, 'manual', \
+                     '2025-01-01T00:00:00Z', NULL)",
+            params![run_id, ghost_parent_id],
+        )
+        .unwrap();
+
+        let step_id = ulid::Ulid::new().to_string();
+        conn.execute(
+            "INSERT INTO workflow_run_steps \
+             (id, workflow_run_id, step_name, role, position, status, iteration, \
+              gate_type, gate_timeout, started_at) \
+             VALUES (?1, ?2, 'approval-gate', 'gate', 0, 'waiting', 1, \
+                     'human_approval', '999999999s', '2099-01-01T00:00:00Z')",
+            params![step_id, run_id],
+        )
+        .unwrap();
+
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
+        assert_eq!(
+            reaped, 1,
+            "purged parent should cause the workflow run to be reaped"
+        );
+
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                params![run_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "cancelled");
     }
 }
