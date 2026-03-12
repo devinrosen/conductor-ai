@@ -62,6 +62,8 @@ pub struct GithubPr {
     pub author: String,
     pub state: String,
     pub head_ref_name: String,
+    pub is_draft: bool,
+    pub review_decision: Option<String>,
 }
 
 /// Intermediate deserialization shape for a single PR entry from `gh pr list --json`.
@@ -80,6 +82,10 @@ struct RawPr {
     state: String,
     #[serde(rename = "headRefName")]
     head_ref_name: String,
+    #[serde(rename = "isDraft", default)]
+    is_draft: bool,
+    #[serde(rename = "reviewDecision", default)]
+    review_decision: Option<String>,
 }
 
 /// Parse `gh pr list --json` output into [`GithubPr`] values.
@@ -100,6 +106,8 @@ fn parse_prs_json(json: &str) -> Vec<GithubPr> {
             author: r.author.login,
             state: r.state,
             head_ref_name: r.head_ref_name,
+            is_draft: r.is_draft,
+            review_decision: r.review_decision,
         })
         .collect()
 }
@@ -122,7 +130,7 @@ pub fn list_open_prs(remote_url: &str) -> Result<Vec<GithubPr>> {
         "--state",
         "open",
         "--json",
-        "number,title,author,state,headRefName",
+        "number,title,author,state,headRefName,isDraft,reviewDecision",
         "--limit",
         "50",
     ]) {
@@ -765,14 +773,18 @@ mod tests {
                 "title": "feat: add PR pane",
                 "author": {"login": "alice"},
                 "state": "OPEN",
-                "headRefName": "feat/42-add-pr-pane"
+                "headRefName": "feat/42-add-pr-pane",
+                "isDraft": false,
+                "reviewDecision": "REVIEW_REQUIRED"
             },
             {
                 "number": 7,
                 "title": "fix: correct typo",
                 "author": {"login": "bob"},
                 "state": "OPEN",
-                "headRefName": "fix/7-typo"
+                "headRefName": "fix/7-typo",
+                "isDraft": true,
+                "reviewDecision": null
             }
         ]"#;
 
@@ -783,8 +795,30 @@ mod tests {
         assert_eq!(prs[0].author, "alice");
         assert_eq!(prs[0].state, "OPEN");
         assert_eq!(prs[0].head_ref_name, "feat/42-add-pr-pane");
+        assert!(!prs[0].is_draft);
+        assert_eq!(prs[0].review_decision.as_deref(), Some("REVIEW_REQUIRED"));
         assert_eq!(prs[1].number, 7);
         assert_eq!(prs[1].author, "bob");
+        assert!(prs[1].is_draft);
+        assert!(prs[1].review_decision.is_none());
+    }
+
+    #[test]
+    fn test_parse_list_open_prs_missing_new_fields() {
+        // #[serde(default)] must allow old JSON without isDraft/reviewDecision.
+        let json = r#"[
+            {
+                "number": 1,
+                "title": "old-style PR",
+                "author": {"login": "legacy"},
+                "state": "OPEN",
+                "headRefName": "feat/1-old"
+            }
+        ]"#;
+        let prs = parse_prs_json(json);
+        assert_eq!(prs.len(), 1);
+        assert!(!prs[0].is_draft);
+        assert!(prs[0].review_decision.is_none());
     }
 
     #[test]
