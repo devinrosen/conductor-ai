@@ -2161,4 +2161,151 @@ mod tests {
         // Timestamp should not be reset.
         assert!(state.status_message_at.unwrap() <= before + Duration::from_millis(1));
     }
+
+    // --- visible_workflow_run_rows tests ---
+
+    fn make_wf_run_full(
+        id: &str,
+        status: WorkflowRunStatus,
+        parent_workflow_run_id: Option<&str>,
+    ) -> conductor_core::workflow::WorkflowRun {
+        conductor_core::workflow::WorkflowRun {
+            id: id.into(),
+            workflow_name: "test-workflow".into(),
+            worktree_id: None,
+            parent_run_id: "run-1".into(),
+            status,
+            dry_run: false,
+            trigger: "manual".into(),
+            started_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
+            result_summary: None,
+            definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
+            ticket_id: None,
+            repo_id: None,
+            parent_workflow_run_id: parent_workflow_run_id.map(|s| s.into()),
+            target_label: None,
+            default_bot_name: None,
+        }
+    }
+
+    #[test]
+    fn visible_workflow_run_rows_empty() {
+        let state = AppState::new();
+        assert!(state.visible_workflow_run_rows().is_empty());
+    }
+
+    #[test]
+    fn visible_workflow_run_rows_single_parent_no_children() {
+        let mut state = AppState::new();
+        state.data.workflow_runs = vec![make_wf_run_full("p1", WorkflowRunStatus::Running, None)];
+        let rows = state.visible_workflow_run_rows();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            matches!(&rows[0], WorkflowRunRow::Parent { run_id, child_count: 0, collapsed: false } if run_id == "p1")
+        );
+    }
+
+    #[test]
+    fn visible_workflow_run_rows_parent_with_child_expanded() {
+        let mut state = AppState::new();
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Running, None),
+            make_wf_run_full("c1", WorkflowRunStatus::Running, Some("p1")),
+        ];
+        let rows = state.visible_workflow_run_rows();
+        assert_eq!(rows.len(), 2);
+        assert!(
+            matches!(&rows[0], WorkflowRunRow::Parent { run_id, child_count: 1, collapsed: false } if run_id == "p1")
+        );
+        assert!(matches!(&rows[1], WorkflowRunRow::Child { run_id, .. } if run_id == "c1"));
+    }
+
+    #[test]
+    fn visible_workflow_run_rows_parent_with_child_collapsed() {
+        let mut state = AppState::new();
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Running, None),
+            make_wf_run_full("c1", WorkflowRunStatus::Running, Some("p1")),
+        ];
+        state.collapsed_workflow_run_ids.insert("p1".into());
+        let rows = state.visible_workflow_run_rows();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            matches!(&rows[0], WorkflowRunRow::Parent { run_id, child_count: 1, collapsed: true } if run_id == "p1")
+        );
+    }
+
+    #[test]
+    fn visible_workflow_run_rows_orphaned_child_treated_as_root() {
+        let mut state = AppState::new();
+        // c1 references a parent not in the list — should appear as a root
+        state.data.workflow_runs = vec![make_wf_run_full(
+            "c1",
+            WorkflowRunStatus::Running,
+            Some("nonexistent"),
+        )];
+        let rows = state.visible_workflow_run_rows();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            matches!(&rows[0], WorkflowRunRow::Parent { run_id, child_count: 0, .. } if run_id == "c1")
+        );
+    }
+
+    // --- init_collapse_state tests ---
+
+    #[test]
+    fn init_collapse_state_running_not_collapsed() {
+        let mut state = AppState::new();
+        state.data.workflow_runs = vec![make_wf_run_full("p1", WorkflowRunStatus::Running, None)];
+        state.init_collapse_state();
+        assert!(!state.collapsed_workflow_run_ids.contains("p1"));
+        assert!(state.collapse_initialized.contains("p1"));
+    }
+
+    #[test]
+    fn init_collapse_state_terminal_statuses_collapsed() {
+        for status in [
+            WorkflowRunStatus::Completed,
+            WorkflowRunStatus::Failed,
+            WorkflowRunStatus::Cancelled,
+        ] {
+            let mut state = AppState::new();
+            state.data.workflow_runs = vec![make_wf_run_full("p1", status.clone(), None)];
+            state.init_collapse_state();
+            assert!(
+                state.collapsed_workflow_run_ids.contains("p1"),
+                "expected p1 collapsed for {status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn init_collapse_state_idempotent() {
+        let mut state = AppState::new();
+        state.data.workflow_runs = vec![make_wf_run_full("p1", WorkflowRunStatus::Completed, None)];
+        state.init_collapse_state();
+        assert!(state.collapsed_workflow_run_ids.contains("p1"));
+        // Manually expand — second call must not re-collapse since already initialized
+        state.collapsed_workflow_run_ids.remove("p1");
+        state.init_collapse_state();
+        assert!(
+            !state.collapsed_workflow_run_ids.contains("p1"),
+            "second init_collapse_state call must not re-collapse an already-initialized run"
+        );
+    }
+
+    #[test]
+    fn init_collapse_state_child_runs_not_collapsed() {
+        let mut state = AppState::new();
+        // A child run with terminal status should not be auto-collapsed
+        state.data.workflow_runs = vec![make_wf_run_full(
+            "c1",
+            WorkflowRunStatus::Completed,
+            Some("p1"),
+        )];
+        state.init_collapse_state();
+        assert!(!state.collapsed_workflow_run_ids.contains("c1"));
+    }
 }

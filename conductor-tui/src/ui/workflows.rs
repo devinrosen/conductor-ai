@@ -321,7 +321,13 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         ));
                     } else {
                         spans.push(Span::styled(
-                            format!("  {}", &run.started_at[..19].replace('T', " ")),
+                            format!(
+                                "  {}",
+                                run.started_at
+                                    .get(..19)
+                                    .unwrap_or(&run.started_at)
+                                    .replace('T', " ")
+                            ),
                             Style::default().fg(state.theme.label_secondary),
                         ));
                     }
