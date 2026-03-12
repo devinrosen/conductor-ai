@@ -1033,4 +1033,47 @@ mod tests {
         assert!(matches!(map_key(key(KeyCode::Left), &state), Action::None));
         assert!(matches!(map_key(key(KeyCode::Right), &state), Action::None));
     }
+
+    // --- Workflow column focus keybindings ---
+
+    fn ctrl(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn ctrl_l_maps_to_focus_workflow_column() {
+        let state = AppState::new();
+        assert!(matches!(
+            map_key(ctrl(KeyCode::Char('l')), &state),
+            Action::FocusWorkflowColumn
+        ));
+    }
+
+    #[test]
+    fn ctrl_h_maps_to_focus_content_column() {
+        let state = AppState::new();
+        assert!(matches!(
+            map_key(ctrl(KeyCode::Char('h')), &state),
+            Action::FocusContentColumn
+        ));
+    }
+
+    #[test]
+    fn backslash_maps_to_toggle_workflow_column() {
+        let state = AppState::new();
+        assert!(matches!(
+            map_key(key(KeyCode::Char('\\')), &state),
+            Action::ToggleWorkflowColumn
+        ));
+    }
+
+    #[test]
+    fn backslash_toggle_works_in_workflow_column_focus() {
+        let mut state = AppState::new();
+        state.column_focus = crate::state::ColumnFocus::Workflow;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('\\')), &state),
+            Action::ToggleWorkflowColumn
+        ));
+    }
 }

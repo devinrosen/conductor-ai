@@ -11,6 +11,7 @@ use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStatus};
 use super::common::truncate;
 use super::helpers::{shorten_paths, visual_idx_with_headers};
 use crate::state::AppState;
+use crate::state::ColumnFocus;
 use crate::state::TargetType;
 use crate::state::WorkflowRunDetailFocus;
 use crate::state::WorkflowRunRow;
@@ -71,7 +72,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
-    let focused = state.workflows_focus == WorkflowsFocus::Defs;
+    let focused = state.column_focus == ColumnFocus::Workflow
+        && state.workflows_focus == WorkflowsFocus::Defs;
     let border_color = if focused {
         state.theme.border_focused
     } else {
@@ -232,7 +234,8 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
-    let focused = state.workflows_focus == WorkflowsFocus::Runs;
+    let focused = state.column_focus == ColumnFocus::Workflow
+        && state.workflows_focus == WorkflowsFocus::Runs;
     let border_color = if focused {
         state.theme.border_focused
     } else {

@@ -7,18 +7,7 @@ use ratatui::Frame;
 use crate::state::{AppState, DashboardFocus};
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
-    let workflow_visible = state.workflow_column_visible && area.width >= 80;
-
-    if workflow_visible {
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
-            .split(area);
-        render_content(frame, cols[0], state);
-        super::workflow_column::render_workflow_column(frame, cols[1], state);
-    } else {
-        render_content(frame, area, state);
-    }
+    super::workflow_column::render_with_workflow_column(frame, area, state, render_content);
 }
 
 fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {

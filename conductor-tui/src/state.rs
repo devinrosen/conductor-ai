@@ -33,7 +33,7 @@ impl FilterState {
 }
 
 use conductor_core::agent::{
-    AgentCreatedIssue, AgentRun, AgentRunEvent, AgentRunStatus, FeedbackRequest, TicketAgentTotals,
+    AgentCreatedIssue, AgentRun, AgentRunEvent, FeedbackRequest, TicketAgentTotals,
 };
 use conductor_core::github::{DiscoveredRepo, GithubPr};
 use conductor_core::issue_source::IssueSource;
@@ -45,48 +45,6 @@ use conductor_core::workflow::{
 
 use crate::theme::Theme;
 
-/// A single active item for the global status bar detail line.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub enum GlobalStatusItem {
-    Agent {
-        worktree_slug: String,
-        status: AgentRunStatus,
-        /// Elapsed seconds since the run started (0 if unknown).
-        elapsed_secs: u64,
-    },
-    Workflow {
-        /// Display label for the context: worktree slug, repo slug, or `#<source_id>` for tickets.
-        context_label: String,
-        status: WorkflowRunStatus,
-        /// Elapsed seconds since the agent run for the current step started (0 if unknown).
-        elapsed_secs: u64,
-        /// Current step name, if known.
-        current_step: Option<String>,
-        /// Ordered list of workflow names from root down to the workflow containing the
-        /// currently-running step. Empty for single-level (non-nested) workflows.
-        workflow_chain: Vec<String>,
-    },
-}
-
-/// Aggregated global status.
-#[derive(Debug, Clone, Default)]
-#[allow(dead_code)]
-pub struct GlobalStatus {
-    pub running_agents: usize,
-    pub waiting_agents: usize,
-    pub running_workflows: usize,
-    pub waiting_workflows: usize,
-    /// Active items sorted by priority (waiting first, then running).
-    pub active_items: Vec<GlobalStatusItem>,
-}
-
-impl GlobalStatus {
-    #[allow(dead_code)]
-    pub fn total_active(&self) -> usize {
-        self.active_items.len()
-    }
-}
 use conductor_core::worktree::Worktree;
 use ratatui::widgets::ListState;
 use tui_textarea::TextArea;
@@ -1153,186 +1111,6 @@ impl AppState {
         self.filter.active || self.detail_ticket_filter.active || self.label_filter.active
     }
 
-    /// Compute the current global status from cached data.
-    #[allow(dead_code)]
-    pub fn global_status(&self) -> GlobalStatus {
-        let slug_map: HashMap<&str, &str> = self
-            .data
-            .worktrees
-            .iter()
-            .map(|wt| (wt.id.as_str(), wt.slug.as_str()))
-            .collect();
-
-        let resolve_slug = |id: &str| {
-            slug_map
-                .get(id)
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| id.to_string())
-        };
-
-        let mut gs = GlobalStatus::default();
-
-        // Collect worktree IDs that have an active workflow run.  These take
-        // precedence over agent entries for the same worktree so we can avoid
-        // double-counting in the header bar.
-        let mut workflow_worktree_ids: std::collections::HashSet<&str> =
-            std::collections::HashSet::new();
-
-        // First pass: build Workflow items and collect their worktree IDs.
-        for (wt_key, run) in &self.data.latest_workflow_runs_by_worktree {
-            match run.status {
-                WorkflowRunStatus::Running => gs.running_workflows += 1,
-                WorkflowRunStatus::Waiting => gs.waiting_workflows += 1,
-                _ => {}
-            }
-            if matches!(
-                run.status,
-                WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
-            ) {
-                if let Some(wt_id) = run.worktree_id.as_deref() {
-                    workflow_worktree_ids.insert(wt_id);
-                } else {
-                    // No worktree_id — use the map key as the dedup key.
-                    workflow_worktree_ids.insert(wt_key.as_str());
-                }
-
-                let context_label = run
-                    .worktree_id
-                    .as_deref()
-                    .map(&resolve_slug)
-                    .unwrap_or_else(|| "(ephemeral)".to_string());
-
-                // Borrow the agent run for this worktree (if any) to get elapsed.
-                let elapsed_secs = run
-                    .worktree_id
-                    .as_deref()
-                    .and_then(|id| self.data.latest_agent_runs.get(id))
-                    .filter(|ar| ar.is_active())
-                    .and_then(|ar| {
-                        chrono::DateTime::parse_from_rfc3339(&ar.started_at)
-                            .ok()
-                            .map(|dt| {
-                                let now = chrono::Utc::now();
-                                now.signed_duration_since(dt).num_seconds().max(0) as u64
-                            })
-                    })
-                    .unwrap_or(0);
-
-                let (current_step, workflow_chain) = self
-                    .data
-                    .workflow_step_summaries
-                    .get(&run.id)
-                    .map(|s| (Some(s.step_name.clone()), s.workflow_chain.clone()))
-                    .unwrap_or((None, Vec::new()));
-
-                gs.active_items.push(GlobalStatusItem::Workflow {
-                    context_label,
-                    status: run.status.clone(),
-                    elapsed_secs,
-                    current_step,
-                    workflow_chain,
-                });
-            }
-        }
-
-        // Third pass: build Workflow items for active non-worktree runs (repo/ticket-targeted).
-        for run in &self.data.active_non_worktree_workflow_runs {
-            match run.status {
-                WorkflowRunStatus::Running => gs.running_workflows += 1,
-                WorkflowRunStatus::Waiting => gs.waiting_workflows += 1,
-                _ => {}
-            }
-            if matches!(
-                run.status,
-                WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
-            ) {
-                // Derive a context label from repo or ticket, fallback to "(ephemeral)".
-                // Use the pre-built maps from DataCache instead of allocating new ones.
-                let context_label = if let Some(ref rid) = run.repo_id {
-                    self.data
-                        .repo_slug_map
-                        .get(rid.as_str())
-                        .map(|s| s.as_str())
-                        .unwrap_or("(ephemeral)")
-                        .to_string()
-                } else if let Some(ref tid) = run.ticket_id {
-                    self.data
-                        .ticket_map
-                        .get(tid.as_str())
-                        .map(|t| format!("#{}", t.source_id))
-                        .unwrap_or_else(|| "(ephemeral)".to_string())
-                } else {
-                    "(ephemeral)".to_string()
-                };
-
-                let (current_step, workflow_chain) = self
-                    .data
-                    .workflow_step_summaries
-                    .get(&run.id)
-                    .map(|s| (Some(s.step_name.clone()), s.workflow_chain.clone()))
-                    .unwrap_or((None, Vec::new()));
-
-                gs.active_items.push(GlobalStatusItem::Workflow {
-                    context_label,
-                    status: run.status.clone(),
-                    elapsed_secs: 0,
-                    current_step,
-                    workflow_chain,
-                });
-            }
-        }
-
-        // Second pass: build Agent items, skipping worktrees covered by a workflow.
-        for run in self.data.latest_agent_runs.values() {
-            // Determine the dedup key for this agent run.
-            let wt_id = run.worktree_id.as_deref().unwrap_or("");
-            if !wt_id.is_empty() && workflow_worktree_ids.contains(wt_id) {
-                // This worktree already has a Workflow item — skip the agent entry.
-                continue;
-            }
-
-            match run.status {
-                AgentRunStatus::Running => gs.running_agents += 1,
-                AgentRunStatus::WaitingForFeedback => gs.waiting_agents += 1,
-                _ => {}
-            }
-            if run.is_active() {
-                let worktree_slug = run
-                    .worktree_id
-                    .as_deref()
-                    .map(&resolve_slug)
-                    .unwrap_or_else(|| "(ephemeral)".to_string());
-                let elapsed_secs = chrono::DateTime::parse_from_rfc3339(&run.started_at)
-                    .ok()
-                    .map(|dt| {
-                        let now = chrono::Utc::now();
-                        now.signed_duration_since(dt).num_seconds().max(0) as u64
-                    })
-                    .unwrap_or(0);
-                gs.active_items.push(GlobalStatusItem::Agent {
-                    worktree_slug,
-                    status: run.status.clone(),
-                    elapsed_secs,
-                });
-            }
-        }
-
-        // Sort: waiting items first (they block progress), then running.
-        gs.active_items.sort_by_key(|item| match item {
-            GlobalStatusItem::Agent {
-                status: AgentRunStatus::WaitingForFeedback,
-                ..
-            }
-            | GlobalStatusItem::Workflow {
-                status: WorkflowRunStatus::Waiting,
-                ..
-            } => 0u8,
-            _ => 1,
-        });
-
-        gs
-    }
-
     /// Rebuild the pre-filtered ticket vecs from the current source data,
     /// `show_closed_tickets`, and the active text/label filters.  Must be called
     /// whenever any of those inputs change.
@@ -1865,220 +1643,6 @@ mod tests {
         assert!(!state.show_closed_tickets);
     }
 
-    fn make_workflow_run(
-        worktree_id: &str,
-        status: WorkflowRunStatus,
-    ) -> conductor_core::workflow::WorkflowRun {
-        conductor_core::workflow::WorkflowRun {
-            id: "wfrun-1".into(),
-            workflow_name: "test-workflow".into(),
-            worktree_id: Some(worktree_id.into()),
-            parent_run_id: "run-1".into(),
-            status,
-            dry_run: false,
-            trigger: "manual".into(),
-            started_at: "2026-01-01T00:00:00Z".into(),
-            ended_at: None,
-            result_summary: None,
-            definition_snapshot: None,
-            inputs: std::collections::HashMap::new(),
-            ticket_id: None,
-            repo_id: None,
-            parent_workflow_run_id: None,
-            target_label: None,
-            default_bot_name: None,
-        }
-    }
-
-    fn make_agent_run(
-        worktree_id: &str,
-        status: AgentRunStatus,
-    ) -> conductor_core::agent::AgentRun {
-        conductor_core::agent::AgentRun {
-            id: "run-1".into(),
-            worktree_id: Some(worktree_id.to_string()),
-            claude_session_id: None,
-            prompt: "do stuff".into(),
-            status,
-            result_text: None,
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
-            started_at: "2026-01-01T00:00:00Z".into(),
-            ended_at: None,
-            tmux_window: None,
-            log_file: None,
-            model: None,
-            plan: None,
-            parent_run_id: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-            bot_name: None,
-        }
-    }
-
-    #[test]
-    fn global_status_empty() {
-        let state = AppState::new();
-        let gs = state.global_status();
-        assert_eq!(gs.total_active(), 0);
-        assert!(gs.active_items.is_empty());
-    }
-
-    #[test]
-    fn global_status_running_agent() {
-        let mut state = AppState::new();
-        state
-            .data
-            .latest_agent_runs
-            .insert("wt1".into(), make_agent_run("wt1", AgentRunStatus::Running));
-        let gs = state.global_status();
-        assert_eq!(gs.running_agents, 1);
-        assert_eq!(gs.waiting_agents, 0);
-        assert_eq!(gs.total_active(), 1);
-        assert_eq!(gs.active_items.len(), 1);
-    }
-
-    #[test]
-    fn global_status_waiting_sorted_first() {
-        let mut state = AppState::new();
-        state
-            .data
-            .latest_agent_runs
-            .insert("wt1".into(), make_agent_run("wt1", AgentRunStatus::Running));
-        state.data.latest_agent_runs.insert(
-            "wt2".into(),
-            make_agent_run("wt2", AgentRunStatus::WaitingForFeedback),
-        );
-        let gs = state.global_status();
-        assert_eq!(gs.running_agents, 1);
-        assert_eq!(gs.waiting_agents, 1);
-        assert_eq!(gs.total_active(), 2);
-        // Waiting item should be sorted first
-        assert!(matches!(
-            &gs.active_items[0],
-            GlobalStatusItem::Agent {
-                status: AgentRunStatus::WaitingForFeedback,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn global_status_running_workflow() {
-        let mut state = AppState::new();
-        state.data.latest_workflow_runs_by_worktree.insert(
-            "wt1".into(),
-            make_workflow_run("wt1", WorkflowRunStatus::Running),
-        );
-        let gs = state.global_status();
-        assert_eq!(gs.running_workflows, 1);
-        assert_eq!(gs.waiting_workflows, 0);
-        assert_eq!(gs.total_active(), 1);
-        assert_eq!(gs.active_items.len(), 1);
-        assert!(matches!(
-            &gs.active_items[0],
-            GlobalStatusItem::Workflow {
-                status: WorkflowRunStatus::Running,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn global_status_waiting_workflow_sorted_first() {
-        let mut state = AppState::new();
-        state
-            .data
-            .latest_agent_runs
-            .insert("wt1".into(), make_agent_run("wt1", AgentRunStatus::Running));
-        state.data.latest_workflow_runs_by_worktree.insert(
-            "wt2".into(),
-            make_workflow_run("wt2", WorkflowRunStatus::Waiting),
-        );
-        let gs = state.global_status();
-        assert_eq!(gs.running_agents, 1);
-        assert_eq!(gs.waiting_workflows, 1);
-        assert_eq!(gs.total_active(), 2);
-        // Waiting workflow should be sorted before running agent
-        assert!(matches!(
-            &gs.active_items[0],
-            GlobalStatusItem::Workflow {
-                status: WorkflowRunStatus::Waiting,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn global_status_completed_and_failed_agents_excluded() {
-        let mut state = AppState::new();
-        state.data.latest_agent_runs.insert(
-            "wt1".into(),
-            make_agent_run("wt1", AgentRunStatus::Completed),
-        );
-        state
-            .data
-            .latest_agent_runs
-            .insert("wt2".into(), make_agent_run("wt2", AgentRunStatus::Failed));
-        let gs = state.global_status();
-        assert_eq!(gs.total_active(), 0);
-        assert!(gs.active_items.is_empty());
-    }
-
-    #[test]
-    fn global_status_slug_resolved_from_worktree() {
-        let mut state = AppState::new();
-        state
-            .data
-            .worktrees
-            .push(conductor_core::worktree::Worktree {
-                id: "wt-id-1".into(),
-                repo_id: "repo-1".into(),
-                slug: "feat-my-feature".into(),
-                branch: "feat/my-feature".into(),
-                path: "/tmp/wt".into(),
-                ticket_id: None,
-                status: conductor_core::worktree::WorktreeStatus::Active,
-                created_at: "2026-01-01T00:00:00Z".into(),
-                completed_at: None,
-                model: None,
-                base_branch: None,
-            });
-        state.data.latest_agent_runs.insert(
-            "wt-id-1".into(),
-            make_agent_run("wt-id-1", AgentRunStatus::Running),
-        );
-        let gs = state.global_status();
-        assert_eq!(gs.total_active(), 1);
-        match &gs.active_items[0] {
-            GlobalStatusItem::Agent { worktree_slug, .. } => {
-                assert_eq!(worktree_slug, "feat-my-feature");
-            }
-            _ => panic!("expected Agent item"),
-        }
-    }
-
-    #[test]
-    fn global_status_slug_fallback_to_id_when_not_found() {
-        let mut state = AppState::new();
-        // No worktrees registered — slug_map is empty
-        state.data.latest_agent_runs.insert(
-            "unknown-wt-id".into(),
-            make_agent_run("unknown-wt-id", AgentRunStatus::Running),
-        );
-        let gs = state.global_status();
-        assert_eq!(gs.total_active(), 1);
-        match &gs.active_items[0] {
-            GlobalStatusItem::Agent { worktree_slug, .. } => {
-                assert_eq!(worktree_slug, "unknown-wt-id");
-            }
-            _ => panic!("expected Agent item"),
-        }
-    }
-
     fn make_ticket(id: &str, state: &str) -> conductor_core::tickets::Ticket {
         conductor_core::tickets::Ticket {
             id: id.to_string(),
@@ -2212,235 +1776,6 @@ mod tests {
         state.tick_status_message(Duration::from_secs(4));
         assert!(state.status_message.is_none());
         assert!(state.status_message_at.is_none());
-    }
-
-    /// Verifies that an `AgentRun` with `worktree_id = None` (ephemeral PR run)
-    /// in the active runs map does not panic and produces a `GlobalStatusItem::Agent`
-    /// with an "(ephemeral)" worktree slug.
-    #[test]
-    fn global_status_agent_with_none_worktree_id_uses_ephemeral_slug() {
-        let mut state = AppState::new();
-        let run = conductor_core::agent::AgentRun {
-            id: "run-eph".into(),
-            worktree_id: None,
-            claude_session_id: None,
-            prompt: "ephemeral".into(),
-            status: AgentRunStatus::Running,
-            result_text: None,
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
-            started_at: "2026-01-01T00:00:00Z".into(),
-            ended_at: None,
-            tmux_window: None,
-            log_file: None,
-            model: None,
-            plan: None,
-            parent_run_id: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_input_tokens: None,
-            cache_creation_input_tokens: None,
-            bot_name: None,
-        };
-        // Insert under an arbitrary key to exercise the global_status iteration path.
-        state.data.latest_agent_runs.insert("run-eph".into(), run);
-        let gs = state.global_status();
-        assert_eq!(gs.running_agents, 1);
-        assert_eq!(gs.active_items.len(), 1);
-        match &gs.active_items[0] {
-            GlobalStatusItem::Agent { worktree_slug, .. } => {
-                assert_eq!(worktree_slug, "(ephemeral)");
-            }
-            _ => panic!("expected Agent item"),
-        }
-    }
-
-    /// When a workflow and its spawned agent both exist for the same worktree,
-    /// `global_status()` should produce exactly one item (Workflow) and
-    /// `total_active()` should return 1.
-    #[test]
-    fn global_status_workflow_suppresses_agent_for_same_worktree() {
-        let mut state = AppState::new();
-        state
-            .data
-            .latest_agent_runs
-            .insert("wt1".into(), make_agent_run("wt1", AgentRunStatus::Running));
-        state.data.latest_workflow_runs_by_worktree.insert(
-            "wt1".into(),
-            make_workflow_run("wt1", WorkflowRunStatus::Running),
-        );
-        let gs = state.global_status();
-        assert_eq!(
-            gs.total_active(),
-            1,
-            "should count only one item after dedup"
-        );
-        assert_eq!(gs.active_items.len(), 1);
-        assert!(
-            matches!(
-                &gs.active_items[0],
-                GlobalStatusItem::Workflow {
-                    status: WorkflowRunStatus::Running,
-                    ..
-                }
-            ),
-            "surviving item should be a Workflow variant"
-        );
-        // The agent counter should NOT have been incremented for the suppressed entry.
-        assert_eq!(gs.running_agents, 0);
-        assert_eq!(gs.running_workflows, 1);
-    }
-
-    #[test]
-    fn global_status_non_worktree_workflow_repo_targeted() {
-        let mut state = AppState::new();
-        // Register a repo so repo_slug_map is populated.
-        let repo = conductor_core::repo::Repo {
-            id: "repo-1".into(),
-            slug: "my-repo".into(),
-            local_path: "/tmp/repo".into(),
-            remote_url: String::new(),
-            default_branch: "main".into(),
-            workspace_dir: String::new(),
-            created_at: "2026-01-01T00:00:00Z".into(),
-            model: None,
-            allow_agent_issue_creation: false,
-        };
-        state.data.repos.push(repo);
-        state.data.rebuild_maps();
-
-        let mut run = conductor_core::workflow::WorkflowRun {
-            id: "wfrun-repo".into(),
-            workflow_name: "test-workflow".into(),
-            worktree_id: None,
-            parent_run_id: "root".into(),
-            status: WorkflowRunStatus::Running,
-            dry_run: false,
-            trigger: "manual".into(),
-            started_at: "2026-01-01T00:00:00Z".into(),
-            ended_at: None,
-            result_summary: None,
-            definition_snapshot: None,
-            inputs: std::collections::HashMap::new(),
-            ticket_id: None,
-            repo_id: Some("repo-1".into()),
-            parent_workflow_run_id: None,
-            target_label: None,
-            default_bot_name: None,
-        };
-        state
-            .data
-            .active_non_worktree_workflow_runs
-            .push(run.clone());
-
-        let gs = state.global_status();
-        assert_eq!(gs.running_workflows, 1);
-        assert_eq!(gs.total_active(), 1);
-        match &gs.active_items[0] {
-            GlobalStatusItem::Workflow { context_label, .. } => {
-                assert_eq!(context_label, "my-repo");
-            }
-            _ => panic!("expected Workflow item"),
-        }
-
-        // Unknown repo_id falls back to "(ephemeral)".
-        run.repo_id = Some("unknown-repo".into());
-        state.data.active_non_worktree_workflow_runs[0] = run;
-        let gs2 = state.global_status();
-        match &gs2.active_items[0] {
-            GlobalStatusItem::Workflow { context_label, .. } => {
-                assert_eq!(context_label, "(ephemeral)");
-            }
-            _ => panic!("expected Workflow item"),
-        }
-    }
-
-    #[test]
-    fn global_status_non_worktree_workflow_ticket_targeted() {
-        let mut state = AppState::new();
-        // Register a ticket so ticket_map is populated.
-        state.data.tickets.push(make_ticket("ticket-1", "open"));
-        state.data.rebuild_maps();
-
-        let mut run = conductor_core::workflow::WorkflowRun {
-            id: "wfrun-ticket".into(),
-            workflow_name: "test-workflow".into(),
-            worktree_id: None,
-            parent_run_id: "root".into(),
-            status: WorkflowRunStatus::Running,
-            dry_run: false,
-            trigger: "manual".into(),
-            started_at: "2026-01-01T00:00:00Z".into(),
-            ended_at: None,
-            result_summary: None,
-            definition_snapshot: None,
-            inputs: std::collections::HashMap::new(),
-            ticket_id: Some("ticket-1".into()),
-            repo_id: None,
-            parent_workflow_run_id: None,
-            target_label: None,
-            default_bot_name: None,
-        };
-        state
-            .data
-            .active_non_worktree_workflow_runs
-            .push(run.clone());
-
-        let gs = state.global_status();
-        assert_eq!(gs.running_workflows, 1);
-        assert_eq!(gs.total_active(), 1);
-        match &gs.active_items[0] {
-            GlobalStatusItem::Workflow { context_label, .. } => {
-                // make_ticket sets source_id = id = "ticket-1"
-                assert_eq!(context_label, "#ticket-1");
-            }
-            _ => panic!("expected Workflow item"),
-        }
-
-        // Unknown ticket_id falls back to "(ephemeral)".
-        run.ticket_id = Some("unknown-ticket".into());
-        state.data.active_non_worktree_workflow_runs[0] = run;
-        let gs2 = state.global_status();
-        match &gs2.active_items[0] {
-            GlobalStatusItem::Workflow { context_label, .. } => {
-                assert_eq!(context_label, "(ephemeral)");
-            }
-            _ => panic!("expected Workflow item"),
-        }
-    }
-
-    #[test]
-    fn global_status_non_worktree_workflow_no_context_is_ephemeral() {
-        let mut state = AppState::new();
-        let run = conductor_core::workflow::WorkflowRun {
-            id: "wfrun-eph".into(),
-            workflow_name: "test-workflow".into(),
-            worktree_id: None,
-            parent_run_id: "root".into(),
-            status: WorkflowRunStatus::Running,
-            dry_run: false,
-            trigger: "manual".into(),
-            started_at: "2026-01-01T00:00:00Z".into(),
-            ended_at: None,
-            result_summary: None,
-            definition_snapshot: None,
-            inputs: std::collections::HashMap::new(),
-            ticket_id: None,
-            repo_id: None,
-            parent_workflow_run_id: None,
-            target_label: None,
-            default_bot_name: None,
-        };
-        state.data.active_non_worktree_workflow_runs.push(run);
-        let gs = state.global_status();
-        assert_eq!(gs.running_workflows, 1);
-        match &gs.active_items[0] {
-            GlobalStatusItem::Workflow { context_label, .. } => {
-                assert_eq!(context_label, "(ephemeral)");
-            }
-            _ => panic!("expected Workflow item"),
-        }
     }
 
     #[test]
@@ -3006,5 +2341,72 @@ mod tests {
         let rows = state.visible_workflow_run_rows();
         assert_eq!(rows.len(), 1);
         assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
+    }
+
+    // --- ColumnFocus navigation tests ---
+
+    #[test]
+    fn focused_index_and_len_workflow_column_defs() {
+        let mut state = AppState::new();
+        state.column_focus = ColumnFocus::Workflow;
+        state.workflows_focus = WorkflowsFocus::Defs;
+        state.workflow_def_index = 2;
+        // With no defs loaded the len is 0; the important thing is the index
+        // comes from workflow_def_index (not from a content-column list).
+        let (idx, len) = state.focused_index_and_len();
+        assert_eq!(idx, 2);
+        assert_eq!(len, state.data.workflow_defs.len());
+    }
+
+    #[test]
+    fn focused_index_and_len_workflow_column_runs() {
+        let mut state = AppState::new();
+        state.column_focus = ColumnFocus::Workflow;
+        state.workflows_focus = WorkflowsFocus::Runs;
+        state.workflow_run_index = 1;
+        state.data.workflow_runs = vec![make_wf_run_full("r1", WorkflowRunStatus::Running, None)];
+        let (idx, len) = state.focused_index_and_len();
+        assert_eq!(idx, 1);
+        assert_eq!(len, 1); // one visible row
+    }
+
+    #[test]
+    fn focused_index_and_len_content_column_not_affected_by_workflow_index() {
+        let mut state = AppState::new();
+        state.column_focus = ColumnFocus::Content;
+        state.workflows_focus = WorkflowsFocus::Runs;
+        state.workflow_run_index = 99; // should be ignored — Dashboard/Repos is the default view
+        let (idx, len) = state.focused_index_and_len();
+        assert_eq!(idx, 0);
+        assert_eq!(len, 0); // no repos loaded
+    }
+
+    #[test]
+    fn set_focused_index_workflow_column_defs() {
+        let mut state = AppState::new();
+        state.column_focus = ColumnFocus::Workflow;
+        state.workflows_focus = WorkflowsFocus::Defs;
+        state.set_focused_index(3);
+        assert_eq!(state.workflow_def_index, 3);
+    }
+
+    #[test]
+    fn set_focused_index_workflow_column_runs() {
+        let mut state = AppState::new();
+        state.column_focus = ColumnFocus::Workflow;
+        state.workflows_focus = WorkflowsFocus::Runs;
+        state.set_focused_index(7);
+        assert_eq!(state.workflow_run_index, 7);
+    }
+
+    #[test]
+    fn set_focused_index_content_column_does_not_touch_workflow_indices() {
+        let mut state = AppState::new();
+        state.column_focus = ColumnFocus::Content;
+        state.workflows_focus = WorkflowsFocus::Defs;
+        state.workflow_def_index = 5;
+        state.set_focused_index(2); // targets repo_index (Dashboard default)
+        assert_eq!(state.workflow_def_index, 5); // unchanged
+        assert_eq!(state.repo_index, 2);
     }
 }
