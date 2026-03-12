@@ -322,7 +322,7 @@ pub fn render_ticket_info(
         labels_line,
         Line::from(vec![
             Span::styled("  URL:       ", label_style),
-            Span::styled(&ticket.url, Style::default().fg(theme.label_accent)),
+            Span::styled(&ticket.url, Style::default().fg(theme.label_url)),
         ]),
         Line::from(""),
     ];

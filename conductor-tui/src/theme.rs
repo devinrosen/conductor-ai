@@ -16,6 +16,7 @@ pub struct Theme {
     pub label_warning: Color,    // Yellow    — inputs badge, retries, running state
     pub label_error: Color,      // Red       — failures, error snippets
     pub label_info: Color,       // Cyan      — tool_use events, agent activity
+    pub label_url: Color,        // Blue      — hyperlinks (ticket URLs, etc.)
     pub highlight_bg: Color,     // DarkGray  — selected row background
     pub group_header: Color,     // Yellow    — repo/section group headers
 }
@@ -36,6 +37,7 @@ impl Default for Theme {
             label_warning: Color::Yellow,
             label_error: Color::Red,
             label_info: Color::Cyan,
+            label_url: Color::Blue,
             highlight_bg: Color::DarkGray,
             group_header: Color::Yellow,
         }
