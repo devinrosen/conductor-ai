@@ -10,10 +10,10 @@ workflow ticket-to-pr-auto-merge {
   }
 
   call workflow ticket-to-pr {
-    as = "developer"
     inputs {
       ticket_id = "{{ticket_id}}"
     }
+    as = "developer"
   }
 
   gate pr_checks {
