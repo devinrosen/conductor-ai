@@ -1154,7 +1154,7 @@ fn main() -> Result<()> {
                 // Try new .wf files first, fall back to legacy .md
                 let (wf_defs, wf_warnings) = WorkflowManager::list_defs(&wt_path, &repo_path)?;
                 for w in &wf_warnings {
-                    eprintln!("warning: {w}");
+                    eprintln!("warning: Failed to parse {}: {}", w.file, w.message);
                 }
                 if !wf_defs.is_empty() {
                     for def in &wf_defs {

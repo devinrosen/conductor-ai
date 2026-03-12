@@ -30,7 +30,7 @@ use crate::schema_config::{self, OutputSchema};
 pub use crate::workflow_dsl::{
     collect_agent_names, collect_workflow_refs, detect_workflow_cycles,
     validate_workflow_semantics, AgentRef, InputDecl, ValidationError, ValidationReport,
-    WorkflowDef, WorkflowTrigger, MAX_WORKFLOW_DEPTH,
+    WorkflowDef, WorkflowTrigger, WorkflowWarning, MAX_WORKFLOW_DEPTH,
 };
 use crate::worktree::WorktreeManager;
 
@@ -1179,13 +1179,13 @@ impl<'a> WorkflowManager<'a> {
     /// Wraps `workflow_dsl::load_workflow_defs` so consumers don't need to
     /// reach into the low-level DSL module directly.
     ///
-    /// Returns `(defs, warnings)` — warnings contain one message per `.wf`
-    /// file that failed to parse. Successfully-parsed definitions are always
-    /// returned even when some files are broken.
+    /// Returns `(defs, warnings)` — warnings contain one [`WorkflowWarning`]
+    /// per `.wf` file that failed to parse. Successfully-parsed definitions are
+    /// always returned even when some files are broken.
     pub fn list_defs(
         worktree_path: &str,
         repo_path: &str,
-    ) -> Result<(Vec<WorkflowDef>, Vec<String>)> {
+    ) -> Result<(Vec<WorkflowDef>, Vec<WorkflowWarning>)> {
         workflow_dsl::load_workflow_defs(worktree_path, repo_path)
     }
 

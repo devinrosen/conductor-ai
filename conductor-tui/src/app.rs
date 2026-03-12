@@ -14,7 +14,7 @@ use conductor_core::github;
 use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
-use conductor_core::workflow::MetadataEntry;
+use conductor_core::workflow::{MetadataEntry, WorkflowWarning};
 use conductor_core::worktree::WorktreeManager;
 
 use crate::action::{Action, GithubDiscoverPayload};
@@ -62,6 +62,22 @@ fn wrap_decrement(index: &mut usize, len: usize) {
 
 /// Format structured [`MetadataEntry`] values into a fixed-width text block
 /// suitable for the TUI modal.
+/// Build a status-bar message for workflow parse warnings, or `None` if there are none.
+fn workflow_parse_warning_message(warnings: &[WorkflowWarning]) -> Option<String> {
+    if warnings.is_empty() {
+        return None;
+    }
+    let count = warnings.len();
+    let label = warnings
+        .iter()
+        .map(|w| w.file.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "⚠ {count} workflow file(s) failed to parse: {label}"
+    ))
+}
+
 fn format_metadata_entries(entries: &[MetadataEntry]) -> String {
     let pad = entries
         .iter()
@@ -674,26 +690,9 @@ impl App {
                 self.state.data.step_agent_events = payload.step_agent_events;
                 self.state.data.step_agent_run = payload.step_agent_run;
                 self.state.init_collapse_state();
-                if !payload.workflow_parse_warnings.is_empty() {
-                    let count = payload.workflow_parse_warnings.len();
-                    // Warning format: "Failed to parse <filename>: <error>"
-                    let names: Vec<&str> = payload
-                        .workflow_parse_warnings
-                        .iter()
-                        .filter_map(|w| {
-                            w.strip_prefix("Failed to parse ")
-                                .and_then(|s| s.split(": ").next())
-                                .or_else(|| w.split_whitespace().last())
-                        })
-                        .collect();
-                    let label = if names.is_empty() {
-                        format!("{count} workflow(s) failed to parse")
-                    } else {
-                        names.join(", ")
-                    };
-                    self.state.status_message = Some(format!(
-                        "⚠ {count} workflow file(s) failed to parse: {label}"
-                    ));
+                if let Some(msg) = workflow_parse_warning_message(&payload.workflow_parse_warnings)
+                {
+                    self.state.status_message = Some(msg);
                 }
                 self.clamp_workflow_indices();
                 return matches!(self.state.view, View::Workflows | View::WorkflowRunDetail);
@@ -4741,25 +4740,8 @@ impl App {
                 let (defs, warnings) =
                     WorkflowManager::list_defs(&wt_path, &rp).unwrap_or_default();
                 self.state.data.workflow_defs = defs;
-                if !warnings.is_empty() {
-                    let count = warnings.len();
-                    // Warning format: "Failed to parse <filename>: <error>"
-                    let names: Vec<&str> = warnings
-                        .iter()
-                        .filter_map(|w| {
-                            w.strip_prefix("Failed to parse ")
-                                .and_then(|s| s.split(": ").next())
-                                .or_else(|| w.split_whitespace().last())
-                        })
-                        .collect();
-                    let label = if names.is_empty() {
-                        format!("{count} workflow(s) failed to parse")
-                    } else {
-                        names.join(", ")
-                    };
-                    self.state.status_message = Some(format!(
-                        "⚠ {count} workflow file(s) failed to parse: {label}"
-                    ));
+                if let Some(msg) = workflow_parse_warning_message(&warnings) {
+                    self.state.status_message = Some(msg);
                 }
             }
         } else {

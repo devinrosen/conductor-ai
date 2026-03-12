@@ -94,7 +94,7 @@ pub async fn list_workflow_defs(
     let (defs, warnings) =
         WorkflowManager::list_defs(&wt.path, &repo.local_path).unwrap_or_default();
     for w in &warnings {
-        tracing::warn!("{w}");
+        tracing::warn!("Failed to parse {}: {}", w.file, w.message);
     }
     let summaries: Vec<WorkflowDefSummary> = defs.iter().map(WorkflowDefSummary::from).collect();
     Ok(Json(summaries))

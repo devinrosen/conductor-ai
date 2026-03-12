@@ -70,6 +70,15 @@ impl WorkflowDef {
     }
 }
 
+/// A structured parse warning produced when a `.wf` file fails to load.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowWarning {
+    /// The filename (e.g. `bad.wf`) that failed to parse.
+    pub file: String,
+    /// Human-readable description of the parse error.
+    pub message: String,
+}
+
 /// Trigger type for when a workflow should run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1319,13 +1328,13 @@ pub fn parse_workflow_str(input: &str, source_path: &str) -> Result<WorkflowDef>
 
 /// Load all workflow definitions from `.conductor/workflows/*.wf`.
 ///
-/// Returns `(defs, warnings)` where `warnings` contains one message per file
-/// that failed to parse. Callers receive all successfully-parsed definitions
-/// even when some files are broken.
+/// Returns `(defs, warnings)` where `warnings` contains one [`WorkflowWarning`]
+/// per file that failed to parse. Callers receive all successfully-parsed
+/// definitions even when some files are broken.
 pub fn load_workflow_defs(
     worktree_path: &str,
     repo_path: &str,
-) -> Result<(Vec<WorkflowDef>, Vec<String>)> {
+) -> Result<(Vec<WorkflowDef>, Vec<WorkflowWarning>)> {
     let workflows_dir = match resolve_conductor_subdir(worktree_path, repo_path, "workflows") {
         Some(dir) => dir,
         None => return Ok((Vec::new(), Vec::new())),
@@ -1348,13 +1357,16 @@ pub fn load_workflow_defs(
         match parse_workflow_file(&path) {
             Ok(def) => defs.push(def),
             Err(e) => {
-                let filename = path
+                let file = path
                     .file_name()
                     .unwrap_or(path.as_os_str())
-                    .to_string_lossy();
-                let msg = format!("Failed to parse {filename}: {e}");
-                tracing::warn!("{msg}");
-                warnings.push(msg);
+                    .to_string_lossy()
+                    .into_owned();
+                tracing::warn!("Failed to parse {file}: {e}");
+                warnings.push(WorkflowWarning {
+                    file,
+                    message: e.to_string(),
+                });
             }
         }
     }
@@ -2070,13 +2082,9 @@ workflow ticket-to-pr {
         assert_eq!(defs[0].name, "good");
         // One warning for the bad file
         assert_eq!(warnings.len(), 1);
-        // Warning includes the filename without debug-format quotes
-        assert!(warnings[0].contains("bad.wf"), "warning: {}", warnings[0]);
-        assert!(
-            !warnings[0].contains('"'),
-            "warning should not contain quotes: {}",
-            warnings[0]
-        );
+        // Warning carries the filename in the structured `file` field
+        assert_eq!(warnings[0].file, "bad.wf");
+        assert!(!warnings[0].message.is_empty());
     }
 
     #[test]
