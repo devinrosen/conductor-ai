@@ -3658,4 +3658,85 @@ workflow test {
             "error should name the unknown target"
         );
     }
+
+    #[test]
+    fn test_parse_gate_review_decision_mode() {
+        let input = r#"
+            workflow test {
+                meta { targets = ["worktree"] }
+                gate pr_approval {
+                    mode = "review_decision"
+                    timeout = "1h"
+                }
+            }
+        "#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let node = def.body.first().unwrap();
+        match node {
+            WorkflowNode::Gate(g) => {
+                assert_eq!(g.approval_mode, ApprovalMode::ReviewDecision);
+                assert_eq!(g.gate_type, GateType::PrApproval);
+            }
+            other => panic!("Expected Gate node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_gate_min_approvals_mode_explicit() {
+        let input = r#"
+            workflow test {
+                meta { targets = ["worktree"] }
+                gate pr_approval {
+                    mode = "min_approvals"
+                    min_approvals = 2
+                    timeout = "1h"
+                }
+            }
+        "#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let node = def.body.first().unwrap();
+        match node {
+            WorkflowNode::Gate(g) => {
+                assert_eq!(g.approval_mode, ApprovalMode::MinApprovals);
+                assert_eq!(g.min_approvals, 2);
+            }
+            other => panic!("Expected Gate node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_gate_invalid_mode_rejected() {
+        let input = r#"
+            workflow test {
+                gate pr_approval {
+                    mode = "banana"
+                    timeout = "1h"
+                }
+            }
+        "#;
+        let result = parse_workflow_str(input, "test.wf");
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(err.contains("Invalid mode"), "got: {err}");
+    }
+
+    #[test]
+    fn test_parse_gate_review_decision_with_min_approvals_rejected() {
+        let input = r#"
+            workflow test {
+                gate pr_approval {
+                    mode = "review_decision"
+                    min_approvals = 2
+                    timeout = "1h"
+                }
+            }
+        "#;
+        let result = parse_workflow_str(input, "test.wf");
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("Cannot specify both"),
+            "expected conflict error, got: {err}"
+        );
+    }
 }
