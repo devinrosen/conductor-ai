@@ -1,5 +1,24 @@
 use std::path::PathBuf;
 
+/// Expand a leading `~` in a path string to the user's home directory.
+///
+/// Returns `Err` with a descriptive message if `~` is present but the home
+/// directory cannot be determined. Paths that do not start with `~` are
+/// returned unchanged as a `PathBuf`.
+pub fn expand_tilde(path: &str) -> Result<PathBuf, String> {
+    if let Some(rest) = path.strip_prefix("~/") {
+        let home = dirs::home_dir()
+            .ok_or_else(|| "cannot expand '~': home directory is unavailable".to_string())?;
+        Ok(home.join(rest))
+    } else if path == "~" {
+        let home = dirs::home_dir()
+            .ok_or_else(|| "cannot expand '~': home directory is unavailable".to_string())?;
+        Ok(home)
+    } else {
+        Ok(PathBuf::from(path))
+    }
+}
+
 /// Resolve a `.conductor/<subdir>` directory, preferring `worktree_path` over `repo_path`.
 ///
 /// Returns `Some(path)` for the first existing directory found, or `None` if neither exists.

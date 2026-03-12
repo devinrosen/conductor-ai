@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use ratatui::style::Color;
 
 #[derive(Debug, Clone, Copy)]
@@ -108,6 +110,54 @@ impl Theme {
         }
     }
 
+    /// Load a theme from a base16 TOML file.
+    ///
+    /// The file must contain entries for the required base16 slots. Any missing
+    /// slot or invalid hex value returns an `Err` naming the offending field.
+    pub fn from_base16_file(path: &Path) -> Result<Self, String> {
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed to read theme file {}: {e}", path.display()))?;
+        let value: toml::Value = toml::from_str(&contents)
+            .map_err(|e| format!("failed to parse theme file {}: {e}", path.display()))?;
+
+        let get = |slot: &str| -> Result<Color, String> {
+            let hex = value
+                .get(slot)
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("missing required base16 slot \"{slot}\" in theme file"))?;
+            parse_hex_color(slot, hex)
+        };
+
+        let base02 = get("base02")?;
+        let base03 = get("base03")?;
+        let base05 = get("base05")?;
+        let base08 = get("base08")?;
+        let base0a = get("base0A")?;
+        let base0b = get("base0B")?;
+        let base0c = get("base0C")?;
+        let base0d = get("base0D")?;
+        let base0e = get("base0E")?;
+
+        Ok(Self {
+            highlight_bg: base02,
+            border_inactive: base03,
+            status_cancelled: base03,
+            label_secondary: base03,
+            label_primary: base05,
+            status_failed: base08,
+            label_error: base08,
+            status_running: base0a,
+            label_warning: base0a,
+            label_accent: base0a,
+            status_completed: base0b,
+            border_focused: base0c,
+            group_header: base0c,
+            label_info: base0d,
+            label_url: base0d,
+            status_waiting: base0e,
+        })
+    }
+
     /// Catppuccin Mocha — dark pastel palette (catppuccin.com)
     pub fn catppuccin_mocha() -> Self {
         Self {
@@ -128,5 +178,125 @@ impl Theme {
             highlight_bg: Color::Rgb(0x31, 0x32, 0x44),     // Surface0
             group_header: Color::Rgb(0xB4, 0xBE, 0xFE),     // Lavender
         }
+    }
+}
+
+/// Parse a 6-character hex color string (with optional `#` prefix) into `Color::Rgb`.
+///
+/// Returns a descriptive `Err` naming the offending slot on failure.
+fn parse_hex_color(slot: &str, hex: &str) -> Result<Color, String> {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() != 6 {
+        return Err(format!(
+            "{slot}: invalid hex '{hex}' (expected 6 hex digits)"
+        ));
+    }
+    let r =
+        u8::from_str_radix(&hex[0..2], 16).map_err(|_| format!("{slot}: invalid hex '{hex}'"))?;
+    let g =
+        u8::from_str_radix(&hex[2..4], 16).map_err(|_| format!("{slot}: invalid hex '{hex}'"))?;
+    let b =
+        u8::from_str_radix(&hex[4..6], 16).map_err(|_| format!("{slot}: invalid hex '{hex}'"))?;
+    Ok(Color::Rgb(r, g, b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_valid_theme(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("theme.toml");
+        std::fs::write(
+            &path,
+            r##"
+base00 = "#1d2021"
+base01 = "#282828"
+base02 = "#32302f"
+base03 = "#504945"
+base04 = "#bdae93"
+base05 = "#d5c4a1"
+base06 = "#ebdbb2"
+base07 = "#fbf1c7"
+base08 = "#fb4934"
+base09 = "#fe8019"
+base0A = "#fabd2f"
+base0B = "#b8bb26"
+base0C = "#8ec07c"
+base0D = "#83a598"
+base0E = "#d3869b"
+base0F = "#d65d0e"
+"##,
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn test_from_base16_file_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_valid_theme(dir.path());
+        let theme = Theme::from_base16_file(&path).expect("should parse valid theme");
+        // base02 = #32302f → highlight_bg
+        assert_eq!(theme.highlight_bg, Color::Rgb(0x32, 0x30, 0x2f));
+        // base0B = #b8bb26 → status_completed
+        assert_eq!(theme.status_completed, Color::Rgb(0xb8, 0xbb, 0x26));
+        // base0A = #fabd2f → status_running
+        assert_eq!(theme.status_running, Color::Rgb(0xfa, 0xbd, 0x2f));
+    }
+
+    #[test]
+    fn test_from_base16_file_missing_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("theme.toml");
+        // Omit base0B (required)
+        std::fs::write(
+            &path,
+            r##"
+base02 = "#32302f"
+base03 = "#504945"
+base05 = "#d5c4a1"
+base08 = "#fb4934"
+base0A = "#fabd2f"
+base0C = "#8ec07c"
+base0D = "#83a598"
+base0E = "#d3869b"
+"##,
+        )
+        .unwrap();
+        let err = Theme::from_base16_file(&path).unwrap_err();
+        assert!(
+            err.contains("base0B"),
+            "error should name missing slot, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_from_base16_file_invalid_hex() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("theme.toml");
+        std::fs::write(
+            &path,
+            r##"
+base02 = "#32302f"
+base03 = "#504945"
+base05 = "#d5c4a1"
+base08 = "gg0000"
+base0A = "#fabd2f"
+base0B = "#b8bb26"
+base0C = "#8ec07c"
+base0D = "#83a598"
+base0E = "#d3869b"
+"##,
+        )
+        .unwrap();
+        let err = Theme::from_base16_file(&path).unwrap_err();
+        assert!(
+            err.contains("base08"),
+            "error should name offending slot, got: {err}"
+        );
+        assert!(
+            err.contains("gg0000"),
+            "error should include bad hex value, got: {err}"
+        );
     }
 }

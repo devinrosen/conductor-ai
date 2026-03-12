@@ -109,6 +109,9 @@ pub struct GeneralConfig {
     /// Omit to use the default conductor theme.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// Path to a base16 TOML theme file. Takes precedence over `theme` when both are set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +159,7 @@ impl Default for GeneralConfig {
             model: None,
             inject_startup_context: true,
             theme: None,
+            theme_path: None,
         }
     }
 }
