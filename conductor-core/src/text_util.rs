@@ -8,9 +8,11 @@ pub fn resolve_conductor_subdir(
     repo_path: &str,
     subdir: &str,
 ) -> Option<PathBuf> {
-    let worktree_dir = PathBuf::from(worktree_path).join(".conductor").join(subdir);
-    if worktree_dir.is_dir() {
-        return Some(worktree_dir);
+    if !worktree_path.is_empty() {
+        let worktree_dir = PathBuf::from(worktree_path).join(".conductor").join(subdir);
+        if worktree_dir.is_dir() {
+            return Some(worktree_dir);
+        }
     }
     let repo_dir = PathBuf::from(repo_path).join(".conductor").join(subdir);
     if repo_dir.is_dir() {
@@ -65,6 +67,37 @@ pub fn parse_frontmatter(content: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_resolve_conductor_subdir_empty_worktree_path() {
+        let repo_dir = TempDir::new().unwrap();
+        let workflows = repo_dir.path().join(".conductor").join("workflows");
+        fs::create_dir_all(&workflows).unwrap();
+
+        // Empty worktree_path must not be resolved; repo_path should be used instead.
+        let result = resolve_conductor_subdir("", repo_dir.path().to_str().unwrap(), "workflows");
+        assert_eq!(result, Some(workflows));
+    }
+
+    #[test]
+    fn test_resolve_conductor_subdir_nonempty_worktree_path_preferred() {
+        let repo_dir = TempDir::new().unwrap();
+        let wt_dir = TempDir::new().unwrap();
+        let repo_workflows = repo_dir.path().join(".conductor").join("workflows");
+        let wt_workflows = wt_dir.path().join(".conductor").join("workflows");
+        fs::create_dir_all(&repo_workflows).unwrap();
+        fs::create_dir_all(&wt_workflows).unwrap();
+
+        // When both exist, worktree_path should be preferred.
+        let result = resolve_conductor_subdir(
+            wt_dir.path().to_str().unwrap(),
+            repo_dir.path().to_str().unwrap(),
+            "workflows",
+        );
+        assert_eq!(result, Some(wt_workflows));
+    }
 
     #[test]
     fn test_truncate_str_multibyte() {
