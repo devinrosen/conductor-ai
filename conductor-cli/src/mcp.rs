@@ -798,6 +798,13 @@ fn conductor_tools() -> Vec<Tool> {
                         "description": "Input key=value pairs (optional)"
                     }),
                 );
+                props.insert(
+                    "dry_run".into(),
+                    json!({
+                        "type": "boolean",
+                        "description": "If true, run in dry-run mode: gates are auto-approved, committing agents are prefixed with 'DO NOT commit or push', and the {{dry_run}} template variable is set to \"true\". No code is pushed and no GitHub side effects occur."
+                    }),
+                );
                 let mut s = serde_json::Map::new();
                 s.insert("type".into(), Value::String("object".into()));
                 s.insert("properties".into(), Value::Object(props));
@@ -1382,6 +1389,10 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
     let workflow_name = require_arg!(args, "workflow");
     let repo_slug = require_arg!(args, "repo");
     let worktree_slug = get_arg(args, "worktree");
+    let dry_run = args
+        .get("dry_run")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     // Extract optional inputs object
     let inputs: HashMap<String, String> = match args.get("inputs") {
@@ -1446,7 +1457,10 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
         ticket_id: None,
         repo_id: Some(repo.id),
         model: None,
-        exec_config: WorkflowExecConfig::default(),
+        exec_config: WorkflowExecConfig {
+            dry_run,
+            ..WorkflowExecConfig::default()
+        },
         inputs,
         target_label: Some(repo_slug.to_string()),
         run_id_notify: Some(Arc::clone(&notify_pair)),
@@ -1500,7 +1514,7 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
     };
 
     tool_ok(format!(
-        "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nstatus: pending\nPoll progress with conductor_get_run."
+        "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nstatus: pending\ndry_run: {dry_run}\nPoll progress with conductor_get_run."
     ))
 }
 
@@ -2356,8 +2370,9 @@ mod tests {
         // a full end-to-end workflow execution.
         let workflow_name = "my-wf";
         let run_id = "01HXXXXXXXXXXXXXXXXXXXXXXX";
+        let dry_run = false;
         let response = format!(
-            "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nstatus: pending\nPoll progress with conductor_get_run."
+            "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nstatus: pending\ndry_run: {dry_run}\nPoll progress with conductor_get_run."
         );
         assert!(
             response.contains("status: pending"),
@@ -2366,6 +2381,37 @@ mod tests {
         assert!(
             response.contains(&format!("run_id: {run_id}")),
             "response must include run_id: {response}"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_run_workflow_dry_run_flag_parsed() {
+        let (_f, db) = make_test_db();
+        // dry_run: true should be accepted and reach the repo lookup (not fail on arg parsing)
+        let mut args = serde_json::Map::new();
+        args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
+        args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
+        args.insert("dry_run".to_string(), Value::Bool(true));
+        let result = dispatch_tool(&db, "conductor_run_workflow", &args);
+        // Should fail at repo lookup (ghost-repo not registered), not at arg parsing
+        assert_eq!(result.is_error, Some(true));
+        let content = format!("{result:?}");
+        assert!(
+            !content.contains("dry_run"),
+            "Should not fail on dry_run parsing; got: {content}"
+        );
+
+        // dry_run as a non-boolean (string) should be tolerated via unwrap_or(false)
+        let mut args2 = serde_json::Map::new();
+        args2.insert("workflow".to_string(), Value::String("my-wf".to_string()));
+        args2.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
+        args2.insert("dry_run".to_string(), Value::String("true".to_string()));
+        let result2 = dispatch_tool(&db, "conductor_run_workflow", &args2);
+        assert_eq!(result2.is_error, Some(true));
+        let content2 = format!("{result2:?}");
+        assert!(
+            !content2.contains("dry_run"),
+            "Non-boolean dry_run should be ignored (unwrap_or(false)); got: {content2}"
         );
     }
 
