@@ -9,36 +9,28 @@ Run `conductor workflow validate`, interpret each error type, and offer actionab
 
 ## Steps
 
-### 0. Resolve target directory and run init preflight
+### 0. Resolve target directory and pre-flight checks
 
-**Determine the target directory:**
-- If the user provided a directory path as an argument, use it as `<target_dir>`
-- Otherwise default to CWD: `$(pwd)`
+**Resolve target directory:** If the user provided a directory path as an argument, use it. Otherwise use the current working directory.
 
-**Validate it is a git repo root:**
-```bash
-git -C <target_dir> rev-parse --show-toplevel
-```
-- If the command fails, stop and report: "`<target_dir>` is not inside a git repository."
-- If the returned path does not equal `<target_dir>`, stop and report: "`<target_dir>` is a subdirectory — please pass the repo root."
+Validate the target directory is the root of a git repo:
 
-**Auto-init preflight (silent):**
 ```bash
-[ -d <target_dir>/.conductor/agents ] && [ -d <target_dir>/.conductor/workflows ]
-```
-If either is missing, silently run the init steps (do not ask the user — mention it in the final summary):
-```bash
-mkdir -p <target_dir>/.conductor/agents
-mkdir -p <target_dir>/.conductor/workflows
-mkdir -p <target_dir>/.conductor/prompts
-mkdir -p <target_dir>/.conductor/schemas
-for dir in agents workflows prompts schemas; do
-  t="<target_dir>/.conductor/$dir"
-  [ -z "$(ls -A "$t" 2>/dev/null)" ] && touch "$t/.gitkeep"
-done
+git -C <target_dir> rev-parse --show-toplevel 2>/dev/null
 ```
 
-**All file paths in subsequent steps use `<target_dir>` as the prefix.**
+- If the command fails, stop and tell the user: "The path `<target_dir>` is not a git repository. Please provide the root of a git repo."
+- If it succeeds but the output path differs from `<target_dir>`, stop and tell the user: "The path `<target_dir>` is inside a git repo but is not its root (root is `<output>`). Please provide the repo root."
+
+All subsequent paths in this skill are relative to `<target_dir>`.
+
+**Ensure `.conductor/` exists:** Check whether the required subdirectories are present:
+
+```bash
+ls <target_dir>/.conductor/agents/ <target_dir>/.conductor/workflows/ 2>/dev/null || echo "MISSING"
+```
+
+If either directory is missing, invoke `/conductor-workflow-init <target_dir>` (silently, no confirmation prompt needed) to create the full directory structure before continuing.
 
 ### 1. Determine which workflow(s) to validate
 
@@ -50,23 +42,25 @@ ls <target_dir>/.conductor/workflows/
 
 ### 2. Run validation
 
-For a specific workflow:
+> **Note:** `conductor workflow validate` currently requires a registered repo slug and worktree slug (see [issue #568](https://github.com/devinrosen/conductor-ai/issues/568) for path-based validation). Until `--path` is implemented, validation must be run from within a registered worktree. If the target repo is not registered in conductor, skip to step 5 and report that validation could not be run, pointing the user at issue #568.
+
+For a specific workflow (run from within a registered worktree):
 ```bash
-conductor workflow validate --path <target_dir> <name>
+conductor workflow validate <repo-slug> <worktree-slug> <name>
 ```
 
-For all workflows (iterate over each `.wf` file):
+For all workflows:
 ```bash
 for f in <target_dir>/.conductor/workflows/*.wf; do
   name="${f%.wf}"; name="${name##*/}"
   echo "=== $name ==="
-  conductor workflow validate --path <target_dir> "$name"
+  conductor workflow validate <repo-slug> <worktree-slug> "$name"
 done
 ```
 
 If `conductor` is not on PATH, use:
 ```bash
-cargo run --bin conductor -- workflow validate --path <target_dir> <name>
+cargo run --bin conductor -- workflow validate <repo-slug> <worktree-slug> <name>
 ```
 
 ### 3. Interpret each error
@@ -215,7 +209,7 @@ For each error, offer to apply the fix directly. Make the smallest correct chang
 
 ### 5. Confirm clean
 
-Re-run `conductor workflow validate --path <target_dir> <name>` after all fixes. Report the final result:
+Re-run `conductor workflow validate <repo-slug> <worktree-slug> <name>` after all fixes. Report the final result:
 - If clean: "Validation passed — no errors found."
 - If still failing: iterate until clean or ask the user for clarification.
 
@@ -224,4 +218,4 @@ Re-run `conductor workflow validate --path <target_dir> <name>` after all fixes.
 - Validation is always safe to run — it reads files and checks structure, it does not execute any agents or modify state.
 - If `conductor` is not built yet, run `cargo build --bin conductor` first.
 - `conductor workflow validate` checks agents, snippets, and cycles. It does not check that agent prompts make semantic sense — that requires reading the individual `.md` files.
-- After validation passes, suggest a dry run to verify runtime behavior: `conductor workflow run <name> --dry-run`. Note: `--dry-run` does not yet support `--path`; if the workflow lives outside the current repo, `cd` to `<target_dir>` first.
+- After validation passes, suggest a dry run to verify runtime behavior: `conductor workflow run <name> --dry-run`.

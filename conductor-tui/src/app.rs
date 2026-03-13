@@ -376,7 +376,9 @@ impl App {
                 self.state.column_focus = crate::state::ColumnFocus::Content;
             }
             Action::FocusWorkflowColumn => {
-                self.state.column_focus = crate::state::ColumnFocus::Workflow;
+                if self.state.workflow_column_visible {
+                    self.state.column_focus = crate::state::ColumnFocus::Workflow;
+                }
             }
             Action::ToggleWorkflowColumn => {
                 self.state.workflow_column_visible = !self.state.workflow_column_visible;
@@ -1284,7 +1286,9 @@ impl App {
             WorkflowsFocus::Runs => {
                 let visible = self.state.visible_workflow_run_rows();
                 if let Some(row) = visible.get(self.state.workflow_run_index) {
-                    let target_id = row.run_id().to_string();
+                    let Some(target_id) = row.run_id().map(|s| s.to_string()) else {
+                        return; // header row — Enter is a no-op
+                    };
                     if let Some(run) = self
                         .state
                         .data
@@ -6251,5 +6255,28 @@ mod tests {
         let mut idx = 0;
         wrap_decrement(&mut idx, 0);
         assert_eq!(idx, 0);
+    }
+
+    #[test]
+    fn test_focus_workflow_column_ignored_when_hidden() {
+        let mut state = crate::state::AppState::new();
+        state.workflow_column_visible = false;
+        state.column_focus = crate::state::ColumnFocus::Content;
+        // FocusWorkflowColumn should be a no-op when column is hidden
+        if state.workflow_column_visible {
+            state.column_focus = crate::state::ColumnFocus::Workflow;
+        }
+        assert_eq!(state.column_focus, crate::state::ColumnFocus::Content);
+    }
+
+    #[test]
+    fn test_focus_workflow_column_allowed_when_visible() {
+        let mut state = crate::state::AppState::new();
+        state.workflow_column_visible = true;
+        state.column_focus = crate::state::ColumnFocus::Content;
+        if state.workflow_column_visible {
+            state.column_focus = crate::state::ColumnFocus::Workflow;
+        }
+        assert_eq!(state.column_focus, crate::state::ColumnFocus::Workflow);
     }
 }

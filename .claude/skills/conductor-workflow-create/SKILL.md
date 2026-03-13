@@ -9,39 +9,30 @@ Guide the user through creating a new conductor workflow `.wf` file from scratch
 
 ## Steps
 
-### 0. Resolve target directory and run init preflight
+### 0. Resolve target directory and pre-flight checks
 
-**Determine the target directory:**
-- If the user provided a directory path as an argument (e.g., `/conductor-workflow-create ~/my-project make-pr`), use it as `<target_dir>`
-- Otherwise default to CWD: `$(pwd)`
+**Resolve target directory:** If the user provided a directory path as an argument, use it. Otherwise use the current working directory.
 
-**Validate it is a git repo root:**
-```bash
-git -C <target_dir> rev-parse --show-toplevel
-```
-- If the command fails, stop and report: "`<target_dir>` is not inside a git repository."
-- If the returned path does not equal `<target_dir>`, stop and report: "`<target_dir>` is a subdirectory — please pass the repo root."
+Validate the target directory is the root of a git repo:
 
-**Auto-init preflight (silent):**
-Check whether `.conductor/agents/` and `.conductor/workflows/` both exist:
 ```bash
-[ -d <target_dir>/.conductor/agents ] && [ -d <target_dir>/.conductor/workflows ]
-```
-If either is missing, silently run the init steps (do not ask the user — just do it and mention it in the final summary):
-```bash
-mkdir -p <target_dir>/.conductor/agents
-mkdir -p <target_dir>/.conductor/workflows
-mkdir -p <target_dir>/.conductor/prompts
-mkdir -p <target_dir>/.conductor/schemas
-for dir in agents workflows prompts schemas; do
-  t="<target_dir>/.conductor/$dir"
-  [ -z "$(ls -A "$t" 2>/dev/null)" ] && touch "$t/.gitkeep"
-done
+git -C <target_dir> rev-parse --show-toplevel 2>/dev/null
 ```
 
-**All file paths in subsequent steps use `<target_dir>` as the prefix.**
+- If the command fails, stop and tell the user: "The path `<target_dir>` is not a git repository. Please provide the root of a git repo."
+- If it succeeds but the output path differs from `<target_dir>`, stop and tell the user: "The path `<target_dir>` is inside a git repo but is not its root (root is `<output>`). Please provide the repo root."
 
-### 0a. Read the canonical DSL reference
+All subsequent paths in this skill are relative to `<target_dir>`.
+
+**Ensure `.conductor/` exists:** Check whether the required subdirectories are present:
+
+```bash
+ls <target_dir>/.conductor/agents/ <target_dir>/.conductor/workflows/ 2>/dev/null || echo "MISSING"
+```
+
+If either directory is missing, invoke `/conductor-workflow-init <target_dir>` (silently, no confirmation prompt needed) to create the full directory structure before continuing.
+
+### 1. Read the canonical DSL reference
 
 Read `docs/workflow/engine.md` for the full grammar, all constructs, and design rationale. This is the authoritative source — use it throughout this session.
 
@@ -129,7 +120,7 @@ Avoid creating a cycle — check existing `.wf` files to ensure the workflow you
 
 ### 4. Identify missing agents
 
-Compare the `call` statements in your draft against the existing agents listed in step 2. For any agent that doesn't exist yet, note that you will need to create a stub `.md` file at `<target_dir>/.conductor/agents/<name>.md`.
+Compare the `call` statements in your draft against the existing agents listed in step 2. For any agent that doesn't exist yet, note that you will need to create a stub `.md` file at `.conductor/agents/<name>.md`.
 
 Stub format:
 ```markdown
@@ -174,13 +165,15 @@ Write any new agent stub files:
 Run validation using one of these commands (try `conductor` first, fall back to `cargo run`):
 
 ```bash
-conductor workflow validate --path <target_dir> <name>
+conductor workflow validate <repo-slug> <worktree-slug> <name>
 ```
 
 If that fails with "command not found":
 ```bash
-cargo run --bin conductor -- workflow validate --path <target_dir> <name>
+cargo run --bin conductor -- workflow validate <repo-slug> <worktree-slug> <name>
 ```
+
+> **Note:** Validation requires the repo to be registered in conductor's DB. If it isn't, skip validation and note that path-based validation is tracked in [issue #568](https://github.com/devinrosen/conductor-ai/issues/568).
 
 ### 8. Report results
 
@@ -188,7 +181,6 @@ If validation passes:
 - Confirm what was created
 - List any agent stub files that still need their prompts fleshed out
 - Suggest a test run: `conductor workflow run <name> --dry-run`
-  - Note: `conductor workflow run --dry-run` does not yet support `--path`; if the workflow lives outside the current repo, use the slug-based form or `cd` to `<target_dir>` first.
 
 If validation fails:
 - Interpret each error (see `/conductor-workflow-validate` for error guidance)
