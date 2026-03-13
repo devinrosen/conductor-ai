@@ -415,11 +415,7 @@ fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<String> {
         let repo_mgr = RepoManager::new(&conn, &config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
         let wf_mgr = WorkflowManager::new(&conn);
-        let runs = wf_mgr.list_all_workflow_runs(50)?;
-        let repo_runs: Vec<_> = runs
-            .into_iter()
-            .filter(|r| r.repo_id.as_deref() == Some(&repo.id))
-            .collect();
+        let repo_runs = wf_mgr.list_workflow_runs_by_repo_id(&repo.id, 50)?;
         if repo_runs.is_empty() {
             return Ok(format!("No workflow runs for {repo_slug}."));
         }
@@ -997,11 +993,8 @@ fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> Call
             Err(e) => return tool_err(e),
         }
     } else {
-        match wf_mgr.list_all_workflow_runs(50) {
-            Ok(r) => r
-                .into_iter()
-                .filter(|r| r.repo_id.as_deref() == Some(&repo.id))
-                .collect(),
+        match wf_mgr.list_workflow_runs_by_repo_id(&repo.id, 50) {
+            Ok(r) => r,
             Err(e) => return tool_err(e),
         }
     };
@@ -1443,5 +1436,267 @@ mod tests {
         let steps = mgr.get_workflow_steps(&run_id).expect("get steps");
         assert_eq!(steps[0].gate_feedback.as_deref(), Some("LGTM"));
         assert_eq!(steps[0].gate_approved_by.as_deref(), Some("mcp"));
+    }
+
+    // -- tool_create_worktree -----------------------------------------------
+
+    #[test]
+    fn test_dispatch_create_worktree_missing_repo_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_create_worktree", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_create_worktree_missing_name_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(
+            &db,
+            "conductor_create_worktree",
+            &args_with("repo", "my-repo"),
+        );
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_create_worktree_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let mut args = serde_json::Map::new();
+        args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
+        args.insert("name".to_string(), Value::String("feat-test".to_string()));
+        let result = dispatch_tool(&db, "conductor_create_worktree", &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    // -- tool_delete_worktree -----------------------------------------------
+
+    #[test]
+    fn test_dispatch_delete_worktree_missing_repo_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_delete_worktree", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_delete_worktree_missing_slug_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(
+            &db,
+            "conductor_delete_worktree",
+            &args_with("repo", "my-repo"),
+        );
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_delete_worktree_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let mut args = serde_json::Map::new();
+        args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
+        args.insert("slug".to_string(), Value::String("feat-wt".to_string()));
+        let result = dispatch_tool(&db, "conductor_delete_worktree", &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    // -- tool_sync_tickets --------------------------------------------------
+
+    #[test]
+    fn test_dispatch_sync_tickets_missing_repo_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_sync_tickets", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_sync_tickets_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(
+            &db,
+            "conductor_sync_tickets",
+            &args_with("repo", "ghost-repo"),
+        );
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_dispatch_sync_tickets_no_sources_returns_error() {
+        // A repo with no issue sources configured should return is_error=true.
+        use conductor_core::config::Config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let (_f, db) = make_test_db();
+        let conn = open_database(&db).expect("open db");
+        let config = Config::default();
+        let repo_mgr = RepoManager::new(&conn, &config);
+        repo_mgr
+            .add(
+                "test-repo",
+                "/tmp/test-repo",
+                "https://github.com/x/y",
+                None,
+            )
+            .expect("add repo");
+
+        let result = dispatch_tool(
+            &db,
+            "conductor_sync_tickets",
+            &args_with("repo", "test-repo"),
+        );
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "no sources should yield is_error=true"
+        );
+    }
+
+    // -- tool_push_worktree -------------------------------------------------
+
+    #[test]
+    fn test_dispatch_push_worktree_missing_repo_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_push_worktree", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_push_worktree_missing_slug_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(
+            &db,
+            "conductor_push_worktree",
+            &args_with("repo", "my-repo"),
+        );
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_push_worktree_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let mut args = serde_json::Map::new();
+        args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
+        args.insert("slug".to_string(), Value::String("feat-wt".to_string()));
+        let result = dispatch_tool(&db, "conductor_push_worktree", &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    // -- list_workflow_runs_by_repo_id (conductor-core) ---------------------
+
+    #[test]
+    fn test_list_workflow_runs_by_repo_id_empty() {
+        use conductor_core::db::open_database;
+        use conductor_core::workflow::WorkflowManager;
+
+        let (_f, db) = make_test_db();
+        let conn = open_database(&db).expect("open db");
+        let mgr = WorkflowManager::new(&conn);
+        let runs = mgr
+            .list_workflow_runs_by_repo_id("nonexistent-repo-id", 50)
+            .expect("query should succeed");
+        assert!(runs.is_empty(), "expected no runs for unknown repo");
+    }
+
+    #[test]
+    fn test_list_workflow_runs_by_repo_id_scoped() {
+        use conductor_core::agent::AgentManager;
+        use conductor_core::config::Config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+        use conductor_core::workflow::WorkflowManager;
+
+        let (_f, db) = make_test_db();
+        let conn = open_database(&db).expect("open db");
+        let config = Config::default();
+        let repo_mgr = RepoManager::new(&conn, &config);
+        let repo_a = repo_mgr
+            .add("repo-a", "/tmp/repo-a", "https://github.com/x/a", None)
+            .expect("add repo-a");
+        let repo_b = repo_mgr
+            .add("repo-b", "/tmp/repo-b", "https://github.com/x/b", None)
+            .expect("add repo-b");
+
+        let agent_mgr = AgentManager::new(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        let parent = agent_mgr
+            .create_run(None, "workflow", None, None)
+            .expect("create agent run");
+
+        // Create one run for repo-A and one for repo-B
+        let _run_a = mgr
+            .create_workflow_run_with_targets(
+                "wf-a",
+                None,
+                None,
+                Some(&repo_a.id),
+                &parent.id,
+                false,
+                "manual",
+                None,
+                None,
+                None,
+            )
+            .expect("create run A");
+        let _run_b = mgr
+            .create_workflow_run_with_targets(
+                "wf-b",
+                None,
+                None,
+                Some(&repo_b.id),
+                &parent.id,
+                false,
+                "manual",
+                None,
+                None,
+                None,
+            )
+            .expect("create run B");
+
+        let runs_a = mgr
+            .list_workflow_runs_by_repo_id(&repo_a.id, 50)
+            .expect("query A");
+        let runs_b = mgr
+            .list_workflow_runs_by_repo_id(&repo_b.id, 50)
+            .expect("query B");
+
+        assert_eq!(runs_a.len(), 1, "expected 1 run for repo-a");
+        assert_eq!(runs_a[0].workflow_name, "wf-a");
+        assert_eq!(runs_b.len(), 1, "expected 1 run for repo-b");
+        assert_eq!(runs_b[0].workflow_name, "wf-b");
     }
 }

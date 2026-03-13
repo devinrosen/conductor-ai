@@ -926,6 +926,25 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// List recent workflow runs for a specific repo, ordered by started_at DESC.
+    /// Unlike `list_all_workflow_runs` + filter, this queries directly by `repo_id`
+    /// so older per-repo runs beyond a global cap are never silently omitted.
+    pub fn list_workflow_runs_by_repo_id(
+        &self,
+        repo_id: &str,
+        limit: usize,
+    ) -> Result<Vec<WorkflowRun>> {
+        query_collect(
+            self.conn,
+            &format!(
+                "SELECT {RUN_COLUMNS} FROM workflow_runs \
+                 WHERE repo_id = ?1 ORDER BY started_at DESC LIMIT {limit}"
+            ),
+            params![repo_id],
+            row_to_workflow_run,
+        )
+    }
+
     /// List recent root workflow runs (those with no parent workflow run) across all
     /// worktrees, ordered by started_at DESC.  Used in the TUI per-worktree slot so that
     /// the root run wins over any concurrently-active child run.
