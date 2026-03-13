@@ -831,9 +831,9 @@ mod tests {
     }
 
     #[test]
-    fn r_maps_to_run_workflow_in_workflows_view() {
+    fn r_maps_to_run_workflow_in_workflow_column_focus() {
         let mut state = AppState::new();
-        state.view = View::Workflows;
+        state.column_focus = crate::state::ColumnFocus::Workflow;
         assert!(matches!(
             map_key(key(KeyCode::Char('r')), &state),
             Action::RunWorkflow
