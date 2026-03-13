@@ -195,6 +195,7 @@ impl Theme {
 
         // Detect format: if base16 slots are at the top level (classic flat format),
         // use them directly. Otherwise expect a nested `palette:` section.
+        #[allow(clippy::type_complexity)]
         let get: Box<dyn Fn(&str) -> Result<Color, String>> = if value.get("base08").is_some() {
             Box::new(|slot: &str| {
                 let hex = value.get(slot).and_then(|v| v.as_str()).ok_or_else(|| {
@@ -518,6 +519,74 @@ palette:
         )
         .unwrap();
         path
+    }
+
+    fn write_valid_flat_yaml_theme(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        let path = dir.join(format!("{name}.yaml"));
+        std::fs::write(
+            &path,
+            r#"scheme: "Flat Test Theme"
+base00: "1d2021"
+base01: "282828"
+base02: "32302f"
+base03: "504945"
+base04: "bdae93"
+base05: "d5c4a1"
+base06: "ebdbb2"
+base07: "fbf1c7"
+base08: "fb4934"
+base09: "fe8019"
+base0A: "fabd2f"
+base0B: "b8bb26"
+base0C: "8ec07c"
+base0D: "83a598"
+base0E: "d3869b"
+base0F: "d65d0e"
+"#,
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn test_from_base16_yaml_file_flat_format() {
+        // Classic flat base16-schemes format: slots at the top level, no `palette:` section.
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_valid_flat_yaml_theme(dir.path(), "flat");
+        let theme = Theme::from_base16_yaml_file(&path).expect("should parse flat YAML theme");
+        // base02 = #32302f → highlight_bg
+        assert_eq!(theme.highlight_bg, Color::Rgb(0x32, 0x30, 0x2f));
+        // base0B = #b8bb26 → status_completed
+        assert_eq!(theme.status_completed, Color::Rgb(0xb8, 0xbb, 0x26));
+        // base0A = #fabd2f → status_running
+        assert_eq!(theme.status_running, Color::Rgb(0xfa, 0xbd, 0x2f));
+    }
+
+    #[test]
+    fn test_from_base16_yaml_file_flat_format_missing_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("flat_missing.yaml");
+        // Flat format with all required slots except base0B, so base0B is reported missing.
+        std::fs::write(
+            &path,
+            "scheme: \"Flat\"\nbase02: \"32302f\"\nbase03: \"504945\"\nbase05: \"d5c4a1\"\nbase08: \"fb4934\"\nbase0A: \"fabd2f\"\nbase0C: \"8ec07c\"\nbase0D: \"83a598\"\nbase0E: \"d3869b\"\n",
+        )
+        .unwrap();
+        let err = Theme::from_base16_yaml_file(&path).unwrap_err();
+        assert!(
+            err.contains("base0B"),
+            "error should name missing slot, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_from_base16_yaml_file_nested_format() {
+        // Nested palette format: slots under `palette:` key.
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_valid_yaml_theme(dir.path(), "nested");
+        let theme = Theme::from_base16_yaml_file(&path).expect("should parse nested YAML theme");
+        assert_eq!(theme.highlight_bg, Color::Rgb(0x32, 0x30, 0x2f));
+        assert_eq!(theme.status_completed, Color::Rgb(0xb8, 0xbb, 0x26));
     }
 
     #[test]
