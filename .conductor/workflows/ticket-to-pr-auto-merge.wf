@@ -29,10 +29,16 @@ workflow ticket-to-pr-auto-merge {
   }
 
   // Rebase onto latest main after approval to resolve any conflicts that
-  // accumulated during the review window, and fix lint
-  call workflow rebase-and-fix
+  // accumulated during the review window
+  call workflow rebase-worktree
 
-  // Wait for CI to pass on the rebased branch before merging
+  // If conflicts were resolved, code changed — re-run lint and full review
+  // cycle to verify the fix before merging
+  if rebase-worktree.has_conflicts {
+    call workflow iterate-pr
+  }
+
+  // CI must pass on the final state before merging
   gate pr_checks {
     timeout    = "2h"
     on_timeout = fail
