@@ -6054,7 +6054,7 @@ impl App {
 
         if let Modal::GateAction { ref step_id, .. } = self.state.modal {
             let wf_mgr = WorkflowManager::new(&self.conn);
-            match wf_mgr.reject_gate(step_id, "tui-user") {
+            match wf_mgr.reject_gate(step_id, "tui-user", None) {
                 Ok(()) => {
                     self.state.status_message = Some("Gate rejected".to_string());
                 }

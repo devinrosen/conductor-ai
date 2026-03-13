@@ -92,7 +92,7 @@ Tools are callable by Claude during a conversation to take actions or fetch live
 | `conductor_list_runs` | `repo, worktree?` | List workflow runs |
 | `conductor_get_run` | `run_id` | Get step-by-step detail for a run |
 | `conductor_approve_gate` | `run_id, feedback?` | Approve a waiting gate |
-| `conductor_reject_gate` | `run_id` | Reject a waiting gate |
+| `conductor_reject_gate` | `run_id, feedback?` | Reject a waiting gate |
 | `conductor_push_worktree` | `repo, slug` | Push worktree branch to origin |
 
 ### MCP server implementation

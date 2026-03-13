@@ -802,12 +802,17 @@ impl<'a> WorkflowManager<'a> {
     }
 
     /// Reject a gate: set step to failed.
-    pub fn reject_gate(&self, step_id: &str, rejected_by: &str) -> Result<()> {
+    pub fn reject_gate(
+        &self,
+        step_id: &str,
+        rejected_by: &str,
+        feedback: Option<&str>,
+    ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "UPDATE workflow_run_steps SET gate_approved_by = ?1, status = 'failed', ended_at = ?2 \
-             WHERE id = ?3",
-            params![rejected_by, now, step_id],
+            "UPDATE workflow_run_steps SET gate_approved_by = ?1, gate_feedback = ?2, status = 'failed', ended_at = ?3 \
+             WHERE id = ?4",
+            params![rejected_by, feedback, now, step_id],
         )?;
         Ok(())
     }
@@ -4845,7 +4850,7 @@ mod tests {
         )
         .unwrap();
 
-        mgr.reject_gate(&step_id, "user").unwrap();
+        mgr.reject_gate(&step_id, "user", None).unwrap();
 
         let steps = mgr.get_workflow_steps(&run.id).unwrap();
         assert_eq!(steps[0].status, WorkflowStepStatus::Failed);
