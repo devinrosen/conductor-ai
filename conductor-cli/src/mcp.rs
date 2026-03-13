@@ -779,8 +779,9 @@ fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_list_repos",
-            "List all registered repos and their slugs. Use this to discover valid repo slugs \
-             required by other conductor tools.",
+            "List all registered repos and their slugs. Includes active run counts per repo \
+             (running, waiting, pending) so you can triage work across repos at a glance. \
+             Use this to discover valid repo slugs required by other conductor tools.",
             schema(&[]),
         ),
         Tool::new(
@@ -836,7 +837,9 @@ fn open_db_and_config(
 }
 
 fn tool_list_repos(db_path: &Path) -> CallToolResult {
+    use conductor_core::agent::AgentManager;
     use conductor_core::repo::RepoManager;
+    use conductor_core::workflow::WorkflowManager;
 
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
@@ -849,12 +852,39 @@ fn tool_list_repos(db_path: &Path) -> CallToolResult {
     if repos.is_empty() {
         return tool_ok("No repos registered. Use `conductor repo add` to register one.");
     }
+    let agent_counts = match AgentManager::new(&conn).active_run_counts_by_repo() {
+        Ok(m) => m,
+        Err(e) => return tool_err(e),
+    };
+    let workflow_counts = match WorkflowManager::new(&conn).active_run_counts_by_repo() {
+        Ok(m) => m,
+        Err(e) => return tool_err(e),
+    };
     let mut out = String::new();
     for r in repos {
         out.push_str(&format!(
-            "slug: {}\nlocal_path: {}\nremote_url: {}\ndefault_branch: {}\n\n",
+            "slug: {}\nlocal_path: {}\nremote_url: {}\ndefault_branch: {}\n",
             r.slug, r.local_path, r.remote_url, r.default_branch
         ));
+        let running = agent_counts.get(&r.id).map_or(0, |c| c.running)
+            + workflow_counts.get(&r.id).map_or(0, |c| c.running);
+        let waiting = agent_counts.get(&r.id).map_or(0, |c| c.waiting)
+            + workflow_counts.get(&r.id).map_or(0, |c| c.waiting);
+        let pending = workflow_counts.get(&r.id).map_or(0, |c| c.pending);
+        let mut parts: Vec<String> = Vec::new();
+        if running > 0 {
+            parts.push(format!("{running} running"));
+        }
+        if waiting > 0 {
+            parts.push(format!("{waiting} waiting"));
+        }
+        if pending > 0 {
+            parts.push(format!("{pending} pending"));
+        }
+        if !parts.is_empty() {
+            out.push_str(&format!("active_runs: {}\n", parts.join(", ")));
+        }
+        out.push('\n');
     }
     tool_ok(out)
 }
@@ -1937,6 +1967,53 @@ mod tests {
         assert!(
             text.contains("https://github.com/acme/my-repo"),
             "expected remote_url in output, got: {text}"
+        );
+        // No active runs — active_runs: line must be absent
+        assert!(
+            !text.contains("active_runs:"),
+            "expected no active_runs line when no runs exist, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_list_repos_with_active_runs() {
+        use conductor_core::agent::AgentManager;
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            let repo = RepoManager::new(&conn, &config)
+                .add(
+                    "active-repo",
+                    "/tmp/active-repo",
+                    "https://github.com/acme/active-repo",
+                    None,
+                )
+                .expect("add repo");
+            // Insert a worktree directly (avoids actual git ops)
+            conn.execute(
+                "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+                 VALUES ('wt-test-1', ?1, 'feat-x', 'feat/x', '/tmp/active-repo/feat-x', 'active', '2024-01-01T00:00:00Z')",
+                rusqlite::params![repo.id],
+            ).expect("insert worktree");
+            // Create an agent run in running status via AgentManager (default status = running)
+            AgentManager::new(&conn)
+                .create_run(Some("wt-test-1"), "test prompt", None, None)
+                .expect("create run");
+        }
+        let result = dispatch_tool(&db, "conductor_list_repos", &empty_args());
+        assert_ne!(result.is_error, Some(true), "should succeed");
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("active_runs: 1 running"),
+            "expected active_runs line, got: {text}"
         );
     }
 

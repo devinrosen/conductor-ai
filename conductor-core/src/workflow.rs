@@ -508,6 +508,14 @@ pub struct StepResult {
 // Manager (CRUD)
 // ---------------------------------------------------------------------------
 
+/// Counts of active workflow runs (pending / running / waiting) for a single repo.
+#[derive(Debug, Clone, Default)]
+pub struct ActiveWorkflowCounts {
+    pub pending: u32,
+    pub running: u32,
+    pub waiting: u32,
+}
+
 /// Manages workflow definitions, execution, and persistence.
 pub struct WorkflowManager<'a> {
     conn: &'a Connection,
@@ -516,6 +524,36 @@ pub struct WorkflowManager<'a> {
 impl<'a> WorkflowManager<'a> {
     pub fn new(conn: &'a Connection) -> Self {
         Self { conn }
+    }
+
+    /// Returns counts of active workflow runs (pending / running / waiting) per repo_id.
+    /// Repos with no active runs are absent from the map. Rows where repo_id IS NULL are skipped.
+    pub fn active_run_counts_by_repo(&self) -> Result<HashMap<String, ActiveWorkflowCounts>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT repo_id, status, COUNT(*) AS cnt \
+             FROM workflow_runs \
+             WHERE status IN ('pending', 'running', 'waiting') \
+               AND repo_id IS NOT NULL \
+             GROUP BY repo_id, status",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let repo_id: String = row.get(0)?;
+            let status: String = row.get(1)?;
+            let cnt: u32 = row.get(2)?;
+            Ok((repo_id, status, cnt))
+        })?;
+        let mut map: HashMap<String, ActiveWorkflowCounts> = HashMap::new();
+        for row in rows {
+            let (repo_id, status, cnt) = row?;
+            let entry = map.entry(repo_id).or_default();
+            match status.as_str() {
+                "pending" => entry.pending += cnt,
+                "running" => entry.running += cnt,
+                "waiting" => entry.waiting += cnt,
+                _ => {}
+            }
+        }
+        Ok(map)
     }
 
     pub fn create_workflow_run(
