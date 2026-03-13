@@ -25,6 +25,7 @@ use conductor_core::workflow::{
 use conductor_core::workflow_config;
 use conductor_core::worktree::WorktreeManager;
 
+mod mcp;
 mod statusline;
 
 /// Environment variable name used to pass the current agent run ID to subprocesses.
@@ -69,6 +70,17 @@ enum Commands {
         #[command(subcommand)]
         command: StatuslineCommands,
     },
+    /// Model Context Protocol server (stdio transport for Claude Code integration)
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpCommands {
+    /// Start the conductor MCP server on stdio
+    Serve,
 }
 
 #[derive(Subcommand)]
@@ -1288,6 +1300,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(r.slug.as_str()),
                             default_bot_name: None,
+                            run_id_notify: None,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1337,6 +1350,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(run_id.as_str()),
                             default_bot_name: None,
+                            run_id_notify: None,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1386,6 +1400,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(repo.slug.as_str()),
                             default_bot_name: None,
+                            run_id_notify: None,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1438,6 +1453,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(&wt_label),
                             default_bot_name: None,
+                            run_id_notify: None,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1809,6 +1825,13 @@ fn main() -> Result<()> {
         Commands::Statusline { command } => match command {
             StatuslineCommands::Install => statusline::install()?,
             StatuslineCommands::Uninstall => statusline::uninstall()?,
+        },
+        Commands::Mcp { command } => match command {
+            McpCommands::Serve => {
+                let rt = tokio::runtime::Runtime::new()
+                    .context("failed to create tokio runtime for MCP server")?;
+                rt.block_on(mcp::serve())?;
+            }
         },
     }
 

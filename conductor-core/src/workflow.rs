@@ -926,6 +926,25 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// List recent workflow runs for a specific repo, ordered by started_at DESC.
+    /// Unlike `list_all_workflow_runs` + filter, this queries directly by `repo_id`
+    /// so older per-repo runs beyond a global cap are never silently omitted.
+    pub fn list_workflow_runs_by_repo_id(
+        &self,
+        repo_id: &str,
+        limit: usize,
+    ) -> Result<Vec<WorkflowRun>> {
+        query_collect(
+            self.conn,
+            &format!(
+                "SELECT {RUN_COLUMNS} FROM workflow_runs \
+                 WHERE repo_id = ?1 ORDER BY started_at DESC LIMIT {limit}"
+            ),
+            params![repo_id],
+            row_to_workflow_run,
+        )
+    }
+
     /// List recent root workflow runs (those with no parent workflow run) across all
     /// worktrees, ordered by started_at DESC.  Used in the TUI per-worktree slot so that
     /// the root run wins over any concurrently-active child run.
@@ -1690,6 +1709,14 @@ pub struct WorkflowExecInput<'a> {
     /// Default named GitHub App bot identity for call nodes that have no explicit `as =`.
     /// Set by a `call workflow { as = "..." }` node when it invokes a sub-workflow.
     pub default_bot_name: Option<String>,
+    /// If set, the workflow run ID is written here immediately after the run record is
+    /// created (before any steps execute). Used by callers that need to return the ID
+    /// to an external client while execution continues in the background.
+    ///
+    /// The `Condvar` is notified once the ID has been written, allowing waiters to
+    /// block efficiently instead of spinning.
+    pub run_id_notify:
+        Option<std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)>>,
 }
 
 /// Execute a workflow definition against a worktree.
@@ -1779,6 +1806,13 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         input.parent_workflow_run_id,
         input.target_label,
     )?;
+
+    // Notify any waiting caller of the freshly-created run ID.
+    if let Some(pair) = &input.run_id_notify {
+        let (lock, cvar) = pair.as_ref();
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) = Some(wf_run.id.clone());
+        cvar.notify_one();
+    }
 
     // Persist default_bot_name so it can be restored on resume.
     if let Some(ref bot_name) = input.default_bot_name {
@@ -1965,6 +1999,10 @@ pub struct WorkflowExecStandalone {
     pub inputs: HashMap<String, String>,
     /// Human-readable label for the target (e.g. `repo_slug/wt_slug`, `owner/repo#N`).
     pub target_label: Option<String>,
+    /// If set, the workflow run ID is written here immediately after the run record is
+    /// created (before any steps execute). See [`WorkflowExecInput::run_id_notify`].
+    pub run_id_notify:
+        Option<std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)>>,
 }
 
 /// Execute a workflow in a self-contained manner: opens its own database
@@ -1990,6 +2028,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         parent_workflow_run_id: None,
         target_label: params.target_label.as_deref(),
         default_bot_name: None,
+        run_id_notify: params.run_id_notify.clone(),
     };
 
     execute_workflow(&input)
@@ -2893,6 +2932,7 @@ fn execute_call_workflow(
                 .bot_name
                 .clone()
                 .or_else(|| state.default_bot_name.clone()),
+            run_id_notify: None,
         };
 
         match execute_workflow(&child_input) {
@@ -6413,6 +6453,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let err = execute_workflow(&input).unwrap_err();
         assert!(
@@ -6455,6 +6496,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         // Guard should pass; empty workflow completes successfully.
         let result = execute_workflow(&input);
@@ -6499,12 +6541,64 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result = execute_workflow(&input);
         assert!(
             !matches!(result, Err(ConductorError::WorkflowRunAlreadyActive { .. })),
             "child workflow should not be blocked by active parent run"
         );
+    }
+
+    #[test]
+    fn test_run_id_notify_slot_is_populated() {
+        // Verify that execute_workflow writes the newly-created run ID into
+        // run_id_notify before any steps execute. This is the mechanism used
+        // by the MCP tool_run_workflow handler to return a run_id immediately.
+        let conn = setup_db();
+        let config = Config::default();
+        let exec_config = WorkflowExecConfig::default();
+
+        let workflow = make_empty_workflow();
+
+        let slot: std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)> =
+            std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+
+        let input = WorkflowExecInput {
+            conn: &conn,
+            config: &config,
+            workflow: &workflow,
+            worktree_id: None,
+            working_dir: "/tmp/repo",
+            repo_path: "/tmp/repo",
+            ticket_id: None,
+            repo_id: None,
+            model: None,
+            exec_config: &exec_config,
+            inputs: HashMap::new(),
+            depth: 0,
+            parent_workflow_run_id: None,
+            target_label: None,
+            default_bot_name: None,
+            run_id_notify: Some(std::sync::Arc::clone(&slot)),
+        };
+
+        execute_workflow(&input).expect("workflow should complete");
+
+        let notified_id = slot
+            .0
+            .lock()
+            .expect("mutex not poisoned")
+            .clone()
+            .expect("run_id_notify slot should have been written");
+
+        // The written ID must match the run that was actually created.
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .get_workflow_run(&notified_id)
+            .expect("db query ok")
+            .expect("run should exist");
+        assert_eq!(run.workflow_name, "test-wf");
     }
 
     // -----------------------------------------------------------------------
@@ -8238,6 +8332,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result1 = execute_workflow(&input1);
         assert!(
@@ -8267,6 +8362,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result2 = execute_workflow(&input2);
         assert!(
@@ -8555,6 +8651,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8603,6 +8700,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8655,6 +8753,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8694,6 +8793,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         assert!(
             execute_workflow(&input).is_err(),
@@ -8724,6 +8824,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         assert!(
             execute_workflow(&input).is_err(),
@@ -8792,6 +8893,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8844,6 +8946,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result = execute_workflow(&input).unwrap();
 

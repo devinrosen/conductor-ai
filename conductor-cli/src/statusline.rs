@@ -77,14 +77,35 @@ fn install_to(conductor_dir: &Path, settings_path: &Path) -> Result<()> {
         .context("script path is not valid UTF-8")?;
     value["statusLineTool"] = serde_json::Value::String(script_path_str.to_string());
 
-    // 5. Write settings back
+    // 5. Set mcpServers.conductor
+    {
+        let mcp_servers = value["mcpServers"]
+            .as_object_mut()
+            .cloned()
+            .unwrap_or_default();
+        let mut mcp_servers = mcp_servers;
+        mcp_servers.insert(
+            "conductor".to_string(),
+            serde_json::json!({
+                "command": "conductor",
+                "args": ["mcp", "serve"]
+            }),
+        );
+        value["mcpServers"] = serde_json::Value::Object(mcp_servers);
+    }
+
+    // 6. Write settings back
     write_settings(settings_path, &value)?;
 
     println!("Conductor status line installed.");
     println!("  Script:  {}", script_path.display());
     println!("  Setting: {} → statusLineTool", settings_path.display());
+    println!(
+        "  Setting: {} → mcpServers.conductor",
+        settings_path.display()
+    );
     println!();
-    println!("Restart Claude Code to activate the status line.");
+    println!("Restart Claude Code to activate the status line and MCP server.");
 
     Ok(())
 }
@@ -101,8 +122,17 @@ fn uninstall_from(settings_path: &Path) -> Result<()> {
 
     let mut value = read_settings(settings_path)?;
 
-    if value.get("statusLineTool").is_none() {
-        println!("statusLineTool is not set in {}.", settings_path.display());
+    let has_statusline = value.get("statusLineTool").is_some();
+    let has_mcp = value
+        .get("mcpServers")
+        .and_then(|v| v.get("conductor"))
+        .is_some();
+
+    if !has_statusline && !has_mcp {
+        println!(
+            "Nothing to uninstall: conductor keys not found in {}.",
+            settings_path.display()
+        );
         return Ok(());
     }
 
@@ -110,10 +140,20 @@ fn uninstall_from(settings_path: &Path) -> Result<()> {
         obj.remove("statusLineTool");
     }
 
+    // Remove mcpServers.conductor; drop the whole mcpServers key if empty.
+    if let Some(mcp_obj) = value["mcpServers"].as_object_mut() {
+        mcp_obj.remove("conductor");
+        if mcp_obj.is_empty() {
+            if let Some(obj) = value.as_object_mut() {
+                obj.remove("mcpServers");
+            }
+        }
+    }
+
     write_settings(settings_path, &value)?;
 
     println!("Conductor status line uninstalled.");
-    println!("  Removed statusLineTool from {}", settings_path.display());
+    println!("  Removed conductor keys from {}", settings_path.display());
 
     Ok(())
 }
@@ -174,6 +214,19 @@ mod tests {
             v["statusLineTool"].as_str().unwrap(),
             script.to_str().unwrap()
         );
+        // mcpServers.conductor should be set
+        assert_eq!(
+            v["mcpServers"]["conductor"]["command"].as_str().unwrap(),
+            "conductor"
+        );
+        assert_eq!(
+            v["mcpServers"]["conductor"]["args"][0].as_str().unwrap(),
+            "mcp"
+        );
+        assert_eq!(
+            v["mcpServers"]["conductor"]["args"][1].as_str().unwrap(),
+            "serve"
+        );
     }
 
     #[test]
@@ -226,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn uninstall_removes_statusline_tool() {
+    fn uninstall_removes_statusline_tool_and_mcp_servers() {
         let root = temp_dir();
         let conductor = root.join("conductor");
         let settings = root.join("settings.json");
@@ -243,6 +296,48 @@ mod tests {
             v.get("statusLineTool").is_none(),
             "statusLineTool should have been removed"
         );
+        assert!(
+            v.get("mcpServers").is_none(),
+            "mcpServers should have been removed (was empty)"
+        );
+    }
+
+    #[test]
+    fn uninstall_leaves_other_mcp_servers_untouched() {
+        let root = temp_dir();
+        let conductor = root.join("conductor");
+        let settings = root.join("settings.json");
+
+        // Pre-populate with another MCP server
+        fs::write(
+            &settings,
+            r#"{"mcpServers": {"other-server": {"command": "other"}}}"#,
+        )
+        .unwrap();
+
+        // Install (should add conductor entry)
+        install_to(&conductor, &settings).unwrap();
+
+        let raw = fs::read_to_string(&settings).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(v["mcpServers"]["conductor"].is_object());
+        assert!(v["mcpServers"]["other-server"].is_object());
+
+        // Uninstall (should remove conductor but leave other-server)
+        uninstall_from(&settings).unwrap();
+
+        let raw = fs::read_to_string(&settings).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(
+            v.get("mcpServers")
+                .and_then(|m| m.get("conductor"))
+                .is_none(),
+            "mcpServers.conductor should be removed"
+        );
+        assert!(
+            v["mcpServers"]["other-server"].is_object(),
+            "other-server should remain"
+        );
     }
 
     #[test]
@@ -251,7 +346,7 @@ mod tests {
         let settings = root.join("settings.json");
         fs::write(&settings, r#"{"otherKey": 1}"#).unwrap();
 
-        // Should succeed without error even though statusLineTool is not set
+        // Should succeed without error even though conductor keys are not set
         uninstall_from(&settings).unwrap();
 
         let raw = fs::read_to_string(&settings).unwrap();
