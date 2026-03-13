@@ -1635,6 +1635,62 @@ mod tests {
         assert_eq!(steps[0].gate_approved_by.as_deref(), Some("mcp"));
     }
 
+    // -- tool_list_repos ----------------------------------------------------
+
+    #[test]
+    fn test_dispatch_list_repos_empty_db() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_list_repos", &empty_args());
+        assert_ne!(result.is_error, Some(true), "empty list should succeed");
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("No repos registered"),
+            "expected empty message, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_list_repos_populated() {
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            RepoManager::new(&conn, &config)
+                .add(
+                    "my-repo",
+                    "/tmp/my-repo",
+                    "https://github.com/acme/my-repo",
+                    None,
+                )
+                .expect("add repo");
+        }
+        let result = dispatch_tool(&db, "conductor_list_repos", &empty_args());
+        assert_ne!(result.is_error, Some(true), "populated list should succeed");
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("my-repo"),
+            "expected slug in output, got: {text}"
+        );
+        assert!(
+            text.contains("/tmp/my-repo"),
+            "expected local_path in output, got: {text}"
+        );
+        assert!(
+            text.contains("https://github.com/acme/my-repo"),
+            "expected remote_url in output, got: {text}"
+        );
+    }
+
     // -- tool_create_worktree -----------------------------------------------
 
     #[test]
