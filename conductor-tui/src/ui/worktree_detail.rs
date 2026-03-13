@@ -239,8 +239,27 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         let has_waiting = state.data.latest_agent_runs.get(&wt.id).is_some_and(|run| {
             run.status == conductor_core::agent::AgentRunStatus::WaitingForFeedback
         });
+        let has_resumable_wf = state
+            .data
+            .latest_workflow_runs_by_worktree
+            .get(&wt.id)
+            .is_some_and(|r| {
+                use conductor_core::workflow::WorkflowRunStatus;
+                !matches!(
+                    r.status,
+                    WorkflowRunStatus::Running
+                        | WorkflowRunStatus::Completed
+                        | WorkflowRunStatus::Cancelled
+                )
+            });
         if has_waiting {
-            "Tab=switch panel  y=copy  o=act  p=prompt  f=respond  F=dismiss  x=stop  w=workflow  d=del  Esc=back"
+            if has_resumable_wf {
+                "Tab=switch panel  y=copy  o=act  p=prompt  f=respond  F=dismiss  x=stop  w=workflow  r=resume wf  d=del  Esc=back"
+            } else {
+                "Tab=switch panel  y=copy  o=act  p=prompt  f=respond  F=dismiss  x=stop  w=workflow  d=del  Esc=back"
+            }
+        } else if has_resumable_wf {
+            "Tab=switch panel  y=copy  o=act  p=prompt  O=orchestrate  x=stop  w=workflow  r=resume wf  d=del  Esc=back"
         } else {
             "Tab=switch panel  y=copy  o=act  p=prompt  O=orchestrate  x=stop  w=workflow  d=del  Esc=back"
         }

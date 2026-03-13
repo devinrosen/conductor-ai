@@ -320,6 +320,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('x') if is_active => return Action::StopAgent,
             KeyCode::Char('f') if is_waiting_for_feedback => return Action::SubmitFeedback,
             KeyCode::Char('F') if is_waiting_for_feedback => return Action::DismissFeedback,
+            KeyCode::Char('r') => return Action::ResumeWorktreeWorkflow,
             KeyCode::Char('w') => return Action::PickWorkflow,
             KeyCode::Char('y') => return Action::WorktreeDetailCopy,
             KeyCode::Char('o') => return Action::WorktreeDetailOpen,
@@ -819,6 +820,27 @@ mod tests {
     }
 
     // --- `w` key: PickWorkflow / RunWorkflow bindings ---
+
+    // --- `r` key: ResumeWorktreeWorkflow binding ---
+
+    #[test]
+    fn r_maps_to_resume_worktree_workflow_in_worktree_detail() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::InfoPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('r')), &state),
+            Action::ResumeWorktreeWorkflow
+        ));
+    }
+
+    #[test]
+    fn r_maps_to_run_workflow_in_workflows_view() {
+        let mut state = AppState::new();
+        state.view = View::Workflows;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('r')), &state),
+            Action::RunWorkflow
+        ));
+    }
 
     #[test]
     fn w_maps_to_pick_workflow_in_worktree_detail() {
