@@ -1960,10 +1960,7 @@ fn tool_list_prs(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallT
     let mut out = String::new();
     for pr in &prs {
         let draft_label = if pr.is_draft { " [DRAFT]" } else { "" };
-        let review = pr
-            .review_decision
-            .as_deref()
-            .unwrap_or("NONE");
+        let review = pr.review_decision.as_deref().unwrap_or("NONE");
         out.push_str(&format!(
             "#{number} — {title}{draft}\n  url: {url}\n  branch: {branch}\n  author: {author}\n  review: {review}\n  ci: {ci}\n\n",
             number = pr.number,
@@ -4128,7 +4125,11 @@ workflow build {
         let args = args_with("repo", "local-repo");
         let result = dispatch_tool(&db, "conductor_list_prs", &args);
         // Non-GitHub repos yield empty PR list — tool_ok with "No open PRs" message.
-        assert_ne!(result.is_error, Some(true), "should not error for non-GitHub repo");
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "should not error for non-GitHub repo"
+        );
         let text = result.content[0]
             .as_text()
             .map(|t| t.text.as_str())
