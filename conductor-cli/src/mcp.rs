@@ -624,8 +624,21 @@ fn conductor_tools() -> Vec<Tool> {
     vec![
         Tool::new(
             "conductor_list_tickets",
-            "List open tickets for a repo.",
-            schema(&[("repo", "Repo slug (e.g. my-repo)", true)]),
+            "List tickets for a repo. Filters: label, search, include_closed.",
+            schema(&[
+                ("repo", "Repo slug (e.g. my-repo)", true),
+                (
+                    "label",
+                    "Filter by label name (comma-separated for multiple, e.g. 'bug,enhancement')",
+                    false,
+                ),
+                ("search", "Text search against ticket title and body", false),
+                (
+                    "include_closed",
+                    "Set to 'true' to include closed tickets (default: open only)",
+                    false,
+                ),
+            ]),
         ),
         Tool::new(
             "conductor_list_worktrees",
@@ -837,9 +850,27 @@ fn tool_list_repos(db_path: &Path) -> CallToolResult {
 
 fn tool_list_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::repo::RepoManager;
-    use conductor_core::tickets::TicketSyncer;
+    use conductor_core::tickets::{TicketFilter, TicketSyncer};
 
     let repo_slug = require_arg!(args, "repo");
+
+    let labels: Vec<String> = get_arg(args, "label")
+        .map(|s| {
+            s.split(',')
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let search = get_arg(args, "search").map(|s| s.to_string());
+    let include_closed = get_arg(args, "include_closed") == Some("true");
+
+    let filter = TicketFilter {
+        labels,
+        search,
+        include_closed,
+    };
+
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
@@ -850,7 +881,7 @@ fn tool_list_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
         Err(e) => return tool_err(e),
     };
     let syncer = TicketSyncer::new(&conn);
-    let tickets = match syncer.list(Some(&repo.id)) {
+    let tickets = match syncer.list_filtered(Some(&repo.id), &filter) {
         Ok(t) => t,
         Err(e) => return tool_err(e),
     };
