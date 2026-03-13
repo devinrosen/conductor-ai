@@ -651,6 +651,57 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
+    /// Cancel a workflow run, best-effort cancelling any in-progress steps and
+    /// their child agent runs before marking the run itself as cancelled.
+    ///
+    /// Returns an error only if the run is not found or is already in a
+    /// terminal state (`completed`, `failed`, or `cancelled`).  Step and
+    /// child-run cancellation failures are silently ignored (best-effort).
+    pub fn cancel_run(&self, run_id: &str, reason: &str) -> Result<()> {
+        let run = self
+            .get_workflow_run(run_id)?
+            .ok_or_else(|| ConductorError::Workflow(format!("Workflow run not found: {run_id}")))?;
+
+        if matches!(
+            run.status,
+            WorkflowRunStatus::Completed | WorkflowRunStatus::Failed | WorkflowRunStatus::Cancelled
+        ) {
+            return Err(ConductorError::Workflow(format!(
+                "Run {run_id} is already in terminal state: {}",
+                run.status
+            )));
+        }
+
+        let agent_mgr = AgentManager::new(self.conn);
+        if let Ok(steps) = self.get_workflow_steps(run_id) {
+            for step in steps {
+                if matches!(
+                    step.status,
+                    WorkflowStepStatus::Completed
+                        | WorkflowStepStatus::Failed
+                        | WorkflowStepStatus::Skipped
+                        | WorkflowStepStatus::TimedOut
+                ) {
+                    continue;
+                }
+                if let Some(ref child_id) = step.child_run_id {
+                    let _ = agent_mgr.update_run_cancelled(child_id);
+                }
+                let _ = self.update_step_status(
+                    &step.id,
+                    WorkflowStepStatus::Failed,
+                    step.child_run_id.as_deref(),
+                    Some(reason),
+                    None,
+                    None,
+                    None,
+                );
+            }
+        }
+
+        self.update_workflow_status(run_id, WorkflowRunStatus::Cancelled, Some(reason))
+    }
+
     /// Insert a workflow step record.
     pub fn insert_step(
         &self,
@@ -9869,5 +9920,199 @@ And here is my actual output:
         // Beyond end returns empty
         let beyond = mgr.list_workflow_runs_by_repo_id("r1", 2, 10).unwrap();
         assert!(beyond.is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // cancel_run tests
+    // ---------------------------------------------------------------------------
+
+    fn make_workflow_run(
+        conn: &Connection,
+    ) -> (WorkflowManager<'_>, crate::agent::AgentRun, WorkflowRun) {
+        let agent_mgr = AgentManager::new(conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let mgr = WorkflowManager::new(conn);
+        let run = mgr
+            .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        (mgr, parent, run)
+    }
+
+    #[test]
+    fn test_cancel_run_pending() {
+        let conn = setup_db();
+        let (mgr, _parent, run) = make_workflow_run(&conn);
+        assert_eq!(run.status, WorkflowRunStatus::Pending);
+
+        mgr.cancel_run(&run.id, "user requested").unwrap();
+
+        let updated = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert_eq!(updated.status, WorkflowRunStatus::Cancelled);
+    }
+
+    #[test]
+    fn test_cancel_run_running_with_active_steps() {
+        let conn = setup_db();
+        let (mgr, _parent, run) = make_workflow_run(&conn);
+
+        // Advance run to Running
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        // Insert a Running step with a child agent run
+        let child_agent_mgr = AgentManager::new(&conn);
+        let child = child_agent_mgr
+            .create_run(Some("w1"), "child-step", None, None)
+            .unwrap();
+
+        let step_id = mgr
+            .insert_step(&run.id, "do-work", "actor", false, 0, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step_id,
+            WorkflowStepStatus::Running,
+            Some(&child.id),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Cancel the run — should cancel step and child agent run
+        mgr.cancel_run(&run.id, "abort").unwrap();
+
+        let updated_run = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert_eq!(updated_run.status, WorkflowRunStatus::Cancelled);
+
+        let steps = mgr.get_workflow_steps(&run.id).unwrap();
+        assert_eq!(steps[0].status, WorkflowStepStatus::Failed);
+
+        let agent_run: String = conn
+            .query_row(
+                "SELECT status FROM agent_runs WHERE id = ?1",
+                params![child.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(agent_run, "cancelled");
+    }
+
+    #[test]
+    fn test_cancel_run_waiting_status() {
+        let conn = setup_db();
+        let (mgr, _parent, run) = make_workflow_run(&conn);
+
+        // Advance run to Waiting (e.g. at a gate)
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None)
+            .unwrap();
+
+        // Insert a Waiting step (no child run)
+        let step_id = mgr
+            .insert_step(&run.id, "human-gate", "gate", false, 0, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step_id,
+            WorkflowStepStatus::Waiting,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        mgr.cancel_run(&run.id, "timed out").unwrap();
+
+        let updated = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert_eq!(updated.status, WorkflowRunStatus::Cancelled);
+
+        let steps = mgr.get_workflow_steps(&run.id).unwrap();
+        assert_eq!(steps[0].status, WorkflowStepStatus::Failed);
+    }
+
+    #[test]
+    fn test_cancel_run_skips_terminal_steps() {
+        let conn = setup_db();
+        let (mgr, _parent, run) = make_workflow_run(&conn);
+
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        // A completed step — must not be touched
+        let done_step = mgr
+            .insert_step(&run.id, "already-done", "actor", false, 0, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &done_step,
+            WorkflowStepStatus::Completed,
+            None,
+            Some("done"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // An active step — must be cancelled
+        let active_step = mgr
+            .insert_step(&run.id, "in-progress", "actor", false, 1, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &active_step,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        mgr.cancel_run(&run.id, "stop").unwrap();
+
+        let steps = mgr.get_workflow_steps(&run.id).unwrap();
+        let done = steps.iter().find(|s| s.id == done_step).unwrap();
+        let active = steps.iter().find(|s| s.id == active_step).unwrap();
+
+        assert_eq!(
+            done.status,
+            WorkflowStepStatus::Completed,
+            "completed step must not be modified"
+        );
+        assert_eq!(
+            active.status,
+            WorkflowStepStatus::Failed,
+            "active step must be marked failed"
+        );
+    }
+
+    #[test]
+    fn test_cancel_run_already_terminal_returns_error() {
+        let conn = setup_db();
+        let (mgr, _parent, run) = make_workflow_run(&conn);
+
+        mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+
+        let err = mgr.cancel_run(&run.id, "too late").unwrap_err();
+        assert!(
+            err.to_string().contains("terminal state"),
+            "expected terminal state error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_cancel_run_not_found_returns_error() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let err = mgr.cancel_run("nonexistent-id", "reason").unwrap_err();
+        assert!(
+            err.to_string().contains("not found"),
+            "expected not-found error, got: {err}"
+        );
     }
 }
