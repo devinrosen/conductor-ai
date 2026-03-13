@@ -297,6 +297,10 @@ impl App {
         match action {
             Action::None => return false,
             Action::Tick => {
+                // Prune completed workflow threads so the Vec doesn't accumulate
+                // stale handles across the session. Only in-flight threads remain,
+                // making the quit-time join fast in the common case.
+                self.workflow_threads.retain(|h| !h.is_finished());
                 // Poll workflow data asynchronously on every tick so the global
                 // status bar (and workflow views) stay current regardless of which
                 // view is active.
