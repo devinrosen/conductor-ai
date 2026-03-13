@@ -541,6 +541,9 @@ impl App {
 
             // Theme picker
             Action::ShowThemePicker => self.handle_show_theme_picker(),
+            Action::ThemesLoaded { themes, warnings } => {
+                self.handle_themes_loaded(themes, warnings);
+            }
             Action::ThemePreview(idx) => self.handle_theme_preview(idx),
             Action::ThemeSaveComplete { result } => {
                 self.state.modal = match result {
@@ -3350,7 +3353,24 @@ impl App {
     // ── Theme picker ───────────────────────────────────────────────────
 
     fn handle_show_theme_picker(&mut self) {
-        let themes = crate::theme::all_themes();
+        let Some(bg_tx) = self.bg_tx.clone() else {
+            self.state.modal = Modal::Error {
+                message: "Cannot open theme picker: background sender not ready.".into(),
+            };
+            return;
+        };
+        // Show a non-blocking progress modal while scanning ~/.conductor/themes/
+        // off the TUI main thread, as required by the threading rule in CLAUDE.md.
+        self.state.modal = Modal::Progress {
+            message: "Loading themes…".into(),
+        };
+        std::thread::spawn(move || {
+            let (themes, warnings) = crate::theme::all_themes();
+            let _ = bg_tx.send(Action::ThemesLoaded { themes, warnings });
+        });
+    }
+
+    fn handle_themes_loaded(&mut self, themes: Vec<(String, String)>, warnings: Vec<String>) {
         let current_name = self
             .config
             .general
@@ -3367,6 +3387,13 @@ impl App {
             original_theme: self.state.theme,
             original_name: current_name,
         };
+        // Surface any broken theme files as a status warning (non-fatal).
+        if !warnings.is_empty() {
+            self.state.status_message = Some(format!(
+                "Warning: {} theme file(s) failed to parse — check your ~/.conductor/themes/ directory",
+                warnings.len()
+            ));
+        }
     }
 
     fn handle_theme_preview(&mut self, idx: usize) {
