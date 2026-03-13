@@ -432,7 +432,12 @@ fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<String> {
         }
         let mut out = String::new();
         for run in &repo_runs {
-            out.push_str(&format_run_summary_line(run));
+            let (slug, branch, _) = resolve_worktree_info(&conn, run);
+            out.push_str(&format_run_summary_line(
+                run,
+                slug.as_deref(),
+                branch.as_deref(),
+            ));
         }
         return Ok(out);
     }
@@ -500,11 +505,23 @@ fn format_workflow_def(def: &conductor_core::workflow::WorkflowDef) -> String {
 // Run formatting helpers (shared between resource reader and tool handlers)
 // ---------------------------------------------------------------------------
 
-fn format_run_summary_line(run: &conductor_core::workflow::WorkflowRun) -> String {
-    format!(
-        "id: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\n\n",
+fn format_run_summary_line(
+    run: &conductor_core::workflow::WorkflowRun,
+    worktree_slug: Option<&str>,
+    worktree_branch: Option<&str>,
+) -> String {
+    let mut out = format!(
+        "id: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\n",
         run.id, run.workflow_name, run.status, run.started_at
-    )
+    );
+    if let Some(slug) = worktree_slug {
+        out.push_str(&format!("worktree_slug: {slug}\n"));
+    }
+    if let Some(branch) = worktree_branch {
+        out.push_str(&format!("worktree_branch: {branch}\n"));
+    }
+    out.push('\n');
+    out
 }
 
 fn format_run_summary_line_with_repo(
@@ -524,9 +541,11 @@ fn format_run_summary_line_with_repo(
 fn format_run_detail(
     run: &conductor_core::workflow::WorkflowRun,
     steps: &[conductor_core::workflow::WorkflowRunStep],
+    worktree_slug: Option<&str>,
+    worktree_branch: Option<&str>,
 ) -> String {
     let mut out = format!(
-        "id: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\nended_at: {}\nsummary: {}\n\nsteps:\n",
+        "id: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\nended_at: {}\nsummary: {}\n",
         run.id,
         run.workflow_name,
         run.status,
@@ -534,6 +553,13 @@ fn format_run_detail(
         run.ended_at.as_deref().unwrap_or("running"),
         run.result_summary.as_deref().unwrap_or("none")
     );
+    if let Some(slug) = worktree_slug {
+        out.push_str(&format!("worktree_slug: {slug}\n"));
+    }
+    if let Some(branch) = worktree_branch {
+        out.push_str(&format!("worktree_branch: {branch}\n"));
+    }
+    out.push_str("\nsteps:\n");
     for step in steps {
         out.push_str(&format!(
             "  {} [{}]: {}\n",
@@ -543,19 +569,6 @@ fn format_run_detail(
         ));
     }
     out
-}
-
-/// Resolve the worktree filesystem path for a workflow run.
-fn worktree_path_for_run(
-    conn: &rusqlite::Connection,
-    run: &conductor_core::workflow::WorkflowRun,
-) -> Option<PathBuf> {
-    let wt_id = run.worktree_id.as_deref()?;
-    let config = conductor_core::config::load_config().ok()?;
-    let wt = conductor_core::worktree::WorktreeManager::new(conn, &config)
-        .get_by_id(wt_id)
-        .ok()?;
-    Some(PathBuf::from(&wt.path))
 }
 
 /// Return the tail of the most recent Claude Code conversation log for a worktree.
@@ -643,14 +656,38 @@ fn format_run_detail_with_log(
     run: &conductor_core::workflow::WorkflowRun,
     steps: &[conductor_core::workflow::WorkflowRunStep],
 ) -> String {
-    let mut out = format_run_detail(run, steps);
-    if let Some(wt_path) = worktree_path_for_run(conn, run) {
-        if let Some(log) = conversation_log_tail(&wt_path) {
+    let (wt_slug, wt_branch, wt_path) = resolve_worktree_info(conn, run);
+    let mut out = format_run_detail(run, steps, wt_slug.as_deref(), wt_branch.as_deref());
+    if let Some(path) = wt_path {
+        if let Some(log) = conversation_log_tail(&path) {
             out.push_str("\nconversation log (last 20 messages):\n");
             out.push_str(&log);
         }
     }
     out
+}
+
+/// Resolve the worktree slug, branch, and filesystem path for a workflow run.
+/// Returns `(slug, branch, path)` — all `None` if there is no worktree or it has been deleted.
+fn resolve_worktree_info(
+    conn: &rusqlite::Connection,
+    run: &conductor_core::workflow::WorkflowRun,
+) -> (Option<String>, Option<String>, Option<std::path::PathBuf>) {
+    let wt_id = match run.worktree_id.as_deref() {
+        Some(id) => id,
+        None => return (None, None, None),
+    };
+    let config = match conductor_core::config::load_config() {
+        Ok(c) => c,
+        Err(_) => return (None, None, None),
+    };
+    match conductor_core::worktree::WorktreeManager::new(conn, &config).get_by_id(wt_id) {
+        Ok(wt) => {
+            let path = Some(std::path::PathBuf::from(&wt.path));
+            (Some(wt.slug), Some(wt.branch), path)
+        }
+        Err(_) => (None, None, None),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3202,5 +3239,91 @@ workflow build {
         let mgr2 = AgentManager::new(&conn2);
         let updated = mgr2.get_run(&run.id).expect("query").expect("run exists");
         assert_eq!(updated.status, AgentRunStatus::Running);
+    }
+
+    // -- worktree_slug in list_runs output ----------------------------------
+
+    #[test]
+    fn test_list_runs_includes_worktree_slug() {
+        use conductor_core::agent::AgentManager;
+        use conductor_core::config::Config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+        use conductor_core::workflow::WorkflowManager;
+
+        let (_f, db) = make_test_db();
+        let conn = open_database(&db).expect("open db");
+        let config = Config::default();
+
+        // Register a repo.
+        let repo = RepoManager::new(&conn, &config)
+            .add(
+                "slug-test-repo",
+                "/tmp/slug-test-repo",
+                "https://github.com/x/y",
+                None,
+            )
+            .expect("add repo");
+
+        // Insert a worktree row directly (avoids git subprocess calls).
+        let wt_id = "01JTEST0000000000000000001";
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 'active', datetime('now'))",
+            rusqlite::params![
+                wt_id,
+                repo.id,
+                "feat-my-feature",
+                "feat/my-feature",
+                "/tmp/wt"
+            ],
+        )
+        .expect("insert worktree");
+
+        // Create a workflow run linked to both the worktree and the repo.
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(None, "workflow", None, None)
+            .expect("create agent run");
+        WorkflowManager::new(&conn)
+            .create_workflow_run_with_targets(
+                "my-wf",
+                Some(wt_id),
+                None,
+                Some(&repo.id),
+                &parent.id,
+                false,
+                "manual",
+                None,
+                None,
+                None,
+            )
+            .expect("create workflow run");
+
+        // Call tool_list_runs and verify worktree_slug appears in output.
+        let args = args_with("repo", "slug-test-repo");
+        let result = dispatch_tool(&db, "conductor_list_runs", &args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "list_runs should succeed; got: {:?}",
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("worktree_slug: feat-my-feature"),
+            "expected worktree_slug in output, got: {text}"
+        );
+        assert!(
+            text.contains("worktree_branch: feat/my-feature"),
+            "expected worktree_branch in output, got: {text}"
+        );
     }
 }
