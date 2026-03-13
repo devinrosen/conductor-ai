@@ -1690,6 +1690,10 @@ pub struct WorkflowExecInput<'a> {
     /// Default named GitHub App bot identity for call nodes that have no explicit `as =`.
     /// Set by a `call workflow { as = "..." }` node when it invokes a sub-workflow.
     pub default_bot_name: Option<String>,
+    /// If set, the workflow run ID is written here immediately after the run record is
+    /// created (before any steps execute). Used by callers that need to return the ID
+    /// to an external client while execution continues in the background.
+    pub run_id_notify: Option<std::sync::Arc<std::sync::Mutex<Option<String>>>>,
 }
 
 /// Execute a workflow definition against a worktree.
@@ -1779,6 +1783,13 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         input.parent_workflow_run_id,
         input.target_label,
     )?;
+
+    // Notify any waiting caller of the freshly-created run ID.
+    if let Some(slot) = &input.run_id_notify {
+        if let Ok(mut guard) = slot.lock() {
+            *guard = Some(wf_run.id.clone());
+        }
+    }
 
     // Persist default_bot_name so it can be restored on resume.
     if let Some(ref bot_name) = input.default_bot_name {
@@ -1965,6 +1976,9 @@ pub struct WorkflowExecStandalone {
     pub inputs: HashMap<String, String>,
     /// Human-readable label for the target (e.g. `repo_slug/wt_slug`, `owner/repo#N`).
     pub target_label: Option<String>,
+    /// If set, the workflow run ID is written here immediately after the run record is
+    /// created (before any steps execute). See [`WorkflowExecInput::run_id_notify`].
+    pub run_id_notify: Option<std::sync::Arc<std::sync::Mutex<Option<String>>>>,
 }
 
 /// Execute a workflow in a self-contained manner: opens its own database
@@ -1990,6 +2004,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         parent_workflow_run_id: None,
         target_label: params.target_label.as_deref(),
         default_bot_name: None,
+        run_id_notify: params.run_id_notify.clone(),
     };
 
     execute_workflow(&input)
@@ -2893,6 +2908,7 @@ fn execute_call_workflow(
                 .bot_name
                 .clone()
                 .or_else(|| state.default_bot_name.clone()),
+            run_id_notify: None,
         };
 
         match execute_workflow(&child_input) {
@@ -6413,6 +6429,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let err = execute_workflow(&input).unwrap_err();
         assert!(
@@ -6455,6 +6472,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         // Guard should pass; empty workflow completes successfully.
         let result = execute_workflow(&input);
@@ -6499,6 +6517,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result = execute_workflow(&input);
         assert!(
@@ -8238,6 +8257,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result1 = execute_workflow(&input1);
         assert!(
@@ -8267,6 +8287,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result2 = execute_workflow(&input2);
         assert!(
@@ -8555,6 +8576,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8603,6 +8625,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8655,6 +8678,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8694,6 +8718,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         assert!(
             execute_workflow(&input).is_err(),
@@ -8724,6 +8749,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         assert!(
             execute_workflow(&input).is_err(),
@@ -8792,6 +8818,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result = execute_workflow(&input).unwrap();
 
@@ -8844,6 +8871,7 @@ And here is my actual output:
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            run_id_notify: None,
         };
         let result = execute_workflow(&input).unwrap();
 

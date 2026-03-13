@@ -200,6 +200,10 @@ fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource>> {
     let repo_mgr = RepoManager::new(&conn, &config);
     let repos = repo_mgr.list()?;
 
+    // Fetch all recent workflow runs once (avoids N+1 query inside the per-repo loop)
+    let wf_mgr = WorkflowManager::new(&conn);
+    let all_runs = wf_mgr.list_all_workflow_runs(200)?;
+
     for repo in &repos {
         resources.push(make_resource(
             format!("conductor://repo/{}", repo.slug),
@@ -249,9 +253,7 @@ fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource>> {
             ));
         }
 
-        // Recent workflow runs filtered by repo_id
-        let wf_mgr = WorkflowManager::new(&conn);
-        let all_runs = wf_mgr.list_all_workflow_runs(50)?;
+        // Recent workflow runs filtered by repo_id (all_runs fetched once above)
         for run in all_runs
             .iter()
             .filter(|r| r.repo_id.as_deref() == Some(&repo.id))
@@ -813,12 +815,12 @@ fn tool_sync_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
 }
 
 fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
-    use conductor_core::agent::AgentManager;
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::{
         execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone, WorkflowManager,
     };
     use conductor_core::worktree::WorktreeManager;
+    use std::sync::{Arc, Mutex};
 
     let workflow_name = match get_arg(args, "workflow") {
         Some(s) => s,
@@ -870,33 +872,9 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
         (None, repo.local_path.clone())
     };
 
-    // Create a placeholder agent run that acts as the "parent" for the workflow run
-    let agent_mgr = AgentManager::new(&conn);
-    let parent_run = match agent_mgr.create_run(worktree_id.as_deref(), "mcp-workflow", None, None)
-    {
-        Ok(r) => r,
-        Err(e) => return tool_err(format!("Failed to create agent run: {e}")),
-    };
-
-    // Create the workflow run record
-    let wf_mgr = WorkflowManager::new(&conn);
-    let wf_run = match wf_mgr.create_workflow_run_with_targets(
-        &workflow.name,
-        worktree_id.as_deref(),
-        None,
-        Some(&repo.id),
-        &parent_run.id,
-        false,
-        "mcp",
-        None,
-        None,
-        Some(repo_slug),
-    ) {
-        Ok(r) => r,
-        Err(e) => return tool_err(format!("Failed to create workflow run: {e}")),
-    };
-
-    let run_id = wf_run.id.clone();
+    // Slot receives the actual workflow run ID as soon as execute_workflow creates it
+    // (before any steps execute), allowing us to return it immediately to the caller.
+    let run_id_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
     // Fire-and-forget: execute in a background thread
     let standalone = WorkflowExecStandalone {
@@ -911,11 +889,29 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
         exec_config: WorkflowExecConfig::default(),
         inputs,
         target_label: Some(repo_slug.to_string()),
+        run_id_notify: Some(Arc::clone(&run_id_slot)),
     };
 
     std::thread::spawn(move || {
         let _ = execute_workflow_standalone(&standalone);
     });
+
+    // Wait up to 2 s for the background thread to create the workflow run record.
+    let run_id = {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            {
+                let guard = run_id_slot.lock().unwrap();
+                if let Some(id) = guard.as_ref() {
+                    break id.clone();
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return tool_err("Workflow started but run_id was not available within 2 s");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    };
 
     tool_ok(format!(
         "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nPoll progress with conductor_get_run."
@@ -1099,4 +1095,175 @@ pub async fn serve() -> anyhow::Result<()> {
     let service = rmcp::serve_server(server, rmcp::transport::stdio()).await?;
     service.waiting().await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create a temp file DB with migrations applied, return the file (kept alive).
+    fn make_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
+        use conductor_core::db::open_database;
+        let file = tempfile::NamedTempFile::new().expect("temp file");
+        let path = file.path().to_path_buf();
+        open_database(&path).expect("open_database");
+        (file, path)
+    }
+
+    fn empty_args() -> serde_json::Map<String, Value> {
+        serde_json::Map::new()
+    }
+
+    fn args_with(key: &str, val: &str) -> serde_json::Map<String, Value> {
+        let mut m = serde_json::Map::new();
+        m.insert(key.to_string(), Value::String(val.to_string()));
+        m
+    }
+
+    // -- read_resource_by_uri -----------------------------------------------
+
+    #[test]
+    fn test_read_resource_unknown_uri_returns_error() {
+        let (_f, db) = make_test_db();
+        let result = read_resource_by_uri(&db, "conductor://does-not-exist/foo");
+        assert!(result.is_err(), "unknown URI should be an error");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Unknown conductor://"),
+            "error message should mention unknown URI, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_read_resource_repos_empty_db() {
+        let (_f, db) = make_test_db();
+        let result = read_resource_by_uri(&db, "conductor://repos").expect("should succeed");
+        assert!(
+            result.contains("No repos registered"),
+            "expected empty message, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_read_resource_repo_not_found() {
+        let (_f, db) = make_test_db();
+        let result = read_resource_by_uri(&db, "conductor://repo/no-such-repo");
+        assert!(result.is_err(), "missing repo should be an error");
+    }
+
+    #[test]
+    fn test_read_resource_tickets_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let result = read_resource_by_uri(&db, "conductor://tickets/ghost-repo");
+        assert!(result.is_err(), "unknown repo should produce an error");
+    }
+
+    #[test]
+    fn test_read_resource_worktrees_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let result = read_resource_by_uri(&db, "conductor://worktrees/ghost-repo");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_resource_runs_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let result = read_resource_by_uri(&db, "conductor://runs/ghost-repo");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_resource_run_not_found() {
+        let (_f, db) = make_test_db();
+        let result = read_resource_by_uri(&db, "conductor://run/01HXXXXXXXXXXXXXXXXXXXXXXX");
+        assert!(result.is_err(), "non-existent run_id should be an error");
+    }
+
+    #[test]
+    fn test_read_resource_workflows_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let result = read_resource_by_uri(&db, "conductor://workflows/ghost-repo");
+        assert!(result.is_err());
+    }
+
+    // -- dispatch_tool -------------------------------------------------------
+
+    #[test]
+    fn test_dispatch_unknown_tool() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_nonexistent", &empty_args());
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "unknown tool should return is_error=true"
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Unknown tool"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_list_tickets_missing_repo_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_list_tickets", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_list_worktrees_missing_repo_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_list_worktrees", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_dispatch_get_run_missing_run_id_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_get_run", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_dispatch_get_run_nonexistent_run() {
+        let (_f, db) = make_test_db();
+        let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
+        let result = dispatch_tool(&db, "conductor_get_run", &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_dispatch_list_runs_missing_repo_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_list_runs", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_dispatch_run_workflow_missing_args() {
+        let (_f, db) = make_test_db();
+        // Missing both "workflow" and "repo"
+        let result = dispatch_tool(&db, "conductor_run_workflow", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_dispatch_run_workflow_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let mut args = serde_json::Map::new();
+        args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
+        args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
+        let result = dispatch_tool(&db, "conductor_run_workflow", &args);
+        assert_eq!(result.is_error, Some(true));
+    }
 }

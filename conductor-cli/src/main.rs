@@ -1300,6 +1300,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(r.slug.as_str()),
                             default_bot_name: None,
+                            run_id_notify: None,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1349,6 +1350,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(run_id.as_str()),
                             default_bot_name: None,
+                            run_id_notify: None,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1398,6 +1400,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(repo.slug.as_str()),
                             default_bot_name: None,
+                            run_id_notify: None,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1450,6 +1453,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(&wt_label),
                             default_bot_name: None,
+                            run_id_notify: None,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
