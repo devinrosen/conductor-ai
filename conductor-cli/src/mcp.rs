@@ -3,7 +3,7 @@
 //! All DB access runs inside `tokio::task::spawn_blocking` since `rusqlite::Connection`
 //! is `!Send`. The `rmcp` library handles the stdio JSON-RPC transport.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -442,7 +442,7 @@ fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<String> {
             .get_workflow_run(run_id)?
             .ok_or_else(|| anyhow::anyhow!("Workflow run {run_id} not found"))?;
         let steps = wf_mgr.get_workflow_steps(run_id)?;
-        return Ok(format_run_detail(&run, &steps));
+        return Ok(format_run_detail_with_log(&conn, &run, &steps));
     }
 
     if let Some(repo_slug) = uri.strip_prefix("conductor://workflows/") {
@@ -503,6 +503,106 @@ fn format_run_detail(
             step.status,
             step.result_text.as_deref().unwrap_or("")
         ));
+    }
+    out
+}
+
+/// Resolve the worktree filesystem path for a workflow run.
+fn worktree_path_for_run(
+    conn: &rusqlite::Connection,
+    run: &conductor_core::workflow::WorkflowRun,
+) -> Option<PathBuf> {
+    let wt_id = run.worktree_id.as_deref()?;
+    let config = conductor_core::config::load_config().ok()?;
+    let wt = conductor_core::worktree::WorktreeManager::new(conn, &config)
+        .get_by_id(wt_id)
+        .ok()?;
+    Some(PathBuf::from(&wt.path))
+}
+
+/// Return the tail of the most recent Claude Code conversation log for a worktree.
+///
+/// Looks in `~/.claude/projects/<escaped>/` where `<escaped>` is the worktree
+/// path with every `/` replaced by `-`. Returns `None` on any error or if no
+/// relevant messages are found.
+fn conversation_log_tail(worktree_path: &Path) -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let escaped = worktree_path.to_str()?.replace('/', "-");
+    let projects_dir = PathBuf::from(&home)
+        .join(".claude")
+        .join("projects")
+        .join(&escaped);
+
+    // Collect all .jsonl files, pick the most recently modified.
+    let entries = std::fs::read_dir(&projects_dir).ok()?;
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        if let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) {
+            if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
+                best = Some((mtime, path));
+            }
+        }
+    }
+    let log_path = best?.1;
+
+    // Ring-buffer the last 20 user/assistant messages.
+    let content = std::fs::read_to_string(&log_path).ok()?;
+    let mut ring: VecDeque<String> = VecDeque::with_capacity(20);
+    for line in content.lines() {
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let msg_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if msg_type != "user" && msg_type != "assistant" {
+            continue;
+        }
+        // Extract text content.
+        let text = match val.get("message").and_then(|m| m.get("content")) {
+            Some(Value::String(s)) => s.chars().take(500).collect::<String>(),
+            Some(Value::Array(blocks)) => {
+                let mut parts = String::new();
+                for block in blocks {
+                    if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                        if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
+                            parts.push_str(t);
+                        }
+                    }
+                }
+                parts.chars().take(500).collect::<String>()
+            }
+            _ => continue,
+        };
+        if text.is_empty() {
+            continue;
+        }
+        if ring.len() == 20 {
+            ring.pop_front();
+        }
+        ring.push_back(format!("[{msg_type}]\n{text}\n"));
+    }
+
+    if ring.is_empty() {
+        return None;
+    }
+    Some(ring.into_iter().collect::<String>())
+}
+
+/// Like `format_run_detail` but also appends the conversation log tail when available.
+fn format_run_detail_with_log(
+    conn: &rusqlite::Connection,
+    run: &conductor_core::workflow::WorkflowRun,
+    steps: &[conductor_core::workflow::WorkflowRunStep],
+) -> String {
+    let mut out = format_run_detail(run, steps);
+    if let Some(wt_path) = worktree_path_for_run(conn, run) {
+        if let Some(log) = conversation_log_tail(&wt_path) {
+            out.push_str("\nconversation log (last 20 messages):\n");
+            out.push_str(&log);
+        }
     }
     out
 }
@@ -1013,7 +1113,7 @@ fn tool_get_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallTo
         Ok(s) => s,
         Err(e) => return tool_err(e),
     };
-    tool_ok(format_run_detail(&run, &steps))
+    tool_ok(format_run_detail_with_log(&conn, &run, &steps))
 }
 
 fn tool_approve_gate(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
