@@ -16,13 +16,13 @@ Steps:
 
 2. Attempt to merge via the merge queue (auto-merge):
    ```
-   gh pr merge --auto --squash
+   gh pr merge --auto --squash --delete-branch
    ```
-   If the command succeeds, the PR will be merged automatically once all checks pass.
+   If the command succeeds, the PR will be merged automatically once all checks pass and the remote branch will be deleted.
 
 3. If `--auto` fails because the repository does not have a merge queue enabled, fall back to a direct squash merge:
    ```
-   gh pr merge --squash
+   gh pr merge --squash --delete-branch
    ```
 
 4. Close the linked GitHub issue. The ticket ID may be a bare number (e.g. `123`) or prefixed with `#` (e.g. `#123`). Strip any leading `#` before passing to the CLI:
