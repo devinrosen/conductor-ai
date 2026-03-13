@@ -7,25 +7,14 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStatus};
-use conductor_core::worktree::Worktree;
 
 use super::common::truncate;
 use super::helpers::{shorten_paths, visual_idx_with_headers};
 use crate::state::AppState;
+use crate::state::TargetType;
 use crate::state::WorkflowRunDetailFocus;
 use crate::state::WorkflowRunRow;
 use crate::state::WorkflowsFocus;
-
-/// Return the slug of the worktree matching `predicate`, or `None` if not found.
-fn worktree_slug_opt(
-    worktrees: &[Worktree],
-    predicate: impl Fn(&Worktree) -> bool,
-) -> Option<&str> {
-    worktrees
-        .iter()
-        .find(|wt| predicate(wt))
-        .map(|wt| wt.slug.as_str())
-}
 
 /// Render the Workflows split-pane view: defs (left) + runs (right).
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -265,7 +254,55 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
     let items: Vec<ListItem> = visible
         .iter()
         .map(|row| {
-            let run_id = row.run_id();
+            // Handle header rows first — they have no associated WorkflowRun.
+            match row {
+                WorkflowRunRow::RepoHeader {
+                    repo_slug,
+                    collapsed,
+                    run_count,
+                } => {
+                    let arrow = if *collapsed { "▶" } else { "▼" };
+                    let label = if *collapsed {
+                        format!("{arrow} {repo_slug}  (+{run_count})")
+                    } else {
+                        format!("{arrow} {repo_slug}")
+                    };
+                    return ListItem::new(Line::from(vec![Span::styled(
+                        label,
+                        Style::default()
+                            .fg(state.theme.group_header)
+                            .add_modifier(Modifier::BOLD),
+                    )]));
+                }
+                WorkflowRunRow::TargetHeader {
+                    label,
+                    target_type,
+                    collapsed,
+                    run_count,
+                    ..
+                } => {
+                    let arrow = if *collapsed { "▶" } else { "▼" };
+                    let type_badge = match target_type {
+                        TargetType::Pr => "[pr]",
+                        TargetType::Worktree => "[wt]",
+                    };
+                    let display = if *collapsed {
+                        format!("  {arrow} {:<30}  {type_badge}  (+{run_count})", label)
+                    } else {
+                        format!("  {arrow} {:<30}  {type_badge}", label)
+                    };
+                    return ListItem::new(Line::from(vec![Span::styled(
+                        display,
+                        Style::default().fg(state.theme.label_secondary),
+                    )]));
+                }
+                _ => {}
+            }
+
+            // Parent / Child rows: look up the run.
+            let Some(run_id) = row.run_id() else {
+                return ListItem::new(Line::from(vec![Span::raw("?")]));
+            };
             let Some(run) = run_map.get(run_id) else {
                 return ListItem::new(Line::from(vec![Span::raw("?")]));
             };
@@ -294,8 +331,11 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         "  "
                     };
 
+                    // In global mode, indent run rows under their target header.
+                    let indent = if global_mode { "    " } else { "" };
+
                     let mut spans = vec![
-                        Span::raw(prefix),
+                        Span::raw(format!("{indent}{prefix}")),
                         Span::styled(status_symbol, Style::default().fg(status_color)),
                         Span::raw("  "),
                         Span::styled(
@@ -304,33 +344,17 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         ),
                     ];
 
-                    if global_mode {
-                        // Prefer target_label, then worktree slug, then "?".
-                        let target = run
-                            .target_label
-                            .as_deref()
-                            .or_else(|| {
-                                worktree_slug_opt(&state.data.worktrees, |w| {
-                                    Some(w.id.as_str()) == run.worktree_id.as_deref()
-                                })
-                            })
-                            .unwrap_or("?");
-                        spans.push(Span::styled(
-                            format!("  {}", truncate(target, 25)),
-                            Style::default().fg(state.theme.label_secondary),
-                        ));
-                    } else {
-                        spans.push(Span::styled(
-                            format!(
-                                "  {}",
-                                run.started_at
-                                    .get(..19)
-                                    .unwrap_or(&run.started_at)
-                                    .replace('T', " ")
-                            ),
-                            Style::default().fg(state.theme.label_secondary),
-                        ));
-                    }
+                    // Show timestamp in both modes; the target context is now on the header row.
+                    spans.push(Span::styled(
+                        format!(
+                            "  {}",
+                            run.started_at
+                                .get(..19)
+                                .unwrap_or(&run.started_at)
+                                .replace('T', " ")
+                        ),
+                        Style::default().fg(state.theme.label_secondary),
+                    ));
 
                     spans.push(Span::styled(
                         format!("  {duration}"),
@@ -358,7 +382,9 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                     ListItem::new(Line::from(spans))
                 }
                 WorkflowRunRow::Child { .. } => {
+                    let indent = if global_mode { "    " } else { "" };
                     let mut spans = vec![
+                        Span::raw(indent),
                         Span::styled(
                             "  \u{2570} ",
                             Style::default().fg(state.theme.label_secondary),
@@ -388,6 +414,10 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                     }
 
                     ListItem::new(Line::from(spans))
+                }
+                // Header arms already handled above; this branch is unreachable.
+                WorkflowRunRow::RepoHeader { .. } | WorkflowRunRow::TargetHeader { .. } => {
+                    ListItem::new(Line::from(vec![Span::raw("")]))
                 }
             }
         })
