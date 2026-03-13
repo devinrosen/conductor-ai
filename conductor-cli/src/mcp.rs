@@ -667,16 +667,40 @@ fn conductor_tools() -> Vec<Tool> {
             "conductor_run_workflow",
             "Start a workflow. Returns run_id immediately; poll with conductor_get_run. \
              Provide worktree or inputs to target a specific context.",
-            schema(&[
-                ("workflow", "Workflow name", true),
-                ("repo", "Repo slug", true),
-                ("worktree", "Worktree slug (optional)", false),
-                (
-                    "inputs",
-                    "JSON object of input key=value pairs (optional)",
-                    false,
-                ),
-            ]),
+            {
+                let mut props = serde_json::Map::new();
+                props.insert(
+                    "workflow".into(),
+                    json!({ "type": "string", "description": "Workflow name" }),
+                );
+                props.insert(
+                    "repo".into(),
+                    json!({ "type": "string", "description": "Repo slug" }),
+                );
+                props.insert(
+                    "worktree".into(),
+                    json!({ "type": "string", "description": "Worktree slug (optional)" }),
+                );
+                props.insert(
+                    "inputs".into(),
+                    json!({
+                        "type": "object",
+                        "additionalProperties": { "type": "string" },
+                        "description": "Input key=value pairs (optional)"
+                    }),
+                );
+                let mut s = serde_json::Map::new();
+                s.insert("type".into(), Value::String("object".into()));
+                s.insert("properties".into(), Value::Object(props));
+                s.insert(
+                    "required".into(),
+                    Value::Array(vec![
+                        Value::String("workflow".into()),
+                        Value::String("repo".into()),
+                    ]),
+                );
+                Arc::new(s)
+            },
         ),
         Tool::new(
             "conductor_list_runs",
@@ -945,14 +969,22 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
     let repo_slug = require_arg!(args, "repo");
     let worktree_slug = get_arg(args, "worktree");
 
-    // Parse optional inputs JSON
-    let inputs: HashMap<String, String> = if let Some(inputs_str) = get_arg(args, "inputs") {
-        match serde_json::from_str::<HashMap<String, String>>(inputs_str) {
-            Ok(m) => m,
-            Err(e) => return tool_err(format!("Invalid inputs JSON: {e}")),
+    // Extract optional inputs object
+    let inputs: HashMap<String, String> = match args.get("inputs") {
+        None => HashMap::new(),
+        Some(Value::Object(map)) => {
+            let mut result = HashMap::new();
+            for (k, v) in map {
+                match v.as_str() {
+                    Some(s) => {
+                        result.insert(k.clone(), s.to_string());
+                    }
+                    None => return tool_err(format!("inputs.{k} must be a string value")),
+                }
+            }
+            result
         }
-    } else {
-        HashMap::new()
+        Some(other) => return tool_err(format!("inputs must be an object, got: {other}")),
     };
 
     let (conn, config) = match open_db_and_config(db_path) {
@@ -1364,6 +1396,63 @@ mod tests {
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         let result = dispatch_tool(&db, "conductor_run_workflow", &args);
         assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_dispatch_run_workflow_inputs_as_object() {
+        let (_f, db) = make_test_db();
+        let mut inputs_map = serde_json::Map::new();
+        inputs_map.insert("key1".to_string(), Value::String("val1".to_string()));
+        inputs_map.insert("key2".to_string(), Value::String("val2".to_string()));
+        let mut args = serde_json::Map::new();
+        args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
+        args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
+        args.insert("inputs".to_string(), Value::Object(inputs_map));
+        // Should fail at repo lookup, not at inputs parsing
+        let result = dispatch_tool(&db, "conductor_run_workflow", &args);
+        assert_eq!(result.is_error, Some(true));
+        let content = format!("{result:?}");
+        assert!(
+            !content.contains("inputs must be an object"),
+            "Should not fail on inputs parsing"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_run_workflow_inputs_as_string_fails() {
+        let (_f, db) = make_test_db();
+        let mut args = serde_json::Map::new();
+        args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
+        args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
+        args.insert(
+            "inputs".to_string(),
+            Value::String(r#"{"key":"val"}"#.to_string()),
+        );
+        let result = dispatch_tool(&db, "conductor_run_workflow", &args);
+        assert_eq!(result.is_error, Some(true));
+        let content = format!("{result:?}");
+        assert!(
+            content.contains("inputs must be an object"),
+            "Should fail with inputs type error"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_run_workflow_inputs_non_string_value_fails() {
+        let (_f, db) = make_test_db();
+        let mut inputs_map = serde_json::Map::new();
+        inputs_map.insert("count".to_string(), Value::Number(42.into()));
+        let mut args = serde_json::Map::new();
+        args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
+        args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
+        args.insert("inputs".to_string(), Value::Object(inputs_map));
+        let result = dispatch_tool(&db, "conductor_run_workflow", &args);
+        assert_eq!(result.is_error, Some(true));
+        let content = format!("{result:?}");
+        assert!(
+            content.contains("inputs.count must be a string value"),
+            "Should fail with per-key type error"
+        );
     }
 
     // -- gate tools (approve / reject) --------------------------------------
