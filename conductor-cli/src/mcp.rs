@@ -936,7 +936,7 @@ fn conductor_tools() -> Vec<Tool> {
              Also available as the `conductor://worktree/{repo}/{slug}` resource.",
             schema(&[
                 ("repo", "Repo slug", true),
-                ("slug", "Worktree slug", true),
+                ("slug", "Worktree slug or branch name (e.g. feat/my-feature)", true),
             ]),
         ),
         Tool::new(
@@ -1110,7 +1110,7 @@ fn tool_get_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
         Err(e) => return tool_err(e),
     };
 
-    let wt = match WorktreeManager::new(&conn, &config).get_by_slug(&repo.id, wt_slug) {
+    let wt = match WorktreeManager::new(&conn, &config).get_by_slug_or_branch(&repo.id, wt_slug) {
         Ok(w) => w,
         Err(e) => return tool_err(e),
     };
@@ -4155,6 +4155,62 @@ workflow build {
         args.insert("slug".into(), Value::String("feat-nonexistent".into()));
         let result = dispatch_tool(&db, "conductor_get_worktree", &result_args(args));
         assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_dispatch_get_worktree_by_branch() {
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let (_f, db) = make_test_db();
+        let conn = open_database(&db).expect("open db");
+        let config = conductor_core::config::Config::default();
+
+        let repo = RepoManager::new(&conn, &config)
+            .register(
+                "my-repo",
+                "/tmp/my-repo",
+                "https://github.com/org/my-repo.git",
+                None,
+            )
+            .expect("register repo");
+
+        // Insert a worktree directly to avoid git subprocess calls.
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES (?1, ?2, ?3, ?4, '/tmp/wt', 'active', datetime('now'))",
+            rusqlite::params![
+                "01JTEST0000000000000000WTB",
+                repo.id,
+                "feat-my-feature",
+                "feat/my-feature",
+            ],
+        )
+        .expect("insert worktree");
+
+        // Look up by branch name instead of slug.
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("my-repo".into()));
+        args.insert("slug".into(), Value::String("feat/my-feature".into()));
+        let result = dispatch_tool(&db, "conductor_get_worktree", &result_args(args));
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "lookup by branch name should succeed; got: {:?}",
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("slug: feat-my-feature"),
+            "expected slug in output, got: {text}"
+        );
     }
 
     /// Build an args map from an already-constructed Map (pass-through helper).
