@@ -4,6 +4,7 @@
 //! is `!Send`. The `rmcp` library handles the stdio JSON-RPC transport.
 
 use std::collections::{HashMap, VecDeque};
+use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -532,9 +533,14 @@ fn conversation_log_tail(worktree_path: &Path) -> Option<String> {
         .join(".claude")
         .join("projects")
         .join(&escaped);
+    conversation_log_tail_from_dir(&projects_dir)
+}
 
+/// Inner implementation: read the most-recently-modified JSONL from `projects_dir`
+/// and return the last 20 user/assistant messages. Separated for testability.
+fn conversation_log_tail_from_dir(projects_dir: &Path) -> Option<String> {
     // Collect all .jsonl files, pick the most recently modified.
-    let entries = std::fs::read_dir(&projects_dir).ok()?;
+    let entries = std::fs::read_dir(projects_dir).ok()?;
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -549,11 +555,14 @@ fn conversation_log_tail(worktree_path: &Path) -> Option<String> {
     }
     let log_path = best?.1;
 
-    // Ring-buffer the last 20 user/assistant messages.
-    let content = std::fs::read_to_string(&log_path).ok()?;
+    // Ring-buffer the last 20 user/assistant messages, streaming line-by-line
+    // to avoid buffering the entire (potentially large) JSONL file into memory.
+    let file = std::fs::File::open(&log_path).ok()?;
+    let reader = std::io::BufReader::new(file);
     let mut ring: VecDeque<String> = VecDeque::with_capacity(20);
-    for line in content.lines() {
-        let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
+    for line in reader.lines() {
+        let line = line.ok().unwrap_or_default();
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
         let msg_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -1823,5 +1832,175 @@ mod tests {
         assert_eq!(runs_a[0].workflow_name, "wf-a");
         assert_eq!(runs_b.len(), 1, "expected 1 run for repo-b");
         assert_eq!(runs_b[0].workflow_name, "wf-b");
+    }
+
+    // -- conversation_log_tail ----------------------------------------------
+    //
+    // Tests call `conversation_log_tail_from_dir` directly so we can pass a temp
+    // directory path without mutating the HOME env var (which is not thread-safe
+    // in parallel test runs).
+
+    /// Write a minimal JSONL conversation log to the given path.
+    fn write_jsonl(path: &std::path::Path, lines: &[serde_json::Value]) {
+        use std::io::Write as _;
+        let mut f = std::fs::File::create(path).expect("create jsonl");
+        for line in lines {
+            writeln!(f, "{}", line).expect("write line");
+        }
+    }
+
+    /// Create a temp dir with a single `session.jsonl` containing `messages`,
+    /// then call `conversation_log_tail_from_dir` on that dir.
+    fn tail_from_messages(messages: &[serde_json::Value]) -> Option<String> {
+        let dir = tempfile::TempDir::new().expect("tmpdir");
+        write_jsonl(&dir.path().join("session.jsonl"), messages);
+        conversation_log_tail_from_dir(dir.path())
+    }
+
+    #[test]
+    fn test_conversation_log_tail_nonexistent_dir() {
+        // A non-existent directory returns None.
+        let result = conversation_log_tail_from_dir(std::path::Path::new(
+            "/tmp/no-such-conductor-test-dir-xyz",
+        ));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_conversation_log_tail_empty_log() {
+        // A JSONL file with no user/assistant messages returns None.
+        let result = tail_from_messages(&[
+            serde_json::json!({"type": "system", "message": {"content": "setup"}}),
+        ]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_conversation_log_tail_skips_non_user_assistant() {
+        // Only "user" and "assistant" type entries should appear in the tail.
+        let result = tail_from_messages(&[
+            serde_json::json!({"type": "system", "message": {"content": "sys"}}),
+            serde_json::json!({"type": "tool_result", "message": {"content": "tool"}}),
+        ]);
+        assert!(result.is_none(), "no user/assistant messages → None");
+    }
+
+    #[test]
+    fn test_conversation_log_tail_string_content() {
+        // Messages with string content are included.
+        let result = tail_from_messages(&[
+            serde_json::json!({"type": "user", "message": {"content": "Hello from user"}}),
+            serde_json::json!({"type": "assistant", "message": {"content": "Hello from assistant"}}),
+        ])
+        .expect("should return Some");
+        assert!(result.contains("Hello from user"), "got: {result}");
+        assert!(result.contains("Hello from assistant"), "got: {result}");
+        assert!(result.contains("[user]"), "got: {result}");
+        assert!(result.contains("[assistant]"), "got: {result}");
+    }
+
+    #[test]
+    fn test_conversation_log_tail_array_content_blocks() {
+        // Messages with array content blocks (type=text) are concatenated; other
+        // block types (e.g. tool_use) are ignored.
+        let result = tail_from_messages(&[serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "block one "},
+                    {"type": "tool_use", "id": "xyz"},
+                    {"type": "text", "text": "block two"}
+                ]
+            }
+        })])
+        .expect("should return Some");
+        assert!(result.contains("block one"), "got: {result}");
+        assert!(result.contains("block two"), "got: {result}");
+        assert!(
+            !result.contains("xyz"),
+            "tool_use id should not appear; got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_conversation_log_tail_ring_buffer_cap() {
+        // Only the last 20 messages should be retained.
+        let messages: Vec<_> = (0..30_u32)
+            .map(|i| {
+                serde_json::json!({
+                    "type": "user",
+                    "message": {"content": format!("msg-{i:03}")}
+                })
+            })
+            .collect();
+        let result = tail_from_messages(&messages).expect("should return Some");
+        // First 10 messages (000–009) should have been evicted.
+        for i in 0..10_u32 {
+            assert!(
+                !result.contains(&format!("msg-{i:03}")),
+                "msg-{i:03} should have been evicted; got: {result}"
+            );
+        }
+        // Last 20 messages (010–029) should be present.
+        for i in 10..30_u32 {
+            assert!(
+                result.contains(&format!("msg-{i:03}")),
+                "msg-{i:03} should be present; got: {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_conversation_log_tail_truncates_long_text() {
+        // Individual message text is capped at 500 chars.
+        let long_text = "x".repeat(1000);
+        let result = tail_from_messages(&[
+            serde_json::json!({"type": "user", "message": {"content": long_text}}),
+        ])
+        .expect("should return Some");
+        let x_count = result.chars().filter(|&c| c == 'x').count();
+        assert_eq!(x_count, 500, "expected 500 chars of text, got {x_count}");
+    }
+
+    #[test]
+    fn test_conversation_log_tail_skips_empty_text() {
+        // Messages that produce empty text (e.g. only tool_use blocks) are skipped.
+        let result = tail_from_messages(&[serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "tool_use", "id": "abc"}]
+            }
+        })]);
+        assert!(result.is_none(), "only tool_use content → no text → None");
+    }
+
+    #[test]
+    fn test_conversation_log_tail_picks_most_recent_file() {
+        // When multiple JSONL files exist, the most recently modified one is used.
+        let dir = tempfile::TempDir::new().expect("tmpdir");
+
+        // Write the older file first so its mtime is earlier.
+        let old_path = dir.path().join("old.jsonl");
+        write_jsonl(
+            &old_path,
+            &[serde_json::json!({"type": "user", "message": {"content": "from old file"}})],
+        );
+        // Sleep briefly to ensure mtime differs between files.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let new_path = dir.path().join("new.jsonl");
+        write_jsonl(
+            &new_path,
+            &[serde_json::json!({"type": "user", "message": {"content": "from new file"}})],
+        );
+
+        let result = conversation_log_tail_from_dir(dir.path()).expect("should return Some");
+        assert!(
+            result.contains("from new file"),
+            "should use newest file; got: {result}"
+        );
+        assert!(
+            !result.contains("from old file"),
+            "should not use old file; got: {result}"
+        );
     }
 }
