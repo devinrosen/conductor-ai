@@ -252,6 +252,51 @@ impl<'a> WorktreeManager<'a> {
             })
     }
 
+    pub fn get_by_branch(&self, repo_id: &str, branch: &str) -> Result<Worktree> {
+        self.conn
+            .query_row(
+                &format!(
+                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = ?1 AND branch = ?2"
+                ),
+                params![repo_id, branch],
+                map_worktree_row,
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
+                    slug: branch.to_string(),
+                },
+                _ => ConductorError::Database(e),
+            })
+    }
+
+    /// Try to resolve a worktree by slug first, then by branch name.
+    /// If neither matches, returns a "did you mean" error listing available slugs.
+    pub fn get_by_slug_or_branch(&self, repo_id: &str, slug_or_branch: &str) -> Result<Worktree> {
+        match self.get_by_slug(repo_id, slug_or_branch) {
+            Ok(wt) => return Ok(wt),
+            Err(ConductorError::WorktreeNotFound { .. }) => {}
+            Err(e) => return Err(e),
+        }
+
+        match self.get_by_branch(repo_id, slug_or_branch) {
+            Ok(wt) => return Ok(wt),
+            Err(ConductorError::WorktreeNotFound { .. }) => {}
+            Err(e) => return Err(e),
+        }
+
+        // Neither slug nor branch matched — build a "did you mean" error.
+        let available = self.list_by_repo_id(repo_id, false).unwrap_or_default();
+        let suggestions: Vec<&str> = available.iter().take(5).map(|w| w.slug.as_str()).collect();
+        let hint = if suggestions.is_empty() {
+            String::new()
+        } else {
+            format!(" — did you mean one of: {}", suggestions.join(", "))
+        };
+        Err(ConductorError::WorktreeNotFound {
+            slug: format!("{slug_or_branch}{hint}"),
+        })
+    }
+
     pub fn list_by_ticket(&self, ticket_id: &str) -> Result<Vec<Worktree>> {
         query_collect(
             self.conn,
@@ -1287,6 +1332,94 @@ mod tests {
         let wt = mgr.get_by_id("wt1").unwrap();
         assert_eq!(wt.status, WorktreeStatus::Abandoned);
         assert!(wt.completed_at.is_some());
+    }
+
+    // ---- get_by_slug_or_branch tests ----
+
+    fn insert_test_worktree(conn: &Connection, id: &str, repo_id: &str, slug: &str, branch: &str) {
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES (?1, ?2, ?3, ?4, '/tmp/ws', 'active', '2024-01-01T00:00:00Z')",
+            params![id, repo_id, slug, branch],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_get_by_slug_or_branch_slug_match() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        insert_test_worktree(
+            &conn,
+            "wt1",
+            "r1",
+            "feat-123-my-feature",
+            "feat/123-my-feature",
+        );
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let wt = mgr
+            .get_by_slug_or_branch("r1", "feat-123-my-feature")
+            .unwrap();
+        assert_eq!(wt.id, "wt1");
+    }
+
+    #[test]
+    fn test_get_by_slug_or_branch_branch_match() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        insert_test_worktree(
+            &conn,
+            "wt1",
+            "r1",
+            "feat-123-my-feature",
+            "feat/123-my-feature",
+        );
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let wt = mgr
+            .get_by_slug_or_branch("r1", "feat/123-my-feature")
+            .unwrap();
+        assert_eq!(wt.id, "wt1");
+    }
+
+    #[test]
+    fn test_get_by_slug_or_branch_did_you_mean() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        insert_test_worktree(
+            &conn,
+            "wt1",
+            "r1",
+            "feat-123-my-feature",
+            "feat/123-my-feature",
+        );
+        insert_test_worktree(&conn, "wt2", "r1", "fix-456-other", "fix/456-other");
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let err = mgr
+            .get_by_slug_or_branch("r1", "totally-wrong")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("totally-wrong"), "error: {err}");
+        assert!(err.contains("did you mean"), "error: {err}");
+        assert!(err.contains("feat-123-my-feature"), "error: {err}");
+    }
+
+    #[test]
+    fn test_get_by_slug_or_branch_empty_repo() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+
+        // Use a repo ID that has no worktrees seeded in the test DB.
+        let mgr = WorktreeManager::new(&conn, &config);
+        let err = mgr
+            .get_by_slug_or_branch("repo-with-no-worktrees", "anything")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("anything"), "error: {err}");
+        // No "did you mean" hint when repo has no worktrees
+        assert!(!err.contains("did you mean"), "error: {err}");
     }
 
     #[test]

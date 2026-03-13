@@ -679,7 +679,7 @@ fn conductor_tools() -> Vec<Tool> {
                 );
                 props.insert(
                     "worktree".into(),
-                    json!({ "type": "string", "description": "Worktree slug (optional)" }),
+                    json!({ "type": "string", "description": "Worktree slug or branch name (optional)" }),
                 );
                 props.insert(
                     "inputs".into(),
@@ -707,7 +707,11 @@ fn conductor_tools() -> Vec<Tool> {
             "List recent workflow runs for a repo (optionally filtered by worktree and/or status).",
             schema(&[
                 ("repo", "Repo slug", true),
-                ("worktree", "Worktree slug to filter by (optional)", false),
+                (
+                    "worktree",
+                    "Worktree slug or branch name to filter by (optional)",
+                    false,
+                ),
                 (
                     "status",
                     "Filter by run status: pending, running, completed, failed, cancelled, waiting (optional)",
@@ -1053,7 +1057,7 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
 
     let (worktree_id, working_dir) = if let Some(wt_slug) = worktree_slug {
         let wt_mgr = WorktreeManager::new(&conn, &config);
-        match wt_mgr.get_by_slug(&repo.id, wt_slug) {
+        match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
             Ok(wt) => (Some(wt.id), wt.path),
             Err(e) => return tool_err(e),
         }
@@ -1164,7 +1168,7 @@ fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> Call
     let wf_mgr = WorkflowManager::new(&conn);
     let runs = if let Some(wt_slug) = worktree_slug {
         let wt_mgr = WorktreeManager::new(&conn, &config);
-        let wt = match wt_mgr.get_by_slug(&repo.id, wt_slug) {
+        let wt = match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
             Ok(w) => w,
             Err(e) => return tool_err(e),
         };
