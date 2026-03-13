@@ -458,7 +458,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('T') => Action::ShowThemePicker,
 
         // CRUD actions
-        KeyCode::Char('a') => Action::AddRepo,
+        KeyCode::Char('a') => Action::RegisterRepo,
         KeyCode::Char('c') => Action::Create,
         KeyCode::Char('d') => Action::Delete,
         KeyCode::Char('s') => Action::SyncTickets,

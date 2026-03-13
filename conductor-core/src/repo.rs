@@ -32,7 +32,7 @@ impl<'a> RepoManager<'a> {
         Self { conn, config }
     }
 
-    pub fn add(
+    pub fn register(
         &self,
         slug: &str,
         local_path: &str,
@@ -206,7 +206,7 @@ impl<'a> RepoManager<'a> {
         Ok(())
     }
 
-    pub fn remove(&self, slug: &str) -> Result<()> {
+    pub fn unregister(&self, slug: &str) -> Result<()> {
         let affected = self
             .conn
             .execute("DELETE FROM repos WHERE slug = ?1", params![slug])?;
@@ -218,7 +218,7 @@ impl<'a> RepoManager<'a> {
         Ok(())
     }
 
-    pub fn remove_by_id(&self, id: &str) -> Result<()> {
+    pub fn unregister_by_id(&self, id: &str) -> Result<()> {
         let affected = self
             .conn
             .execute("DELETE FROM repos WHERE id = ?1", params![id])?;

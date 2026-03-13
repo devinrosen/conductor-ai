@@ -73,7 +73,7 @@ pub enum Action {
     GoToTickets,
     GoToWorkflows,
     // CRUD triggers
-    AddRepo,
+    RegisterRepo,
     Create,
     Delete,
     #[allow(dead_code)]
@@ -258,7 +258,7 @@ pub enum Action {
         wt_slug: String,
         result: Result<String, String>,
     },
-    RepoRemoveComplete {
+    RepoUnregisterComplete {
         repo_slug: String,
         result: Result<(), String>,
     },

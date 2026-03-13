@@ -4,7 +4,7 @@ import { useRepos } from "../components/layout/AppShell";
 import { api } from "../api/client";
 import type { Worktree, AgentRun } from "../api/types";
 import { RepoCard } from "../components/repos/RepoCard";
-import { CreateRepoForm } from "../components/repos/CreateRepoForm";
+import { RegisterRepoForm } from "../components/repos/RegisterRepoForm";
 import { GitHubDiscoverModal } from "../components/repos/GitHubDiscoverModal";
 import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
@@ -30,7 +30,7 @@ export function DashboardPage() {
   >([]);
   const [latestRuns, setLatestRuns] = useState<Record<string, AgentRun>>({});
   const [wtTick, setWtTick] = useState(0);
-  const [createRepoOpen, setCreateRepoOpen] = useState(false);
+  const [registerRepoOpen, setRegisterRepoOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
 
   const refreshWorktrees = useCallback(() => setWtTick((n) => n + 1), []);
@@ -86,7 +86,7 @@ export function DashboardPage() {
     if (wt) navigate(`/repos/${wt.repo_id}/worktrees/${wt.id}`);
   }, [activeWorktrees, selectedIndex, navigate]);
 
-  const openCreateRepo = useCallback(() => setCreateRepoOpen(true), []);
+  const openCreateRepo = useCallback(() => setRegisterRepoOpen(true), []);
   const openDiscover = useCallback(() => setDiscoverOpen(true), []);
 
   const handleEscape = useCallback(() => {
@@ -97,7 +97,7 @@ export function DashboardPage() {
     { key: "j", handler: moveDown, description: "Next worktree" },
     { key: "k", handler: moveUp, description: "Previous worktree" },
     { key: "Enter", handler: openSelected, description: "Open selected", enabled: selectedIndex >= 0 },
-    { key: "c", handler: openCreateRepo, description: "Add repo" },
+    { key: "c", handler: openCreateRepo, description: "Register repo" },
     { key: "d", handler: openDiscover, description: "Discover GitHub repos" },
     { key: "Escape", handler: handleEscape, description: "Deselect", enabled: selectedIndex >= 0 },
   ]);
@@ -115,7 +115,7 @@ export function DashboardPage() {
           >
             Discover from GitHub
           </button>
-          <CreateRepoForm onCreated={refreshRepos} open={createRepoOpen} onOpenChange={setCreateRepoOpen} />
+          <RegisterRepoForm onCreated={refreshRepos} open={registerRepoOpen} onOpenChange={setRegisterRepoOpen} />
         </div>
       </div>
       <GitHubDiscoverModal
@@ -130,7 +130,7 @@ export function DashboardPage() {
           Repos
         </h3>
         {repos.length === 0 ? (
-          <EmptyState message="No repos registered yet. Add one to get started." />
+          <EmptyState message="No repos registered yet. Register one to get started." />
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {repos.map((repo) => (

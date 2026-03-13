@@ -19,9 +19,9 @@ pub fn api_router() -> Router<AppState> {
         // Repos
         .route(
             "/api/repos",
-            get(repos::list_repos).post(repos::create_repo),
+            get(repos::list_repos).post(repos::register_repo),
         )
-        .route("/api/repos/{id}", delete(repos::delete_repo))
+        .route("/api/repos/{id}", delete(repos::unregister_repo))
         .route("/api/repos/{id}/model", patch(repos::patch_repo_model))
         .route(
             "/api/repos/{id}/settings",

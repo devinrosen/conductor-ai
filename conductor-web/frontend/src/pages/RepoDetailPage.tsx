@@ -89,7 +89,7 @@ export function RepoDetailPage() {
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [togglingAgentIssues, setTogglingAgentIssues] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-  const [deleteRepoConfirm, setDeleteRepoConfirm] = useState(false);
+  const [unregisterRepoConfirm, setUnregisterRepoConfirm] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [createWtOpen, setCreateWtOpen] = useState(false);
   const [editingModel, setEditingModel] = useState(false);
@@ -118,8 +118,8 @@ export function RepoDetailPage() {
   }
 
   async function handleDeleteRepo() {
-    await api.deleteRepo(repoId!);
-    setDeleteRepoConfirm(false);
+    await api.unregisterRepo(repoId!);
+    setUnregisterRepoConfirm(false);
     refreshRepos();
     window.location.href = "/";
   }
@@ -171,7 +171,7 @@ export function RepoDetailPage() {
     }
   }, [selectedTicket, selectedIndex, reset]);
 
-  const noModalOpen = !selectedTicket && deleteTarget === null && !deleteRepoConfirm;
+  const noModalOpen = !selectedTicket && deleteTarget === null && !unregisterRepoConfirm;
 
   useHotkeys([
     { key: "j", handler: moveDown, description: "Next worktree", enabled: noModalOpen },
@@ -200,7 +200,7 @@ export function RepoDetailPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-bold text-gray-900">{repo.slug}</h2>
           <button
-            onClick={() => setDeleteRepoConfirm(true)}
+            onClick={() => setUnregisterRepoConfirm(true)}
             className="px-3 py-1.5 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
           >
             Delete Repo
@@ -400,11 +400,11 @@ export function RepoDetailPage() {
         onCancel={() => setDeleteTarget(null)}
       />
       <ConfirmDialog
-        open={deleteRepoConfirm}
+        open={unregisterRepoConfirm}
         title="Delete Repo"
         message="Are you sure? This will unregister the repo from Conductor."
         onConfirm={handleDeleteRepo}
-        onCancel={() => setDeleteRepoConfirm(false)}
+        onCancel={() => setUnregisterRepoConfirm(false)}
       />
     </div>
   );

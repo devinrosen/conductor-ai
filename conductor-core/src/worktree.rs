@@ -1610,7 +1610,7 @@ mod tests {
 
         let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
         let _repo = repo_mgr
-            .add(
+            .register(
                 "myrepo",
                 missing_local.to_str().unwrap(),
                 remote.to_str().unwrap(),
@@ -1649,7 +1649,7 @@ mod tests {
 
         let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
         repo_mgr
-            .add(
+            .register(
                 "badrepo",
                 missing_local.to_str().unwrap(),
                 "file:///this/does/not/exist/at/all",

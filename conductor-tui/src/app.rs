@@ -497,7 +497,7 @@ impl App {
             Action::FormSubmit => self.handle_form_submit(),
 
             // CRUD
-            Action::AddRepo => self.handle_add_repo(),
+            Action::RegisterRepo => self.handle_register_repo(),
             Action::Create => self.handle_create(),
             Action::Delete => self.handle_delete(),
             Action::Push => self.handle_push(),
@@ -961,18 +961,18 @@ impl App {
                     }
                 }
             }
-            Action::RepoRemoveComplete { repo_slug, result } => {
+            Action::RepoUnregisterComplete { repo_slug, result } => {
                 self.state.modal = Modal::None;
                 match result {
                     Ok(()) => {
-                        self.state.status_message = Some(format!("Removed repo: {repo_slug}"));
+                        self.state.status_message = Some(format!("Unregistered repo: {repo_slug}"));
                         self.state.view = View::Dashboard;
                         self.state.selected_repo_id = None;
                         self.refresh_data();
                     }
                     Err(e) => {
                         self.state.modal = Modal::Error {
-                            message: format!("Remove failed: {e}"),
+                            message: format!("Unregister failed: {e}"),
                         };
                     }
                 }
@@ -1942,12 +1942,12 @@ impl App {
                     });
                 });
             }
-            ConfirmAction::RemoveRepo { repo_slug } => {
+            ConfirmAction::UnregisterRepo { repo_slug } => {
                 let Some(bg_tx) = self.bg_tx.clone() else {
                     return;
                 };
                 self.state.modal = Modal::Progress {
-                    message: "Removing repo…".to_string(),
+                    message: "Unregistering repo…".to_string(),
                 };
                 let config = self.config.clone();
                 std::thread::spawn(move || {
@@ -1955,9 +1955,9 @@ impl App {
                         let db = conductor_core::config::db_path();
                         let conn = conductor_core::db::open_database(&db)?;
                         let mgr = RepoManager::new(&conn, &config);
-                        mgr.remove(&repo_slug).map_err(anyhow::Error::from)
+                        mgr.unregister(&repo_slug).map_err(anyhow::Error::from)
                     })();
-                    let _ = bg_tx.send(Action::RepoRemoveComplete {
+                    let _ = bg_tx.send(Action::RepoUnregisterComplete {
                         repo_slug,
                         result: result.map_err(|e| e.to_string()),
                     });
@@ -2624,8 +2624,8 @@ impl App {
                 } else if self.state.view == View::Dashboard
                     && self.state.dashboard_focus == DashboardFocus::Repos
                 {
-                    // No repo selected on repos panel — open add repo form instead
-                    self.handle_add_repo();
+                    // No repo selected on repos panel — open register repo form instead
+                    self.handle_register_repo();
                 } else {
                     self.state.status_message = Some("Select a repo first".to_string());
                 }
@@ -2634,12 +2634,12 @@ impl App {
         }
     }
 
-    fn handle_add_repo(&mut self) {
+    fn handle_register_repo(&mut self) {
         if self.state.view != View::Dashboard {
             return;
         }
         self.state.modal = Modal::Form {
-            title: "Add Repository".to_string(),
+            title: "Register Repository".to_string(),
             fields: vec![
                 FormField {
                     label: "Remote URL".to_string(),
@@ -2664,7 +2664,7 @@ impl App {
                 },
             ],
             active_field: 0,
-            on_submit: FormAction::AddRepo,
+            on_submit: FormAction::RegisterRepo,
         };
     }
 
@@ -2683,8 +2683,8 @@ impl App {
             }
             // Auto-derive dependent fields
             match on_submit {
-                FormAction::AddRepo => {
-                    Self::auto_derive_add_repo_fields(fields, active_field, config)
+                FormAction::RegisterRepo => {
+                    Self::auto_derive_register_repo_fields(fields, active_field, config)
                 }
                 FormAction::AddIssueSource { .. } if active_field == 0 => {
                     Self::sync_issue_source_form_fields(fields);
@@ -2711,8 +2711,8 @@ impl App {
                 }
             }
             match on_submit {
-                FormAction::AddRepo => {
-                    Self::auto_derive_add_repo_fields(fields, active_field, config)
+                FormAction::RegisterRepo => {
+                    Self::auto_derive_register_repo_fields(fields, active_field, config)
                 }
                 FormAction::AddIssueSource { .. } if active_field == 0 => {
                     Self::sync_issue_source_form_fields(fields);
@@ -2748,7 +2748,7 @@ impl App {
         }
     }
 
-    fn auto_derive_add_repo_fields(
+    fn auto_derive_register_repo_fields(
         fields: &mut [FormField],
         changed_field: usize,
         config: &Config,
@@ -2812,7 +2812,7 @@ impl App {
         } = modal
         {
             match on_submit {
-                FormAction::AddRepo => self.submit_add_repo(fields),
+                FormAction::RegisterRepo => self.submit_register_repo(fields),
                 FormAction::AddIssueSource {
                     repo_id,
                     repo_slug,
@@ -2822,7 +2822,7 @@ impl App {
         }
     }
 
-    fn submit_add_repo(&mut self, fields: Vec<FormField>) {
+    fn submit_register_repo(&mut self, fields: Vec<FormField>) {
         let url = fields
             .first()
             .map(|f| f.value.trim().to_string())
@@ -2850,14 +2850,14 @@ impl App {
         };
 
         let mgr = RepoManager::new(&self.conn, &self.config);
-        match mgr.add(&slug, &local, &url, None) {
+        match mgr.register(&slug, &local, &url, None) {
             Ok(repo) => {
-                self.state.status_message = Some(format!("Added repo: {}", repo.slug));
+                self.state.status_message = Some(format!("Registered repo: {}", repo.slug));
                 self.refresh_data();
             }
             Err(e) => {
                 self.state.modal = Modal::Error {
-                    message: format!("Add repo failed: {e}"),
+                    message: format!("Register repo failed: {e}"),
                 };
             }
         }
@@ -3189,14 +3189,14 @@ impl App {
                             String::new()
                         };
                         self.state.modal = Modal::ConfirmByName {
-                            title: "Remove Repository".to_string(),
+                            title: "Unregister Repository".to_string(),
                             message: format!(
                                 "This will permanently delete the repo and all associated worktrees, agent runs, and tickets.{}",
                                 warning
                             ),
                             expected: repo.slug.clone(),
                             value: String::new(),
-                            on_confirm: ConfirmAction::RemoveRepo {
+                            on_confirm: ConfirmAction::UnregisterRepo {
                                 repo_slug: repo.slug.clone(),
                             },
                         };
@@ -4881,7 +4881,7 @@ impl App {
                 for url in &to_import {
                     let slug = derive_slug_from_url(url);
                     let local_path = derive_local_path(&config, &slug);
-                    match mgr.add(&slug, &local_path, url, None) {
+                    match mgr.register(&slug, &local_path, url, None) {
                         Ok(_) => imported += 1,
                         Err(e) => errors.push(format!("{slug}: {e}")),
                     }

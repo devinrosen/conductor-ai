@@ -605,7 +605,7 @@ pub enum ConfirmAction {
         repo_slug: String,
         wt_slug: String,
     },
-    RemoveRepo {
+    UnregisterRepo {
         repo_slug: String,
     },
     DeleteIssueSource {
@@ -635,7 +635,7 @@ pub struct FormField {
 #[derive(Debug, Clone)]
 #[allow(clippy::enum_variant_names)]
 pub enum FormAction {
-    AddRepo,
+    RegisterRepo,
     AddIssueSource {
         repo_id: String,
         repo_slug: String,

@@ -303,7 +303,9 @@ fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<String> {
         let mgr = RepoManager::new(&conn, &config);
         let repos = mgr.list()?;
         if repos.is_empty() {
-            return Ok("No repos registered. Use `conductor repo add` to register one.".into());
+            return Ok(
+                "No repos registered. Use `conductor repo register` to register one.".into(),
+            );
         }
         let mut out = String::new();
         for r in repos {
@@ -1003,7 +1005,7 @@ fn tool_list_repos(db_path: &Path) -> CallToolResult {
         Err(e) => return tool_err(e),
     };
     if repos.is_empty() {
-        return tool_ok("No repos registered. Use `conductor repo add` to register one.");
+        return tool_ok("No repos registered. Use `conductor repo register` to register one.");
     }
     let agent_counts = match AgentManager::new(&conn).active_run_counts_by_repo() {
         Ok(m) => m,
@@ -2571,13 +2573,13 @@ mod tests {
             let conn = open_database(&db).expect("open db");
             let config = load_config().expect("load config");
             RepoManager::new(&conn, &config)
-                .add(
+                .register(
                     "my-repo",
                     "/tmp/my-repo",
                     "https://github.com/acme/my-repo",
                     None,
                 )
-                .expect("add repo");
+                .expect("register repo");
         }
         let result = dispatch_tool(&db, "conductor_list_repos", &empty_args());
         assert_ne!(result.is_error, Some(true), "populated list should succeed");
@@ -2616,13 +2618,13 @@ mod tests {
             let conn = open_database(&db).expect("open db");
             let config = load_config().expect("load config");
             let repo = RepoManager::new(&conn, &config)
-                .add(
+                .register(
                     "active-repo",
                     "/tmp/active-repo",
                     "https://github.com/acme/active-repo",
                     None,
                 )
-                .expect("add repo");
+                .expect("register repo");
             // Insert a worktree directly (avoids actual git ops)
             conn.execute(
                 "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
@@ -2705,8 +2707,8 @@ workflow deploy {
             let conn = open_database(&db).expect("open db");
             let config = load_config().expect("load config");
             RepoManager::new(&conn, &config)
-                .add("my-repo", repo_path, "https://github.com/x/y", None)
-                .expect("add repo");
+                .register("my-repo", repo_path, "https://github.com/x/y", None)
+                .expect("register repo");
         }
 
         let result = dispatch_tool(
@@ -2782,8 +2784,8 @@ workflow w {
             let conn = open_database(&db).expect("open db");
             let config = load_config().expect("load config");
             RepoManager::new(&conn, &config)
-                .add("my-repo", repo_path, "https://github.com/x/y", None)
-                .expect("add repo");
+                .register("my-repo", repo_path, "https://github.com/x/y", None)
+                .expect("register repo");
         }
 
         let result = dispatch_tool(
@@ -2833,8 +2835,8 @@ workflow build {
             let conn = open_database(&db).expect("open db");
             let config = load_config().expect("load config");
             RepoManager::new(&conn, &config)
-                .add("my-repo", repo_path, "https://github.com/x/y", None)
-                .expect("add repo");
+                .register("my-repo", repo_path, "https://github.com/x/y", None)
+                .expect("register repo");
         }
 
         let result = read_resource_by_uri(&db, "conductor://workflows/my-repo")
@@ -2924,13 +2926,13 @@ workflow build {
         let conn = open_database(&db).expect("open db");
         let config = Config::default();
         RepoManager::new(&conn, &config)
-            .add(
+            .register(
                 "test-repo",
                 "/tmp/test-repo",
                 "https://github.com/x/y",
                 None,
             )
-            .expect("add repo");
+            .expect("register repo");
 
         let mut args = serde_json::Map::new();
         args.insert("repo".to_string(), Value::String("test-repo".to_string()));
@@ -3025,13 +3027,13 @@ workflow build {
         let config = Config::default();
         let repo_mgr = RepoManager::new(&conn, &config);
         repo_mgr
-            .add(
+            .register(
                 "test-repo",
                 "/tmp/test-repo",
                 "https://github.com/x/y",
                 None,
             )
-            .expect("add repo");
+            .expect("register repo");
 
         let result = dispatch_tool(
             &db,
@@ -3115,8 +3117,8 @@ workflow build {
         let conn = open_database(&db).expect("open db");
         let config = Config::default();
         let repo = RepoManager::new(&conn, &config)
-            .add("test-repo", "/tmp/test", "https://github.com/x/y", None)
-            .expect("add repo");
+            .register("test-repo", "/tmp/test", "https://github.com/x/y", None)
+            .expect("register repo");
         let ticket = TicketInput {
             source_id: "42".to_string(),
             source_type: "github".to_string(),
@@ -3168,11 +3170,11 @@ workflow build {
         let config = Config::default();
         let repo_mgr = RepoManager::new(&conn, &config);
         let repo_a = repo_mgr
-            .add("repo-a", "/tmp/repo-a", "https://github.com/x/a", None)
-            .expect("add repo-a");
+            .register("repo-a", "/tmp/repo-a", "https://github.com/x/a", None)
+            .expect("register repo-a");
         let repo_b = repo_mgr
-            .add("repo-b", "/tmp/repo-b", "https://github.com/x/b", None)
-            .expect("add repo-b");
+            .register("repo-b", "/tmp/repo-b", "https://github.com/x/b", None)
+            .expect("register repo-b");
 
         let agent_mgr = AgentManager::new(&conn);
         let mgr = WorkflowManager::new(&conn);
@@ -3761,13 +3763,13 @@ workflow build {
 
         // Register a repo.
         let repo = RepoManager::new(&conn, &config)
-            .add(
+            .register(
                 "slug-test-repo",
                 "/tmp/slug-test-repo",
                 "https://github.com/x/y",
                 None,
             )
-            .expect("add repo");
+            .expect("register repo");
 
         // Insert a worktree row directly (avoids git subprocess calls).
         let wt_id = "01JTEST0000000000000000001";
@@ -3843,13 +3845,13 @@ workflow build {
             let conn = open_database(&db).expect("open db");
             let config = conductor_core::config::Config::default();
             RepoManager::new(&conn, &config)
-                .add(
+                .register(
                     "my-repo",
                     "/tmp/my-repo",
                     "https://github.com/org/my-repo.git",
                     None,
                 )
-                .expect("add repo");
+                .expect("register repo");
         }
 
         let mut args = serde_json::Map::new();

@@ -296,8 +296,8 @@ enum WorkflowCommands {
 
 #[derive(Subcommand)]
 enum RepoCommands {
-    /// Add a repository
-    Add {
+    /// Register a repository
+    Register {
         /// Git remote URL
         remote_url: String,
         /// Short slug for the repo
@@ -318,8 +318,8 @@ enum RepoCommands {
         /// GitHub org login, or omit to list available orgs
         owner: Option<String>,
     },
-    /// Remove a repository
-    Remove {
+    /// Unregister a repository
+    Unregister {
         /// Repo slug
         slug: String,
     },
@@ -525,7 +525,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Repo { command } => match command {
-            RepoCommands::Add {
+            RepoCommands::Register {
                 remote_url,
                 slug,
                 local_path,
@@ -536,14 +536,14 @@ fn main() -> Result<()> {
                 let local = local_path.unwrap_or_else(|| derive_local_path(&config, &slug));
 
                 let mgr = RepoManager::new(&conn, &config);
-                let repo = mgr.add(&slug, &local, &remote_url, workspace.as_deref())?;
-                println!("Added repo: {} ({})", repo.slug, repo.remote_url);
+                let repo = mgr.register(&slug, &local, &remote_url, workspace.as_deref())?;
+                println!("Registered repo: {} ({})", repo.slug, repo.remote_url);
             }
             RepoCommands::List => {
                 let mgr = RepoManager::new(&conn, &config);
                 let repos = mgr.list()?;
                 if repos.is_empty() {
-                    println!("No repos registered. Use `conductor repo add` to add one.");
+                    println!("No repos registered. Use `conductor repo register` to register one.");
                 } else {
                     for repo in repos {
                         println!("  {}  {}", repo.slug, repo.remote_url);
@@ -588,7 +588,7 @@ fn main() -> Result<()> {
                             discovered.len(),
                             unregistered
                         );
-                        println!("Use `conductor repo add <url>` to register a repo.");
+                        println!("Use `conductor repo register <url>` to register a repo.");
                     }
                 } else {
                     // No owner given: list orgs (+ personal)
@@ -602,10 +602,10 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            RepoCommands::Remove { slug } => {
+            RepoCommands::Unregister { slug } => {
                 let mgr = RepoManager::new(&conn, &config);
-                mgr.remove(&slug)?;
-                println!("Removed repo: {slug}");
+                mgr.unregister(&slug)?;
+                println!("Unregistered repo: {slug}");
             }
             RepoCommands::SetModel { slug, model } => {
                 let mgr = RepoManager::new(&conn, &config);

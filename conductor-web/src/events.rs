@@ -5,10 +5,10 @@ use tokio::sync::broadcast;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event", content = "data")]
 pub enum ConductorEvent {
-    #[serde(rename = "repo_created")]
-    RepoCreated { id: String },
-    #[serde(rename = "repo_deleted")]
-    RepoDeleted { id: String },
+    #[serde(rename = "repo_registered")]
+    RepoRegistered { id: String },
+    #[serde(rename = "repo_unregistered")]
+    RepoUnregistered { id: String },
     #[serde(rename = "worktree_created")]
     WorktreeCreated { id: String, repo_id: String },
     #[serde(rename = "worktree_deleted")]
@@ -57,8 +57,8 @@ impl ConductorEvent {
     /// The SSE event name used as the `event:` field.
     pub fn event_name(&self) -> &'static str {
         match self {
-            Self::RepoCreated { .. } => "repo_created",
-            Self::RepoDeleted { .. } => "repo_deleted",
+            Self::RepoRegistered { .. } => "repo_registered",
+            Self::RepoUnregistered { .. } => "repo_unregistered",
             Self::WorktreeCreated { .. } => "worktree_created",
             Self::WorktreeDeleted { .. } => "worktree_deleted",
             Self::TicketsSynced { .. } => "tickets_synced",
@@ -108,16 +108,16 @@ mod tests {
     #[test]
     fn emit_with_no_subscribers_does_not_panic() {
         let bus = EventBus::new(16);
-        bus.emit(ConductorEvent::RepoCreated { id: "test".into() });
+        bus.emit(ConductorEvent::RepoRegistered { id: "test".into() });
     }
 
     #[tokio::test]
     async fn subscriber_receives_events() {
         let bus = EventBus::new(16);
         let mut rx = bus.subscribe();
-        bus.emit(ConductorEvent::RepoCreated { id: "abc".into() });
+        bus.emit(ConductorEvent::RepoRegistered { id: "abc".into() });
         let event = rx.recv().await.unwrap();
-        assert_eq!(event.event_name(), "repo_created");
+        assert_eq!(event.event_name(), "repo_registered");
     }
 
     #[test]
@@ -136,12 +136,12 @@ mod tests {
     fn event_name_matches_all_variants() {
         let cases: Vec<(ConductorEvent, &str)> = vec![
             (
-                ConductorEvent::RepoCreated { id: "".into() },
-                "repo_created",
+                ConductorEvent::RepoRegistered { id: "".into() },
+                "repo_registered",
             ),
             (
-                ConductorEvent::RepoDeleted { id: "".into() },
-                "repo_deleted",
+                ConductorEvent::RepoUnregistered { id: "".into() },
+                "repo_unregistered",
             ),
             (
                 ConductorEvent::WorktreeCreated {

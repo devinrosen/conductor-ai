@@ -119,7 +119,7 @@ function RepoPicker({
 
     for (const repo of toImport) {
       try {
-        await api.createRepo({ remote_url: repo.clone_url });
+        await api.registerRepo({ remote_url: repo.clone_url });
         anySuccess = true;
       } catch (err) {
         errors[repo.full_name] =

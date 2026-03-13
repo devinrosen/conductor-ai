@@ -46,9 +46,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export const api = {
   // Repos
   listRepos: () => request<Repo[]>("/repos"),
-  createRepo: (data: CreateRepoRequest) =>
+  registerRepo: (data: CreateRepoRequest) =>
     request<Repo>("/repos", { method: "POST", body: JSON.stringify(data) }),
-  deleteRepo: (id: string) =>
+  unregisterRepo: (id: string) =>
     request<void>(`/repos/${id}`, { method: "DELETE" }),
   setRepoModel: (id: string, model: string | null) =>
     request<Repo>(`/repos/${id}/model`, {

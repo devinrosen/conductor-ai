@@ -43,7 +43,7 @@ pub fn render(frame: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        help_line("a", "Add repository"),
+        help_line("a", "Register repository"),
         help_line("c", "Create worktree"),
         help_line("d", "Delete (worktree/repo)"),
         help_line("s", "Sync tickets"),

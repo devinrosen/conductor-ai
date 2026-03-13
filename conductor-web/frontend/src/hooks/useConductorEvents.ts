@@ -2,8 +2,8 @@ import { useEffect, useRef, useCallback } from "react";
 
 /** All SSE event types emitted by the backend. */
 export type ConductorEventType =
-  | "repo_created"
-  | "repo_deleted"
+  | "repo_registered"
+  | "repo_unregistered"
   | "worktree_created"
   | "worktree_deleted"
   | "tickets_synced"
@@ -51,8 +51,8 @@ export function useConductorEvents(
     const source = new EventSource("/api/events");
 
     const eventTypes: ConductorEventType[] = [
-      "repo_created",
-      "repo_deleted",
+      "repo_registered",
+      "repo_unregistered",
       "worktree_created",
       "worktree_deleted",
       "tickets_synced",

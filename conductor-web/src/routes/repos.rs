@@ -11,7 +11,7 @@ use crate::events::ConductorEvent;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
-pub struct CreateRepoRequest {
+pub struct RegisterRepoRequest {
     pub remote_url: String,
     pub slug: Option<String>,
     pub local_path: Option<String>,
@@ -26,9 +26,9 @@ pub async fn list_repos(State(state): State<AppState>) -> Result<Json<Vec<Repo>>
     Ok(Json(repos))
 }
 
-pub async fn create_repo(
+pub async fn register_repo(
     State(state): State<AppState>,
-    Json(body): Json<CreateRepoRequest>,
+    Json(body): Json<RegisterRepoRequest>,
 ) -> Result<(StatusCode, Json<Repo>), ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
@@ -39,27 +39,27 @@ pub async fn create_repo(
     let local_path = body
         .local_path
         .unwrap_or_else(|| derive_local_path(&config, &slug));
-    let repo = mgr.add(
+    let repo = mgr.register(
         &slug,
         &local_path,
         &body.remote_url,
         body.workspace_dir.as_deref(),
     )?;
-    state.events.emit(ConductorEvent::RepoCreated {
+    state.events.emit(ConductorEvent::RepoRegistered {
         id: repo.id.clone(),
     });
     Ok((StatusCode::CREATED, Json(repo)))
 }
 
-pub async fn delete_repo(
+pub async fn unregister_repo(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
     let mgr = RepoManager::new(&db, &config);
-    mgr.remove_by_id(&id)?;
-    state.events.emit(ConductorEvent::RepoDeleted { id });
+    mgr.unregister_by_id(&id)?;
+    state.events.emit(ConductorEvent::RepoUnregistered { id });
     Ok(StatusCode::NO_CONTENT)
 }
 

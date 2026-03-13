@@ -51,8 +51,8 @@ export function AppShell() {
     const handleMap: Partial<
       Record<ConductorEventType, (data: ConductorEventData) => void>
     > = {
-      repo_created: refetchRepos,
-      repo_deleted: refetchRepos,
+      repo_registered: refetchRepos,
+      repo_unregistered: refetchRepos,
       lagged: refetchRepos,
     };
     return handleMap;
