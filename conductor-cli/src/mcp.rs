@@ -644,7 +644,7 @@ fn conductor_tools() -> Vec<Tool> {
                 ),
                 (
                     "ticket_id",
-                    "Internal ticket ULID to link (optional)",
+                    "Ticket ID to link (optional) — accepts either the internal ULID or an external source ID (e.g. GitHub issue number '680')",
                     false,
                 ),
             ]),
@@ -842,19 +842,49 @@ fn tool_list_worktrees(db_path: &Path, args: &serde_json::Map<String, Value>) ->
     tool_ok(out)
 }
 
+/// Returns `true` if `s` looks like a ULID: exactly 26 uppercase alphanumeric chars.
+/// Used to distinguish internal ULIDs (e.g. "01HXYZ...") from external source IDs (e.g. "680").
+fn looks_like_ulid(s: &str) -> bool {
+    s.len() == 26 && s.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
 fn tool_create_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+    use conductor_core::repo::RepoManager;
+    use conductor_core::tickets::TicketSyncer;
     use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = require_arg!(args, "repo");
     let name = require_arg!(args, "name");
-    let ticket_id = get_arg(args, "ticket_id");
+    let raw_ticket_id = get_arg(args, "ticket_id");
 
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
     };
+
+    // Resolve ticket_id: if it looks like a ULID pass it through; otherwise treat
+    // it as an external source_id and look up the internal ULID.
+    let resolved_ticket_id: Option<String> = match raw_ticket_id {
+        None => None,
+        Some(id) if looks_like_ulid(id) => Some(id.to_string()),
+        Some(source_id) => {
+            let repo_mgr = RepoManager::new(&conn, &config);
+            let repo = match repo_mgr.get_by_slug(repo_slug) {
+                Ok(r) => r,
+                Err(e) => return tool_err(e),
+            };
+            let syncer = TicketSyncer::new(&conn);
+            match syncer.get_by_source_id(&repo.id, source_id) {
+                Ok(ticket) => Some(ticket.id),
+                Err(e) => {
+                    return tool_err(format!("Could not resolve ticket ID '{source_id}': {e}"))
+                }
+            }
+        }
+    };
+
     let wt_mgr = WorktreeManager::new(&conn, &config);
-    match wt_mgr.create(repo_slug, name, None, ticket_id, None) {
+    match wt_mgr.create(repo_slug, name, None, resolved_ticket_id.as_deref(), None) {
         Ok((wt, warnings)) => {
             let mut msg = format!(
                 "Worktree created.\nslug: {}\nbranch: {}\npath: {}\n",
@@ -1731,6 +1761,55 @@ mod tests {
         args.insert("name".to_string(), Value::String("feat-test".to_string()));
         let result = dispatch_tool(&db, "conductor_create_worktree", &args);
         assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_looks_like_ulid() {
+        // Valid ULID: 26 uppercase alphanumeric chars
+        assert!(looks_like_ulid("01HXYZABCDEFGHJKMNPQRSTVWX"));
+        assert!(looks_like_ulid("01JRKBDR0B7W72V1EHNH78WKTF"));
+        // GitHub issue numbers should NOT look like ULIDs
+        assert!(!looks_like_ulid("680"));
+        assert!(!looks_like_ulid("42"));
+        // Too short / too long
+        assert!(!looks_like_ulid("01HXYZ"));
+        assert!(!looks_like_ulid("01HXYZABCDEFGHJKMNPQRSTVWXYZ"));
+    }
+
+    #[test]
+    fn test_create_worktree_unknown_external_ticket_id_returns_error() {
+        // Passing a numeric source_id that doesn't exist should return is_error=true
+        // with a clear message mentioning the source_id.
+        use conductor_core::config::Config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let (_f, db) = make_test_db();
+        let conn = open_database(&db).expect("open db");
+        let config = Config::default();
+        RepoManager::new(&conn, &config)
+            .add(
+                "test-repo",
+                "/tmp/test-repo",
+                "https://github.com/x/y",
+                None,
+            )
+            .expect("add repo");
+
+        let mut args = serde_json::Map::new();
+        args.insert("repo".to_string(), Value::String("test-repo".to_string()));
+        args.insert("name".to_string(), Value::String("feat-test".to_string()));
+        args.insert("ticket_id".to_string(), Value::String("999".to_string()));
+        let result = dispatch_tool(&db, "conductor_create_worktree", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("999"),
+            "error should mention the source_id, got: {text}"
+        );
     }
 
     // -- tool_delete_worktree -----------------------------------------------
