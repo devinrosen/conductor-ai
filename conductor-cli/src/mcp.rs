@@ -430,9 +430,27 @@ fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<String> {
         if repo_runs.is_empty() {
             return Ok(format!("No workflow runs for {repo_slug}."));
         }
+        // Cache worktree lookups so we don't hit the DB (and load_config) once per run.
+        let wt_mgr = WorktreeManager::new(&conn, &config);
+        let mut wt_cache: HashMap<String, (String, String)> = HashMap::new();
         let mut out = String::new();
         for run in &repo_runs {
-            let (slug, branch, _) = resolve_worktree_info(&conn, run);
+            let (slug, branch) = if let Some(wt_id) = run.worktree_id.as_deref() {
+                if let Some(cached) = wt_cache.get(wt_id) {
+                    (Some(cached.0.clone()), Some(cached.1.clone()))
+                } else {
+                    match wt_mgr.get_by_id(wt_id) {
+                        Ok(wt) => {
+                            wt_cache
+                                .insert(wt_id.to_string(), (wt.slug.clone(), wt.branch.clone()));
+                            (Some(wt.slug), Some(wt.branch))
+                        }
+                        Err(_) => (None, None),
+                    }
+                }
+            } else {
+                (None, None)
+            };
             out.push_str(&format_run_summary_line(
                 run,
                 slug.as_deref(),
@@ -1400,7 +1418,12 @@ fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> Call
         }
         let mut out = String::new();
         for run in &runs {
-            out.push_str(&format_run_summary_line(run));
+            let (slug, branch, _) = resolve_worktree_info(&conn, run);
+            out.push_str(&format_run_summary_line(
+                run,
+                slug.as_deref(),
+                branch.as_deref(),
+            ));
         }
         if runs.len() == limit {
             out.push_str(&format!(
