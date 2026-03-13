@@ -88,15 +88,10 @@ pub fn render_header(
     let total_active = gs.total_active();
     let has_usage = state.data.claude_usage.is_some();
 
-    // Determine how many rows the status-bar section needs (1 or 2).
-    let status_rows = if area.height >= 2
-        && (total_active > 0 && (total_active <= 3 || state.status_bar_expanded))
-    {
-        2u16
-    } else {
-        1u16
-    };
-    let total_rows = status_rows + if has_usage { 1 } else { 0 };
+    // Delegate to AppState::header_height so row-count logic lives in one place;
+    // clamp to the available area height to handle narrow terminals.
+    let total_rows = state.header_height(gs).min(area.height);
+    let status_rows = total_rows - if has_usage { 1 } else { 0 };
 
     if total_rows >= 3 {
         // summary + detail + usage
