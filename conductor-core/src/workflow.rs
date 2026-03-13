@@ -979,6 +979,7 @@ impl<'a> WorkflowManager<'a> {
         &self,
         repo_id: &str,
         limit: usize,
+        offset: usize,
         status: Option<WorkflowRunStatus>,
     ) -> Result<Vec<WorkflowRun>> {
         if let Some(s) = status {
@@ -992,13 +993,38 @@ impl<'a> WorkflowManager<'a> {
                      WHERE workflow_runs.repo_id = ?1 \
                        AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
                        AND workflow_runs.status = ?2 \
-                     ORDER BY workflow_runs.started_at DESC LIMIT {limit}"
+                     ORDER BY workflow_runs.started_at DESC LIMIT {limit} OFFSET {offset}"
                 ),
                 params![repo_id, status_str],
                 row_to_workflow_run,
             )
         } else {
-            self.list_workflow_runs_by_repo_id(repo_id, limit)
+            self.list_workflow_runs_by_repo_id(repo_id, limit, offset)
+        }
+    }
+
+    /// Like `list_workflow_runs_filtered` but with explicit limit and offset for pagination.
+    pub fn list_workflow_runs_filtered_paginated(
+        &self,
+        worktree_id: &str,
+        status: Option<WorkflowRunStatus>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<WorkflowRun>> {
+        if let Some(s) = status {
+            let status_str = s.to_string();
+            query_collect(
+                self.conn,
+                &format!(
+                    "SELECT {RUN_COLUMNS} FROM workflow_runs \
+                     WHERE worktree_id = ?1 AND status = ?2 \
+                     ORDER BY started_at DESC LIMIT {limit} OFFSET {offset}"
+                ),
+                params![worktree_id, status_str],
+                row_to_workflow_run,
+            )
+        } else {
+            self.list_workflow_runs_paginated(worktree_id, limit, offset)
         }
     }
 
@@ -1028,6 +1054,7 @@ impl<'a> WorkflowManager<'a> {
         &self,
         repo_id: &str,
         limit: usize,
+        offset: usize,
     ) -> Result<Vec<WorkflowRun>> {
         query_collect(
             self.conn,
@@ -1037,9 +1064,29 @@ impl<'a> WorkflowManager<'a> {
                  LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
                  WHERE workflow_runs.repo_id = ?1 \
                    AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
-                 ORDER BY workflow_runs.started_at DESC LIMIT {limit}"
+                 ORDER BY workflow_runs.started_at DESC LIMIT {limit} OFFSET {offset}"
             ),
             params![repo_id],
+            row_to_workflow_run,
+        )
+    }
+
+    /// Like `list_workflow_runs` but with explicit limit and offset for pagination.
+    /// `list_workflow_runs` is kept for TUI callers that return all runs.
+    pub fn list_workflow_runs_paginated(
+        &self,
+        worktree_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<WorkflowRun>> {
+        query_collect(
+            self.conn,
+            &format!(
+                "SELECT {RUN_COLUMNS} FROM workflow_runs \
+                 WHERE worktree_id = ?1 \
+                 ORDER BY started_at DESC LIMIT {limit} OFFSET {offset}"
+            ),
+            params![worktree_id],
             row_to_workflow_run,
         )
     }
@@ -5517,7 +5564,7 @@ And here is my actual output:
         )
         .unwrap();
 
-        let runs = mgr.list_workflow_runs_by_repo_id("r1", 100).unwrap();
+        let runs = mgr.list_workflow_runs_by_repo_id("r1", 100, 0).unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].workflow_name, "active-run");
     }

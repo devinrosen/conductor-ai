@@ -271,7 +271,7 @@ fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource>> {
 
         // Per-repo workflow runs: query directly by repo_id to avoid the global
         // cap silently dropping older runs when many repos are registered.
-        let repo_runs = wf_mgr.list_workflow_runs_by_repo_id(&repo.id, 50)?;
+        let repo_runs = wf_mgr.list_workflow_runs_by_repo_id(&repo.id, 50, 0)?;
         for run in &repo_runs {
             resources.push(make_resource(
                 format!("conductor://run/{}", run.id),
@@ -426,7 +426,7 @@ fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<String> {
         let repo_mgr = RepoManager::new(&conn, &config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
         let wf_mgr = WorkflowManager::new(&conn);
-        let repo_runs = wf_mgr.list_workflow_runs_by_repo_id(&repo.id, 50)?;
+        let repo_runs = wf_mgr.list_workflow_runs_by_repo_id(&repo.id, 50, 0)?;
         if repo_runs.is_empty() {
             return Ok(format!("No workflow runs for {repo_slug}."));
         }
@@ -704,13 +704,20 @@ fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_list_runs",
-            "List recent workflow runs for a repo (optionally filtered by worktree and/or status).",
+            "List recent workflow runs for a repo (optionally filtered by worktree and/or status). \
+             Supports pagination via limit (default 50) and offset (default 0).",
             schema(&[
                 ("repo", "Repo slug", true),
                 ("worktree", "Worktree slug to filter by (optional)", false),
                 (
                     "status",
                     "Filter by run status: pending, running, completed, failed, cancelled, waiting (optional)",
+                    false,
+                ),
+                ("limit", "Max runs to return (default 50)", false),
+                (
+                    "offset",
+                    "Number of runs to skip for pagination (default 0)",
                     false,
                 ),
             ]),
@@ -1151,6 +1158,13 @@ fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> Call
         None => None,
     };
 
+    let limit: usize = get_arg(args, "limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50);
+    let offset: usize = get_arg(args, "offset")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
@@ -1168,12 +1182,12 @@ fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> Call
             Ok(w) => w,
             Err(e) => return tool_err(e),
         };
-        match wf_mgr.list_workflow_runs_filtered(&wt.id, status) {
+        match wf_mgr.list_workflow_runs_filtered_paginated(&wt.id, status, limit, offset) {
             Ok(r) => r,
             Err(e) => return tool_err(e),
         }
     } else {
-        match wf_mgr.list_workflow_runs_by_repo_id_filtered(&repo.id, 50, status) {
+        match wf_mgr.list_workflow_runs_by_repo_id_filtered(&repo.id, limit, offset, status) {
             Ok(r) => r,
             Err(e) => return tool_err(e),
         }
@@ -1185,6 +1199,13 @@ fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> Call
     let mut out = String::new();
     for run in &runs {
         out.push_str(&format_run_summary_line(run));
+    }
+    if runs.len() == limit {
+        out.push_str(&format!(
+            "\nShowing {offset}–{end} (limit {limit}). Pass offset={next} for more.",
+            end = offset + runs.len(),
+            next = offset + limit,
+        ));
     }
     tool_ok(out)
 }
@@ -2014,7 +2035,7 @@ mod tests {
         let conn = open_database(&db).expect("open db");
         let mgr = WorkflowManager::new(&conn);
         let runs = mgr
-            .list_workflow_runs_by_repo_id("nonexistent-repo-id", 50)
+            .list_workflow_runs_by_repo_id("nonexistent-repo-id", 50, 0)
             .expect("query should succeed");
         assert!(runs.is_empty(), "expected no runs for unknown repo");
     }
@@ -2076,10 +2097,10 @@ mod tests {
             .expect("create run B");
 
         let runs_a = mgr
-            .list_workflow_runs_by_repo_id(&repo_a.id, 50)
+            .list_workflow_runs_by_repo_id(&repo_a.id, 50, 0)
             .expect("query A");
         let runs_b = mgr
-            .list_workflow_runs_by_repo_id(&repo_b.id, 50)
+            .list_workflow_runs_by_repo_id(&repo_b.id, 50, 0)
             .expect("query B");
 
         assert_eq!(runs_a.len(), 1, "expected 1 run for repo-a");
