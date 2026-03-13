@@ -680,10 +680,15 @@ fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_list_runs",
-            "List recent workflow runs for a repo (optionally filtered by worktree).",
+            "List recent workflow runs for a repo (optionally filtered by worktree and/or status).",
             schema(&[
                 ("repo", "Repo slug", true),
                 ("worktree", "Worktree slug to filter by (optional)", false),
+                (
+                    "status",
+                    "Filter by run status: pending, running, completed, failed, cancelled, waiting (optional)",
+                    false,
+                ),
             ]),
         ),
         Tool::new(
@@ -1060,11 +1065,20 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
 
 fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::repo::RepoManager;
-    use conductor_core::workflow::WorkflowManager;
+    use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
     use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = require_arg!(args, "repo");
     let worktree_slug = get_arg(args, "worktree");
+    let status_str = get_arg(args, "status");
+
+    let status: Option<WorkflowRunStatus> = match status_str {
+        Some(s) => match s.parse::<WorkflowRunStatus>() {
+            Ok(v) => Some(v),
+            Err(e) => return tool_err(e),
+        },
+        None => None,
+    };
 
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
@@ -1083,12 +1097,12 @@ fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> Call
             Ok(w) => w,
             Err(e) => return tool_err(e),
         };
-        match wf_mgr.list_workflow_runs(&wt.id) {
+        match wf_mgr.list_workflow_runs_filtered(&wt.id, status) {
             Ok(r) => r,
             Err(e) => return tool_err(e),
         }
     } else {
-        match wf_mgr.list_workflow_runs_by_repo_id(&repo.id, 50) {
+        match wf_mgr.list_workflow_runs_by_repo_id_filtered(&repo.id, 50, status) {
             Ok(r) => r,
             Err(e) => return tool_err(e),
         }

@@ -948,6 +948,55 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    pub fn list_workflow_runs_filtered(
+        &self,
+        worktree_id: &str,
+        status: Option<WorkflowRunStatus>,
+    ) -> Result<Vec<WorkflowRun>> {
+        if let Some(s) = status {
+            let status_str = s.to_string();
+            query_collect(
+                self.conn,
+                &format!(
+                    "SELECT {RUN_COLUMNS} FROM workflow_runs \
+                     WHERE worktree_id = ?1 AND status = ?2 \
+                     ORDER BY started_at DESC"
+                ),
+                params![worktree_id, status_str],
+                row_to_workflow_run,
+            )
+        } else {
+            self.list_workflow_runs(worktree_id)
+        }
+    }
+
+    pub fn list_workflow_runs_by_repo_id_filtered(
+        &self,
+        repo_id: &str,
+        limit: usize,
+        status: Option<WorkflowRunStatus>,
+    ) -> Result<Vec<WorkflowRun>> {
+        if let Some(s) = status {
+            let status_str = s.to_string();
+            query_collect(
+                self.conn,
+                &format!(
+                    "SELECT workflow_runs.* \
+                     FROM workflow_runs \
+                     LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                     WHERE workflow_runs.repo_id = ?1 \
+                       AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
+                       AND workflow_runs.status = ?2 \
+                     ORDER BY workflow_runs.started_at DESC LIMIT {limit}"
+                ),
+                params![repo_id, status_str],
+                row_to_workflow_run,
+            )
+        } else {
+            self.list_workflow_runs_by_repo_id(repo_id, limit)
+        }
+    }
+
     /// List recent workflow runs across all worktrees, ordered by started_at DESC.
     /// Only includes runs whose associated worktree is `active` (or runs with no
     /// worktree, i.e. ephemeral/repo-targeted runs).
