@@ -9743,4 +9743,131 @@ And here is my actual output:
             .unwrap();
         assert_eq!(status, "cancelled");
     }
+
+    #[test]
+    fn test_list_workflow_runs_paginated_limit_and_offset() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        // Create 5 runs for worktree w1
+        for i in 0..5 {
+            let p = agent_mgr
+                .create_run(Some("w1"), &format!("wf-paginated-{i}"), None, None)
+                .unwrap();
+            mgr.create_workflow_run(
+                &format!("paginated-flow-{i}"),
+                Some("w1"),
+                &p.id,
+                false,
+                "manual",
+                None,
+            )
+            .unwrap();
+        }
+
+        // First page: limit=2, offset=0
+        let page1 = mgr.list_workflow_runs_paginated("w1", 2, 0).unwrap();
+        assert_eq!(page1.len(), 2);
+
+        // Second page: limit=2, offset=2
+        let page2 = mgr.list_workflow_runs_paginated("w1", 2, 2).unwrap();
+        assert_eq!(page2.len(), 2);
+
+        // Third page: limit=2, offset=4 — only 1 remaining
+        let page3 = mgr.list_workflow_runs_paginated("w1", 2, 4).unwrap();
+        assert_eq!(page3.len(), 1);
+
+        // Pages must not overlap
+        let ids1: Vec<_> = page1.iter().map(|r| r.id.clone()).collect();
+        let ids2: Vec<_> = page2.iter().map(|r| r.id.clone()).collect();
+        assert!(
+            ids1.iter().all(|id| !ids2.contains(id)),
+            "page1 and page2 must not share runs"
+        );
+
+        // All 5 runs returned when limit exceeds count
+        let all = mgr.list_workflow_runs_paginated("w1", 100, 0).unwrap();
+        assert_eq!(all.len(), 5);
+    }
+
+    #[test]
+    fn test_list_workflow_runs_paginated_filters_by_worktree() {
+        let conn = setup_db();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w2', 'r1', 'feat-other', 'feat/other', '/tmp/ws/other', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let agent_mgr = AgentManager::new(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        let p1 = agent_mgr
+            .create_run(Some("w1"), "wf-w1", None, None)
+            .unwrap();
+        let p2 = agent_mgr
+            .create_run(Some("w2"), "wf-w2", None, None)
+            .unwrap();
+        mgr.create_workflow_run("run-w1", Some("w1"), &p1.id, false, "manual", None)
+            .unwrap();
+        mgr.create_workflow_run("run-w2", Some("w2"), &p2.id, false, "manual", None)
+            .unwrap();
+
+        let w1_runs = mgr.list_workflow_runs_paginated("w1", 100, 0).unwrap();
+        assert_eq!(w1_runs.len(), 1);
+        assert_eq!(w1_runs[0].workflow_name, "run-w1");
+
+        let w2_runs = mgr.list_workflow_runs_paginated("w2", 100, 0).unwrap();
+        assert_eq!(w2_runs.len(), 1);
+        assert_eq!(w2_runs[0].workflow_name, "run-w2");
+    }
+
+    #[test]
+    fn test_list_workflow_runs_by_repo_id_offset_pagination() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        // Create 4 runs for repo r1 (all on active worktree w1)
+        for i in 0..4 {
+            let p = agent_mgr
+                .create_run(Some("w1"), &format!("wf-repo-{i}"), None, None)
+                .unwrap();
+            mgr.create_workflow_run_with_targets(
+                &format!("repo-flow-{i}"),
+                Some("w1"),
+                None,
+                Some("r1"),
+                &p.id,
+                false,
+                "manual",
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        }
+
+        // First page
+        let page1 = mgr.list_workflow_runs_by_repo_id("r1", 2, 0).unwrap();
+        assert_eq!(page1.len(), 2);
+
+        // Second page
+        let page2 = mgr.list_workflow_runs_by_repo_id("r1", 2, 2).unwrap();
+        assert_eq!(page2.len(), 2);
+
+        // Pages must not overlap
+        let ids1: Vec<_> = page1.iter().map(|r| r.id.clone()).collect();
+        let ids2: Vec<_> = page2.iter().map(|r| r.id.clone()).collect();
+        assert!(
+            ids1.iter().all(|id| !ids2.contains(id)),
+            "page1 and page2 must not share runs"
+        );
+
+        // Beyond end returns empty
+        let beyond = mgr.list_workflow_runs_by_repo_id("r1", 2, 10).unwrap();
+        assert!(beyond.is_empty());
+    }
 }
