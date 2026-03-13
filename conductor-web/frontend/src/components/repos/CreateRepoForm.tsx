@@ -22,12 +22,12 @@ export function CreateRepoForm({
     setError(null);
     setSubmitting(true);
     try {
-      await api.createRepo({ remote_url: remoteUrl });
+      await api.registerRepo({ remote_url: remoteUrl });
       setRemoteUrl("");
       setOpen(false);
       onCreated();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create repo");
+      setError(err instanceof Error ? err.message : "Failed to register repo");
     } finally {
       setSubmitting(false);
     }
