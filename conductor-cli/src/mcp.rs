@@ -770,6 +770,16 @@ fn conductor_tools() -> Vec<Tool> {
              required by other conductor tools.",
             schema(&[]),
         ),
+        Tool::new(
+            "conductor_submit_agent_feedback",
+            "Submit feedback to an agent run that is waiting for input \
+             (status: waiting_for_feedback). Finds the pending feedback request \
+             for the given run_id and delivers the response, resuming the agent.",
+            schema(&[
+                ("run_id", "Agent run ID that is waiting for feedback", true),
+                ("feedback", "The feedback or answer to deliver to the agent", true),
+            ]),
+        ),
     ]
 }
 
@@ -797,6 +807,7 @@ fn dispatch_tool(
         "conductor_cancel_run" => tool_cancel_run(db_path, args),
         "conductor_list_workflows" => tool_list_workflows(db_path, args),
         "conductor_list_repos" => tool_list_repos(db_path),
+        "conductor_submit_agent_feedback" => tool_submit_agent_feedback(db_path, args),
         _ => tool_err(format!("Unknown tool: {name}")),
     }
 }
@@ -1389,6 +1400,38 @@ fn tool_cancel_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> Cal
         Ok(()) => tool_ok(format!(
             "Workflow run {} ('{}') cancelled.",
             run_id, run.workflow_name
+        )),
+        Err(e) => tool_err(e),
+    }
+}
+
+fn tool_submit_agent_feedback(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::agent::AgentManager;
+
+    let run_id = require_arg!(args, "run_id");
+    let feedback = require_arg!(args, "feedback");
+
+    let (conn, _config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+    let mgr = AgentManager::new(&conn);
+    let pending = match mgr.pending_feedback_for_run(run_id) {
+        Ok(Some(fb)) => fb,
+        Ok(None) => {
+            return tool_err(format!(
+                "No pending feedback request found for run {run_id}. \
+                 The run may not be waiting for feedback."
+            ))
+        }
+        Err(e) => return tool_err(e),
+    };
+    match mgr.submit_feedback(&pending.id, feedback) {
+        Ok(_) => tool_ok(format!(
+            "Feedback submitted for run {run_id}. Agent has been resumed."
         )),
         Err(e) => tool_err(e),
     }
@@ -2524,5 +2567,106 @@ mod tests {
             run.result_summary.as_deref(),
             Some("Cancelled via MCP conductor_cancel_run")
         );
+    }
+
+    // -- tool_submit_agent_feedback -----------------------------------------
+
+    #[test]
+    fn test_dispatch_submit_agent_feedback_missing_run_id() {
+        let (_f, db) = make_test_db();
+        let args = args_with("feedback", "some response");
+        let result = dispatch_tool(&db, "conductor_submit_agent_feedback", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_submit_agent_feedback_missing_feedback() {
+        let (_f, db) = make_test_db();
+        let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
+        let result = dispatch_tool(&db, "conductor_submit_agent_feedback", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_submit_agent_feedback_no_pending() {
+        use conductor_core::agent::AgentManager;
+        use conductor_core::db::open_database;
+
+        let (_f, db) = make_test_db();
+        // Create an agent run (not waiting for feedback)
+        let conn = open_database(&db).expect("open db");
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run(None, "do something", None, None)
+            .expect("create run");
+
+        let mut args = serde_json::Map::new();
+        args.insert("run_id".to_string(), Value::String(run.id.clone()));
+        args.insert(
+            "feedback".to_string(),
+            Value::String("some response".to_string()),
+        );
+        let result = dispatch_tool(&db, "conductor_submit_agent_feedback", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("No pending feedback request"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_submit_agent_feedback_success() {
+        use conductor_core::agent::{AgentManager, AgentRunStatus};
+        use conductor_core::db::open_database;
+
+        let (_f, db) = make_test_db();
+        let conn = open_database(&db).expect("open db");
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run(None, "do something", None, None)
+            .expect("create run");
+        // Create a pending feedback request (this also sets run status to waiting_for_feedback)
+        mgr.request_feedback(&run.id, "Should I proceed?")
+            .expect("request feedback");
+
+        let mut args = serde_json::Map::new();
+        args.insert("run_id".to_string(), Value::String(run.id.clone()));
+        args.insert(
+            "feedback".to_string(),
+            Value::String("Yes, proceed.".to_string()),
+        );
+        let result = dispatch_tool(&db, "conductor_submit_agent_feedback", &args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "submit_agent_feedback should succeed; got: {:?}",
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Feedback submitted"), "got: {text}");
+
+        // Verify run status is back to running
+        let conn2 = open_database(&db).expect("open db");
+        let mgr2 = AgentManager::new(&conn2);
+        let updated = mgr2.get_run(&run.id).expect("query").expect("run exists");
+        assert_eq!(updated.status, AgentRunStatus::Running);
     }
 }
