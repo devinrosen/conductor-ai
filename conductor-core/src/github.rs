@@ -225,6 +225,30 @@ pub fn discover_github_repos(owner: Option<&str>) -> Result<Vec<DiscoveredRepo>>
     Ok(repos)
 }
 
+/// Parse a single GitHub issue JSON value into label details and assignee.
+/// Shared by [`sync_github_issues`] and [`fetch_github_issue`].
+fn parse_issue_metadata(issue: &serde_json::Value) -> (Vec<TicketLabelInput>, Option<String>) {
+    let label_details: Vec<TicketLabelInput> = issue["labels"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|l| {
+                    l["name"].as_str().map(|name| TicketLabelInput {
+                        name: name.to_string(),
+                        color: l["color"].as_str().map(|c| c.to_string()),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let assignee = issue["assignees"]
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|a| a["login"].as_str())
+        .map(|s| s.to_string());
+    (label_details, assignee)
+}
+
 /// Sync open GitHub issues for a repo using the `gh` CLI.
 /// Returns a list of normalized TicketInputs ready for upsert.
 ///
@@ -261,25 +285,8 @@ pub fn sync_github_issues(
         .into_iter()
         .map(|issue| {
             let number = issue["number"].as_u64().unwrap_or(0);
-            let label_details: Vec<TicketLabelInput> = issue["labels"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|l| {
-                            l["name"].as_str().map(|name| TicketLabelInput {
-                                name: name.to_string(),
-                                color: l["color"].as_str().map(|c| c.to_string()),
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+            let (label_details, assignee) = parse_issue_metadata(&issue);
             let label_names: Vec<&str> = label_details.iter().map(|l| l.name.as_str()).collect();
-            let assignee = issue["assignees"]
-                .as_array()
-                .and_then(|arr| arr.first())
-                .and_then(|a| a["login"].as_str())
-                .map(|s| s.to_string());
 
             TicketInput {
                 source_type: "github".to_string(),
@@ -298,6 +305,69 @@ pub fn sync_github_issues(
         .collect();
 
     Ok(tickets)
+}
+
+/// Fetch a single GitHub issue by number and return its current state.
+///
+/// Unlike [`sync_github_issues`] (which hardcodes `"open"`), this function
+/// reads the actual `state` field from `gh issue view` so the caller gets the
+/// real open/closed status.
+///
+/// When `token` is `Some`, the request runs under that identity
+/// (e.g. a GitHub App installation). When `None`, falls back to the
+/// default `gh` CLI user.
+pub fn fetch_github_issue(
+    owner: &str,
+    repo: &str,
+    issue_number: i64,
+    token: Option<&str>,
+) -> Result<TicketInput> {
+    let repo_slug = repo_slug(owner, repo);
+    let number_str = issue_number.to_string();
+    let output = run_gh_with_token(
+        &[
+            "issue",
+            "view",
+            &number_str,
+            "--repo",
+            &repo_slug,
+            "--json",
+            "number,title,body,labels,assignees,state,url",
+        ],
+        token,
+    )?;
+
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let issue: serde_json::Value = serde_json::from_str(&json_str)
+        .map_err(|e| ConductorError::TicketSync(format!("failed to parse gh output: {e}")))?;
+
+    let number = issue["number"].as_u64().ok_or_else(|| {
+        ConductorError::TicketSync("gh issue view response missing 'number' field".to_string())
+    })?;
+    let (label_details, assignee) = parse_issue_metadata(&issue);
+    let label_names: Vec<&str> = label_details.iter().map(|l| l.name.as_str()).collect();
+
+    // gh issue view returns state as "OPEN" or "CLOSED"; normalize to lowercase
+    let raw_state = issue["state"].as_str().unwrap_or("OPEN");
+    let state = if raw_state.eq_ignore_ascii_case("open") {
+        "open".to_string()
+    } else {
+        "closed".to_string()
+    };
+
+    Ok(TicketInput {
+        source_type: "github".to_string(),
+        source_id: number.to_string(),
+        title: issue["title"].as_str().unwrap_or("").to_string(),
+        body: issue["body"].as_str().unwrap_or("").to_string(),
+        state,
+        labels: serde_json::to_string(&label_names).unwrap_or_else(|_| "[]".to_string()),
+        assignee,
+        priority: None,
+        url: issue["url"].as_str().unwrap_or("").to_string(),
+        raw_json: serde_json::to_string(&issue).unwrap_or_else(|_| "{}".to_string()),
+        label_details,
+    })
 }
 
 /// Create a new GitHub issue via the `gh` CLI.

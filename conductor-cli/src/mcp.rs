@@ -772,8 +772,17 @@ fn conductor_tools() -> Vec<Tool> {
         .with_annotations(ToolAnnotations::new().destructive(true).read_only(false)),
         Tool::new(
             "conductor_sync_tickets",
-            "Sync tickets from the configured issue source (GitHub/Jira) for a repo.",
-            schema(&[("repo", "Repo slug", true)]),
+            "Sync tickets from the configured issue source (GitHub/Jira) for a repo. \
+             When ticket_id is provided, re-fetches only that one ticket without closing others.",
+            schema(&[
+                ("repo", "Repo slug", true),
+                (
+                    "ticket_id",
+                    "Optional: ULID, external source ID (e.g. GitHub issue number or Jira key), \
+                     or GitHub PR URL. When provided, re-fetches only this ticket.",
+                    false,
+                ),
+            ]),
         ),
         Tool::new(
             "conductor_run_workflow",
@@ -1385,8 +1394,10 @@ fn tool_sync_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
     use conductor_core::jira_acli;
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::TicketSyncer;
+    use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = require_arg!(args, "repo");
+    let ticket_id_arg = get_arg(args, "ticket_id");
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
@@ -1407,6 +1418,66 @@ fn tool_sync_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
         ));
     }
     let syncer = TicketSyncer::new(&conn);
+
+    // Single-ticket sync path
+    if let Some(ticket_id_str) = ticket_id_arg {
+        let worktree_mgr = WorktreeManager::new(&conn, &config);
+        let (source_type, source_id) =
+            match syncer.resolve_ticket_id(&worktree_mgr, &repo, ticket_id_str) {
+                Ok(v) => v,
+                Err(e) => return tool_err(e),
+            };
+
+        for source in &sources {
+            if source.source_type != source_type {
+                continue;
+            }
+            let fetch_result = match source.source_type.as_str() {
+                "github" => {
+                    let cfg: conductor_core::issue_source::GitHubConfig =
+                        match serde_json::from_str(&source.config_json) {
+                            Ok(c) => c,
+                            Err(e) => return tool_err(format!("github config parse error: {e}")),
+                        };
+                    let issue_number: i64 = match source_id.parse() {
+                        Ok(n) => n,
+                        Err(_) => {
+                            return tool_err(format!("invalid GitHub issue number: {source_id}"))
+                        }
+                    };
+                    github::fetch_github_issue(&cfg.owner, &cfg.repo, issue_number, None)
+                }
+                "jira" => {
+                    let cfg: conductor_core::issue_source::JiraConfig =
+                        match serde_json::from_str(&source.config_json) {
+                            Ok(c) => c,
+                            Err(e) => return tool_err(format!("jira config parse error: {e}")),
+                        };
+                    jira_acli::fetch_jira_issue(&source_id, &cfg.url)
+                }
+                other => return tool_err(format!("Unknown source type: {other}")),
+            };
+            match fetch_result {
+                Ok(ticket) => {
+                    if let Err(e) = syncer.upsert_tickets(&repo.id, &[ticket]) {
+                        return tool_err(format!("upsert failed: {e}"));
+                    }
+                    if let Err(e) = syncer.mark_worktrees_for_closed_tickets(&repo.id) {
+                        eprintln!(
+                            "warn: mark_worktrees_for_closed_tickets failed for {repo_slug}: {e}"
+                        );
+                    }
+                    return tool_ok(format!("Synced 1 ticket for {repo_slug}."));
+                }
+                Err(e) => return tool_err(format!("{source_type}: {e}")),
+            }
+        }
+        return tool_err(format!(
+            "No {source_type} issue source configured for {repo_slug}."
+        ));
+    }
+
+    // Full-sync path (unchanged)
     let mut total_synced = 0usize;
     let mut total_closed = 0usize;
     let mut errors = Vec::new();

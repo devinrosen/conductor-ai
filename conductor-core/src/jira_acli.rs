@@ -40,6 +40,49 @@ pub fn sync_jira_issues_acli(jql: &str, base_url: &str) -> Result<Vec<TicketInpu
     parse_jira_issues(&json_str, base_url)
 }
 
+/// Fetch a single Jira issue by key and return its current state.
+///
+/// Uses JQL `key = <issue_key>` with a limit of 1 to retrieve only the
+/// requested issue, reusing the existing `parse_jira_issues` parser.
+pub fn fetch_jira_issue(issue_key: &str, base_url: &str) -> Result<TicketInput> {
+    let jql = format!("key = {issue_key}");
+    let output = Command::new("acli")
+        .args([
+            "jira",
+            "workitem",
+            "search",
+            "--jql",
+            &jql,
+            "--json",
+            "--limit",
+            "1",
+            "--fields",
+            "key,summary,status,priority,assignee,labels,description",
+        ])
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                ConductorError::TicketSync(
+                    "acli not found. Install the Atlassian CLI (acli) and ensure it is on your PATH.".to_string(),
+                )
+            } else {
+                ConductorError::TicketSync(format!("failed to run acli: {e}"))
+            }
+        })?;
+
+    if !output.status.success() {
+        return Err(ConductorError::TicketSync(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let mut tickets = parse_jira_issues(&json_str, base_url)?;
+    tickets.pop().ok_or_else(|| ConductorError::TicketNotFound {
+        id: issue_key.to_string(),
+    })
+}
+
 /// Parse acli JSON output into TicketInputs.
 fn parse_jira_issues(json_str: &str, base_url: &str) -> Result<Vec<TicketInput>> {
     let issues: Vec<serde_json::Value> = serde_json::from_str(json_str)
