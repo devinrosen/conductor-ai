@@ -75,6 +75,16 @@ fn get_arg<'a>(args: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'
     args.get(key).and_then(|v| v.as_str())
 }
 
+/// Macro: extract a required string arg; returns `tool_err` early if missing.
+macro_rules! require_arg {
+    ($args:expr, $key:literal) => {
+        match get_arg($args, $key) {
+            Some(s) => s,
+            None => return tool_err(concat!("Missing required argument: ", $key)),
+        }
+    };
+}
+
 /// The conductor MCP server. Holds only the DB path — each request opens its
 /// own connection inside `spawn_blocking` to avoid the `!Send` issue.
 pub struct ConductorMcpServer {
@@ -632,10 +642,7 @@ fn tool_list_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::TicketSyncer;
 
-    let repo_slug = match get_arg(args, "repo") {
-        Some(s) => s,
-        None => return tool_err("Missing required argument: repo"),
-    };
+    let repo_slug = require_arg!(args, "repo");
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
@@ -665,10 +672,7 @@ fn tool_list_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
 fn tool_list_worktrees(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::worktree::WorktreeManager;
 
-    let repo_slug = match get_arg(args, "repo") {
-        Some(s) => s,
-        None => return tool_err("Missing required argument: repo"),
-    };
+    let repo_slug = require_arg!(args, "repo");
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
@@ -694,14 +698,8 @@ fn tool_list_worktrees(db_path: &Path, args: &serde_json::Map<String, Value>) ->
 fn tool_create_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::worktree::WorktreeManager;
 
-    let repo_slug = match get_arg(args, "repo") {
-        Some(s) => s,
-        None => return tool_err("Missing required argument: repo"),
-    };
-    let name = match get_arg(args, "name") {
-        Some(s) => s,
-        None => return tool_err("Missing required argument: name"),
-    };
+    let repo_slug = require_arg!(args, "repo");
+    let name = require_arg!(args, "name");
     let ticket_id = get_arg(args, "ticket_id");
 
     let (conn, config) = match open_db_and_config(db_path) {
@@ -727,14 +725,8 @@ fn tool_create_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -
 fn tool_delete_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::worktree::WorktreeManager;
 
-    let repo_slug = match get_arg(args, "repo") {
-        Some(s) => s,
-        None => return tool_err("Missing required argument: repo"),
-    };
-    let slug = match get_arg(args, "slug") {
-        Some(s) => s,
-        None => return tool_err("Missing required argument: slug"),
-    };
+    let repo_slug = require_arg!(args, "repo");
+    let slug = require_arg!(args, "slug");
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
@@ -753,10 +745,7 @@ fn tool_sync_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::TicketSyncer;
 
-    let repo_slug = match get_arg(args, "repo") {
-        Some(s) => s,
-        None => return tool_err("Missing required argument: repo"),
-    };
+    let repo_slug = require_arg!(args, "repo");
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
@@ -843,14 +832,8 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
     use conductor_core::worktree::WorktreeManager;
     use std::sync::{Arc, Mutex};
 
-    let workflow_name = match get_arg(args, "workflow") {
-        Some(s) => s,
-        None => return tool_err("Missing required argument: workflow"),
-    };
-    let repo_slug = match get_arg(args, "repo") {
-        Some(s) => s,
-        None => return tool_err("Missing required argument: repo"),
-    };
+    let workflow_name = require_arg!(args, "workflow");
+    let repo_slug = require_arg!(args, "repo");
     let worktree_slug = get_arg(args, "worktree");
 
     // Parse optional inputs JSON
@@ -971,10 +954,7 @@ fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> Call
     use conductor_core::workflow::WorkflowManager;
     use conductor_core::worktree::WorktreeManager;
 
-    let repo_slug = match get_arg(args, "repo") {
-        Some(s) => s,
-        None => return tool_err("Missing required argument: repo"),
-    };
+    let repo_slug = require_arg!(args, "repo");
     let worktree_slug = get_arg(args, "worktree");
 
     let (conn, config) = match open_db_and_config(db_path) {
@@ -1018,10 +998,7 @@ fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> Call
 fn tool_get_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::workflow::WorkflowManager;
 
-    let run_id = match get_arg(args, "run_id") {
-        Some(s) => s,
-        None => return tool_err("Missing required argument: run_id"),
-    };
+    let run_id = require_arg!(args, "run_id");
     let (conn, _config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
@@ -1042,10 +1019,7 @@ fn tool_get_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallTo
 fn tool_approve_gate(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::workflow::WorkflowManager;
 
-    let run_id = match get_arg(args, "run_id") {
-        Some(s) => s,
-        None => return tool_err("Missing required argument: run_id"),
-    };
+    let run_id = require_arg!(args, "run_id");
     let feedback = get_arg(args, "feedback");
 
     let (conn, _config) = match open_db_and_config(db_path) {
@@ -1067,10 +1041,7 @@ fn tool_approve_gate(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
 fn tool_reject_gate(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::workflow::WorkflowManager;
 
-    let run_id = match get_arg(args, "run_id") {
-        Some(s) => s,
-        None => return tool_err("Missing required argument: run_id"),
-    };
+    let run_id = require_arg!(args, "run_id");
     let (conn, _config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
@@ -1090,14 +1061,8 @@ fn tool_reject_gate(db_path: &Path, args: &serde_json::Map<String, Value>) -> Ca
 fn tool_push_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::worktree::WorktreeManager;
 
-    let repo_slug = match get_arg(args, "repo") {
-        Some(s) => s,
-        None => return tool_err("Missing required argument: repo"),
-    };
-    let slug = match get_arg(args, "slug") {
-        Some(s) => s,
-        None => return tool_err("Missing required argument: slug"),
-    };
+    let repo_slug = require_arg!(args, "repo");
+    let slug = require_arg!(args, "slug");
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
