@@ -915,11 +915,17 @@ impl<'a> WorkflowManager<'a> {
     }
 
     /// List recent workflow runs across all worktrees, ordered by started_at DESC.
+    /// Only includes runs whose associated worktree is `active` (or runs with no
+    /// worktree, i.e. ephemeral/repo-targeted runs).
     pub fn list_all_workflow_runs(&self, limit: usize) -> Result<Vec<WorkflowRun>> {
         query_collect(
             self.conn,
             &format!(
-                "SELECT {RUN_COLUMNS} FROM workflow_runs ORDER BY started_at DESC LIMIT {limit}"
+                "SELECT workflow_runs.* \
+                 FROM workflow_runs \
+                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                 WHERE workflow_runs.worktree_id IS NULL OR worktrees.status = 'active' \
+                 ORDER BY workflow_runs.started_at DESC LIMIT {limit}"
             ),
             params![],
             row_to_workflow_run,
@@ -929,6 +935,7 @@ impl<'a> WorkflowManager<'a> {
     /// List recent workflow runs for a specific repo, ordered by started_at DESC.
     /// Unlike `list_all_workflow_runs` + filter, this queries directly by `repo_id`
     /// so older per-repo runs beyond a global cap are never silently omitted.
+    /// Only includes runs whose associated worktree is `active` (or runs with no worktree).
     pub fn list_workflow_runs_by_repo_id(
         &self,
         repo_id: &str,
@@ -937,8 +944,12 @@ impl<'a> WorkflowManager<'a> {
         query_collect(
             self.conn,
             &format!(
-                "SELECT {RUN_COLUMNS} FROM workflow_runs \
-                 WHERE repo_id = ?1 ORDER BY started_at DESC LIMIT {limit}"
+                "SELECT workflow_runs.* \
+                 FROM workflow_runs \
+                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                 WHERE workflow_runs.repo_id = ?1 \
+                   AND (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
+                 ORDER BY workflow_runs.started_at DESC LIMIT {limit}"
             ),
             params![repo_id],
             row_to_workflow_run,
@@ -5297,6 +5308,130 @@ And here is my actual output:
         // Verify the ephemeral run has None worktree_id
         let found = all.iter().find(|r| r.id == ephemeral.id).unwrap();
         assert!(found.worktree_id.is_none());
+    }
+
+    #[test]
+    fn test_list_all_workflow_runs_excludes_merged_worktree() {
+        let conn = setup_db();
+        // Insert a second worktree with merged status
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w2', 'r1', 'feat-merged', 'feat/merged', '/tmp/ws/merged', 'merged', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let agent_mgr = AgentManager::new(&conn);
+        let p1 = agent_mgr.create_run(Some("w1"), "wf1", None, None).unwrap();
+        let p2 = agent_mgr.create_run(Some("w2"), "wf2", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        mgr.create_workflow_run("active-run", Some("w1"), &p1.id, false, "manual", None)
+            .unwrap();
+        mgr.create_workflow_run("merged-run", Some("w2"), &p2.id, false, "manual", None)
+            .unwrap();
+
+        let all = mgr.list_all_workflow_runs(100).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].workflow_name, "active-run");
+    }
+
+    #[test]
+    fn test_list_all_workflow_runs_excludes_abandoned_worktree() {
+        let conn = setup_db();
+        // Insert a second worktree with abandoned status
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w2', 'r1', 'feat-abandoned', 'feat/abandoned', '/tmp/ws/abandoned', 'abandoned', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let agent_mgr = AgentManager::new(&conn);
+        let p1 = agent_mgr.create_run(Some("w1"), "wf1", None, None).unwrap();
+        let p2 = agent_mgr.create_run(Some("w2"), "wf2", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        mgr.create_workflow_run("active-run", Some("w1"), &p1.id, false, "manual", None)
+            .unwrap();
+        mgr.create_workflow_run("abandoned-run", Some("w2"), &p2.id, false, "manual", None)
+            .unwrap();
+
+        let all = mgr.list_all_workflow_runs(100).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].workflow_name, "active-run");
+    }
+
+    #[test]
+    fn test_list_all_workflow_runs_includes_ephemeral_and_active() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        // Active worktree run
+        let p1 = agent_mgr.create_run(Some("w1"), "wf1", None, None).unwrap();
+        mgr.create_workflow_run("active-run", Some("w1"), &p1.id, false, "manual", None)
+            .unwrap();
+
+        // Ephemeral run (no worktree)
+        let p2 = agent_mgr.create_run(None, "wf2", None, None).unwrap();
+        mgr.create_workflow_run("ephemeral-run", None, &p2.id, false, "manual", None)
+            .unwrap();
+
+        let all = mgr.list_all_workflow_runs(100).unwrap();
+        assert_eq!(all.len(), 2);
+        let names: Vec<&str> = all.iter().map(|r| r.workflow_name.as_str()).collect();
+        assert!(names.contains(&"active-run"));
+        assert!(names.contains(&"ephemeral-run"));
+    }
+
+    #[test]
+    fn test_list_workflow_runs_by_repo_id_excludes_merged_worktree() {
+        let conn = setup_db();
+        // Insert a second worktree with merged status (same repo)
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w2', 'r1', 'feat-merged', 'feat/merged', '/tmp/ws/merged', 'merged', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let agent_mgr = AgentManager::new(&conn);
+        let p1 = agent_mgr.create_run(Some("w1"), "wf1", None, None).unwrap();
+        let p2 = agent_mgr.create_run(Some("w2"), "wf2", None, None).unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        // Use create_workflow_run_with_targets to set repo_id so the query can filter by it
+        mgr.create_workflow_run_with_targets(
+            "active-run",
+            Some("w1"),
+            None,
+            Some("r1"),
+            &p1.id,
+            false,
+            "manual",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        mgr.create_workflow_run_with_targets(
+            "merged-run",
+            Some("w2"),
+            None,
+            Some("r1"),
+            &p2.id,
+            false,
+            "manual",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let runs = mgr.list_workflow_runs_by_repo_id("r1", 100).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].workflow_name, "active-run");
     }
 
     #[test]
