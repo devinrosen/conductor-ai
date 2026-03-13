@@ -1388,50 +1388,6 @@ fn tool_delete_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -
     }
 }
 
-/// Resolve a `ticket_id` string to `(source_type, source_id)` for a single-ticket sync.
-///
-/// Accepts three forms:
-/// - GitHub PR URL (contains `/pull/`) — resolves via PR → head branch → worktree → ticket
-/// - 26-character ULID — looks up by internal ID
-/// - Anything else — treated as an external source ID (GitHub issue number or Jira key)
-fn resolve_ticket_id(
-    syncer: &conductor_core::tickets::TicketSyncer<'_>,
-    worktree_mgr: &conductor_core::worktree::WorktreeManager<'_>,
-    repo: &conductor_core::repo::Repo,
-    ticket_id_str: &str,
-) -> Result<(String, String), String> {
-    use conductor_core::github;
-
-    // PR URL path
-    if ticket_id_str.contains("/pull/") {
-        let pr_number = github::parse_pr_number_from_url(ticket_id_str)
-            .ok_or_else(|| format!("could not parse PR number from URL: {ticket_id_str}"))?;
-        let branch =
-            github::get_pr_head_branch(&repo.remote_url, pr_number).map_err(|e| e.to_string())?;
-        let wt = worktree_mgr
-            .get_by_branch(&repo.id, &branch)
-            .map_err(|e| e.to_string())?;
-        let ticket_id = wt
-            .ticket_id
-            .ok_or_else(|| format!("worktree for branch {branch} has no linked ticket"))?;
-        let ticket = syncer.get_by_id(&ticket_id).map_err(|e| e.to_string())?;
-        return Ok((ticket.source_type, ticket.source_id));
-    }
-
-    // ULID path (26 chars)
-    if ticket_id_str.len() == 26 {
-        if let Ok(ticket) = syncer.get_by_id(ticket_id_str) {
-            return Ok((ticket.source_type, ticket.source_id));
-        }
-    }
-
-    // External source_id path
-    let ticket = syncer
-        .get_by_source_id(&repo.id, ticket_id_str)
-        .map_err(|e| e.to_string())?;
-    Ok((ticket.source_type, ticket.source_id))
-}
-
 fn tool_sync_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::github;
     use conductor_core::issue_source::IssueSourceManager;
@@ -1467,7 +1423,7 @@ fn tool_sync_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
     if let Some(ticket_id_str) = ticket_id_arg {
         let worktree_mgr = WorktreeManager::new(&conn, &config);
         let (source_type, source_id) =
-            match resolve_ticket_id(&syncer, &worktree_mgr, &repo, ticket_id_str) {
+            match syncer.resolve_ticket_id(&worktree_mgr, &repo, ticket_id_str) {
                 Ok(v) => v,
                 Err(e) => return tool_err(e),
             };
@@ -1489,7 +1445,7 @@ fn tool_sync_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
                             return tool_err(format!("invalid GitHub issue number: {source_id}"))
                         }
                     };
-                    github::fetch_github_issue(&cfg.owner, &cfg.repo, issue_number)
+                    github::fetch_github_issue(&cfg.owner, &cfg.repo, issue_number, None)
                 }
                 "jira" => {
                     let cfg: conductor_core::issue_source::JiraConfig =

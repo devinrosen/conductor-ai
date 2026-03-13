@@ -442,6 +442,50 @@ impl<'a> TicketSyncer<'a> {
 
         Ok(count)
     }
+
+    /// Resolve a user-supplied ticket identifier to `(source_type, source_id)`.
+    ///
+    /// Accepts three forms:
+    /// - GitHub PR URL (contains `/pull/`) — resolves via PR → head branch → worktree → ticket
+    /// - 26-character ULID — looks up by internal ID
+    /// - Anything else — treated as an external source ID (GitHub issue number or Jira key)
+    pub fn resolve_ticket_id(
+        &self,
+        worktree_mgr: &WorktreeManager<'_>,
+        repo: &crate::repo::Repo,
+        ticket_id_str: &str,
+    ) -> Result<(String, String)> {
+        use crate::github;
+
+        // PR URL path
+        if ticket_id_str.contains("/pull/") {
+            let pr_number = github::parse_pr_number_from_url(ticket_id_str).ok_or_else(|| {
+                ConductorError::TicketSync(format!(
+                    "could not parse PR number from URL: {ticket_id_str}"
+                ))
+            })?;
+            let branch = github::get_pr_head_branch(&repo.remote_url, pr_number)?;
+            let wt = worktree_mgr.get_by_branch(&repo.id, &branch)?;
+            let ticket_id = wt.ticket_id.ok_or_else(|| {
+                ConductorError::TicketSync(format!(
+                    "worktree for branch {branch} has no linked ticket"
+                ))
+            })?;
+            let ticket = self.get_by_id(&ticket_id)?;
+            return Ok((ticket.source_type, ticket.source_id));
+        }
+
+        // ULID path (26 chars)
+        if ticket_id_str.len() == 26 {
+            if let Ok(ticket) = self.get_by_id(ticket_id_str) {
+                return Ok((ticket.source_type, ticket.source_id));
+            }
+        }
+
+        // External source_id path
+        let ticket = self.get_by_source_id(&repo.id, ticket_id_str)?;
+        Ok((ticket.source_type, ticket.source_id))
+    }
 }
 
 /// Build a rich agent prompt from a ticket's context.
