@@ -22,8 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - run: bun install --cwd conductor-web/frontend
-      - run: bun run build --cwd conductor-web/frontend
+      - run: bun --cwd conductor-web/frontend install
+      - run: bun --cwd conductor-web/frontend run build
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add clippy
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - run: bun install --cwd conductor-web/frontend
-      - run: bun run build --cwd conductor-web/frontend
+      - run: bun --cwd conductor-web/frontend install
+      - run: bun --cwd conductor-web/frontend run build
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
