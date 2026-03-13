@@ -212,9 +212,12 @@ impl Theme {
         let value: serde_yml::Value = serde_yml::from_str(&contents)
             .map_err(|e| format!("failed to parse theme file {}: {e}", path.display()))?;
 
-        let palette = value
-            .get("palette")
-            .ok_or_else(|| "missing \"palette\" section in theme file".to_string())?;
+        let palette = value.get("palette").ok_or_else(|| {
+            format!(
+                "{}: missing \"palette\" section in theme file",
+                path.display()
+            )
+        })?;
 
         let get = |slot: &str| -> Result<Color, String> {
             let hex = palette.get(slot).and_then(|v| v.as_str()).ok_or_else(|| {
@@ -544,6 +547,23 @@ palette:
         assert!(
             err.contains("broken.yaml"),
             "error should include file path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_yaml_missing_palette_error_includes_file_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nopalette.yaml");
+        std::fs::write(&path, "name: \"No Palette\"\n").unwrap();
+
+        let err = Theme::from_base16_yaml_file(&path).unwrap_err();
+        assert!(
+            err.contains("nopalette.yaml"),
+            "missing palette error should include file path, got: {err}"
+        );
+        assert!(
+            err.contains("palette"),
+            "error should mention 'palette', got: {err}"
         );
     }
 
