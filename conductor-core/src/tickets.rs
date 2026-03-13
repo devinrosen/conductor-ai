@@ -58,6 +58,20 @@ pub struct TicketLabel {
     pub color: Option<String>,
 }
 
+/// Filter options for [`TicketSyncer::list_filtered`].
+pub struct TicketFilter {
+    /// Only include tickets that have ALL of these labels.
+    /// NOTE: label filtering uses the `ticket_labels` join table, which is only
+    /// populated when `label_details` are provided during upsert. Tickets synced
+    /// without label details will never match a label filter even if their JSON
+    /// `labels` field is non-empty.
+    pub labels: Vec<String>,
+    /// Case-insensitive substring match against ticket title and body (ASCII only).
+    pub search: Option<String>,
+    /// When `false` (default), only open tickets are returned.
+    pub include_closed: bool,
+}
+
 impl Ticket {
     pub fn matches_filter(&self, query: &str) -> bool {
         self.title.to_lowercase().contains(query)
@@ -202,6 +216,65 @@ impl<'a> TicketSyncer<'a> {
             query_collect(self.conn, query, [], map_ticket_row)?
         };
         Ok(tickets)
+    }
+
+    /// List tickets with optional filtering. Open-only by default.
+    ///
+    /// Filters are applied in SQL:
+    /// - `repo_id`: scoped to a single repo when provided.
+    /// - `filter.include_closed`: when `false`, restricts to `state = 'open'`.
+    /// - `filter.labels`: ALL listed labels must be present (AND semantics via EXISTS subqueries).
+    /// - `filter.search`: `LIKE %term%` on title and body (case-insensitive for ASCII).
+    pub fn list_filtered(
+        &self,
+        repo_id: Option<&str>,
+        filter: &TicketFilter,
+    ) -> Result<Vec<Ticket>> {
+        let select = "SELECT t.id, t.repo_id, t.source_type, t.source_id, t.title, t.body, \
+                      t.state, t.labels, t.assignee, t.priority, t.url, t.synced_at, t.raw_json \
+                      FROM tickets t";
+
+        let mut conditions: Vec<String> = Vec::new();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(rid) = repo_id {
+            conditions.push("t.repo_id = ?".to_string());
+            param_values.push(Box::new(rid.to_string()));
+        }
+
+        if !filter.include_closed {
+            conditions.push("t.state = 'open'".to_string());
+        }
+
+        for label in &filter.labels {
+            conditions.push(
+                "EXISTS (SELECT 1 FROM ticket_labels tl WHERE tl.ticket_id = t.id AND tl.label = ?)"
+                    .to_string(),
+            );
+            param_values.push(Box::new(label.clone()));
+        }
+
+        if let Some(ref term) = filter.search {
+            conditions.push("(t.title LIKE ? OR t.body LIKE ?)".to_string());
+            let pattern = format!("%{term}%");
+            param_values.push(Box::new(pattern.clone()));
+            param_values.push(Box::new(pattern));
+        }
+
+        let sql = if conditions.is_empty() {
+            format!("{select} ORDER BY t.synced_at DESC")
+        } else {
+            format!(
+                "{select} WHERE {} ORDER BY t.synced_at DESC",
+                conditions.join(" AND ")
+            )
+        };
+
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), map_ticket_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     /// Link a ticket to a worktree.
@@ -1309,5 +1382,210 @@ mod tests {
         let syncer = TicketSyncer::new(&conn);
         let map = syncer.get_all_labels().unwrap();
         assert!(map.is_empty(), "empty DB must yield empty label map");
+    }
+
+    // -----------------------------------------------------------------------
+    // list_filtered tests
+    // -----------------------------------------------------------------------
+
+    fn make_ticket_with_body(source_id: &str, title: &str, body: &str) -> TicketInput {
+        TicketInput {
+            source_type: "github".to_string(),
+            source_id: source_id.to_string(),
+            title: title.to_string(),
+            body: body.to_string(),
+            state: "open".to_string(),
+            labels: "[]".to_string(),
+            assignee: None,
+            priority: None,
+            url: String::new(),
+            raw_json: "{}".to_string(),
+            label_details: vec![],
+        }
+    }
+
+    #[test]
+    fn test_list_filtered_defaults_to_open_only() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![
+            make_ticket("1", "Open issue"),
+            make_ticket("2", "Closed issue"),
+        ];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+        syncer
+            .close_missing_tickets("r1", "github", &["1"])
+            .unwrap();
+
+        let filter = TicketFilter {
+            labels: vec![],
+            search: None,
+            include_closed: false,
+        };
+        let results = syncer.list_filtered(Some("r1"), &filter).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source_id, "1");
+    }
+
+    #[test]
+    fn test_list_filtered_include_closed() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![
+            make_ticket("1", "Open issue"),
+            make_ticket("2", "Closed issue"),
+        ];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+        syncer
+            .close_missing_tickets("r1", "github", &["1"])
+            .unwrap();
+
+        let filter = TicketFilter {
+            labels: vec![],
+            search: None,
+            include_closed: true,
+        };
+        let results = syncer.list_filtered(Some("r1"), &filter).unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_list_filtered_by_label() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let mut t1 = make_ticket("1", "Bug report");
+        t1.label_details = vec![TicketLabelInput {
+            name: "bug".to_string(),
+            color: None,
+        }];
+        let t2 = make_ticket("2", "Feature request"); // no labels
+
+        syncer.upsert_tickets("r1", &[t1, t2]).unwrap();
+
+        let filter = TicketFilter {
+            labels: vec!["bug".to_string()],
+            search: None,
+            include_closed: false,
+        };
+        let results = syncer.list_filtered(Some("r1"), &filter).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source_id, "1");
+    }
+
+    #[test]
+    fn test_list_filtered_by_multiple_labels_and_semantics() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // t1 has both "bug" and "urgent"
+        let mut t1 = make_ticket("1", "Critical bug");
+        t1.label_details = vec![
+            TicketLabelInput {
+                name: "bug".to_string(),
+                color: None,
+            },
+            TicketLabelInput {
+                name: "urgent".to_string(),
+                color: None,
+            },
+        ];
+        // t2 has only "bug"
+        let mut t2 = make_ticket("2", "Normal bug");
+        t2.label_details = vec![TicketLabelInput {
+            name: "bug".to_string(),
+            color: None,
+        }];
+
+        syncer.upsert_tickets("r1", &[t1, t2]).unwrap();
+
+        // Filtering for both labels should return only t1 (AND semantics)
+        let filter = TicketFilter {
+            labels: vec!["bug".to_string(), "urgent".to_string()],
+            search: None,
+            include_closed: false,
+        };
+        let results = syncer.list_filtered(Some("r1"), &filter).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source_id, "1");
+    }
+
+    #[test]
+    fn test_list_filtered_by_search_title() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        syncer
+            .upsert_tickets(
+                "r1",
+                &[
+                    make_ticket_with_body("1", "Fix the login page", ""),
+                    make_ticket_with_body("2", "Update dashboard", ""),
+                ],
+            )
+            .unwrap();
+
+        let filter = TicketFilter {
+            labels: vec![],
+            search: Some("login".to_string()),
+            include_closed: false,
+        };
+        let results = syncer.list_filtered(Some("r1"), &filter).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source_id, "1");
+    }
+
+    #[test]
+    fn test_list_filtered_by_search_body() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        syncer
+            .upsert_tickets(
+                "r1",
+                &[
+                    make_ticket_with_body("1", "Issue A", "contains the keyword xyz"),
+                    make_ticket_with_body("2", "Issue B", "nothing relevant"),
+                ],
+            )
+            .unwrap();
+
+        let filter = TicketFilter {
+            labels: vec![],
+            search: Some("xyz".to_string()),
+            include_closed: false,
+        };
+        let results = syncer.list_filtered(Some("r1"), &filter).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source_id, "1");
+    }
+
+    #[test]
+    fn test_list_filtered_no_repo_scope() {
+        let conn = setup_db();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+             VALUES ('repo2', 'other-repo', '/tmp/repo2', 'https://github.com/test/other', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let syncer = TicketSyncer::new(&conn);
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "Repo1 issue")])
+            .unwrap();
+        syncer
+            .upsert_tickets("repo2", &[make_ticket("2", "Repo2 issue")])
+            .unwrap();
+
+        let filter = TicketFilter {
+            labels: vec![],
+            search: None,
+            include_closed: false,
+        };
+        let results = syncer.list_filtered(None, &filter).unwrap();
+        assert_eq!(results.len(), 2);
     }
 }
