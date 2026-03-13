@@ -200,7 +200,13 @@ fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource>> {
     let repo_mgr = RepoManager::new(&conn, &config);
     let repos = repo_mgr.list()?;
 
-    // Fetch all recent workflow runs once (avoids N+1 query inside the per-repo loop)
+    // Bulk-fetch all tickets, worktrees, and workflow runs once to avoid N+1 queries.
+    let syncer = TicketSyncer::new(&conn);
+    let all_tickets = syncer.list(None)?;
+
+    let wt_mgr = WorktreeManager::new(&conn, &config);
+    let all_worktrees = wt_mgr.list(None, false)?;
+
     let wf_mgr = WorkflowManager::new(&conn);
     let all_runs = wf_mgr.list_all_workflow_runs(200)?;
 
@@ -231,10 +237,12 @@ fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource>> {
             format!("Available workflow definitions for {}", repo.slug),
         ));
 
-        // Individual tickets (cap at 100 per repo)
-        let syncer = TicketSyncer::new(&conn);
-        let tickets = syncer.list(Some(&repo.id))?;
-        for ticket in tickets.iter().take(100) {
+        // Individual tickets (cap at 100 per repo, filtered from bulk fetch)
+        for ticket in all_tickets
+            .iter()
+            .filter(|t| t.repo_id == repo.id)
+            .take(100)
+        {
             resources.push(make_resource(
                 format!("conductor://ticket/{}/{}", repo.slug, ticket.source_id),
                 format!("ticket:{}#{}", repo.slug, ticket.source_id),
@@ -242,10 +250,8 @@ fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource>> {
             ));
         }
 
-        // Individual worktrees
-        let wt_mgr = WorktreeManager::new(&conn, &config);
-        let worktrees = wt_mgr.list(Some(&repo.slug), false)?;
-        for wt in &worktrees {
+        // Individual worktrees (filtered from bulk fetch)
+        for wt in all_worktrees.iter().filter(|w| w.repo_id == repo.id) {
             resources.push(make_resource(
                 format!("conductor://worktree/{}/{}", repo.slug, wt.slug),
                 format!("worktree:{}/{}", repo.slug, wt.slug),
@@ -253,7 +259,7 @@ fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource>> {
             ));
         }
 
-        // Recent workflow runs filtered by repo_id (all_runs fetched once above)
+        // Recent workflow runs filtered by repo_id (bulk fetched above)
         for run in all_runs
             .iter()
             .filter(|r| r.repo_id.as_deref() == Some(&repo.id))
@@ -422,11 +428,8 @@ fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<String> {
             return Ok(format!("No workflow runs for {repo_slug}."));
         }
         let mut out = String::new();
-        for run in repo_runs {
-            out.push_str(&format!(
-                "id: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\n\n",
-                run.id, run.workflow_name, run.status, run.started_at
-            ));
+        for run in &repo_runs {
+            out.push_str(&format_run_summary_line(run));
         }
         return Ok(out);
     }
@@ -437,24 +440,7 @@ fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<String> {
             .get_workflow_run(run_id)?
             .ok_or_else(|| anyhow::anyhow!("Workflow run {run_id} not found"))?;
         let steps = wf_mgr.get_workflow_steps(run_id)?;
-        let mut out = format!(
-            "id: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\nended_at: {}\nsummary: {}\n\nsteps:\n",
-            run.id,
-            run.workflow_name,
-            run.status,
-            run.started_at,
-            run.ended_at.as_deref().unwrap_or("running"),
-            run.result_summary.as_deref().unwrap_or("none")
-        );
-        for step in steps {
-            out.push_str(&format!(
-                "  {} [{}]: {}\n",
-                step.step_name,
-                step.status,
-                step.result_text.as_deref().unwrap_or("")
-            ));
-        }
-        return Ok(out);
+        return Ok(format_run_detail(&run, &steps));
     }
 
     if let Some(repo_slug) = uri.strip_prefix("conductor://workflows/") {
@@ -482,6 +468,41 @@ fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<String> {
     }
 
     anyhow::bail!("Unknown conductor:// URI: {uri}")
+}
+
+// ---------------------------------------------------------------------------
+// Run formatting helpers (shared between resource reader and tool handlers)
+// ---------------------------------------------------------------------------
+
+fn format_run_summary_line(run: &conductor_core::workflow::WorkflowRun) -> String {
+    format!(
+        "id: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\n\n",
+        run.id, run.workflow_name, run.status, run.started_at
+    )
+}
+
+fn format_run_detail(
+    run: &conductor_core::workflow::WorkflowRun,
+    steps: &[conductor_core::workflow::WorkflowRunStep],
+) -> String {
+    let mut out = format!(
+        "id: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\nended_at: {}\nsummary: {}\n\nsteps:\n",
+        run.id,
+        run.workflow_name,
+        run.status,
+        run.started_at,
+        run.ended_at.as_deref().unwrap_or("running"),
+        run.result_summary.as_deref().unwrap_or("none")
+    );
+    for step in steps {
+        out.push_str(&format!(
+            "  {} [{}]: {}\n",
+            step.step_name,
+            step.status,
+            step.result_text.as_deref().unwrap_or("")
+        ));
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -892,8 +913,17 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
         run_id_notify: Some(Arc::clone(&run_id_slot)),
     };
 
+    // Slot receives the error message if execute_workflow_standalone fails before
+    // creating the run record (i.e., before writing to run_id_slot).
+    let error_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let error_slot_bg = Arc::clone(&error_slot);
+
     std::thread::spawn(move || {
-        let _ = execute_workflow_standalone(&standalone);
+        if let Err(e) = execute_workflow_standalone(&standalone) {
+            if let Ok(mut guard) = error_slot_bg.lock() {
+                *guard = Some(e.to_string());
+            }
+        }
     });
 
     // Wait up to 2 s for the background thread to create the workflow run record.
@@ -901,9 +931,14 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
             {
-                let guard = run_id_slot.lock().unwrap();
-                if let Some(id) = guard.as_ref() {
+                let id_guard = run_id_slot.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(id) = id_guard.as_ref() {
                     break id.clone();
+                }
+                // Surface early startup errors immediately instead of waiting for timeout.
+                let err_guard = error_slot.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(err) = err_guard.as_ref() {
+                    return tool_err(format!("Workflow failed to start: {err}"));
                 }
             }
             if std::time::Instant::now() >= deadline {
@@ -964,11 +999,8 @@ fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> Call
         return tool_ok(format!("No workflow runs for {repo_slug}."));
     }
     let mut out = String::new();
-    for run in runs {
-        out.push_str(&format!(
-            "id: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\n\n",
-            run.id, run.workflow_name, run.status, run.started_at
-        ));
+    for run in &runs {
+        out.push_str(&format_run_summary_line(run));
     }
     tool_ok(out)
 }
@@ -994,24 +1026,7 @@ fn tool_get_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallTo
         Ok(s) => s,
         Err(e) => return tool_err(e),
     };
-    let mut out = format!(
-        "id: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\nended_at: {}\nsummary: {}\n\nsteps:\n",
-        run.id,
-        run.workflow_name,
-        run.status,
-        run.started_at,
-        run.ended_at.as_deref().unwrap_or("running"),
-        run.result_summary.as_deref().unwrap_or("none")
-    );
-    for step in steps {
-        out.push_str(&format!(
-            "  {} [{}]: {}\n",
-            step.step_name,
-            step.status,
-            step.result_text.as_deref().unwrap_or("")
-        ));
-    }
-    tool_ok(out)
+    tool_ok(format_run_detail(&run, &steps))
 }
 
 fn tool_approve_gate(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
@@ -1265,5 +1280,157 @@ mod tests {
         args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
         let result = dispatch_tool(&db, "conductor_run_workflow", &args);
         assert_eq!(result.is_error, Some(true));
+    }
+
+    // -- gate tools (approve / reject) --------------------------------------
+
+    /// Helper: set up a workflow run with a waiting gate step. Returns (run_id, step_id).
+    fn make_waiting_gate(db_path: &std::path::Path) -> (String, String) {
+        use conductor_core::agent::AgentManager;
+        use conductor_core::db::open_database;
+        use conductor_core::workflow::{WorkflowManager, WorkflowStepStatus};
+
+        let conn = open_database(db_path).expect("open db");
+
+        // FK: workflow_runs.parent_run_id references agent_runs.id
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(None, "workflow", None, None)
+            .expect("create agent run");
+
+        let mgr = WorkflowManager::new(&conn);
+
+        let run = mgr
+            .create_workflow_run("test-wf", None, &parent.id, false, "manual", None)
+            .expect("create run");
+
+        let step_id = mgr
+            .insert_step(&run.id, "human_review", "reviewer", false, 0, 0)
+            .expect("insert step");
+
+        mgr.set_step_gate_info(&step_id, "human_approval", Some("Approve?"), "24h")
+            .expect("set gate info");
+
+        mgr.update_step_status(
+            &step_id,
+            WorkflowStepStatus::Waiting,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("set waiting status");
+
+        (run.id, step_id)
+    }
+
+    #[test]
+    fn test_dispatch_approve_gate_missing_run_id_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_approve_gate", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_reject_gate_missing_run_id_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_reject_gate", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_approve_gate_no_waiting_gate() {
+        let (_f, db) = make_test_db();
+        let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
+        let result = dispatch_tool(&db, "conductor_approve_gate", &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_dispatch_reject_gate_no_waiting_gate() {
+        let (_f, db) = make_test_db();
+        let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
+        let result = dispatch_tool(&db, "conductor_reject_gate", &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_dispatch_approve_gate_success() {
+        let (_f, db) = make_test_db();
+        let (run_id, _step_id) = make_waiting_gate(&db);
+
+        let args = args_with("run_id", &run_id);
+        let result = dispatch_tool(&db, "conductor_approve_gate", &args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "approve_gate should succeed; got: {:?}",
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("approved"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_reject_gate_success() {
+        let (_f, db) = make_test_db();
+        let (run_id, _step_id) = make_waiting_gate(&db);
+
+        let args = args_with("run_id", &run_id);
+        let result = dispatch_tool(&db, "conductor_reject_gate", &args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "reject_gate should succeed; got: {:?}",
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("rejected"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_approve_gate_with_feedback() {
+        let (_f, db) = make_test_db();
+        let (run_id, _step_id) = make_waiting_gate(&db);
+
+        let mut args = serde_json::Map::new();
+        args.insert("run_id".to_string(), Value::String(run_id.clone()));
+        args.insert("feedback".to_string(), Value::String("LGTM".to_string()));
+        let result = dispatch_tool(&db, "conductor_approve_gate", &args);
+        assert_ne!(result.is_error, Some(true));
+
+        // Verify the feedback was persisted
+        use conductor_core::db::open_database;
+        use conductor_core::workflow::WorkflowManager;
+        let conn = open_database(&db).expect("open db");
+        let mgr = WorkflowManager::new(&conn);
+        let steps = mgr.get_workflow_steps(&run_id).expect("get steps");
+        assert_eq!(steps[0].gate_feedback.as_deref(), Some("LGTM"));
+        assert_eq!(steps[0].gate_approved_by.as_deref(), Some("mcp"));
     }
 }

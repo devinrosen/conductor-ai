@@ -6526,6 +6526,56 @@ And here is my actual output:
         );
     }
 
+    #[test]
+    fn test_run_id_notify_slot_is_populated() {
+        // Verify that execute_workflow writes the newly-created run ID into
+        // run_id_notify before any steps execute. This is the mechanism used
+        // by the MCP tool_run_workflow handler to return a run_id immediately.
+        let conn = setup_db();
+        let config = Config::default();
+        let exec_config = WorkflowExecConfig::default();
+
+        let workflow = make_empty_workflow();
+
+        let slot: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+
+        let input = WorkflowExecInput {
+            conn: &conn,
+            config: &config,
+            workflow: &workflow,
+            worktree_id: None,
+            working_dir: "/tmp/repo",
+            repo_path: "/tmp/repo",
+            ticket_id: None,
+            repo_id: None,
+            model: None,
+            exec_config: &exec_config,
+            inputs: HashMap::new(),
+            depth: 0,
+            parent_workflow_run_id: None,
+            target_label: None,
+            default_bot_name: None,
+            run_id_notify: Some(std::sync::Arc::clone(&slot)),
+        };
+
+        execute_workflow(&input).expect("workflow should complete");
+
+        let notified_id = slot
+            .lock()
+            .expect("mutex not poisoned")
+            .clone()
+            .expect("run_id_notify slot should have been written");
+
+        // The written ID must match the run that was actually created.
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .get_workflow_run(&notified_id)
+            .expect("db query ok")
+            .expect("run should exist");
+        assert_eq!(run.workflow_name, "test-wf");
+    }
+
     // -----------------------------------------------------------------------
     // execute_do tests (plain do {} block)
     // -----------------------------------------------------------------------
