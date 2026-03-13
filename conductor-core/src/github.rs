@@ -322,7 +322,9 @@ pub fn fetch_github_issue(owner: &str, repo: &str, issue_number: i64) -> Result<
     let issue: serde_json::Value = serde_json::from_str(&json_str)
         .map_err(|e| ConductorError::TicketSync(format!("failed to parse gh output: {e}")))?;
 
-    let number = issue["number"].as_u64().unwrap_or(0);
+    let number = issue["number"].as_u64().ok_or_else(|| {
+        ConductorError::TicketSync("gh issue view response missing 'number' field".to_string())
+    })?;
     let label_details: Vec<TicketLabelInput> = issue["labels"]
         .as_array()
         .map(|arr| {
