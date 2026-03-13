@@ -6132,6 +6132,7 @@ And here is my actual output:
             name: "msg".to_string(),
             required: true,
             default: None,
+            description: None,
         }];
 
         let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
@@ -6149,6 +6150,7 @@ And here is my actual output:
             name: "mode".to_string(),
             required: false,
             default: Some("fast".to_string()),
+            description: None,
         }];
 
         let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
@@ -6165,6 +6167,7 @@ And here is my actual output:
             name: "pr_url".to_string(),
             required: true,
             default: None,
+            description: None,
         }];
 
         let err = resolve_child_inputs(&raw, &vars, &decls).unwrap_err();
@@ -6183,6 +6186,7 @@ And here is my actual output:
             name: "mode".to_string(),
             required: false,
             default: Some("fast".to_string()),
+            description: None,
         }];
 
         let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
@@ -6199,6 +6203,7 @@ And here is my actual output:
             name: "optional_field".to_string(),
             required: false,
             default: None,
+            description: None,
         }];
 
         let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
@@ -8557,6 +8562,7 @@ And here is my actual output:
             name: "skip_tests".to_string(),
             required: false,
             default: Some("false".to_string()),
+            description: None,
         }]);
 
         let mut inputs = HashMap::new();
@@ -8572,6 +8578,7 @@ And here is my actual output:
             name: "skip_tests".to_string(),
             required: false,
             default: Some("false".to_string()),
+            description: None,
         }]);
 
         let mut inputs = HashMap::new();
@@ -8589,6 +8596,7 @@ And here is my actual output:
             name: "ticket_id".to_string(),
             required: true,
             default: None,
+            description: None,
         }]);
 
         let mut inputs = HashMap::new();
@@ -8609,6 +8617,7 @@ And here is my actual output:
             name: "ticket_id".to_string(),
             required: true,
             default: None,
+            description: None,
         }]);
 
         let mut inputs = HashMap::new();

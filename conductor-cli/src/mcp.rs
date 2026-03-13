@@ -774,7 +774,7 @@ fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_list_workflows",
-            "List available workflow definitions for a repo. Returns workflow names, descriptions, and trigger types.",
+            "List available workflow definitions for a repo. Returns workflow names, descriptions, trigger types, and input schemas (name, required, default, description for each input).",
             schema(&[("repo", "Repo slug (e.g. my-repo)", true)]),
         ),
         Tool::new(
@@ -1325,9 +1325,23 @@ fn tool_list_workflows(db_path: &Path, args: &serde_json::Map<String, Value>) ->
     } else {
         for def in defs {
             out.push_str(&format!(
-                "name: {}\ndescription: {}\ntrigger: {}\n\n",
+                "name: {}\ndescription: {}\ntrigger: {}\n",
                 def.name, def.description, def.trigger
             ));
+            if !def.inputs.is_empty() {
+                out.push_str("inputs:\n");
+                for input in &def.inputs {
+                    out.push_str(&format!("  - name: {}\n", input.name));
+                    out.push_str(&format!("    required: {}\n", input.required));
+                    if let Some(ref default) = input.default {
+                        out.push_str(&format!("    default: {default}\n"));
+                    }
+                    if let Some(ref description) = input.description {
+                        out.push_str(&format!("    description: {description}\n"));
+                    }
+                }
+            }
+            out.push('\n');
         }
     }
     tool_ok(out)
