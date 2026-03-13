@@ -1,0 +1,23 @@
+workflow ticket-to-pr-safe {
+  meta {
+    description = "Qualify a ticket for autonomous execution, then run the full ticket-to-pr cycle"
+    trigger     = "manual"
+    targets     = ["worktree"]
+  }
+
+  inputs {
+    ticket_id required
+  }
+
+  call workflow qualify-ticket {
+    inputs {
+      ticket_id = "{{ticket_id}}"
+    }
+  }
+
+  call workflow ticket-to-pr {
+    inputs {
+      ticket_id = "{{ticket_id}}"
+    }
+  }
+}
