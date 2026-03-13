@@ -1,4 +1,4 @@
-use conductor_core::agent::AgentRunStatus;
+use conductor_core::agent::{AgentRunStatus, ClaudeUsageStats};
 use conductor_core::tickets::TicketLabel;
 use conductor_core::workflow::WorkflowRunStatus;
 use conductor_core::worktree::{Worktree, WorktreeStatus};
@@ -86,11 +86,27 @@ pub fn render_header(
     gs: &crate::state::GlobalStatus,
 ) {
     let total_active = gs.total_active();
+    let has_usage = state.data.claude_usage.is_some();
 
-    if area.height >= 2 {
+    // Determine how many rows the status-bar section needs (1 or 2).
+    let status_rows = if area.height >= 2
+        && (total_active > 0 && (total_active <= 3 || state.status_bar_expanded))
+    {
+        2u16
+    } else {
+        1u16
+    };
+    let total_rows = status_rows + if has_usage { 1 } else { 0 };
+
+    if total_rows >= 3 {
+        // summary + detail + usage
         let rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)])
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
             .split(area);
         render_header_summary(frame, rows[0], state, total_active, gs);
         render_header_detail(
@@ -101,9 +117,102 @@ pub fn render_header(
             total_active,
             &state.theme,
         );
+        render_claude_usage_bar(frame, rows[2], state.data.claude_usage.as_ref());
+    } else if total_rows == 2 {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Length(1)])
+            .split(area);
+        render_header_summary(frame, rows[0], state, total_active, gs);
+        if has_usage && status_rows == 1 {
+            // No detail row needed; show usage on row 1.
+            render_claude_usage_bar(frame, rows[1], state.data.claude_usage.as_ref());
+        } else {
+            render_header_detail(
+                frame,
+                rows[1],
+                gs,
+                state.status_bar_expanded,
+                total_active,
+                &state.theme,
+            );
+        }
     } else {
         render_header_summary(frame, area, state, total_active, gs);
     }
+}
+
+/// Render a single-line Claude Code usage bar into `area`.
+///
+/// Format: `Claude: 42 msgs today  |  Rate limit: ████░░░░ 52%  resets in 2h 14m  |  Cost today: $1.24`
+pub fn render_claude_usage_bar(frame: &mut Frame, area: Rect, stats: Option<&ClaudeUsageStats>) {
+    let Some(stats) = stats else {
+        return;
+    };
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.push(Span::styled(" ", Style::default()));
+
+    // Messages today
+    match stats.messages_today {
+        Some(n) => spans.push(Span::styled(
+            format!("Claude: {n} msgs today"),
+            Style::default().fg(Color::Cyan),
+        )),
+        None => spans.push(Span::styled(
+            "Claude: — msgs today".to_string(),
+            Style::default().fg(Color::DarkGray),
+        )),
+    }
+
+    // Rate limit section (only if not expired)
+    if let (Some(utilization), Some(resets_at)) =
+        (stats.rate_limit_utilization, stats.rate_limit_resets_at)
+    {
+        spans.push(Span::styled("  |  ", Style::default().fg(Color::DarkGray)));
+
+        let pct = (utilization * 100.0) as u32;
+        let bar_color = if utilization >= 0.90 {
+            Color::Red
+        } else if utilization >= 0.75 {
+            Color::Yellow
+        } else {
+            Color::Green
+        };
+
+        // 8-cell block bar
+        let filled = ((utilization * 8.0).round() as usize).min(8);
+        let empty = 8usize.saturating_sub(filled);
+        let bar: String = "█".repeat(filled) + &"░".repeat(empty);
+
+        // Countdown to reset
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let secs_left = (resets_at - now_unix).max(0);
+        let hours = secs_left / 3600;
+        let mins = (secs_left % 3600) / 60;
+        let countdown = if hours > 0 {
+            format!("{hours}h {mins:02}m")
+        } else {
+            format!("{mins}m")
+        };
+
+        spans.push(Span::styled(
+            format!("Rate limit: {bar} {pct}%  resets in {countdown}"),
+            Style::default().fg(bar_color),
+        ));
+    }
+
+    // Cost today
+    spans.push(Span::styled("  |  ", Style::default().fg(Color::DarkGray)));
+    spans.push(Span::styled(
+        format!("Cost today: ${:.2}", stats.cost_today_usd),
+        Style::default().fg(Color::Cyan),
+    ));
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn render_header_summary(

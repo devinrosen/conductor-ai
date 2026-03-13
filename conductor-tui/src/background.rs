@@ -118,6 +118,8 @@ pub fn poll_data() -> Option<Action> {
         .get_step_summaries_for_runs(&active_run_id_refs)
         .unwrap_or_default();
 
+    let claude_usage = agent_mgr.get_claude_usage_stats().ok();
+
     Some(Action::DataRefreshed(Box::new(DataRefreshedPayload {
         repos,
         worktrees,
@@ -128,6 +130,7 @@ pub fn poll_data() -> Option<Action> {
         latest_workflow_runs_by_worktree,
         workflow_step_summaries,
         active_non_worktree_workflow_runs,
+        claude_usage,
     })))
 }
 

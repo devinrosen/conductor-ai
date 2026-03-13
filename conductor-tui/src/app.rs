@@ -841,6 +841,7 @@ impl App {
                 self.state.data.workflow_step_summaries = payload.workflow_step_summaries;
                 self.state.data.active_non_worktree_workflow_runs =
                     payload.active_non_worktree_workflow_runs;
+                self.state.data.claude_usage = payload.claude_usage;
                 self.refresh_pending_feedback();
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();

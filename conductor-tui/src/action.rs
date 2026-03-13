@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use conductor_core::agent::{AgentRun, AgentRunEvent, TicketAgentTotals};
+use conductor_core::agent::{AgentRun, AgentRunEvent, ClaudeUsageStats, TicketAgentTotals};
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::{Ticket, TicketLabel};
@@ -54,6 +54,8 @@ pub struct DataRefreshedPayload {
     pub workflow_step_summaries: HashMap<String, WorkflowStepSummary>,
     /// Active root workflow runs with no associated worktree (repo/ticket-targeted).
     pub active_non_worktree_workflow_runs: Vec<WorkflowRun>,
+    /// Claude Code usage stats (messages today, rate limit, cost today).
+    pub claude_usage: Option<ClaudeUsageStats>,
 }
 
 /// Every user intent or background result flows through this enum.

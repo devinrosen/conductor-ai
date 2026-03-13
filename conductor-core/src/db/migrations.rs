@@ -617,6 +617,17 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 35)?;
     }
 
+    // Migration 036: add rate_limit_cache table for Claude Code usage stats.
+    let has_rate_limit_cache: bool = conn
+        .prepare("SELECT rate_limit_type FROM rate_limit_cache LIMIT 0")
+        .is_ok();
+    if !has_rate_limit_cache {
+        conn.execute_batch(include_str!("migrations/036_rate_limit_cache.sql"))?;
+    }
+    if version < 36 {
+        bump_version(conn, 36)?;
+    }
+
     Ok(())
 }
 

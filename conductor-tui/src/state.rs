@@ -33,7 +33,8 @@ impl FilterState {
 }
 
 use conductor_core::agent::{
-    AgentCreatedIssue, AgentRun, AgentRunEvent, AgentRunStatus, FeedbackRequest, TicketAgentTotals,
+    AgentCreatedIssue, AgentRun, AgentRunEvent, AgentRunStatus, ClaudeUsageStats, FeedbackRequest,
+    TicketAgentTotals,
 };
 use conductor_core::github::{DiscoveredRepo, GithubPr};
 use conductor_core::issue_source::IssueSource;
@@ -749,6 +750,9 @@ pub struct DataCache {
     /// Steps for every leaf run in the current scope (run_id → ordered steps).
     /// Populated by the background poller on every tick.
     pub workflow_run_steps: HashMap<String, Vec<WorkflowRunStep>>,
+    /// Claude Code usage stats (messages today, rate limit, cost today).
+    /// Populated by the background poller on every tick.
+    pub claude_usage: Option<ClaudeUsageStats>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.
@@ -1324,17 +1328,25 @@ impl AppState {
     /// - 1–3 active items → 2 lines (auto-expanded detail view)
     /// - 4+ active items  → 1 line by default; 2 lines when `status_bar_expanded`
     ///
+    /// When Claude Code usage stats are available, one extra line is added.
+    ///
     /// Accepts a pre-computed `GlobalStatus` so callers that already hold one
     /// (e.g. the render loop) don't trigger a second full recomputation.
     pub fn header_height(&self, gs: &GlobalStatus) -> u16 {
         let total = gs.total_active();
-        if total == 0 {
+        let usage_row: u16 = if self.data.claude_usage.is_some() {
+            1
+        } else {
+            0
+        };
+        let status_rows = if total == 0 {
             1
         } else if total <= 3 || self.status_bar_expanded {
             2
         } else {
             1
-        }
+        };
+        status_rows + usage_row
     }
 
     /// Rebuild the pre-filtered ticket vecs from the current source data,

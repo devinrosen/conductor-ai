@@ -4,7 +4,7 @@ use std::path::Path;
 use std::process::Command;
 
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::db::query_collect;
@@ -2157,6 +2157,148 @@ fn row_to_plan_step(row: &rusqlite::Row) -> rusqlite::Result<PlanStep> {
         started_at: row.get(5)?,
         completed_at: row.get(6)?,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Claude Code usage stats
+// ---------------------------------------------------------------------------
+
+/// A parsed `rate_limit_event` from the Claude CLI stream-json output.
+pub struct RateLimitEvent {
+    pub rate_limit_type: String,
+    pub resets_at: i64,   // Unix timestamp (seconds)
+    pub utilization: f64, // 0.0–1.0
+    pub status: String,   // "allowed", "allowed_warning", "rejected"
+}
+
+/// Aggregated Claude Code usage stats for display in the TUI header.
+#[derive(Debug, Clone)]
+pub struct ClaudeUsageStats {
+    /// Number of messages sent today (from ~/.claude/stats-cache.json), or None if unavailable.
+    pub messages_today: Option<i64>,
+    /// Rate limit utilization (0.0–1.0), or None if expired or missing.
+    pub rate_limit_utilization: Option<f64>,
+    /// Unix timestamp when the rate limit resets, or None if expired or missing.
+    pub rate_limit_resets_at: Option<i64>,
+    /// The rate limit type (e.g. "five_hour"), or None.
+    pub rate_limit_type: Option<String>,
+    /// Rate limit status string, or None.
+    pub rate_limit_status: Option<String>,
+    /// Total cost of agent runs today in USD.
+    pub cost_today_usd: f64,
+}
+
+/// Parse a `rate_limit_event` JSON value into a `RateLimitEvent`.
+/// Returns `None` if the event is not a rate_limit_event or fields are missing.
+pub fn parse_rate_limit_event(event: &serde_json::Value) -> Option<RateLimitEvent> {
+    if event.get("type").and_then(|v| v.as_str()) != Some("rate_limit_event") {
+        return None;
+    }
+    let rate_limit_type = event
+        .get("rate_limit_type")
+        .and_then(|v| v.as_str())?
+        .to_string();
+    let resets_at = event.get("resets_at").and_then(|v| v.as_i64())?;
+    let utilization = event.get("utilization").and_then(|v| v.as_f64())?;
+    let status = event.get("status").and_then(|v| v.as_str())?.to_string();
+    Some(RateLimitEvent {
+        rate_limit_type,
+        resets_at,
+        utilization,
+        status,
+    })
+}
+
+impl<'a> AgentManager<'a> {
+    /// Upsert a rate limit event into the `rate_limit_cache` table.
+    pub fn upsert_rate_limit_event(&self, event: &RateLimitEvent) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO rate_limit_cache \
+             (rate_limit_type, resets_at, utilization, status, last_updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                event.rate_limit_type,
+                event.resets_at,
+                event.utilization,
+                event.status,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Fetch aggregated Claude Code usage stats for display in the TUI header.
+    ///
+    /// - Message count: reads `~/.claude/stats-cache.json`
+    /// - Rate limit: queries `rate_limit_cache` (prefers `five_hour`; hides if expired)
+    /// - Cost today: `COALESCE(SUM(cost_usd), 0.0)` from `agent_runs` started today
+    pub fn get_claude_usage_stats(&self) -> Result<ClaudeUsageStats> {
+        // --- message count from ~/.claude/stats-cache.json ---
+        let messages_today = read_stats_cache_messages_today();
+
+        // --- cost today from agent_runs ---
+        let cost_today_usd: f64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(cost_usd), 0.0) FROM agent_runs \
+             WHERE started_at >= date('now')",
+            [],
+            |row| row.get(0),
+        )?;
+
+        // --- rate limit from rate_limit_cache ---
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        // Prefer five_hour; fall back to the row with the latest resets_at.
+        let row: Option<(String, i64, f64, String)> = self
+            .conn
+            .query_row(
+                "SELECT rate_limit_type, resets_at, utilization, status \
+                 FROM rate_limit_cache \
+                 ORDER BY CASE WHEN rate_limit_type = 'five_hour' THEN 0 ELSE 1 END, \
+                          resets_at DESC \
+                 LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .unwrap_or(None);
+
+        let (rate_limit_utilization, rate_limit_resets_at, rate_limit_type, rate_limit_status) =
+            match row {
+                Some((rl_type, resets_at, utilization, status)) if resets_at > now_unix => (
+                    Some(utilization),
+                    Some(resets_at),
+                    Some(rl_type),
+                    Some(status),
+                ),
+                _ => (None, None, None, None),
+            };
+
+        Ok(ClaudeUsageStats {
+            messages_today,
+            rate_limit_utilization,
+            rate_limit_resets_at,
+            rate_limit_type,
+            rate_limit_status,
+            cost_today_usd,
+        })
+    }
+}
+
+/// Read today's message count from `~/.claude/stats-cache.json`.
+/// Returns `None` on any parse or IO error (graceful degradation).
+fn read_stats_cache_messages_today() -> Option<i64> {
+    let path = dirs::home_dir()?.join(".claude").join("stats-cache.json");
+    let data = fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&data).ok()?;
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    json.get("dailyActivity")
+        .and_then(|da| da.get(&today))
+        .and_then(|day| day.get("messageCount"))
+        .and_then(|v| v.as_i64())
 }
 
 #[cfg(test)]
