@@ -717,6 +717,11 @@ fn conductor_tools() -> Vec<Tool> {
             "Push the current branch of a worktree to the remote.",
             schema(&[("repo", "Repo slug", true), ("slug", "Worktree slug", true)]),
         ),
+        Tool::new(
+            "conductor_list_workflows",
+            "List available workflow definitions for a repo. Returns workflow names, descriptions, and trigger types.",
+            schema(&[("repo", "Repo slug (e.g. my-repo)", true)]),
+        ),
     ]
 }
 
@@ -741,6 +746,7 @@ fn dispatch_tool(
         "conductor_approve_gate" => tool_approve_gate(db_path, args),
         "conductor_reject_gate" => tool_reject_gate(db_path, args),
         "conductor_push_worktree" => tool_push_worktree(db_path, args),
+        "conductor_list_workflows" => tool_list_workflows(db_path, args),
         _ => tool_err(format!("Unknown tool: {name}")),
     }
 }
@@ -1117,6 +1123,44 @@ fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> Call
     let mut out = String::new();
     for run in &runs {
         out.push_str(&format_run_summary_line(run));
+    }
+    tool_ok(out)
+}
+
+fn tool_list_workflows(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+    use conductor_core::repo::RepoManager;
+    use conductor_core::workflow::WorkflowManager;
+
+    let repo_slug = require_arg!(args, "repo");
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+    let repo_mgr = RepoManager::new(&conn, &config);
+    let repo = match repo_mgr.get_by_slug(repo_slug) {
+        Ok(r) => r,
+        Err(e) => return tool_err(e),
+    };
+    let (defs, warnings) = match WorkflowManager::list_defs(&repo.local_path, &repo.local_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+    let mut out = String::new();
+    for w in &warnings {
+        out.push_str(&format!(
+            "warning: Failed to parse {}: {}\n",
+            w.file, w.message
+        ));
+    }
+    if defs.is_empty() {
+        out.push_str(&format!("No workflow definitions found in {repo_slug}."));
+    } else {
+        for def in defs {
+            out.push_str(&format!(
+                "name: {}\ndescription: {}\ntrigger: {}\n\n",
+                def.name, def.description, def.trigger
+            ));
+        }
     }
     tool_ok(out)
 }
