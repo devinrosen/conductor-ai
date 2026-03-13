@@ -412,6 +412,9 @@ pub enum Modal {
         /// Snapshot of all available themes at picker-open time (built-ins + custom).
         /// Stored here so list changes mid-open don't cause index mismatches.
         themes: Vec<(String, String)>,
+        /// Pre-loaded `Theme` objects corresponding 1-to-1 with `themes`.
+        /// Enables O(1) in-memory preview on keypress with no file I/O.
+        loaded_themes: Vec<crate::theme::Theme>,
         /// Index into `themes`.
         selected: usize,
         /// Theme active when the picker was opened; restored on Esc.

@@ -541,8 +541,12 @@ impl App {
 
             // Theme picker
             Action::ShowThemePicker => self.handle_show_theme_picker(),
-            Action::ThemesLoaded { themes, warnings } => {
-                self.handle_themes_loaded(themes, warnings);
+            Action::ThemesLoaded {
+                themes,
+                loaded_themes,
+                warnings,
+            } => {
+                self.handle_themes_loaded(themes, loaded_themes, warnings);
             }
             Action::ThemePreview(idx) => self.handle_theme_preview(idx),
             Action::ThemeSaveComplete { result } => {
@@ -3366,11 +3370,26 @@ impl App {
         };
         std::thread::spawn(move || {
             let (themes, warnings) = crate::theme::all_themes();
-            let _ = bg_tx.send(Action::ThemesLoaded { themes, warnings });
+            // Pre-load all Theme objects so keypress preview is an in-memory
+            // lookup with no file I/O on the TUI main thread.
+            let loaded_themes: Vec<crate::theme::Theme> = themes
+                .iter()
+                .map(|(name, _)| crate::theme::Theme::from_name(name).unwrap_or_default())
+                .collect();
+            let _ = bg_tx.send(Action::ThemesLoaded {
+                themes,
+                loaded_themes,
+                warnings,
+            });
         });
     }
 
-    fn handle_themes_loaded(&mut self, themes: Vec<(String, String)>, warnings: Vec<String>) {
+    fn handle_themes_loaded(
+        &mut self,
+        themes: Vec<(String, String)>,
+        loaded_themes: Vec<crate::theme::Theme>,
+        warnings: Vec<String>,
+    ) {
         let current_name = self
             .config
             .general
@@ -3383,6 +3402,7 @@ impl App {
             .unwrap_or(0);
         self.state.modal = Modal::ThemePicker {
             themes,
+            loaded_themes,
             selected,
             original_theme: self.state.theme,
             original_name: current_name,
@@ -3397,19 +3417,17 @@ impl App {
     }
 
     fn handle_theme_preview(&mut self, idx: usize) {
-        let name_opt = if let Modal::ThemePicker { ref themes, .. } = self.state.modal {
-            themes.get(idx).map(|(n, _)| n.clone())
-        } else {
-            None
-        };
-        if let Some(name) = name_opt {
-            self.state.theme = crate::theme::Theme::from_name(&name).unwrap_or_default();
-        }
-        // Also advance the cursor in the modal so the highlight tracks correctly.
+        // Use the pre-loaded Theme objects stored in the modal — no file I/O on
+        // the TUI main thread.
         if let Modal::ThemePicker {
-            ref mut selected, ..
+            ref loaded_themes,
+            ref mut selected,
+            ..
         } = self.state.modal
         {
+            if let Some(theme) = loaded_themes.get(idx) {
+                self.state.theme = *theme;
+            }
             *selected = idx;
         }
     }

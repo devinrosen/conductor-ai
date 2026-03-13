@@ -908,11 +908,17 @@ mod tests {
 
     fn theme_picker_state(selected: usize) -> AppState {
         let mut state = AppState::new();
+        let theme_list: Vec<(String, String)> = crate::theme::KNOWN_THEMES
+            .iter()
+            .map(|(n, l)| (n.to_string(), l.to_string()))
+            .collect();
+        let loaded_themes: Vec<crate::theme::Theme> = theme_list
+            .iter()
+            .map(|(name, _)| crate::theme::Theme::from_name(name).unwrap_or_default())
+            .collect();
         state.modal = Modal::ThemePicker {
-            themes: crate::theme::KNOWN_THEMES
-                .iter()
-                .map(|(n, l)| (n.to_string(), l.to_string()))
-                .collect(),
+            themes: theme_list,
+            loaded_themes,
             selected,
             original_theme: crate::theme::Theme::default(),
             original_name: "conductor".to_string(),
