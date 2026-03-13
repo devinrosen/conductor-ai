@@ -1472,6 +1472,108 @@ impl<'a> AgentManager<'a> {
         Ok(runs)
     }
 
+    /// List agent runs with optional filters, ordered by `started_at DESC`.
+    ///
+    /// Filtering dimensions (caller ensures `worktree_id` and `repo_id` are
+    /// mutually exclusive):
+    /// - `worktree_id` — direct filter on `agent_runs.worktree_id`
+    /// - `repo_id` — requires JOIN with `worktrees` on `w.repo_id`
+    /// - `status` — filter on `agent_runs.status`
+    /// - `limit` / `offset` — pagination
+    pub fn list_agent_runs(
+        &self,
+        worktree_id: Option<&str>,
+        repo_id: Option<&str>,
+        status: Option<&AgentRunStatus>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<AgentRun>> {
+        // Column list with `ar.` alias for JOIN queries.
+        const AR_COLS: &str = "ar.id, ar.worktree_id, ar.claude_session_id, ar.prompt, ar.status, \
+             ar.result_text, ar.cost_usd, ar.num_turns, ar.duration_ms, ar.started_at, \
+             ar.ended_at, ar.tmux_window, ar.log_file, ar.model, ar.plan, ar.parent_run_id, \
+             ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, \
+             ar.cache_creation_input_tokens, ar.bot_name";
+
+        let mut runs = match (worktree_id, repo_id, status) {
+            // 1. worktree_id + status
+            (Some(wt_id), _, Some(s)) => {
+                let status_str = s.to_string();
+                query_collect(
+                    self.conn,
+                    &format!(
+                        "{AGENT_RUN_SELECT} WHERE worktree_id = ?1 AND status = ?2 \
+                         ORDER BY started_at DESC LIMIT {limit} OFFSET {offset}"
+                    ),
+                    params![wt_id, status_str],
+                    row_to_agent_run,
+                )?
+            }
+            // 2. worktree_id only
+            (Some(wt_id), _, None) => query_collect(
+                self.conn,
+                &format!(
+                    "{AGENT_RUN_SELECT} WHERE worktree_id = ?1 \
+                     ORDER BY started_at DESC LIMIT {limit} OFFSET {offset}"
+                ),
+                params![wt_id],
+                row_to_agent_run,
+            )?,
+            // 3. repo_id + status
+            (None, Some(r_id), Some(s)) => {
+                let status_str = s.to_string();
+                query_collect(
+                    self.conn,
+                    &format!(
+                        "SELECT {AR_COLS} FROM agent_runs ar \
+                         JOIN worktrees w ON w.id = ar.worktree_id \
+                         WHERE w.repo_id = ?1 AND ar.status = ?2 \
+                         ORDER BY ar.started_at DESC LIMIT {limit} OFFSET {offset}"
+                    ),
+                    params![r_id, status_str],
+                    row_to_agent_run,
+                )?
+            }
+            // 4. repo_id only
+            (None, Some(r_id), None) => query_collect(
+                self.conn,
+                &format!(
+                    "SELECT {AR_COLS} FROM agent_runs ar \
+                     JOIN worktrees w ON w.id = ar.worktree_id \
+                     WHERE w.repo_id = ?1 \
+                     ORDER BY ar.started_at DESC LIMIT {limit} OFFSET {offset}"
+                ),
+                params![r_id],
+                row_to_agent_run,
+            )?,
+            // 5. status only
+            (None, None, Some(s)) => {
+                let status_str = s.to_string();
+                query_collect(
+                    self.conn,
+                    &format!(
+                        "{AGENT_RUN_SELECT} WHERE status = ?1 \
+                         ORDER BY started_at DESC LIMIT {limit} OFFSET {offset}"
+                    ),
+                    params![status_str],
+                    row_to_agent_run,
+                )?
+            }
+            // 6. no filter
+            (None, None, None) => query_collect(
+                self.conn,
+                &format!(
+                    "{AGENT_RUN_SELECT} \
+                     ORDER BY started_at DESC LIMIT {limit} OFFSET {offset}"
+                ),
+                params![],
+                row_to_agent_run,
+            )?,
+        };
+        self.populate_plans(&mut runs)?;
+        Ok(runs)
+    }
+
     /// Build a per-phase cost breakdown for all runs in a worktree.
     ///
     /// Top-level runs (no parent) are classified as either "Initial run" or
@@ -4169,6 +4271,145 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert!(result.contains_key(&r1.id));
         assert!(!result.contains_key("nonexistent-id-xyz"));
+    }
+
+    // ── list_agent_runs tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_list_agent_runs_no_filter() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let r1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
+        let r2 = mgr.create_run(Some("w1"), "Task 2", None, None).unwrap();
+
+        let runs = mgr.list_agent_runs(None, None, None, 50, 0).unwrap();
+        assert_eq!(runs.len(), 2);
+        // newest first
+        assert_eq!(runs[0].id, r2.id);
+        assert_eq!(runs[1].id, r1.id);
+    }
+
+    #[test]
+    fn test_list_agent_runs_worktree_filter() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // w1 and w2 are both seeded; create runs in each
+        let r1 = mgr
+            .create_run(Some("w1"), "Task in w1", None, None)
+            .unwrap();
+        let _r2 = mgr
+            .create_run(Some("w2"), "Task in w2", None, None)
+            .unwrap();
+
+        let runs = mgr.list_agent_runs(Some("w1"), None, None, 50, 0).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, r1.id);
+    }
+
+    #[test]
+    fn test_list_agent_runs_worktree_and_status_filter() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let r1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
+        let r2 = mgr.create_run(Some("w1"), "Task 2", None, None).unwrap();
+        mgr.update_run_completed(
+            &r2.id,
+            None,
+            Some("Done"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let running = mgr
+            .list_agent_runs(Some("w1"), None, Some(&AgentRunStatus::Running), 50, 0)
+            .unwrap();
+        assert_eq!(running.len(), 1);
+        assert_eq!(running[0].id, r1.id);
+
+        let completed = mgr
+            .list_agent_runs(Some("w1"), None, Some(&AgentRunStatus::Completed), 50, 0)
+            .unwrap();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].id, r2.id);
+    }
+
+    #[test]
+    fn test_list_agent_runs_repo_filter() {
+        let conn = setup_db();
+        // setup_db inserts w1 (repo_id='r1') and w2 (repo_id='r1').
+        // Insert a second repo with its own worktree.
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+             VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', 'main', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w3', 'r2', 'feat-other', 'feat/other', '/tmp/ws2/other', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        let mgr = AgentManager::new(&conn);
+        let r1 = mgr.create_run(Some("w1"), "r1 task", None, None).unwrap();
+        let _r3 = mgr.create_run(Some("w3"), "r2 task", None, None).unwrap();
+
+        let runs = mgr.list_agent_runs(None, Some("r1"), None, 50, 0).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, r1.id);
+    }
+
+    #[test]
+    fn test_list_agent_runs_status_only_filter() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let r1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
+        let r2 = mgr.create_run(Some("w1"), "Task 2", None, None).unwrap();
+        mgr.update_run_completed(
+            &r1.id,
+            None,
+            Some("Done"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let running = mgr
+            .list_agent_runs(None, None, Some(&AgentRunStatus::Running), 50, 0)
+            .unwrap();
+        assert_eq!(running.len(), 1);
+        assert_eq!(running[0].id, r2.id);
+    }
+
+    #[test]
+    fn test_list_agent_runs_pagination() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        for i in 0..5 {
+            mgr.create_run(Some("w1"), &format!("Task {i}"), None, None)
+                .unwrap();
+        }
+
+        let page1 = mgr.list_agent_runs(None, None, None, 3, 0).unwrap();
+        assert_eq!(page1.len(), 3);
+
+        let page2 = mgr.list_agent_runs(None, None, None, 3, 3).unwrap();
+        assert_eq!(page2.len(), 2);
     }
 
     #[test]

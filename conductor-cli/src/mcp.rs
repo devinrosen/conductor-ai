@@ -852,6 +852,37 @@ fn conductor_tools() -> Vec<Tool> {
             ]),
         ),
         Tool::new(
+            "conductor_list_agent_runs",
+            "List agent runs with optional filters for repo, worktree, and/or status. \
+             Use status=waiting_for_feedback to discover runs that are awaiting human input; \
+             pass the run_id to conductor_submit_agent_feedback to unblock them. \
+             When repo is omitted, runs across all repos are returned. \
+             Supports pagination via limit (default 50) and offset (default 0).",
+            schema(&[
+                (
+                    "repo",
+                    "Repo slug (optional; omit to list runs across all repos)",
+                    false,
+                ),
+                (
+                    "worktree",
+                    "Worktree slug or branch name to filter by (optional; requires repo)",
+                    false,
+                ),
+                (
+                    "status",
+                    "Filter by run status: running, waiting_for_feedback, completed, failed, cancelled (optional)",
+                    false,
+                ),
+                ("limit", "Max runs to return (default 50)", false),
+                (
+                    "offset",
+                    "Number of runs to skip for pagination (default 0)",
+                    false,
+                ),
+            ]),
+        ),
+        Tool::new(
             "conductor_get_run",
             "Get the status and step details of a workflow run. \
              For richer detail including the conversation log tail (last 20 messages from \
@@ -1007,6 +1038,7 @@ fn dispatch_tool(
         "conductor_sync_tickets" => tool_sync_tickets(db_path, args),
         "conductor_run_workflow" => tool_run_workflow(db_path, args),
         "conductor_list_runs" => tool_list_runs(db_path, args),
+        "conductor_list_agent_runs" => tool_list_agent_runs(db_path, args),
         "conductor_get_run" => tool_get_run(db_path, args),
         "conductor_approve_gate" => tool_approve_gate(db_path, args),
         "conductor_reject_gate" => tool_reject_gate(db_path, args),
@@ -1681,6 +1713,164 @@ fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> Call
         }
         tool_ok(out)
     }
+}
+
+fn tool_list_agent_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+    use conductor_core::agent::{AgentManager, AgentRunStatus};
+    use conductor_core::repo::RepoManager;
+    use conductor_core::workflow::WorkflowManager;
+    use conductor_core::worktree::WorktreeManager;
+
+    let repo_slug = get_arg(args, "repo");
+    let worktree_slug = get_arg(args, "worktree");
+    let status_str = get_arg(args, "status");
+
+    // worktree filter is repo-scoped and meaningless without a repo
+    if worktree_slug.is_some() && repo_slug.is_none() {
+        return tool_err("worktree filter requires a repo argument");
+    }
+
+    let status: Option<AgentRunStatus> = match status_str {
+        Some(s) => match s.parse::<AgentRunStatus>() {
+            Ok(v) => Some(v),
+            Err(e) => return tool_err(e),
+        },
+        None => None,
+    };
+
+    let limit: usize = get_arg(args, "limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50);
+    let offset: usize = get_arg(args, "offset")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+    let agent_mgr = AgentManager::new(&conn);
+
+    // Resolve repo / worktree IDs when provided
+    let (resolved_repo_id, resolved_worktree_id) = if let Some(slug) = repo_slug {
+        let repo_mgr = RepoManager::new(&conn, &config);
+        let repo = match repo_mgr.get_by_slug(slug) {
+            Ok(r) => r,
+            Err(e) => return tool_err(e),
+        };
+        if let Some(wt_slug) = worktree_slug {
+            let wt_mgr = WorktreeManager::new(&conn, &config);
+            let wt = match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
+                Ok(w) => w,
+                Err(e) => return tool_err(e),
+            };
+            (None::<String>, Some(wt.id))
+        } else {
+            (Some(repo.id), None::<String>)
+        }
+    } else {
+        (None, None)
+    };
+
+    let runs = match agent_mgr.list_agent_runs(
+        resolved_worktree_id.as_deref(),
+        resolved_repo_id.as_deref(),
+        status.as_ref(),
+        limit,
+        offset,
+    ) {
+        Ok(r) => r,
+        Err(e) => return tool_err(e),
+    };
+
+    if runs.is_empty() {
+        return tool_ok("No agent runs.".to_string());
+    }
+
+    // Batch-load worktree info for all unique worktree_ids
+    let wt_ids: Vec<&str> = runs
+        .iter()
+        .filter_map(|r| r.worktree_id.as_deref())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    let wt_map: std::collections::HashMap<String, (String, String)> = if wt_ids.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        let placeholders = wt_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("SELECT id, slug, branch FROM worktrees WHERE id IN ({placeholders})");
+        match conn.prepare_cached(&sql) {
+            Err(e) => return tool_err(e),
+            Ok(mut stmt) => {
+                let params = rusqlite::params_from_iter(wt_ids.iter());
+                match stmt.query_map(params, |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                }) {
+                    Err(e) => return tool_err(e),
+                    Ok(rows) => {
+                        let mut m = std::collections::HashMap::new();
+                        for row in rows {
+                            match row {
+                                Ok((id, slug, branch)) => {
+                                    m.insert(id, (slug, branch));
+                                }
+                                Err(e) => return tool_err(e),
+                            }
+                        }
+                        m
+                    }
+                }
+            }
+        }
+    };
+
+    // Batch-load workflow run IDs for all agent run IDs
+    let run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+    let wf_mgr = WorkflowManager::new(&conn);
+    let workflow_id_map = match wf_mgr.get_workflow_run_ids_for_agent_runs(&run_ids) {
+        Ok(m) => m,
+        Err(e) => return tool_err(e),
+    };
+
+    let mut out = String::new();
+    for run in &runs {
+        out.push_str(&format!("run_id: {}\n", run.id));
+        out.push_str(&format!("status: {}\n", run.status));
+        if let Some(wt_id) = &run.worktree_id {
+            if let Some((slug, branch)) = wt_map.get(wt_id) {
+                out.push_str(&format!("worktree: {slug}\n"));
+                out.push_str(&format!("branch: {branch}\n"));
+            }
+        }
+        if let Some(wf_run_id) = workflow_id_map.get(&run.id) {
+            out.push_str(&format!("workflow_run_id: {wf_run_id}\n"));
+        }
+        out.push_str(&format!("started_at: {}\n", run.started_at));
+        if let Some(ended) = &run.ended_at {
+            out.push_str(&format!("ended_at: {ended}\n"));
+        }
+        out.push('\n');
+    }
+
+    if runs.len() == limit {
+        out.push_str(&format!(
+            "Showing {offset}–{end} (limit {limit}). Pass offset={next} for more.",
+            end = offset + runs.len(),
+            next = offset + limit,
+        ));
+    }
+
+    tool_ok(out)
 }
 
 fn tool_list_workflows(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
@@ -4661,5 +4851,129 @@ workflow build {
             text.contains("local directory was not modified"),
             "expected non-destructive note, got: {text}"
         );
+    }
+
+    // -- tool_list_agent_runs -----------------------------------------------
+
+    #[test]
+    fn test_dispatch_list_agent_runs_empty() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_list_agent_runs", &empty_args());
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "empty call should succeed, got: {:?}",
+            result.content
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("No agent runs"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_list_agent_runs_worktree_requires_repo() {
+        let (_f, db) = make_test_db();
+        let args = args_with("worktree", "some-wt");
+        let result = dispatch_tool(&db, "conductor_list_agent_runs", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("worktree filter requires a repo"),
+            "got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_list_agent_runs_status_filter() {
+        use conductor_core::agent::AgentManager;
+        use conductor_core::db::open_database;
+
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            conn.execute(
+                "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+                 VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+                [],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+                 VALUES ('w1', 'r1', 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z')",
+                [],
+            ).unwrap();
+            let mgr = AgentManager::new(&conn);
+            let r1 = mgr
+                .create_run(Some("w1"), "running task", None, None)
+                .unwrap();
+            let r2 = mgr
+                .create_run(Some("w1"), "completed task", None, None)
+                .unwrap();
+            mgr.update_run_completed(
+                &r2.id,
+                None,
+                Some("Done"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let _ = (r1, r2);
+        }
+
+        // Filter by running — should see only the running task
+        let args = args_with("status", "running");
+        let result = dispatch_tool(&db, "conductor_list_agent_runs", &args);
+        assert_ne!(result.is_error, Some(true), "should not error");
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("status: running"), "got: {text}");
+        assert!(!text.contains("status: completed"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_list_agent_runs_waiting_for_feedback() {
+        use conductor_core::agent::AgentManager;
+        use conductor_core::db::open_database;
+
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            conn.execute(
+                "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+                 VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+                [],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+                 VALUES ('w1', 'r1', 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z')",
+                [],
+            ).unwrap();
+            let mgr = AgentManager::new(&conn);
+            let run = mgr
+                .create_run(Some("w1"), "needs feedback", None, None)
+                .unwrap();
+            // Transition to waiting_for_feedback via request_feedback
+            mgr.request_feedback(&run.id, "Please approve?").unwrap();
+        }
+
+        let args = args_with("status", "waiting_for_feedback");
+        let result = dispatch_tool(&db, "conductor_list_agent_runs", &args);
+        assert_ne!(result.is_error, Some(true), "should not error");
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("status: waiting_for_feedback"), "got: {text}");
     }
 }

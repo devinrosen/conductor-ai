@@ -1298,6 +1298,45 @@ impl<'a> WorkflowManager<'a> {
         }
     }
 
+    /// Batch-lookup the parent `workflow_run_id` for a set of agent run IDs.
+    ///
+    /// Uses `workflow_run_steps.child_run_id` to find the link.  Returns a map
+    /// of `agent_run_id → workflow_run_id`.  Agent runs that are not linked to
+    /// any workflow step are simply absent from the map.
+    ///
+    /// Avoids N+1 queries — one SQL round-trip regardless of slice size.
+    pub fn get_workflow_run_ids_for_agent_runs(
+        &self,
+        agent_run_ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, String>> {
+        if agent_run_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let placeholders = agent_run_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT child_run_id, workflow_run_id \
+             FROM workflow_run_steps \
+             WHERE child_run_id IN ({placeholders}) \
+             GROUP BY child_run_id"
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let mut map = std::collections::HashMap::new();
+        let params_iter = rusqlite::params_from_iter(agent_run_ids.iter());
+        let rows = stmt.query_map(params_iter, |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (child_run_id, workflow_run_id) = row?;
+            map.insert(child_run_id, workflow_run_id);
+        }
+        Ok(map)
+    }
+
     /// Recover steps stuck in `running` status whose child agent run has
     /// already reached a terminal state (completed, failed, or cancelled).
     ///
