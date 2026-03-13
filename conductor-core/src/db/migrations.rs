@@ -628,6 +628,25 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 36)?;
     }
 
+    // Migration 037: add index on agent_runs.started_at for cost-today query.
+    let has_started_at_index: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master \
+             WHERE type='index' AND name='idx_agent_runs_started_at'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+    if !has_started_at_index {
+        conn.execute_batch(include_str!(
+            "migrations/037_agent_runs_started_at_index.sql"
+        ))?;
+    }
+    if version < 37 {
+        bump_version(conn, 37)?;
+    }
+
     Ok(())
 }
 

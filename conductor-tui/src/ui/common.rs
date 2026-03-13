@@ -91,7 +91,7 @@ pub fn render_header(
     // Delegate to AppState::header_height so row-count logic lives in one place;
     // clamp to the available area height to handle narrow terminals.
     let total_rows = state.header_height(gs).min(area.height);
-    let status_rows = total_rows - if has_usage { 1 } else { 0 };
+    let status_rows = total_rows.saturating_sub(if has_usage { 1 } else { 0 });
 
     if total_rows >= 3 {
         // summary + detail + usage

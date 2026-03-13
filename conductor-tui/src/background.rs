@@ -118,7 +118,13 @@ pub fn poll_data() -> Option<Action> {
         .get_step_summaries_for_runs(&active_run_id_refs)
         .unwrap_or_default();
 
-    let claude_usage = agent_mgr.get_claude_usage_stats().ok();
+    let claude_usage = match agent_mgr.get_claude_usage_stats() {
+        Ok(stats) => Some(stats),
+        Err(e) => {
+            tracing::warn!("get_claude_usage_stats failed: {e}");
+            None
+        }
+    };
 
     Some(Action::DataRefreshed(Box::new(DataRefreshedPayload {
         repos,
