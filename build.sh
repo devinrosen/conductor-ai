@@ -8,8 +8,8 @@ REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 
 echo "==> Building frontend..."
 cd "$REPO_ROOT/conductor-web/frontend"
-npm install
-npm run build
+bun install
+bun run build
 
 echo "==> Building Rust workspace..."
 cd "$REPO_ROOT"

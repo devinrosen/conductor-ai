@@ -18,7 +18,7 @@ cargo build --bin conductor-tui # Build TUI only
 cargo build --bin conductor-web # Build web UI (requires frontend built first)
 
 # Web frontend (must be built before cargo build --bin conductor-web)
-cd conductor-web/frontend && npm install && npm run build
+cd conductor-web/frontend && bun install && bun run build
 ```
 
 No Makefile/justfile — use `cargo` directly.
