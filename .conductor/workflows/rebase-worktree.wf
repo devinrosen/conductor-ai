@@ -1,0 +1,15 @@
+workflow rebase-worktree {
+  meta {
+    description = "Fetch latest main, resolve any conflicts, and force-push the branch"
+    trigger     = "manual"
+    targets     = ["worktree"]
+  }
+
+  call sync-with-main
+
+  if sync-with-main.has_conflicts {
+    call resolve-conflicts
+  }
+
+  call push
+}
