@@ -778,7 +778,8 @@ fn conductor_tools() -> Vec<Tool> {
         Tool::new(
             "conductor_run_workflow",
             "Start a workflow. Returns run_id immediately; poll with conductor_get_run. \
-             Provide worktree or inputs to target a specific context.",
+             Provide worktree or pr to target a specific context. \
+             Use pr (PR number or URL) as a shortcut — it resolves the linked worktree automatically.",
             {
                 let mut props = serde_json::Map::new();
                 props.insert(
@@ -792,6 +793,10 @@ fn conductor_tools() -> Vec<Tool> {
                 props.insert(
                     "worktree".into(),
                     json!({ "type": "string", "description": "Worktree slug or branch name (optional)" }),
+                );
+                props.insert(
+                    "pr".into(),
+                    json!({ "type": "string", "description": "PR number or URL to target. Resolves the linked worktree automatically. Mutually exclusive with `worktree`." }),
                 );
                 props.insert(
                     "inputs".into(),
@@ -1469,10 +1474,32 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
     let workflow_name = require_arg!(args, "workflow");
     let repo_slug = require_arg!(args, "repo");
     let worktree_slug = get_arg(args, "worktree");
+    let pr_arg = get_arg(args, "pr");
     let dry_run = args
         .get("dry_run")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+
+    // pr and worktree are mutually exclusive
+    if pr_arg.is_some() && worktree_slug.is_some() {
+        return tool_err("pr and worktree are mutually exclusive — provide one or the other");
+    }
+
+    // Validate and parse pr number early, before any DB access.
+    let pr_number: Option<i64> = if let Some(pr_str) = pr_arg {
+        use conductor_core::github::parse_pr_number_from_url;
+        if let Ok(n) = pr_str.parse::<i64>() {
+            Some(n)
+        } else if let Some(n) = parse_pr_number_from_url(pr_str) {
+            Some(n)
+        } else {
+            return tool_err(format!(
+                "Invalid pr value '{pr_str}': expected a PR number (e.g. \"123\") or URL (e.g. \"https://github.com/owner/repo/pull/123\")"
+            ));
+        }
+    } else {
+        None
+    };
 
     // Extract optional inputs object
     let inputs: HashMap<String, String> = match args.get("inputs") {
@@ -1512,14 +1539,36 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
         Err(e) => return tool_err(format!("Failed to load workflow '{workflow_name}': {e}")),
     };
 
-    let (worktree_id, working_dir) = if let Some(wt_slug) = worktree_slug {
+    // Resolve worktree: either from `worktree` slug or from `pr` number/URL
+    let (worktree_id, working_dir, target_label) = if let Some(pr_number) = pr_number {
+        use conductor_core::github::get_pr_head_branch;
+
+        // Fetch the head branch from GitHub
+        let branch = match get_pr_head_branch(&repo.remote_url, pr_number) {
+            Ok(b) => b,
+            Err(e) => return tool_err(e),
+        };
+
+        // Find the local worktree for that branch
+        let wt_mgr = WorktreeManager::new(&conn, &config);
+        let wt = match wt_mgr.get_by_branch(&repo.id, &branch) {
+            Ok(wt) => wt,
+            Err(_) => {
+                return tool_err(format!(
+                    "PR #{pr_number} (branch: {branch}) has no local worktree. \
+                     Create one with conductor_create_worktree first."
+                ))
+            }
+        };
+        (Some(wt.id), wt.path, format!("{}#{}", repo_slug, pr_number))
+    } else if let Some(wt_slug) = worktree_slug {
         let wt_mgr = WorktreeManager::new(&conn, &config);
         match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
-            Ok(wt) => (Some(wt.id), wt.path),
+            Ok(wt) => (Some(wt.id), wt.path, repo_slug.to_string()),
             Err(e) => return tool_err(e),
         }
     } else {
-        (None, repo.local_path.clone())
+        (None, repo.local_path.clone(), repo_slug.to_string())
     };
 
     // Condvar-based notification: the workflow engine writes the run ID here and
@@ -1542,7 +1591,7 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
             ..WorkflowExecConfig::default()
         },
         inputs,
-        target_label: Some(repo_slug.to_string()),
+        target_label: Some(target_label),
         run_id_notify: Some(Arc::clone(&notify_pair)),
     };
 
@@ -4975,5 +5024,97 @@ workflow build {
             .map(|t| t.text.as_str())
             .unwrap_or("");
         assert!(text.contains("status: waiting_for_feedback"), "got: {text}");
+    }
+
+    // -- conductor_run_workflow pr parameter --------------------------------
+
+    #[test]
+    fn test_dispatch_run_workflow_pr_and_worktree_mutually_exclusive() {
+        let (_f, db) = make_test_db();
+        let mut args = serde_json::Map::new();
+        args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
+        args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
+        args.insert("pr".to_string(), Value::String("123".to_string()));
+        args.insert(
+            "worktree".to_string(),
+            Value::String("feat-something".to_string()),
+        );
+        let result = dispatch_tool(&db, "conductor_run_workflow", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("mutually exclusive"),
+            "expected 'mutually exclusive' error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_run_workflow_pr_invalid_format() {
+        let (_f, db) = make_test_db();
+        let mut args = serde_json::Map::new();
+        args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
+        args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
+        args.insert(
+            "pr".to_string(),
+            Value::String("not-a-pr-number-or-url".to_string()),
+        );
+        let result = dispatch_tool(&db, "conductor_run_workflow", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("Invalid pr value"),
+            "expected parse error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_run_workflow_pr_number_valid_parse() {
+        // A valid numeric string should pass parse and reach repo lookup (not parse error).
+        let (_f, db) = make_test_db();
+        let mut args = serde_json::Map::new();
+        args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
+        args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
+        args.insert("pr".to_string(), Value::String("42".to_string()));
+        let result = dispatch_tool(&db, "conductor_run_workflow", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        // Must fail at repo lookup (ghost-repo not found), not at PR parse.
+        assert!(
+            !text.contains("Invalid pr value"),
+            "should not fail on PR parse; got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_run_workflow_pr_url_valid_parse() {
+        // A full GitHub PR URL should be parsed and reach repo lookup (not parse error).
+        let (_f, db) = make_test_db();
+        let mut args = serde_json::Map::new();
+        args.insert("workflow".to_string(), Value::String("my-wf".to_string()));
+        args.insert("repo".to_string(), Value::String("ghost-repo".to_string()));
+        args.insert(
+            "pr".to_string(),
+            Value::String("https://github.com/owner/repo/pull/99".to_string()),
+        );
+        let result = dispatch_tool(&db, "conductor_run_workflow", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        // Must fail at repo lookup (ghost-repo not found), not at PR URL parse.
+        assert!(
+            !text.contains("Invalid pr value"),
+            "should not fail on PR URL parse; got: {text}"
+        );
     }
 }

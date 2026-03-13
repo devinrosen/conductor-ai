@@ -599,6 +599,39 @@ pub fn parse_pr_number_from_url(url: &str) -> Option<i64> {
     segment.parse().ok()
 }
 
+/// Fetch the head branch name for a given PR number in the repo identified by `remote_url`.
+///
+/// Uses `gh pr view <pr_number> --repo <owner>/<repo> --json headRefName --jq '.headRefName'`.
+/// Returns a `ConductorError` if the remote is not a GitHub URL, the PR is not found,
+/// or `gh` fails.
+pub fn get_pr_head_branch(remote_url: &str, pr_number: i64) -> Result<String> {
+    let Some((owner, repo)) = parse_github_remote(remote_url) else {
+        return Err(ConductorError::TicketSync(format!(
+            "remote URL is not a GitHub URL: {remote_url}"
+        )));
+    };
+    let slug = repo_slug(&owner, &repo);
+    let pr_str = pr_number.to_string();
+    let output = run_gh(&[
+        "pr",
+        "view",
+        &pr_str,
+        "--repo",
+        &slug,
+        "--json",
+        "headRefName",
+        "--jq",
+        ".headRefName",
+    ])?;
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch.is_empty() {
+        return Err(ConductorError::TicketSync(format!(
+            "PR #{pr_number} not found in {slug}"
+        )));
+    }
+    Ok(branch)
+}
+
 /// Get on-diff review comments on a PR via the `gh` CLI.
 /// Returns `true` if there are unresolved review comments with file positions.
 pub fn has_on_diff_comments(owner: &str, repo: &str, pr_number: i64) -> Result<bool> {
