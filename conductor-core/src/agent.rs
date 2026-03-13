@@ -2263,8 +2263,7 @@ impl<'a> AgentManager<'a> {
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
-            .optional()
-            .unwrap_or(None);
+            .optional()?;
 
         let (rate_limit_utilization, rate_limit_resets_at, rate_limit_type, rate_limit_status) =
             match row {
@@ -2294,7 +2293,7 @@ fn read_stats_cache_messages_today() -> Option<i64> {
     let path = dirs::home_dir()?.join(".claude").join("stats-cache.json");
     let data = fs::read_to_string(path).ok()?;
     let json: serde_json::Value = serde_json::from_str(&data).ok()?;
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     json.get("dailyActivity")
         .and_then(|da| da.get(&today))
         .and_then(|day| day.get("messageCount"))
@@ -4598,5 +4597,149 @@ mod tests {
             }
             other => panic!("expected ConductorError::Agent, got: {other:?}"),
         }
+    }
+
+    // --- parse_rate_limit_event tests ---
+
+    #[test]
+    fn test_parse_rate_limit_event_valid() {
+        let json = serde_json::json!({
+            "type": "rate_limit_event",
+            "rate_limit_type": "five_hour",
+            "resets_at": 9999999999_i64,
+            "utilization": 0.42,
+            "status": "allowed"
+        });
+        let rle = parse_rate_limit_event(&json).expect("should parse");
+        assert_eq!(rle.rate_limit_type, "five_hour");
+        assert_eq!(rle.resets_at, 9999999999);
+        assert!((rle.utilization - 0.42).abs() < f64::EPSILON);
+        assert_eq!(rle.status, "allowed");
+    }
+
+    #[test]
+    fn test_parse_rate_limit_event_wrong_type() {
+        let json = serde_json::json!({"type": "assistant", "rate_limit_type": "five_hour", "resets_at": 1, "utilization": 0.1, "status": "allowed"});
+        assert!(parse_rate_limit_event(&json).is_none());
+    }
+
+    #[test]
+    fn test_parse_rate_limit_event_missing_field() {
+        // Missing "utilization" — should return None
+        let json = serde_json::json!({"type": "rate_limit_event", "rate_limit_type": "five_hour", "resets_at": 1, "status": "allowed"});
+        assert!(parse_rate_limit_event(&json).is_none());
+    }
+
+    #[test]
+    fn test_parse_rate_limit_event_not_rate_limit_event_type() {
+        let json = serde_json::json!({"type": "rate_limit_event"});
+        // All required fields absent → None
+        assert!(parse_rate_limit_event(&json).is_none());
+    }
+
+    // --- upsert_rate_limit_event tests ---
+
+    #[test]
+    fn test_upsert_rate_limit_event_insert_and_replace() {
+        let conn = crate::test_helpers::setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let rle = RateLimitEvent {
+            rate_limit_type: "five_hour".to_string(),
+            resets_at: 9999999999,
+            utilization: 0.5,
+            status: "allowed".to_string(),
+        };
+        mgr.upsert_rate_limit_event(&rle).unwrap();
+
+        let (util, status): (f64, String) = conn
+            .query_row(
+                "SELECT utilization, status FROM rate_limit_cache WHERE rate_limit_type = 'five_hour'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!((util - 0.5).abs() < f64::EPSILON);
+        assert_eq!(status, "allowed");
+
+        // Replace with updated values
+        let rle2 = RateLimitEvent {
+            rate_limit_type: "five_hour".to_string(),
+            resets_at: 9999999999,
+            utilization: 0.9,
+            status: "allowed_warning".to_string(),
+        };
+        mgr.upsert_rate_limit_event(&rle2).unwrap();
+
+        let (util2, status2): (f64, String) = conn
+            .query_row(
+                "SELECT utilization, status FROM rate_limit_cache WHERE rate_limit_type = 'five_hour'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!((util2 - 0.9).abs() < f64::EPSILON);
+        assert_eq!(status2, "allowed_warning");
+    }
+
+    // --- get_claude_usage_stats tests ---
+
+    #[test]
+    fn test_get_claude_usage_stats_empty_db() {
+        let conn = crate::test_helpers::setup_db();
+        let mgr = AgentManager::new(&conn);
+        let stats = mgr.get_claude_usage_stats().unwrap();
+        assert_eq!(stats.cost_today_usd, 0.0);
+        assert!(stats.rate_limit_utilization.is_none());
+        assert!(stats.rate_limit_resets_at.is_none());
+        assert!(stats.rate_limit_type.is_none());
+        assert!(stats.rate_limit_status.is_none());
+    }
+
+    #[test]
+    fn test_get_claude_usage_stats_prefers_five_hour() {
+        let conn = crate::test_helpers::setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let future = 9999999999_i64;
+        // Insert a non-five_hour row first
+        mgr.upsert_rate_limit_event(&RateLimitEvent {
+            rate_limit_type: "daily".to_string(),
+            resets_at: future,
+            utilization: 0.1,
+            status: "allowed".to_string(),
+        })
+        .unwrap();
+        // Insert the five_hour row
+        mgr.upsert_rate_limit_event(&RateLimitEvent {
+            rate_limit_type: "five_hour".to_string(),
+            resets_at: future,
+            utilization: 0.8,
+            status: "allowed_warning".to_string(),
+        })
+        .unwrap();
+
+        let stats = mgr.get_claude_usage_stats().unwrap();
+        assert_eq!(stats.rate_limit_type.as_deref(), Some("five_hour"));
+        assert!((stats.rate_limit_utilization.unwrap() - 0.8).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_get_claude_usage_stats_expired_rate_limit_hidden() {
+        let conn = crate::test_helpers::setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // resets_at in the past → should be hidden
+        mgr.upsert_rate_limit_event(&RateLimitEvent {
+            rate_limit_type: "five_hour".to_string(),
+            resets_at: 1, // Unix epoch + 1s, definitely expired
+            utilization: 0.5,
+            status: "allowed".to_string(),
+        })
+        .unwrap();
+
+        let stats = mgr.get_claude_usage_stats().unwrap();
+        assert!(stats.rate_limit_utilization.is_none());
+        assert!(stats.rate_limit_resets_at.is_none());
     }
 }

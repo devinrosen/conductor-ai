@@ -2153,10 +2153,8 @@ fn run_agent(
                 print_event_summary(&event);
 
                 // Persist rate_limit_event to DB for TUI usage stats display.
-                if event.get("type").and_then(|v| v.as_str()) == Some("rate_limit_event") {
-                    if let Some(rle) = conductor_core::agent::parse_rate_limit_event(&event) {
-                        let _ = mgr.upsert_rate_limit_event(&rle);
-                    }
+                if let Some(rle) = conductor_core::agent::parse_rate_limit_event(&event) {
+                    let _ = mgr.upsert_rate_limit_event(&rle);
                 }
 
                 // Capture session_id from init message and save immediately for resume
