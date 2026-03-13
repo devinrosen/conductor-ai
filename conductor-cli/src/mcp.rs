@@ -753,6 +753,13 @@ fn conductor_tools() -> Vec<Tool> {
             schema(&[("repo", "Repo slug", true), ("slug", "Worktree slug", true)]),
         ),
         Tool::new(
+            "conductor_cancel_run",
+            "Cancel a workflow run that is pending, running, or waiting. \
+             In-progress steps and child agent runs are best-effort cancelled before \
+             the run is marked cancelled.",
+            schema(&[("run_id", "Workflow run ID to cancel", true)]),
+        ),
+        Tool::new(
             "conductor_list_workflows",
             "List available workflow definitions for a repo. Returns workflow names, descriptions, and trigger types.",
             schema(&[("repo", "Repo slug (e.g. my-repo)", true)]),
@@ -787,6 +794,7 @@ fn dispatch_tool(
         "conductor_approve_gate" => tool_approve_gate(db_path, args),
         "conductor_reject_gate" => tool_reject_gate(db_path, args),
         "conductor_push_worktree" => tool_push_worktree(db_path, args),
+        "conductor_cancel_run" => tool_cancel_run(db_path, args),
         "conductor_list_workflows" => tool_list_workflows(db_path, args),
         "conductor_list_repos" => tool_list_repos(db_path),
         _ => tool_err(format!("Unknown tool: {name}")),
@@ -1359,6 +1367,73 @@ fn tool_push_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -> 
     let wt_mgr = WorktreeManager::new(&conn, &config);
     match wt_mgr.push(repo_slug, slug) {
         Ok(msg) => tool_ok(msg),
+        Err(e) => tool_err(e),
+    }
+}
+
+fn tool_cancel_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+    use conductor_core::agent::AgentManager;
+    use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus, WorkflowStepStatus};
+
+    let run_id = require_arg!(args, "run_id");
+    let (conn, _config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+    let wf_mgr = WorkflowManager::new(&conn);
+    let run = match wf_mgr.get_workflow_run(run_id) {
+        Ok(Some(r)) => r,
+        Ok(None) => return tool_err(format!("Workflow run not found: {run_id}")),
+        Err(e) => return tool_err(e),
+    };
+
+    if matches!(
+        run.status,
+        WorkflowRunStatus::Completed | WorkflowRunStatus::Failed | WorkflowRunStatus::Cancelled
+    ) {
+        return tool_err(format!(
+            "Run {run_id} is already in terminal state: {}",
+            run.status
+        ));
+    }
+
+    // Best-effort: cancel in-progress steps and their child agent runs.
+    let agent_mgr = AgentManager::new(&conn);
+    if let Ok(steps) = wf_mgr.get_workflow_steps(run_id) {
+        for step in steps {
+            if matches!(
+                step.status,
+                WorkflowStepStatus::Completed
+                    | WorkflowStepStatus::Failed
+                    | WorkflowStepStatus::Skipped
+                    | WorkflowStepStatus::TimedOut
+            ) {
+                continue;
+            }
+            if let Some(ref child_id) = step.child_run_id {
+                let _ = agent_mgr.update_run_cancelled(child_id);
+            }
+            let _ = wf_mgr.update_step_status(
+                &step.id,
+                WorkflowStepStatus::Failed,
+                step.child_run_id.as_deref(),
+                Some("Cancelled via MCP conductor_cancel_run"),
+                None,
+                None,
+                None,
+            );
+        }
+    }
+
+    match wf_mgr.update_workflow_status(
+        run_id,
+        WorkflowRunStatus::Cancelled,
+        Some("Cancelled via MCP conductor_cancel_run"),
+    ) {
+        Ok(()) => tool_ok(format!(
+            "Workflow run {} ('{}') cancelled.",
+            run_id, run.workflow_name
+        )),
         Err(e) => tool_err(e),
     }
 }
@@ -2367,6 +2442,131 @@ mod tests {
         assert!(
             !result.contains("from old file"),
             "should not use old file; got: {result}"
+        );
+    }
+
+    // -- tool_cancel_run ----------------------------------------------------
+
+    /// Helper: create a workflow run in the given status. Returns the run id.
+    fn make_workflow_run_with_status(
+        db_path: &std::path::Path,
+        status: conductor_core::workflow::WorkflowRunStatus,
+    ) -> String {
+        use conductor_core::agent::AgentManager;
+        use conductor_core::db::open_database;
+        use conductor_core::workflow::WorkflowManager;
+
+        let conn = open_database(db_path).expect("open db");
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(None, "workflow", None, None)
+            .expect("create agent run");
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("test-wf", None, &parent.id, false, "manual", None)
+            .expect("create workflow run");
+        if !matches!(status, conductor_core::workflow::WorkflowRunStatus::Pending) {
+            mgr.update_workflow_status(&run.id, status, None)
+                .expect("update status");
+        }
+        run.id
+    }
+
+    #[test]
+    fn test_dispatch_cancel_run_missing_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_cancel_run", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_cancel_run_not_found() {
+        let (_f, db) = make_test_db();
+        let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
+        let result = dispatch_tool(&db, "conductor_cancel_run", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("not found"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_cancel_run_already_completed() {
+        use conductor_core::workflow::WorkflowRunStatus;
+        let (_f, db) = make_test_db();
+        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Completed);
+        let args = args_with("run_id", &run_id);
+        let result = dispatch_tool(&db, "conductor_cancel_run", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("terminal state"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_cancel_run_already_failed() {
+        use conductor_core::workflow::WorkflowRunStatus;
+        let (_f, db) = make_test_db();
+        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Failed);
+        let args = args_with("run_id", &run_id);
+        let result = dispatch_tool(&db, "conductor_cancel_run", &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_dispatch_cancel_run_already_cancelled() {
+        use conductor_core::workflow::WorkflowRunStatus;
+        let (_f, db) = make_test_db();
+        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Cancelled);
+        let args = args_with("run_id", &run_id);
+        let result = dispatch_tool(&db, "conductor_cancel_run", &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_dispatch_cancel_run_running() {
+        use conductor_core::db::open_database;
+        use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
+        let (_f, db) = make_test_db();
+        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Running);
+        let args = args_with("run_id", &run_id);
+        let result = dispatch_tool(&db, "conductor_cancel_run", &args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "cancel_run should succeed; got: {:?}",
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("cancelled"), "got: {text}");
+
+        // Verify the run status was updated in the DB.
+        let conn = open_database(&db).expect("open db");
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .get_workflow_run(&run_id)
+            .expect("query")
+            .expect("run exists");
+        assert_eq!(run.status, WorkflowRunStatus::Cancelled);
+        assert_eq!(
+            run.result_summary.as_deref(),
+            Some("Cancelled via MCP conductor_cancel_run")
         );
     }
 }
