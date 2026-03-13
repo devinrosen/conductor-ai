@@ -1778,7 +1778,7 @@ fn main() -> Result<()> {
                 match wf_mgr.find_waiting_gate(&run_id)? {
                     Some(step) => {
                         let user = std::env::var("USER").unwrap_or_else(|_| "cli".to_string());
-                        wf_mgr.reject_gate(&step.id, &user)?;
+                        wf_mgr.reject_gate(&step.id, &user, None)?;
                         wf_mgr.update_workflow_status(
                             &run_id,
                             conductor_core::workflow::WorkflowRunStatus::Failed,

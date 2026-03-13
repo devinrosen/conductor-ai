@@ -407,7 +407,7 @@ pub async fn reject_gate(
         ))
     })?;
 
-    mgr.reject_gate(&step.id, "user")?;
+    mgr.reject_gate(&step.id, "user", None)?;
 
     state
         .events
