@@ -304,6 +304,18 @@ impl<'a> WorktreeManager<'a> {
         Ok(worktrees)
     }
 
+    /// Walk up from `cwd` and return the worktree whose `path` is a prefix of (or equals) `cwd`.
+    ///
+    /// Returns `None` when no registered worktree matches.
+    pub fn find_by_cwd(&self, cwd: &Path) -> Result<Option<Worktree>> {
+        let worktrees = self.list(None, false)?;
+        let found = worktrees.into_iter().find(|wt| {
+            let wt_path = Path::new(&wt.path);
+            cwd.starts_with(wt_path)
+        });
+        Ok(found)
+    }
+
     pub fn delete(&self, repo_slug: &str, name: &str) -> Result<Worktree> {
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;

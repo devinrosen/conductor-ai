@@ -221,11 +221,9 @@ enum WorkflowCommands {
     Validate {
         /// Workflow name
         name: String,
-        /// Repo slug (required unless --path is given)
-        #[arg(required_unless_present = "path")]
+        /// Repo slug (optional; auto-detected from CWD when omitted)
         repo: Option<String>,
-        /// Worktree slug (required unless --path is given)
-        #[arg(required_unless_present = "path")]
+        /// Worktree slug (optional; auto-detected from CWD when omitted)
         worktree: Option<String>,
         /// Path to a repo root directory; skips DB lookup
         #[arg(long, conflicts_with_all = &["repo", "worktree"])]
@@ -1566,11 +1564,23 @@ fn main() -> Result<()> {
             } => {
                 let (wt_path, repo_path) = if let Some(ref dir) = path {
                     (dir.clone(), dir.clone())
-                } else {
+                } else if repo.is_some() || worktree.is_some() {
                     let repo_mgr = RepoManager::new(&conn, &config);
                     let r = repo_mgr.get_by_slug(repo.as_deref().unwrap())?;
                     let wt_mgr = WorktreeManager::new(&conn, &config);
                     let wt = wt_mgr.get_by_slug(&r.id, worktree.as_deref().unwrap())?;
+                    (wt.path, r.local_path)
+                } else {
+                    let cwd = std::env::current_dir()?;
+                    let wt_mgr = WorktreeManager::new(&conn, &config);
+                    let wt = wt_mgr.find_by_cwd(&cwd)?.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Could not detect repo/worktree from current directory. \
+                             Run from inside a conductor-managed worktree, or pass <repo> <worktree> explicitly."
+                        )
+                    })?;
+                    let repo_mgr = RepoManager::new(&conn, &config);
+                    let r = repo_mgr.get_by_id(&wt.repo_id)?;
                     (wt.path, r.local_path)
                 };
 
