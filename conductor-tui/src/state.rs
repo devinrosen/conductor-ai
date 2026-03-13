@@ -200,15 +200,31 @@ pub enum WorkflowRunRow {
         /// Number of direct children (0 = leaf).
         child_count: usize,
     },
+    /// An individual step of a leaf run, shown when the user expands the run.
+    Step {
+        /// The run that owns this step.
+        #[allow(dead_code)]
+        run_id: String,
+        #[allow(dead_code)]
+        step_id: String,
+        step_name: String,
+        /// Raw status string (e.g. "completed", "running").
+        status: String,
+        position: i64,
+        /// Indentation level = owning run depth + 1.
+        depth: u8,
+    },
 }
 
 impl WorkflowRunRow {
-    /// Returns the run ID for `Parent`/`Child` rows; `None` for header rows.
+    /// Returns the run ID for `Parent`/`Child` rows; `None` for header/step rows.
     pub fn run_id(&self) -> Option<&str> {
         match self {
             WorkflowRunRow::Parent { run_id, .. } => Some(run_id),
             WorkflowRunRow::Child { run_id, .. } => Some(run_id),
-            WorkflowRunRow::RepoHeader { .. } | WorkflowRunRow::TargetHeader { .. } => None,
+            WorkflowRunRow::RepoHeader { .. }
+            | WorkflowRunRow::TargetHeader { .. }
+            | WorkflowRunRow::Step { .. } => None,
         }
     }
 }
@@ -730,6 +746,9 @@ pub struct DataCache {
     pub step_agent_events: Vec<AgentRunEvent>,
     /// Agent run metadata for the currently selected step's child_run_id
     pub step_agent_run: Option<AgentRun>,
+    /// Steps for every leaf run in the current scope (run_id → ordered steps).
+    /// Populated by the background poller on every tick.
+    pub workflow_run_steps: HashMap<String, Vec<WorkflowRunStep>>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.
@@ -932,6 +951,8 @@ pub struct AppState {
     pub collapsed_target_headers: HashSet<String>,
     /// Tracks which run IDs have had their default collapse state initialized.
     collapse_initialized: HashSet<String>,
+    /// Set of leaf run IDs whose steps are currently expanded inline.
+    pub expanded_step_run_ids: HashSet<String>,
 
     pub should_quit: bool,
 
@@ -952,6 +973,36 @@ pub struct AppState {
     pub home_dir: Option<String>,
 }
 
+/// Append step rows for `run_id` when it is in `expanded_step_run_ids`.
+fn push_steps_for_run(
+    run_id: &str,
+    depth: u8,
+    rows: &mut Vec<WorkflowRunRow>,
+    expanded_step_run_ids: &std::collections::HashSet<String>,
+    workflow_run_steps: &std::collections::HashMap<
+        String,
+        Vec<conductor_core::workflow::WorkflowRunStep>,
+    >,
+) {
+    if !expanded_step_run_ids.contains(run_id) {
+        return;
+    }
+    if let Some(steps) = workflow_run_steps.get(run_id) {
+        let mut ordered: Vec<_> = steps.iter().collect();
+        ordered.sort_by_key(|s| s.position);
+        for step in ordered {
+            rows.push(WorkflowRunRow::Step {
+                run_id: run_id.to_string(),
+                step_id: step.id.clone(),
+                step_name: step.step_name.clone(),
+                status: step.status.to_string(),
+                position: step.position,
+                depth,
+            });
+        }
+    }
+}
+
 /// Recursively append `Child` rows for `parent_id` into `rows`.
 /// `depth` starts at 1 for direct children of a root run.
 fn push_children(
@@ -960,6 +1011,11 @@ fn push_children(
     rows: &mut Vec<WorkflowRunRow>,
     children_map: &std::collections::HashMap<&str, Vec<&conductor_core::workflow::WorkflowRun>>,
     collapsed_ids: &std::collections::HashSet<String>,
+    expanded_step_run_ids: &std::collections::HashSet<String>,
+    workflow_run_steps: &std::collections::HashMap<
+        String,
+        Vec<conductor_core::workflow::WorkflowRunStep>,
+    >,
 ) {
     let Some(children) = children_map.get(parent_id) else {
         return;
@@ -975,7 +1031,25 @@ fn push_children(
             child_count,
         });
         if !collapsed {
-            push_children(&child.id, depth + 1, rows, children_map, collapsed_ids);
+            if child_count == 0 {
+                push_steps_for_run(
+                    &child.id,
+                    depth + 1,
+                    rows,
+                    expanded_step_run_ids,
+                    workflow_run_steps,
+                );
+            } else {
+                push_children(
+                    &child.id,
+                    depth + 1,
+                    rows,
+                    children_map,
+                    collapsed_ids,
+                    expanded_step_run_ids,
+                    workflow_run_steps,
+                );
+            }
         }
     }
 }
@@ -1024,6 +1098,7 @@ impl AppState {
             collapsed_repo_headers: HashSet::new(),
             collapsed_target_headers: HashSet::new(),
             collapse_initialized: HashSet::new(),
+            expanded_step_run_ids: HashSet::new(),
             should_quit: false,
             show_closed_tickets: false,
             ticket_sync_in_progress: false,
@@ -1428,13 +1503,25 @@ impl AppState {
                     child_count,
                 });
                 if !collapsed {
-                    push_children(
-                        &run.id,
-                        1,
-                        &mut result,
-                        &children_map,
-                        &self.collapsed_workflow_run_ids,
-                    );
+                    if child_count == 0 {
+                        push_steps_for_run(
+                            &run.id,
+                            1,
+                            &mut result,
+                            &self.expanded_step_run_ids,
+                            &self.data.workflow_run_steps,
+                        );
+                    } else {
+                        push_children(
+                            &run.id,
+                            1,
+                            &mut result,
+                            &children_map,
+                            &self.collapsed_workflow_run_ids,
+                            &self.expanded_step_run_ids,
+                            &self.data.workflow_run_steps,
+                        );
+                    }
                 }
             }
             return result;
@@ -1556,13 +1643,25 @@ impl AppState {
                         child_count,
                     });
                     if !collapsed {
-                        push_children(
-                            &run.id,
-                            1,
-                            &mut result,
-                            &children_map,
-                            &self.collapsed_workflow_run_ids,
-                        );
+                        if child_count == 0 {
+                            push_steps_for_run(
+                                &run.id,
+                                1,
+                                &mut result,
+                                &self.expanded_step_run_ids,
+                                &self.data.workflow_run_steps,
+                            );
+                        } else {
+                            push_children(
+                                &run.id,
+                                1,
+                                &mut result,
+                                &children_map,
+                                &self.collapsed_workflow_run_ids,
+                                &self.expanded_step_run_ids,
+                                &self.data.workflow_run_steps,
+                            );
+                        }
                     }
                 }
             }

@@ -723,6 +723,7 @@ impl App {
                 self.state.data.workflow_steps = payload.workflow_steps;
                 self.state.data.step_agent_events = payload.step_agent_events;
                 self.state.data.step_agent_run = payload.step_agent_run;
+                self.state.data.workflow_run_steps = payload.all_run_steps;
                 self.state.init_collapse_state();
                 if let Some(msg) = workflow_parse_warning_message(&payload.workflow_parse_warnings)
                 {
@@ -751,6 +752,32 @@ impl App {
                             self.state.collapsed_target_headers.insert(key);
                         }
                     }
+                    // Leaf runs (no children): toggle step expansion.
+                    Some(crate::state::WorkflowRunRow::Parent {
+                        run_id,
+                        child_count: 0,
+                        ..
+                    }) => {
+                        let id = run_id.clone();
+                        if self.state.expanded_step_run_ids.contains(&id) {
+                            self.state.expanded_step_run_ids.remove(&id);
+                        } else {
+                            self.state.expanded_step_run_ids.insert(id);
+                        }
+                    }
+                    Some(crate::state::WorkflowRunRow::Child {
+                        run_id,
+                        child_count: 0,
+                        ..
+                    }) => {
+                        let id = run_id.clone();
+                        if self.state.expanded_step_run_ids.contains(&id) {
+                            self.state.expanded_step_run_ids.remove(&id);
+                        } else {
+                            self.state.expanded_step_run_ids.insert(id);
+                        }
+                    }
+                    // Non-leaf Parent: toggle child run collapse.
                     Some(crate::state::WorkflowRunRow::Parent { run_id, .. }) => {
                         let run_id = run_id.clone();
                         if self.state.collapsed_workflow_run_ids.contains(&run_id) {

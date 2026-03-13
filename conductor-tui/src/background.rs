@@ -359,6 +359,28 @@ fn poll_workflow_data(
         Vec::new()
     };
 
+    // Batch-fetch steps for all leaf runs (runs with no children in the current batch).
+    // Build the set of run IDs that appear as someone's parent — these are non-leaf.
+    let runs_with_children: std::collections::HashSet<&str> = runs
+        .iter()
+        .filter_map(|r| r.parent_workflow_run_id.as_deref())
+        .collect();
+    let mut all_run_steps: std::collections::HashMap<
+        String,
+        Vec<conductor_core::workflow::WorkflowRunStep>,
+    > = std::collections::HashMap::new();
+    for run in &runs {
+        // Skip runs that have children — only leaf runs get step rows.
+        if runs_with_children.contains(run.id.as_str()) {
+            continue;
+        }
+        if let Ok(run_steps) = wf_mgr.get_workflow_steps(&run.id) {
+            if !run_steps.is_empty() {
+                all_run_steps.insert(run.id.clone(), run_steps);
+            }
+        }
+    }
+
     // Load agent events for the selected step's child run
     let agent_mgr = AgentManager::new(&conn);
     let (step_agent_events, step_agent_run) = if let Some(child_run_id) = selected_step_child_run_id
@@ -381,6 +403,7 @@ fn poll_workflow_data(
             step_agent_events,
             step_agent_run,
             workflow_parse_warnings: parse_warnings,
+            all_run_steps,
         },
     )))
 }
