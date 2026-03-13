@@ -909,6 +909,15 @@ fn conductor_tools() -> Vec<Tool> {
                 ("feedback", "The feedback or answer to deliver to the agent", true),
             ]),
         ),
+        Tool::new(
+            "conductor_get_worktree",
+            "Get rich detail for a single worktree: branch, status, path, model, \
+             linked ticket, associated PR with CI status, and latest agent/workflow run.",
+            schema(&[
+                ("repo", "Repo slug", true),
+                ("slug", "Worktree slug", true),
+            ]),
+        ),
     ]
 }
 
@@ -938,6 +947,7 @@ fn dispatch_tool(
         "conductor_list_repos" => tool_list_repos(db_path),
         "conductor_resume_run" => tool_resume_run(db_path, args),
         "conductor_submit_agent_feedback" => tool_submit_agent_feedback(db_path, args),
+        "conductor_get_worktree" => tool_get_worktree(db_path, args),
         _ => tool_err(format!("Unknown tool: {name}")),
     }
 }
@@ -1002,6 +1012,99 @@ fn tool_list_repos(db_path: &Path) -> CallToolResult {
         }
         out.push('\n');
     }
+    tool_ok(out)
+}
+
+fn tool_get_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+    use conductor_core::agent::AgentManager;
+    use conductor_core::github::get_pr_detail;
+    use conductor_core::repo::RepoManager;
+    use conductor_core::tickets::TicketSyncer;
+    use conductor_core::workflow::WorkflowManager;
+    use conductor_core::worktree::WorktreeManager;
+
+    let repo_slug = require_arg!(args, "repo");
+    let wt_slug = require_arg!(args, "slug");
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+
+    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+        Ok(r) => r,
+        Err(e) => return tool_err(e),
+    };
+
+    let wt = match WorktreeManager::new(&conn, &config).get_by_slug(&repo.id, wt_slug) {
+        Ok(w) => w,
+        Err(e) => return tool_err(e),
+    };
+
+    let mut out = format!(
+        "slug: {}\nbranch: {}\nstatus: {}\npath: {}\nmodel: {}\ncreated_at: {}\n",
+        wt.slug,
+        wt.branch,
+        wt.status,
+        wt.path,
+        wt.model.as_deref().unwrap_or("default"),
+        wt.created_at,
+    );
+
+    // Linked ticket
+    if let Some(ticket_id) = &wt.ticket_id {
+        let syncer = TicketSyncer::new(&conn);
+        match syncer.get_by_id(ticket_id) {
+            Ok(ticket) => {
+                out.push_str(&format!(
+                    "\nlinked_ticket: #{} — {}\nticket_url: {}\n",
+                    ticket.source_id, ticket.title, ticket.url
+                ));
+            }
+            Err(e) => {
+                out.push_str(&format!("\nlinked_ticket_error: {e}\n"));
+            }
+        }
+    }
+
+    // PR detail (best-effort, synchronous gh call)
+    if let Some(pr) = get_pr_detail(&repo.remote_url, &wt.branch) {
+        out.push_str(&format!(
+            "\npr_number: {}\npr_title: {}\npr_url: {}\npr_state: {}\npr_ci_status: {}\n",
+            pr.number, pr.title, pr.url, pr.state, pr.ci_status
+        ));
+    }
+
+    // Latest agent run
+    let agent_mgr = AgentManager::new(&conn);
+    match agent_mgr.latest_run_for_worktree(&wt.id) {
+        Ok(Some(run)) => {
+            out.push_str(&format!(
+                "\nlatest_agent_run_id: {}\nlatest_agent_run_status: {}\nlatest_agent_run_started_at: {}\n",
+                run.id, run.status, run.started_at,
+            ));
+            if let Some(ended_at) = &run.ended_at {
+                out.push_str(&format!("latest_agent_run_ended_at: {ended_at}\n"));
+            }
+        }
+        Ok(None) => {}
+        Err(e) => out.push_str(&format!("\nlatest_agent_run_error: {e}\n")),
+    }
+
+    // Latest workflow run
+    let wf_mgr = WorkflowManager::new(&conn);
+    match wf_mgr.list_workflow_runs(&wt.id) {
+        Ok(runs) => {
+            if let Some(run) = runs.first() {
+                out.push_str(&format!(
+                    "\nlatest_workflow_run_id: {}\nlatest_workflow_run_name: {}\nlatest_workflow_run_status: {}\nlatest_workflow_run_started_at: {}\n",
+                    run.id, run.workflow_name, run.status, run.started_at,
+                ));
+            }
+        }
+        Err(e) => out.push_str(&format!("\nlatest_workflow_run_error: {e}\n")),
+    }
+
     tool_ok(out)
 }
 
@@ -3390,11 +3493,37 @@ workflow build {
         assert!(text.contains("Missing required argument"), "got: {text}");
     }
 
+    // -- conductor_get_worktree ---------------------------------------------
+
+    #[test]
+    fn test_dispatch_get_worktree_missing_repo_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_get_worktree", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
     #[test]
     fn test_dispatch_submit_agent_feedback_missing_feedback() {
         let (_f, db) = make_test_db();
         let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
         let result = dispatch_tool(&db, "conductor_submit_agent_feedback", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_get_worktree_missing_slug_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_get_worktree", &args_with("repo", "my-repo"));
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()
@@ -3560,5 +3689,38 @@ workflow build {
             text.contains("worktree_branch: feat/my-feature"),
             "expected worktree_branch in output, got: {text}"
         );
+    }
+
+    #[test]
+    fn test_dispatch_get_worktree_not_found() {
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let (_f, db) = make_test_db();
+
+        // Register a repo so the repo lookup succeeds but the worktree is absent.
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = conductor_core::config::Config::default();
+            RepoManager::new(&conn, &config)
+                .add(
+                    "my-repo",
+                    "/tmp/my-repo",
+                    "https://github.com/org/my-repo.git",
+                    None,
+                )
+                .expect("add repo");
+        }
+
+        let mut args = serde_json::Map::new();
+        args.insert("repo".into(), Value::String("my-repo".into()));
+        args.insert("slug".into(), Value::String("feat-nonexistent".into()));
+        let result = dispatch_tool(&db, "conductor_get_worktree", &result_args(args));
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    /// Build an args map from an already-constructed Map (pass-through helper).
+    fn result_args(m: serde_json::Map<String, Value>) -> serde_json::Map<String, Value> {
+        m
     }
 }

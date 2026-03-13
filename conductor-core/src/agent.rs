@@ -1396,6 +1396,25 @@ impl<'a> AgentManager<'a> {
         Ok(map)
     }
 
+    /// Returns the latest top-level agent run for a single worktree, or `None` if none exist.
+    ///
+    /// `parent_run_id IS NULL` filters to top-level runs — sub-agent child runs are excluded.
+    pub fn latest_run_for_worktree(&self, worktree_id: &str) -> Result<Option<AgentRun>> {
+        let mut runs = query_collect(
+            self.conn,
+            &format!(
+                "{AGENT_RUN_SELECT} \
+                 WHERE worktree_id = ?1 AND parent_run_id IS NULL \
+                 ORDER BY started_at DESC \
+                 LIMIT 1"
+            ),
+            params![worktree_id],
+            row_to_agent_run,
+        )?;
+        self.populate_plans(&mut runs)?;
+        Ok(runs.into_iter().next())
+    }
+
     // ── Parent/child run tree queries ─────────────────────────────────
 
     /// List direct child runs of a parent run (newest first).
