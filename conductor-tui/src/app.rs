@@ -758,6 +758,18 @@ impl App {
                             self.state.collapsed_workflow_run_ids.insert(run_id);
                         }
                     }
+                    Some(crate::state::WorkflowRunRow::Child {
+                        run_id,
+                        child_count,
+                        ..
+                    }) if *child_count > 0 => {
+                        let id = run_id.clone();
+                        if self.state.collapsed_workflow_run_ids.contains(&id) {
+                            self.state.collapsed_workflow_run_ids.remove(&id);
+                        } else {
+                            self.state.collapsed_workflow_run_ids.insert(id);
+                        }
+                    }
                     _ => {}
                 }
                 // Clamp index after visibility change.

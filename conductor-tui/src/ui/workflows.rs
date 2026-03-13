@@ -381,14 +381,26 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
 
                     ListItem::new(Line::from(spans))
                 }
-                WorkflowRunRow::Child { .. } => {
-                    let indent = if global_mode { "    " } else { "" };
+                WorkflowRunRow::Child {
+                    depth,
+                    collapsed,
+                    child_count,
+                    ..
+                } => {
+                    let base_indent = if global_mode { "    " } else { "" };
+                    let level_indent = "  ".repeat(*depth as usize);
+                    let toggle = if *child_count > 0 {
+                        if *collapsed {
+                            "\u{25b6} " // ▶
+                        } else {
+                            "\u{25bc} " // ▼
+                        }
+                    } else {
+                        "\u{2570} " // └
+                    };
                     let mut spans = vec![
-                        Span::raw(indent),
-                        Span::styled(
-                            "  \u{2570} ",
-                            Style::default().fg(state.theme.label_secondary),
-                        ),
+                        Span::raw(format!("{base_indent}{level_indent}")),
+                        Span::styled(toggle, Style::default().fg(state.theme.label_secondary)),
                         Span::styled(status_symbol, Style::default().fg(status_color)),
                         Span::raw("  "),
                         Span::styled(
@@ -402,6 +414,13 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                             Style::default().fg(state.theme.label_accent),
                         ),
                     ];
+
+                    if *collapsed && *child_count > 0 {
+                        spans.push(Span::styled(
+                            format!("  (+{child_count})"),
+                            Style::default().fg(state.theme.label_secondary),
+                        ));
+                    }
 
                     if run.status == WorkflowRunStatus::Failed {
                         if let Some(ref summary) = run.result_summary {

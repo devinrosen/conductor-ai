@@ -193,6 +193,12 @@ pub enum WorkflowRunRow {
         run_id: String,
         #[allow(dead_code)]
         parent_id: String,
+        /// 1 = direct child of root, 2 = grandchild, etc.
+        depth: u8,
+        /// Current expand/collapse state of THIS node.
+        collapsed: bool,
+        /// Number of direct children (0 = leaf).
+        child_count: usize,
     },
 }
 
@@ -946,6 +952,34 @@ pub struct AppState {
     pub home_dir: Option<String>,
 }
 
+/// Recursively append `Child` rows for `parent_id` into `rows`.
+/// `depth` starts at 1 for direct children of a root run.
+fn push_children(
+    parent_id: &str,
+    depth: u8,
+    rows: &mut Vec<WorkflowRunRow>,
+    children_map: &std::collections::HashMap<&str, Vec<&conductor_core::workflow::WorkflowRun>>,
+    collapsed_ids: &std::collections::HashSet<String>,
+) {
+    let Some(children) = children_map.get(parent_id) else {
+        return;
+    };
+    for child in children {
+        let child_count = children_map.get(child.id.as_str()).map_or(0, |v| v.len());
+        let collapsed = collapsed_ids.contains(&child.id);
+        rows.push(WorkflowRunRow::Child {
+            run_id: child.id.clone(),
+            parent_id: parent_id.to_string(),
+            depth,
+            collapsed,
+            child_count,
+        });
+        if !collapsed {
+            push_children(&child.id, depth + 1, rows, children_map, collapsed_ids);
+        }
+    }
+}
+
 impl AppState {
     pub fn new() -> Self {
         Self {
@@ -1386,11 +1420,7 @@ impl AppState {
                 if child_ids.contains(run.id.as_str()) {
                     continue;
                 }
-                let my_children = children_map
-                    .get(run.id.as_str())
-                    .cloned()
-                    .unwrap_or_default();
-                let child_count = my_children.len();
+                let child_count = children_map.get(run.id.as_str()).map_or(0, |v| v.len());
                 let collapsed = self.collapsed_workflow_run_ids.contains(&run.id);
                 result.push(WorkflowRunRow::Parent {
                     run_id: run.id.clone(),
@@ -1398,12 +1428,13 @@ impl AppState {
                     child_count,
                 });
                 if !collapsed {
-                    for child in my_children {
-                        result.push(WorkflowRunRow::Child {
-                            run_id: child.id.clone(),
-                            parent_id: run.id.clone(),
-                        });
-                    }
+                    push_children(
+                        &run.id,
+                        1,
+                        &mut result,
+                        &children_map,
+                        &self.collapsed_workflow_run_ids,
+                    );
                 }
             }
             return result;
@@ -1517,11 +1548,7 @@ impl AppState {
                     if rs != repo_slug || tk != target_key {
                         continue;
                     }
-                    let my_children = children_map
-                        .get(run.id.as_str())
-                        .cloned()
-                        .unwrap_or_default();
-                    let child_count = my_children.len();
+                    let child_count = children_map.get(run.id.as_str()).map_or(0, |v| v.len());
                     let collapsed = self.collapsed_workflow_run_ids.contains(&run.id);
                     result.push(WorkflowRunRow::Parent {
                         run_id: run.id.clone(),
@@ -1529,12 +1556,13 @@ impl AppState {
                         child_count,
                     });
                     if !collapsed {
-                        for child in my_children {
-                            result.push(WorkflowRunRow::Child {
-                                run_id: child.id.clone(),
-                                parent_id: run.id.clone(),
-                            });
-                        }
+                        push_children(
+                            &run.id,
+                            1,
+                            &mut result,
+                            &children_map,
+                            &self.collapsed_workflow_run_ids,
+                        );
                     }
                 }
             }
@@ -2712,5 +2740,87 @@ mod tests {
         )];
         state.init_collapse_state();
         assert!(!state.collapsed_workflow_run_ids.contains("c1"));
+    }
+
+    // --- multi-level expand/collapse tests ---
+
+    #[test]
+    fn visible_workflow_run_rows_grandchild_expanded() {
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        // p1 → c1 → gc1 (three levels, all expanded)
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Running, None),
+            make_wf_run_full("c1", WorkflowRunStatus::Running, Some("p1")),
+            make_wf_run_full("gc1", WorkflowRunStatus::Running, Some("c1")),
+        ];
+        let rows = state.visible_workflow_run_rows();
+        assert_eq!(rows.len(), 3);
+        assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
+        assert!(
+            matches!(&rows[1], WorkflowRunRow::Child { run_id, depth: 1, child_count: 1, collapsed: false, .. } if run_id == "c1")
+        );
+        assert!(
+            matches!(&rows[2], WorkflowRunRow::Child { run_id, depth: 2, child_count: 0, collapsed: false, .. } if run_id == "gc1")
+        );
+    }
+
+    #[test]
+    fn visible_workflow_run_rows_intermediate_child_collapsed() {
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        // p1 → c1 → gc1; collapse c1 — gc1 should be hidden
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Running, None),
+            make_wf_run_full("c1", WorkflowRunStatus::Running, Some("p1")),
+            make_wf_run_full("gc1", WorkflowRunStatus::Running, Some("c1")),
+        ];
+        state.collapsed_workflow_run_ids.insert("c1".into());
+        let rows = state.visible_workflow_run_rows();
+        // p1 (expanded) + c1 (collapsed) = 2 rows; gc1 hidden
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
+        assert!(
+            matches!(&rows[1], WorkflowRunRow::Child { run_id, depth: 1, child_count: 1, collapsed: true, .. } if run_id == "c1")
+        );
+    }
+
+    #[test]
+    fn visible_workflow_run_rows_child_depth_values() {
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        // p1 → c1 (depth 1) → c2 (depth 2) → c3 (depth 3)
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Running, None),
+            make_wf_run_full("c1", WorkflowRunStatus::Running, Some("p1")),
+            make_wf_run_full("c2", WorkflowRunStatus::Running, Some("c1")),
+            make_wf_run_full("c3", WorkflowRunStatus::Running, Some("c2")),
+        ];
+        let rows = state.visible_workflow_run_rows();
+        assert_eq!(rows.len(), 4);
+        assert!(
+            matches!(&rows[1], WorkflowRunRow::Child { run_id, depth: 1, .. } if run_id == "c1")
+        );
+        assert!(
+            matches!(&rows[2], WorkflowRunRow::Child { run_id, depth: 2, .. } if run_id == "c2")
+        );
+        assert!(
+            matches!(&rows[3], WorkflowRunRow::Child { run_id, depth: 3, .. } if run_id == "c3")
+        );
+    }
+
+    #[test]
+    fn visible_workflow_run_rows_leaf_child_count_zero() {
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Running, None),
+            make_wf_run_full("c1", WorkflowRunStatus::Running, Some("p1")),
+        ];
+        let rows = state.visible_workflow_run_rows();
+        assert_eq!(rows.len(), 2);
+        assert!(
+            matches!(&rows[1], WorkflowRunRow::Child { run_id, child_count: 0, collapsed: false, depth: 1, .. } if run_id == "c1")
+        );
     }
 }
