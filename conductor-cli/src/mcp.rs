@@ -1553,12 +1553,13 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
         let wt_mgr = WorktreeManager::new(&conn, &config);
         let wt = match wt_mgr.get_by_branch(&repo.id, &branch) {
             Ok(wt) => wt,
-            Err(_) => {
+            Err(conductor_core::error::ConductorError::WorktreeNotFound { .. }) => {
                 return tool_err(format!(
                     "PR #{pr_number} (branch: {branch}) has no local worktree. \
                      Create one with conductor_create_worktree first."
                 ))
             }
+            Err(e) => return tool_err(e),
         };
         (Some(wt.id), wt.path, format!("{}#{}", repo_slug, pr_number))
     } else if let Some(wt_slug) = worktree_slug {
