@@ -2022,6 +2022,42 @@ mod tests {
     }
 
     #[test]
+    fn header_height_adds_one_when_usage_present() {
+        let mut state = AppState::new();
+        // No active runs → status_rows = 1; with usage row it should be 2.
+        state.data.claude_usage = Some(conductor_core::agent::ClaudeUsageStats {
+            messages_today: Some(5),
+            rate_limit_utilization: None,
+            rate_limit_resets_at: None,
+            rate_limit_type: None,
+            rate_limit_status: None,
+            cost_today_usd: 0.42,
+        });
+        let gs = state.global_status();
+        assert_eq!(state.header_height(&gs), 2);
+    }
+
+    #[test]
+    fn header_height_usage_plus_active_runs() {
+        let mut state = AppState::new();
+        // One active run → status_rows = 2; with usage row it should be 3.
+        state
+            .data
+            .latest_agent_runs
+            .insert("wt1".into(), make_agent_run("wt1", AgentRunStatus::Running));
+        state.data.claude_usage = Some(conductor_core::agent::ClaudeUsageStats {
+            messages_today: None,
+            rate_limit_utilization: None,
+            rate_limit_resets_at: None,
+            rate_limit_type: None,
+            rate_limit_status: None,
+            cost_today_usd: 0.0,
+        });
+        let gs = state.global_status();
+        assert_eq!(state.header_height(&gs), 3);
+    }
+
+    #[test]
     fn global_status_running_workflow() {
         let mut state = AppState::new();
         state.data.latest_workflow_runs_by_worktree.insert(
