@@ -365,21 +365,12 @@ fn poll_workflow_data(
         .iter()
         .filter_map(|r| r.parent_workflow_run_id.as_deref())
         .collect();
-    let mut all_run_steps: std::collections::HashMap<
-        String,
-        Vec<conductor_core::workflow::WorkflowRunStep>,
-    > = std::collections::HashMap::new();
-    for run in &runs {
-        // Skip runs that have children — only leaf runs get step rows.
-        if runs_with_children.contains(run.id.as_str()) {
-            continue;
-        }
-        if let Ok(run_steps) = wf_mgr.get_workflow_steps(&run.id) {
-            if !run_steps.is_empty() {
-                all_run_steps.insert(run.id.clone(), run_steps);
-            }
-        }
-    }
+    let leaf_run_ids: Vec<&str> = runs
+        .iter()
+        .filter(|r| !runs_with_children.contains(r.id.as_str()))
+        .map(|r| r.id.as_str())
+        .collect();
+    let all_run_steps = wf_mgr.get_steps_for_runs(&leaf_run_ids).unwrap_or_default();
 
     // Load agent events for the selected step's child run
     let agent_mgr = AgentManager::new(&conn);
