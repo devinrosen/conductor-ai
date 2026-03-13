@@ -827,6 +827,24 @@ fn conductor_tools() -> Vec<Tool> {
             schema(&[]),
         ),
         Tool::new(
+            "conductor_resume_run",
+            "Resume a failed or paused workflow run from its last failed step. \
+             Use conductor_get_run to check the run status before resuming.",
+            schema(&[
+                ("run_id", "Workflow run ID to resume", true),
+                (
+                    "from_step",
+                    "Optional: resume from this specific named step instead of the last failed step",
+                    false,
+                ),
+                (
+                    "model",
+                    "Optional: override the Claude model for resumed agent steps",
+                    false,
+                ),
+            ]),
+        ),
+        Tool::new(
             "conductor_submit_agent_feedback",
             "Submit feedback to an agent run that is waiting for input \
              (status: waiting_for_feedback). Finds the pending feedback request \
@@ -863,6 +881,7 @@ fn dispatch_tool(
         "conductor_cancel_run" => tool_cancel_run(db_path, args),
         "conductor_list_workflows" => tool_list_workflows(db_path, args),
         "conductor_list_repos" => tool_list_repos(db_path),
+        "conductor_resume_run" => tool_resume_run(db_path, args),
         "conductor_submit_agent_feedback" => tool_submit_agent_feedback(db_path, args),
         _ => tool_err(format!("Unknown tool: {name}")),
     }
@@ -1546,6 +1565,49 @@ fn tool_cancel_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> Cal
         )),
         Err(e) => tool_err(e),
     }
+}
+
+fn tool_resume_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+    use conductor_core::workflow::{
+        resume_workflow_standalone, validate_resume_preconditions, WorkflowManager,
+        WorkflowResumeStandalone,
+    };
+
+    let run_id = require_arg!(args, "run_id");
+    let from_step = get_arg(args, "from_step").map(str::to_string);
+    let model = get_arg(args, "model").map(str::to_string);
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+    let wf_mgr = WorkflowManager::new(&conn);
+    let run = match wf_mgr.get_workflow_run(run_id) {
+        Ok(Some(r)) => r,
+        Ok(None) => return tool_err(format!("Workflow run not found: {run_id}")),
+        Err(e) => return tool_err(e),
+    };
+
+    if let Err(e) = validate_resume_preconditions(&run.status, false, from_step.as_deref()) {
+        return tool_err(e);
+    }
+
+    let params = WorkflowResumeStandalone {
+        config,
+        workflow_run_id: run_id.to_string(),
+        model,
+        from_step,
+        restart: false,
+    };
+
+    std::thread::spawn(move || {
+        let _ = resume_workflow_standalone(&params);
+    });
+
+    tool_ok(format!(
+        "Workflow run {} ('{}') is resuming. Use conductor_get_run to check progress.",
+        run_id, run.workflow_name
+    ))
 }
 
 fn tool_submit_agent_feedback(
@@ -3101,6 +3163,103 @@ workflow build {
             run.result_summary.as_deref(),
             Some("Cancelled via MCP conductor_cancel_run")
         );
+    }
+
+    // -- tool_resume_run ----------------------------------------------------
+
+    #[test]
+    fn test_dispatch_resume_run_missing_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_resume_run", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_resume_run_not_found() {
+        let (_f, db) = make_test_db();
+        let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
+        let result = dispatch_tool(&db, "conductor_resume_run", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("not found"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_resume_run_already_running() {
+        use conductor_core::workflow::WorkflowRunStatus;
+        let (_f, db) = make_test_db();
+        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Running);
+        let args = args_with("run_id", &run_id);
+        let result = dispatch_tool(&db, "conductor_resume_run", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("already running"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_resume_run_already_completed() {
+        use conductor_core::workflow::WorkflowRunStatus;
+        let (_f, db) = make_test_db();
+        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Completed);
+        let args = args_with("run_id", &run_id);
+        let result = dispatch_tool(&db, "conductor_resume_run", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Cannot resume a completed"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_resume_run_already_cancelled() {
+        use conductor_core::workflow::WorkflowRunStatus;
+        let (_f, db) = make_test_db();
+        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Cancelled);
+        let args = args_with("run_id", &run_id);
+        let result = dispatch_tool(&db, "conductor_resume_run", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("cancelled"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_resume_run_failed() {
+        use conductor_core::workflow::WorkflowRunStatus;
+        let (_f, db) = make_test_db();
+        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Failed);
+        let args = args_with("run_id", &run_id);
+        let result = dispatch_tool(&db, "conductor_resume_run", &args);
+        // Pre-flight passes for Failed runs — tool returns success (fire-and-forget)
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "resume_run should succeed for a failed run; got: {:?}",
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("resuming"), "got: {text}");
     }
 
     // -- tool_submit_agent_feedback -----------------------------------------
