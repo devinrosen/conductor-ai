@@ -4,7 +4,7 @@
 //! is `!Send`. The `rmcp` library handles the stdio JSON-RPC transport.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -146,13 +146,12 @@ impl ServerHandler for ConductorMcpServer {
         }
     }
 
-    fn list_tools(
+    async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<ListToolsResult, rmcp::ErrorData>> + Send + '_
-    {
-        async move { Ok(ListToolsResult::with_all_items(conductor_tools())) }
+    ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        Ok(ListToolsResult::with_all_items(conductor_tools()))
     }
 
     fn call_tool(
@@ -605,7 +604,7 @@ fn dispatch_tool(
 }
 
 fn open_db_and_config(
-    db_path: &PathBuf,
+    db_path: &Path,
 ) -> anyhow::Result<(rusqlite::Connection, conductor_core::config::Config)> {
     use conductor_core::config::load_config;
     use conductor_core::db::open_database;
@@ -614,7 +613,7 @@ fn open_db_and_config(
     Ok((conn, config))
 }
 
-fn tool_list_tickets(db_path: &PathBuf, args: &serde_json::Map<String, Value>) -> CallToolResult {
+fn tool_list_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::TicketSyncer;
 
@@ -648,7 +647,7 @@ fn tool_list_tickets(db_path: &PathBuf, args: &serde_json::Map<String, Value>) -
     tool_ok(out)
 }
 
-fn tool_list_worktrees(db_path: &PathBuf, args: &serde_json::Map<String, Value>) -> CallToolResult {
+fn tool_list_worktrees(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = match get_arg(args, "repo") {
@@ -677,10 +676,7 @@ fn tool_list_worktrees(db_path: &PathBuf, args: &serde_json::Map<String, Value>)
     tool_ok(out)
 }
 
-fn tool_create_worktree(
-    db_path: &PathBuf,
-    args: &serde_json::Map<String, Value>,
-) -> CallToolResult {
+fn tool_create_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = match get_arg(args, "repo") {
@@ -713,10 +709,7 @@ fn tool_create_worktree(
     }
 }
 
-fn tool_delete_worktree(
-    db_path: &PathBuf,
-    args: &serde_json::Map<String, Value>,
-) -> CallToolResult {
+fn tool_delete_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = match get_arg(args, "repo") {
@@ -738,7 +731,7 @@ fn tool_delete_worktree(
     }
 }
 
-fn tool_sync_tickets(db_path: &PathBuf, args: &serde_json::Map<String, Value>) -> CallToolResult {
+fn tool_sync_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::github;
     use conductor_core::issue_source::IssueSourceManager;
     use conductor_core::jira_acli;
@@ -819,7 +812,7 @@ fn tool_sync_tickets(db_path: &PathBuf, args: &serde_json::Map<String, Value>) -
     tool_ok(msg)
 }
 
-fn tool_run_workflow(db_path: &PathBuf, args: &serde_json::Map<String, Value>) -> CallToolResult {
+fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::agent::AgentManager;
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::{
@@ -929,7 +922,7 @@ fn tool_run_workflow(db_path: &PathBuf, args: &serde_json::Map<String, Value>) -
     ))
 }
 
-fn tool_list_runs(db_path: &PathBuf, args: &serde_json::Map<String, Value>) -> CallToolResult {
+fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::WorkflowManager;
     use conductor_core::worktree::WorktreeManager;
@@ -984,7 +977,7 @@ fn tool_list_runs(db_path: &PathBuf, args: &serde_json::Map<String, Value>) -> C
     tool_ok(out)
 }
 
-fn tool_get_run(db_path: &PathBuf, args: &serde_json::Map<String, Value>) -> CallToolResult {
+fn tool_get_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::workflow::WorkflowManager;
 
     let run_id = match get_arg(args, "run_id") {
@@ -1025,7 +1018,7 @@ fn tool_get_run(db_path: &PathBuf, args: &serde_json::Map<String, Value>) -> Cal
     tool_ok(out)
 }
 
-fn tool_approve_gate(db_path: &PathBuf, args: &serde_json::Map<String, Value>) -> CallToolResult {
+fn tool_approve_gate(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::workflow::WorkflowManager;
 
     let run_id = match get_arg(args, "run_id") {
@@ -1050,7 +1043,7 @@ fn tool_approve_gate(db_path: &PathBuf, args: &serde_json::Map<String, Value>) -
     }
 }
 
-fn tool_reject_gate(db_path: &PathBuf, args: &serde_json::Map<String, Value>) -> CallToolResult {
+fn tool_reject_gate(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::workflow::WorkflowManager;
 
     let run_id = match get_arg(args, "run_id") {
@@ -1073,7 +1066,7 @@ fn tool_reject_gate(db_path: &PathBuf, args: &serde_json::Map<String, Value>) ->
     }
 }
 
-fn tool_push_worktree(db_path: &PathBuf, args: &serde_json::Map<String, Value>) -> CallToolResult {
+fn tool_push_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = match get_arg(args, "repo") {
