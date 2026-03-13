@@ -737,9 +737,12 @@ fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_list_worktrees",
-            "List active worktrees for a repo. \
+            "List worktrees for a repo. Defaults to active worktrees only; pass status=all to include merged/abandoned. \
              Individual worktrees available in detail via the `conductor://worktree/{repo}/{slug}` resource.",
-            schema(&[("repo", "Repo slug", true)]),
+            schema(&[
+                ("repo", "Repo slug", true),
+                ("status", "Filter by status: 'active' (default) or 'all'", false),
+            ]),
         ),
         Tool::new(
             "conductor_create_worktree",
@@ -1190,17 +1193,27 @@ fn tool_list_worktrees(db_path: &Path, args: &serde_json::Map<String, Value>) ->
     use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = require_arg!(args, "repo");
+    let active_only = match get_arg(args, "status") {
+        None | Some("active") => true,
+        Some("all") => false,
+        Some(other) => {
+            return tool_err(format!(
+                "Unknown status value '{other}'. Valid values: 'active', 'all'."
+            ))
+        }
+    };
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
         Err(e) => return tool_err(e),
     };
     let wt_mgr = WorktreeManager::new(&conn, &config);
-    let worktrees = match wt_mgr.list(Some(repo_slug), true) {
+    let worktrees = match wt_mgr.list(Some(repo_slug), active_only) {
         Ok(w) => w,
         Err(e) => return tool_err(e),
     };
     if worktrees.is_empty() {
-        return tool_ok(format!("No active worktrees for {repo_slug}."));
+        let scope = if active_only { "active " } else { "" };
+        return tool_ok(format!("No {scope}worktrees for {repo_slug}."));
     }
     let mut out = String::new();
     for wt in worktrees {
@@ -2119,6 +2132,75 @@ mod tests {
         let (_f, db) = make_test_db();
         let result = dispatch_tool(&db, "conductor_list_worktrees", &empty_args());
         assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_dispatch_list_worktrees_default_status_active_only() {
+        let (_f, db) = make_test_db();
+        let args = args_with("repo", "nonexistent-repo");
+        let result = dispatch_tool(&db, "conductor_list_worktrees", &args);
+        // Unknown repo returns empty list (not an error) — confirms default path works.
+        assert_eq!(result.is_error, Some(false));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(!text.contains("Unknown status value"), "got: {text}");
+        assert!(
+            text.contains("active"),
+            "default should reference active, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_list_worktrees_explicit_active_status() {
+        let (_f, db) = make_test_db();
+        let mut args = args_with("repo", "nonexistent-repo");
+        args.insert("status".to_string(), Value::String("active".to_string()));
+        let result = dispatch_tool(&db, "conductor_list_worktrees", &args);
+        assert_eq!(result.is_error, Some(false));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(!text.contains("Unknown status value"), "got: {text}");
+        assert!(
+            text.contains("active"),
+            "explicit active should reference active, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_list_worktrees_status_all() {
+        let (_f, db) = make_test_db();
+        let mut args = args_with("repo", "nonexistent-repo");
+        args.insert("status".to_string(), Value::String("all".to_string()));
+        let result = dispatch_tool(&db, "conductor_list_worktrees", &args);
+        assert_eq!(result.is_error, Some(false));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(!text.contains("Unknown status value"), "got: {text}");
+        // status=all omits "active" scope qualifier in the empty message
+        assert!(
+            !text.contains("active "),
+            "all-status should not say 'active', got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_list_worktrees_unknown_status_returns_error() {
+        let (_f, db) = make_test_db();
+        let mut args = args_with("repo", "any-repo");
+        args.insert("status".to_string(), Value::String("merged".to_string()));
+        let result = dispatch_tool(&db, "conductor_list_worktrees", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Unknown status value"), "got: {text}");
     }
 
     #[test]
