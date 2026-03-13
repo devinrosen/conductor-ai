@@ -816,8 +816,9 @@ impl Parser {
                                 _ => break,
                             }
                         }
-                        // A bare identifier with no modifiers is treated as required
-                        if !required && default.is_none() && description.is_none() {
+                        // A bare identifier with no default is treated as required.
+                        // Having only a description does not make an input optional.
+                        if !required && default.is_none() {
                             required = true;
                         }
                         inputs.push(InputDecl {
@@ -3997,5 +3998,54 @@ workflow test {
             }
             other => panic!("Expected CallWorkflow, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_input_with_description_remains_required() {
+        // Regression: a description modifier must not silently change required→optional.
+        let src = r#"
+workflow w {
+    meta { trigger = "manual" targets = ["worktree"] }
+    inputs {
+        bare_required
+        explicit_required required
+        with_description description = "some help text"
+        with_desc_and_required required description = "help"
+        with_default default = "x"
+    }
+    call agent
+}
+"#;
+        let def = parse_workflow_str(src, "test.wf").unwrap();
+        assert_eq!(def.inputs.len(), 5);
+
+        // bare identifier → required
+        assert_eq!(def.inputs[0].name, "bare_required");
+        assert!(def.inputs[0].required, "bare input should be required");
+        assert!(def.inputs[0].default.is_none());
+        assert!(def.inputs[0].description.is_none());
+
+        // explicit `required` keyword
+        assert_eq!(def.inputs[1].name, "explicit_required");
+        assert!(def.inputs[1].required);
+
+        // description alone must NOT make the input optional
+        assert_eq!(def.inputs[2].name, "with_description");
+        assert!(
+            def.inputs[2].required,
+            "input with only a description must still be required"
+        );
+        assert_eq!(def.inputs[2].description.as_deref(), Some("some help text"));
+        assert!(def.inputs[2].default.is_none());
+
+        // explicit required + description
+        assert_eq!(def.inputs[3].name, "with_desc_and_required");
+        assert!(def.inputs[3].required);
+        assert_eq!(def.inputs[3].description.as_deref(), Some("help"));
+
+        // default makes it optional
+        assert_eq!(def.inputs[4].name, "with_default");
+        assert!(!def.inputs[4].required);
+        assert_eq!(def.inputs[4].default.as_deref(), Some("x"));
     }
 }

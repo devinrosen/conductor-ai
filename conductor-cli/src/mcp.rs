@@ -461,16 +461,39 @@ fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<String> {
             out.push_str(&format!("No workflow definitions found in {repo_slug}."));
         } else {
             for def in defs {
-                out.push_str(&format!(
-                    "name: {}\ndescription: {}\ntrigger: {}\n\n",
-                    def.name, def.description, def.trigger
-                ));
+                out.push_str(&format_workflow_def(&def));
             }
         }
         return Ok(out);
     }
 
     anyhow::bail!("Unknown conductor:// URI: {uri}")
+}
+
+// ---------------------------------------------------------------------------
+// Workflow formatting helpers (shared between resource reader and tool handlers)
+// ---------------------------------------------------------------------------
+
+fn format_workflow_def(def: &conductor_core::workflow::WorkflowDef) -> String {
+    let mut out = format!(
+        "name: {}\ndescription: {}\ntrigger: {}\n",
+        def.name, def.description, def.trigger
+    );
+    if !def.inputs.is_empty() {
+        out.push_str("inputs:\n");
+        for input in &def.inputs {
+            out.push_str(&format!("  - name: {}\n", input.name));
+            out.push_str(&format!("    required: {}\n", input.required));
+            if let Some(ref default) = input.default {
+                out.push_str(&format!("    default: {default}\n"));
+            }
+            if let Some(ref description) = input.description {
+                out.push_str(&format!("    description: {description}\n"));
+            }
+        }
+    }
+    out.push('\n');
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1324,24 +1347,7 @@ fn tool_list_workflows(db_path: &Path, args: &serde_json::Map<String, Value>) ->
         out.push_str(&format!("No workflow definitions found in {repo_slug}."));
     } else {
         for def in defs {
-            out.push_str(&format!(
-                "name: {}\ndescription: {}\ntrigger: {}\n",
-                def.name, def.description, def.trigger
-            ));
-            if !def.inputs.is_empty() {
-                out.push_str("inputs:\n");
-                for input in &def.inputs {
-                    out.push_str(&format!("  - name: {}\n", input.name));
-                    out.push_str(&format!("    required: {}\n", input.required));
-                    if let Some(ref default) = input.default {
-                        out.push_str(&format!("    default: {default}\n"));
-                    }
-                    if let Some(ref description) = input.description {
-                        out.push_str(&format!("    description: {description}\n"));
-                    }
-                }
-            }
-            out.push('\n');
+            out.push_str(&format_workflow_def(&def));
         }
     }
     tool_ok(out)
@@ -1952,6 +1958,219 @@ mod tests {
             text.contains("https://github.com/acme/my-repo"),
             "expected remote_url in output, got: {text}"
         );
+    }
+
+    // -- tool_list_workflows / resource conductor://workflows/ ---------------
+
+    /// Write a minimal `.conductor/workflows/<name>.wf` file under a temp dir
+    /// and return the temp dir (kept alive).
+    fn make_wf_dir_with_workflow(name: &str, content: &str) -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let wf_dir = dir.path().join(".conductor").join("workflows");
+        std::fs::create_dir_all(&wf_dir).expect("create workflow dir");
+        std::fs::write(wf_dir.join(format!("{name}.wf")), content).expect("write wf file");
+        dir
+    }
+
+    #[test]
+    fn test_dispatch_list_workflows_missing_repo_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_list_workflows", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_list_workflows_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(
+            &db,
+            "conductor_list_workflows",
+            &args_with("repo", "ghost-repo"),
+        );
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_dispatch_list_workflows_includes_input_schema() {
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let wf_content = r#"
+workflow deploy {
+    meta { description = "Deploy to production" trigger = "manual" targets = ["worktree"] }
+    inputs {
+        env required description = "Target environment"
+        dry_run default = "false" description = "Skip actual deploy"
+    }
+    call deployer
+}
+"#;
+        let wf_dir = make_wf_dir_with_workflow("deploy", wf_content);
+        let repo_path = wf_dir.path().to_str().unwrap();
+
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            RepoManager::new(&conn, &config)
+                .add("my-repo", repo_path, "https://github.com/x/y", None)
+                .expect("add repo");
+        }
+
+        let result = dispatch_tool(
+            &db,
+            "conductor_list_workflows",
+            &args_with("repo", "my-repo"),
+        );
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "should succeed; got: {result:?}"
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+
+        assert!(text.contains("name: deploy"), "missing name; got: {text}");
+        assert!(
+            text.contains("description: Deploy to production"),
+            "missing description; got: {text}"
+        );
+        assert!(
+            text.contains("inputs:"),
+            "missing inputs section; got: {text}"
+        );
+        assert!(text.contains("name: env"), "missing env input; got: {text}");
+        assert!(
+            text.contains("required: true"),
+            "env should be required; got: {text}"
+        );
+        assert!(
+            text.contains("description: Target environment"),
+            "missing input description; got: {text}"
+        );
+        assert!(
+            text.contains("name: dry_run"),
+            "missing dry_run input; got: {text}"
+        );
+        assert!(
+            text.contains("required: false"),
+            "dry_run should not be required; got: {text}"
+        );
+        assert!(
+            text.contains("default: false"),
+            "missing default; got: {text}"
+        );
+        // Drop wf_dir after assertions so tempdir lives long enough.
+        drop(wf_dir);
+    }
+
+    #[test]
+    fn test_dispatch_list_workflows_description_only_input_is_required() {
+        // Regression test: an input declared with only a description must remain required.
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let wf_content = r#"
+workflow w {
+    meta { description = "test" trigger = "manual" targets = ["worktree"] }
+    inputs {
+        ticket_id description = "The ticket to work on"
+    }
+    call agent
+}
+"#;
+        let wf_dir = make_wf_dir_with_workflow("w", wf_content);
+        let repo_path = wf_dir.path().to_str().unwrap();
+
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            RepoManager::new(&conn, &config)
+                .add("my-repo", repo_path, "https://github.com/x/y", None)
+                .expect("add repo");
+        }
+
+        let result = dispatch_tool(
+            &db,
+            "conductor_list_workflows",
+            &args_with("repo", "my-repo"),
+        );
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "should succeed; got: {result:?}"
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+
+        assert!(
+            text.contains("required: true"),
+            "input with only a description must be required; got: {text}"
+        );
+        drop(wf_dir);
+    }
+
+    #[test]
+    fn test_resource_workflows_includes_input_schema() {
+        // The resource handler conductor://workflows/<slug> must include input schemas,
+        // consistent with the tool handler.
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let wf_content = r#"
+workflow build {
+    meta { description = "Build workflow" trigger = "manual" targets = ["worktree"] }
+    inputs {
+        branch required
+    }
+    call builder
+}
+"#;
+        let wf_dir = make_wf_dir_with_workflow("build", wf_content);
+        let repo_path = wf_dir.path().to_str().unwrap();
+
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            RepoManager::new(&conn, &config)
+                .add("my-repo", repo_path, "https://github.com/x/y", None)
+                .expect("add repo");
+        }
+
+        let result = read_resource_by_uri(&db, "conductor://workflows/my-repo")
+            .expect("resource read should succeed");
+
+        assert!(
+            result.contains("name: build"),
+            "missing name; got: {result}"
+        );
+        assert!(
+            result.contains("inputs:"),
+            "resource should include inputs section; got: {result}"
+        );
+        assert!(
+            result.contains("name: branch"),
+            "missing branch input; got: {result}"
+        );
+        assert!(
+            result.contains("required: true"),
+            "branch should be required; got: {result}"
+        );
+        drop(wf_dir);
     }
 
     // -- tool_create_worktree -----------------------------------------------
