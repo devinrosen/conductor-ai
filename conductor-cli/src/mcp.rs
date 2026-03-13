@@ -909,7 +909,7 @@ fn conductor_tools() -> Vec<Tool> {
                 ("run_id", "Workflow run ID to resume", true),
                 (
                     "from_step",
-                    "Optional: resume from this specific named step instead of the last failed step",
+                    "Optional: resume from this specific named step instead of the last failed step. Use `conductor_get_run` to list step names for this run before specifying a value.",
                     false,
                 ),
                 (
