@@ -200,15 +200,31 @@ pub enum WorkflowRunRow {
         /// Number of direct children (0 = leaf).
         child_count: usize,
     },
+    /// An individual step of a leaf run, shown when the user expands the run.
+    Step {
+        /// The run that owns this step.
+        #[allow(dead_code)]
+        run_id: String,
+        #[allow(dead_code)]
+        step_id: String,
+        step_name: String,
+        /// Raw status string (e.g. "completed", "running").
+        status: String,
+        position: i64,
+        /// Indentation level = owning run depth + 1.
+        depth: u8,
+    },
 }
 
 impl WorkflowRunRow {
-    /// Returns the run ID for `Parent`/`Child` rows; `None` for header rows.
+    /// Returns the run ID for `Parent`/`Child` rows; `None` for header/step rows.
     pub fn run_id(&self) -> Option<&str> {
         match self {
             WorkflowRunRow::Parent { run_id, .. } => Some(run_id),
             WorkflowRunRow::Child { run_id, .. } => Some(run_id),
-            WorkflowRunRow::RepoHeader { .. } | WorkflowRunRow::TargetHeader { .. } => None,
+            WorkflowRunRow::RepoHeader { .. }
+            | WorkflowRunRow::TargetHeader { .. }
+            | WorkflowRunRow::Step { .. } => None,
         }
     }
 }
@@ -730,6 +746,9 @@ pub struct DataCache {
     pub step_agent_events: Vec<AgentRunEvent>,
     /// Agent run metadata for the currently selected step's child_run_id
     pub step_agent_run: Option<AgentRun>,
+    /// Steps for every leaf run in the current scope (run_id → ordered steps).
+    /// Populated by the background poller on every tick.
+    pub workflow_run_steps: HashMap<String, Vec<WorkflowRunStep>>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.
@@ -932,6 +951,8 @@ pub struct AppState {
     pub collapsed_target_headers: HashSet<String>,
     /// Tracks which run IDs have had their default collapse state initialized.
     collapse_initialized: HashSet<String>,
+    /// Set of leaf run IDs whose steps are currently expanded inline.
+    pub expanded_step_run_ids: HashSet<String>,
 
     pub should_quit: bool,
 
@@ -952,6 +973,36 @@ pub struct AppState {
     pub home_dir: Option<String>,
 }
 
+/// Append step rows for `run_id` when it is in `expanded_step_run_ids`.
+fn push_steps_for_run(
+    run_id: &str,
+    depth: u8,
+    rows: &mut Vec<WorkflowRunRow>,
+    expanded_step_run_ids: &std::collections::HashSet<String>,
+    workflow_run_steps: &std::collections::HashMap<
+        String,
+        Vec<conductor_core::workflow::WorkflowRunStep>,
+    >,
+) {
+    if !expanded_step_run_ids.contains(run_id) {
+        return;
+    }
+    if let Some(steps) = workflow_run_steps.get(run_id) {
+        let mut ordered: Vec<_> = steps.iter().collect();
+        ordered.sort_by_key(|s| s.position);
+        for step in ordered {
+            rows.push(WorkflowRunRow::Step {
+                run_id: run_id.to_string(),
+                step_id: step.id.clone(),
+                step_name: step.step_name.clone(),
+                status: step.status.to_string(),
+                position: step.position,
+                depth,
+            });
+        }
+    }
+}
+
 /// Recursively append `Child` rows for `parent_id` into `rows`.
 /// `depth` starts at 1 for direct children of a root run.
 fn push_children(
@@ -960,6 +1011,11 @@ fn push_children(
     rows: &mut Vec<WorkflowRunRow>,
     children_map: &std::collections::HashMap<&str, Vec<&conductor_core::workflow::WorkflowRun>>,
     collapsed_ids: &std::collections::HashSet<String>,
+    expanded_step_run_ids: &std::collections::HashSet<String>,
+    workflow_run_steps: &std::collections::HashMap<
+        String,
+        Vec<conductor_core::workflow::WorkflowRunStep>,
+    >,
 ) {
     let Some(children) = children_map.get(parent_id) else {
         return;
@@ -975,7 +1031,25 @@ fn push_children(
             child_count,
         });
         if !collapsed {
-            push_children(&child.id, depth + 1, rows, children_map, collapsed_ids);
+            if child_count == 0 {
+                push_steps_for_run(
+                    &child.id,
+                    depth + 1,
+                    rows,
+                    expanded_step_run_ids,
+                    workflow_run_steps,
+                );
+            } else {
+                push_children(
+                    &child.id,
+                    depth + 1,
+                    rows,
+                    children_map,
+                    collapsed_ids,
+                    expanded_step_run_ids,
+                    workflow_run_steps,
+                );
+            }
         }
     }
 }
@@ -1024,6 +1098,7 @@ impl AppState {
             collapsed_repo_headers: HashSet::new(),
             collapsed_target_headers: HashSet::new(),
             collapse_initialized: HashSet::new(),
+            expanded_step_run_ids: HashSet::new(),
             should_quit: false,
             show_closed_tickets: false,
             ticket_sync_in_progress: false,
@@ -1428,13 +1503,25 @@ impl AppState {
                     child_count,
                 });
                 if !collapsed {
-                    push_children(
-                        &run.id,
-                        1,
-                        &mut result,
-                        &children_map,
-                        &self.collapsed_workflow_run_ids,
-                    );
+                    if child_count == 0 {
+                        push_steps_for_run(
+                            &run.id,
+                            1,
+                            &mut result,
+                            &self.expanded_step_run_ids,
+                            &self.data.workflow_run_steps,
+                        );
+                    } else {
+                        push_children(
+                            &run.id,
+                            1,
+                            &mut result,
+                            &children_map,
+                            &self.collapsed_workflow_run_ids,
+                            &self.expanded_step_run_ids,
+                            &self.data.workflow_run_steps,
+                        );
+                    }
                 }
             }
             return result;
@@ -1556,13 +1643,25 @@ impl AppState {
                         child_count,
                     });
                     if !collapsed {
-                        push_children(
-                            &run.id,
-                            1,
-                            &mut result,
-                            &children_map,
-                            &self.collapsed_workflow_run_ids,
-                        );
+                        if child_count == 0 {
+                            push_steps_for_run(
+                                &run.id,
+                                1,
+                                &mut result,
+                                &self.expanded_step_run_ids,
+                                &self.data.workflow_run_steps,
+                            );
+                        } else {
+                            push_children(
+                                &run.id,
+                                1,
+                                &mut result,
+                                &children_map,
+                                &self.collapsed_workflow_run_ids,
+                                &self.expanded_step_run_ids,
+                                &self.data.workflow_run_steps,
+                            );
+                        }
                     }
                 }
             }
@@ -2822,5 +2921,133 @@ mod tests {
         assert!(
             matches!(&rows[1], WorkflowRunRow::Child { run_id, child_count: 0, collapsed: false, depth: 1, .. } if run_id == "c1")
         );
+    }
+
+    // --- Step row tests ---
+
+    fn make_wf_step(
+        id: &str,
+        run_id: &str,
+        step_name: &str,
+        position: i64,
+    ) -> conductor_core::workflow::WorkflowRunStep {
+        conductor_core::workflow::WorkflowRunStep {
+            id: id.into(),
+            workflow_run_id: run_id.into(),
+            step_name: step_name.into(),
+            role: "actor".into(),
+            can_commit: false,
+            condition_expr: None,
+            status: conductor_core::workflow::WorkflowStepStatus::Completed,
+            child_run_id: None,
+            position,
+            started_at: None,
+            ended_at: None,
+            result_text: None,
+            condition_met: None,
+            iteration: 0,
+            parallel_group_id: None,
+            context_out: None,
+            markers_out: None,
+            retry_count: 0,
+            gate_type: None,
+            gate_prompt: None,
+            gate_timeout: None,
+            gate_approved_by: None,
+            gate_approved_at: None,
+            gate_feedback: None,
+            structured_output: None,
+        }
+    }
+
+    #[test]
+    fn visible_workflow_run_rows_step_rows_appear_when_expanded() {
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        state.data.workflow_runs = vec![make_wf_run_full("p1", WorkflowRunStatus::Completed, None)];
+        state.data.workflow_run_steps.insert(
+            "p1".into(),
+            vec![
+                make_wf_step("s1", "p1", "lint", 0),
+                make_wf_step("s2", "p1", "test", 1),
+            ],
+        );
+        // Not expanded yet — no Step rows.
+        let rows = state.visible_workflow_run_rows();
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
+
+        // Expand the step list for p1.
+        state.expanded_step_run_ids.insert("p1".into());
+        let rows = state.visible_workflow_run_rows();
+        assert_eq!(rows.len(), 3); // Parent + 2 Step rows
+        assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
+        assert!(matches!(&rows[1], WorkflowRunRow::Step { step_name, .. } if step_name == "lint"));
+        assert!(matches!(&rows[2], WorkflowRunRow::Step { step_name, .. } if step_name == "test"));
+    }
+
+    #[test]
+    fn visible_workflow_run_rows_steps_sorted_by_position() {
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        state.data.workflow_runs = vec![make_wf_run_full("p1", WorkflowRunStatus::Completed, None)];
+        // Insert steps out-of-order by position.
+        state.data.workflow_run_steps.insert(
+            "p1".into(),
+            vec![
+                make_wf_step("s3", "p1", "deploy", 2),
+                make_wf_step("s1", "p1", "lint", 0),
+                make_wf_step("s2", "p1", "test", 1),
+            ],
+        );
+        state.expanded_step_run_ids.insert("p1".into());
+        let rows = state.visible_workflow_run_rows();
+        assert_eq!(rows.len(), 4);
+        assert!(
+            matches!(&rows[1], WorkflowRunRow::Step { step_name, position: 0, .. } if step_name == "lint")
+        );
+        assert!(
+            matches!(&rows[2], WorkflowRunRow::Step { step_name, position: 1, .. } if step_name == "test")
+        );
+        assert!(
+            matches!(&rows[3], WorkflowRunRow::Step { step_name, position: 2, .. } if step_name == "deploy")
+        );
+    }
+
+    #[test]
+    fn visible_workflow_run_rows_steps_for_leaf_child_run() {
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        // p1 → c1 (leaf). Steps should appear under c1 when expanded.
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Completed, None),
+            make_wf_run_full("c1", WorkflowRunStatus::Completed, Some("p1")),
+        ];
+        state
+            .data
+            .workflow_run_steps
+            .insert("c1".into(), vec![make_wf_step("s1", "c1", "review", 0)]);
+        state.expanded_step_run_ids.insert("c1".into());
+        let rows = state.visible_workflow_run_rows();
+        // Parent + Child + Step
+        assert_eq!(rows.len(), 3);
+        assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
+        assert!(matches!(&rows[1], WorkflowRunRow::Child { run_id, .. } if run_id == "c1"));
+        assert!(
+            matches!(&rows[2], WorkflowRunRow::Step { run_id, step_name, depth: 2, .. } if run_id == "c1" && step_name == "review")
+        );
+    }
+
+    #[test]
+    fn visible_workflow_run_rows_no_steps_without_data() {
+        // Even if a run is in expanded_step_run_ids, if there are no steps in
+        // workflow_run_steps for that run, no Step rows should appear.
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        state.data.workflow_runs = vec![make_wf_run_full("p1", WorkflowRunStatus::Completed, None)];
+        state.expanded_step_run_ids.insert("p1".into());
+        let rows = state.visible_workflow_run_rows();
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
     }
 }

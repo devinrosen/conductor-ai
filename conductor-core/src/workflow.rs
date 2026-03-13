@@ -875,6 +875,40 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// Batch-fetch steps for multiple runs in a single query.
+    /// Returns a map of run_id → steps (sorted by position).
+    pub fn get_steps_for_runs(
+        &self,
+        run_ids: &[&str],
+    ) -> Result<HashMap<String, Vec<WorkflowRunStep>>> {
+        if run_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = (1..=run_ids.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT {STEP_COLUMNS} FROM workflow_run_steps WHERE workflow_run_id IN ({placeholders}) ORDER BY workflow_run_id, position"
+        );
+        let run_id_strings: Vec<String> = run_ids.iter().map(|s| s.to_string()).collect();
+        let params: Vec<&dyn rusqlite::ToSql> = run_id_strings
+            .iter()
+            .map(|s| s as &dyn rusqlite::ToSql)
+            .collect();
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let steps = stmt
+            .query_map(params.as_slice(), row_to_workflow_step)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut map: HashMap<String, Vec<WorkflowRunStep>> = HashMap::new();
+        for step in steps {
+            map.entry(step.workflow_run_id.clone())
+                .or_default()
+                .push(step);
+        }
+        Ok(map)
+    }
+
     pub fn get_step_by_id(&self, step_id: &str) -> Result<Option<WorkflowRunStep>> {
         let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT {STEP_COLUMNS} FROM workflow_run_steps WHERE id = ?1"

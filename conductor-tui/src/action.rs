@@ -35,6 +35,8 @@ pub struct WorkflowDataPayload {
     pub step_agent_run: Option<AgentRun>,
     /// Structured parse warnings for any `.wf` files that failed to load
     pub workflow_parse_warnings: Vec<WorkflowWarning>,
+    /// Steps for every leaf run in the current scope (run_id → ordered steps).
+    pub all_run_steps: HashMap<String, Vec<WorkflowRunStep>>,
 }
 
 /// Payload for the DataRefreshed action (boxed to keep Action enum small).

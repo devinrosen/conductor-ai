@@ -434,6 +434,31 @@ fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
 
                     ListItem::new(Line::from(spans))
                 }
+                WorkflowRunRow::Step {
+                    step_name,
+                    status,
+                    position,
+                    depth,
+                    ..
+                } => {
+                    let base_indent = if global_mode { "    " } else { "" };
+                    let level_indent = "  ".repeat(*depth as usize);
+                    let (status_symbol, status_color) = status_display(status);
+                    ListItem::new(Line::from(vec![
+                        Span::raw(format!("{base_indent}{level_indent}")),
+                        Span::styled(
+                            "\u{2570} ",
+                            Style::default().fg(state.theme.label_secondary),
+                        ),
+                        Span::styled(
+                            format!("{position}. "),
+                            Style::default().fg(state.theme.label_secondary),
+                        ),
+                        Span::styled(status_symbol, Style::default().fg(status_color)),
+                        Span::raw("  "),
+                        Span::raw(step_name.clone()),
+                    ]))
+                }
                 // Header arms already handled above; this branch is unreachable.
                 WorkflowRunRow::RepoHeader { .. } | WorkflowRunRow::TargetHeader { .. } => {
                     ListItem::new(Line::from(vec![Span::raw("")]))
