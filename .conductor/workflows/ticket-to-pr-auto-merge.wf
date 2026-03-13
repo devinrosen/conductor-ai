@@ -28,6 +28,16 @@ workflow ticket-to-pr-auto-merge {
     on_timeout    = fail
   }
 
+  // Rebase onto latest main after approval to resolve any conflicts that
+  // accumulated during the review window, and fix lint
+  call workflow rebase-and-fix
+
+  // Wait for CI to pass on the rebased branch before merging
+  gate pr_checks {
+    timeout    = "2h"
+    on_timeout = fail
+  }
+
   call merge-and-close {
     as = "merger"
   }
