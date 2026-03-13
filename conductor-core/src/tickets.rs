@@ -477,8 +477,12 @@ impl<'a> TicketSyncer<'a> {
 
         // ULID path (26 chars)
         if ticket_id_str.len() == 26 {
-            if let Ok(ticket) = self.get_by_id(ticket_id_str) {
-                return Ok((ticket.source_type, ticket.source_id));
+            match self.get_by_id(ticket_id_str) {
+                Ok(ticket) => return Ok((ticket.source_type, ticket.source_id)),
+                Err(ConductorError::TicketNotFound { .. }) => {
+                    // Not a ULID match — fall through to source_id lookup
+                }
+                Err(e) => return Err(e),
             }
         }
 
@@ -1631,5 +1635,100 @@ mod tests {
         };
         let results = syncer.list_filtered(None, &filter).unwrap();
         assert_eq!(results.len(), 2);
+    }
+
+    // --- resolve_ticket_id tests ---
+
+    fn make_repo() -> crate::repo::Repo {
+        crate::repo::Repo {
+            id: "r1".to_string(),
+            slug: "test-repo".to_string(),
+            local_path: "/tmp/repo".to_string(),
+            remote_url: "https://github.com/test/repo.git".to_string(),
+            default_branch: "main".to_string(),
+            workspace_dir: "/tmp/ws".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            model: None,
+            allow_agent_issue_creation: false,
+        }
+    }
+
+    #[test]
+    fn test_resolve_ticket_id_by_source_id() {
+        let conn = setup_db();
+        let config = crate::config::Config::default();
+        let syncer = TicketSyncer::new(&conn);
+        let wt_mgr = crate::worktree::WorktreeManager::new(&conn, &config);
+        let repo = make_repo();
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("42", "Issue 42")])
+            .unwrap();
+
+        let (source_type, source_id) = syncer.resolve_ticket_id(&wt_mgr, &repo, "42").unwrap();
+        assert_eq!(source_type, "github");
+        assert_eq!(source_id, "42");
+    }
+
+    #[test]
+    fn test_resolve_ticket_id_by_ulid() {
+        let conn = setup_db();
+        let config = crate::config::Config::default();
+        let syncer = TicketSyncer::new(&conn);
+        let wt_mgr = crate::worktree::WorktreeManager::new(&conn, &config);
+        let repo = make_repo();
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("99", "Issue 99")])
+            .unwrap();
+        let ulid: String = conn
+            .query_row("SELECT id FROM tickets WHERE source_id = '99'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        let (source_type, source_id) = syncer.resolve_ticket_id(&wt_mgr, &repo, &ulid).unwrap();
+        assert_eq!(source_type, "github");
+        assert_eq!(source_id, "99");
+    }
+
+    #[test]
+    fn test_resolve_ticket_id_ulid_not_found_falls_through() {
+        let conn = setup_db();
+        let config = crate::config::Config::default();
+        let syncer = TicketSyncer::new(&conn);
+        let wt_mgr = crate::worktree::WorktreeManager::new(&conn, &config);
+        let repo = make_repo();
+
+        // Insert a ticket with source_id that is exactly 26 chars (ULID-length)
+        // but is NOT a valid internal ULID — should fall through to source_id lookup.
+        let fake_ulid = "01ABCDEFGHJKMNPQRSTVWXYZ99";
+        assert_eq!(fake_ulid.len(), 26);
+        syncer
+            .upsert_tickets(
+                "r1",
+                &[make_ticket(fake_ulid, "Issue with ULID-like source_id")],
+            )
+            .unwrap();
+
+        let (source_type, source_id) = syncer.resolve_ticket_id(&wt_mgr, &repo, fake_ulid).unwrap();
+        assert_eq!(source_type, "github");
+        assert_eq!(source_id, fake_ulid);
+    }
+
+    #[test]
+    fn test_resolve_ticket_id_not_found() {
+        let conn = setup_db();
+        let config = crate::config::Config::default();
+        let syncer = TicketSyncer::new(&conn);
+        let wt_mgr = crate::worktree::WorktreeManager::new(&conn, &config);
+        let repo = make_repo();
+
+        let result = syncer.resolve_ticket_id(&wt_mgr, &repo, "nonexistent");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ConductorError::TicketNotFound { .. }
+        ));
     }
 }
