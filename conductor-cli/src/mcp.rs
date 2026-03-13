@@ -1572,6 +1572,7 @@ fn tool_resume_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> Cal
         resume_workflow_standalone, validate_resume_preconditions, WorkflowManager,
         WorkflowResumeStandalone,
     };
+    use std::sync::{Arc, Mutex};
 
     let run_id = require_arg!(args, "run_id");
     let from_step = get_arg(args, "from_step").map(str::to_string);
@@ -1598,11 +1599,41 @@ fn tool_resume_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> Cal
         model,
         from_step,
         restart: false,
+        db_path: Some(db_path.to_path_buf()),
     };
 
+    // Error slot: captures any error that occurs before steps begin executing.
+    let error_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let error_slot_bg = Arc::clone(&error_slot);
+    // Notify pair: the background thread signals this when it fails (error = true).
+    let notify_pair: Arc<(Mutex<bool>, std::sync::Condvar)> =
+        Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+    let notify_pair_bg = Arc::clone(&notify_pair);
+
     std::thread::spawn(move || {
-        let _ = resume_workflow_standalone(&params);
+        if let Err(e) = resume_workflow_standalone(&params) {
+            *error_slot_bg.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
+            // Wake the waiter so startup errors are surfaced immediately.
+            *notify_pair_bg.0.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            notify_pair_bg.1.notify_one();
+        }
     });
+
+    // Block until an error is signalled or 2 s elapses (workflow is running in background).
+    let (lock, cvar) = notify_pair.as_ref();
+    let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = cvar
+        .wait_timeout_while(guard, std::time::Duration::from_secs(2), |v| !*v)
+        .unwrap_or_else(|e| e.into_inner());
+
+    // Surface any startup error before reporting success.
+    if let Some(err) = error_slot
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        return tool_err(format!("Failed to resume workflow run: {err}"));
+    }
 
     tool_ok(format!(
         "Workflow run {} ('{}') is resuming. Use conductor_get_run to check progress.",
@@ -3244,22 +3275,24 @@ workflow build {
         let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Failed);
         let args = args_with("run_id", &run_id);
         let result = dispatch_tool(&db, "conductor_resume_run", &args);
-        // Pre-flight passes for Failed runs — tool returns success (fire-and-forget)
-        assert_ne!(
-            result.is_error,
-            Some(true),
-            "resume_run should succeed for a failed run; got: {:?}",
-            result
-                .content
-                .first()
-                .and_then(|c| c.as_text())
-                .map(|t| &t.text)
-        );
+        // Status validation passes for Failed runs — any error must come from setup
+        // (e.g. missing snapshot), not from the status check.
         let text = result.content[0]
             .as_text()
             .map(|t| t.text.as_str())
             .unwrap_or("");
-        assert!(text.contains("resuming"), "got: {text}");
+        assert!(
+            !text.contains("already running"),
+            "should not get 'already running' for a Failed run; got: {text}"
+        );
+        assert!(
+            !text.contains("Cannot resume a completed"),
+            "should not get 'completed' error for a Failed run; got: {text}"
+        );
+        assert!(
+            !text.contains("Cannot resume a cancelled"),
+            "should not get 'cancelled' error for a Failed run; got: {text}"
+        );
     }
 
     // -- tool_submit_agent_feedback -----------------------------------------

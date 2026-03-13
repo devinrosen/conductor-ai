@@ -2316,6 +2316,9 @@ pub struct WorkflowResumeStandalone {
     pub model: Option<String>,
     pub from_step: Option<String>,
     pub restart: bool,
+    /// Override the database path. Uses the default conductor db when `None`.
+    /// Useful for tests that operate on a temporary database.
+    pub db_path: Option<std::path::PathBuf>,
 }
 
 /// Validate resume preconditions that can be checked from status alone.
@@ -2356,7 +2359,10 @@ pub fn validate_resume_preconditions(
 /// Resume a workflow in a self-contained manner: opens its own database
 /// connection. Designed for use in background threads.
 pub fn resume_workflow_standalone(params: &WorkflowResumeStandalone) -> Result<WorkflowResult> {
-    let db = crate::config::db_path();
+    let db = params
+        .db_path
+        .clone()
+        .unwrap_or_else(crate::config::db_path);
     let conn = crate::db::open_database(&db)?;
 
     let input = WorkflowResumeInput {
