@@ -328,6 +328,7 @@ pub async fn resume_workflow_endpoint(
             model,
             from_step,
             restart,
+            db_path: None,
         };
 
         let result = conductor_core::workflow::resume_workflow_standalone(&params);

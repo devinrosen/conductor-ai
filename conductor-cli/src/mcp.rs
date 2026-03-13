@@ -882,6 +882,24 @@ fn conductor_tools() -> Vec<Tool> {
             schema(&[]),
         ),
         Tool::new(
+            "conductor_resume_run",
+            "Resume a failed or paused workflow run from its last failed step. \
+             Use conductor_get_run to check the run status before resuming.",
+            schema(&[
+                ("run_id", "Workflow run ID to resume", true),
+                (
+                    "from_step",
+                    "Optional: resume from this specific named step instead of the last failed step",
+                    false,
+                ),
+                (
+                    "model",
+                    "Optional: override the Claude model for resumed agent steps",
+                    false,
+                ),
+            ]),
+        ),
+        Tool::new(
             "conductor_submit_agent_feedback",
             "Submit feedback to an agent run that is waiting for input \
              (status: waiting_for_feedback). Finds the pending feedback request \
@@ -918,6 +936,7 @@ fn dispatch_tool(
         "conductor_cancel_run" => tool_cancel_run(db_path, args),
         "conductor_list_workflows" => tool_list_workflows(db_path, args),
         "conductor_list_repos" => tool_list_repos(db_path),
+        "conductor_resume_run" => tool_resume_run(db_path, args),
         "conductor_submit_agent_feedback" => tool_submit_agent_feedback(db_path, args),
         _ => tool_err(format!("Unknown tool: {name}")),
     }
@@ -1606,6 +1625,80 @@ fn tool_cancel_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> Cal
         )),
         Err(e) => tool_err(e),
     }
+}
+
+fn tool_resume_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+    use conductor_core::workflow::{
+        resume_workflow_standalone, validate_resume_preconditions, WorkflowManager,
+        WorkflowResumeStandalone,
+    };
+    use std::sync::{Arc, Mutex};
+
+    let run_id = require_arg!(args, "run_id");
+    let from_step = get_arg(args, "from_step").map(str::to_string);
+    let model = get_arg(args, "model").map(str::to_string);
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+    let wf_mgr = WorkflowManager::new(&conn);
+    let run = match wf_mgr.get_workflow_run(run_id) {
+        Ok(Some(r)) => r,
+        Ok(None) => return tool_err(format!("Workflow run not found: {run_id}")),
+        Err(e) => return tool_err(e),
+    };
+
+    if let Err(e) = validate_resume_preconditions(&run.status, false, from_step.as_deref()) {
+        return tool_err(e);
+    }
+
+    let params = WorkflowResumeStandalone {
+        config,
+        workflow_run_id: run_id.to_string(),
+        model,
+        from_step,
+        restart: false,
+        db_path: Some(db_path.to_path_buf()),
+    };
+
+    // Error slot: captures any error that occurs before steps begin executing.
+    let error_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let error_slot_bg = Arc::clone(&error_slot);
+    // Notify pair: the background thread signals this when it fails (error = true).
+    let notify_pair: Arc<(Mutex<bool>, std::sync::Condvar)> =
+        Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+    let notify_pair_bg = Arc::clone(&notify_pair);
+
+    std::thread::spawn(move || {
+        if let Err(e) = resume_workflow_standalone(&params) {
+            *error_slot_bg.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
+            // Wake the waiter so startup errors are surfaced immediately.
+            *notify_pair_bg.0.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            notify_pair_bg.1.notify_one();
+        }
+    });
+
+    // Block until an error is signalled or 2 s elapses (workflow is running in background).
+    let (lock, cvar) = notify_pair.as_ref();
+    let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = cvar
+        .wait_timeout_while(guard, std::time::Duration::from_secs(2), |v| !*v)
+        .unwrap_or_else(|e| e.into_inner());
+
+    // Surface any startup error before reporting success.
+    if let Some(err) = error_slot
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        return tool_err(format!("Failed to resume workflow run: {err}"));
+    }
+
+    tool_ok(format!(
+        "Workflow run {} ('{}') is resuming. Use conductor_get_run to check progress.",
+        run_id, run.workflow_name
+    ))
 }
 
 fn tool_submit_agent_feedback(
@@ -3160,6 +3253,105 @@ workflow build {
         assert_eq!(
             run.result_summary.as_deref(),
             Some("Cancelled via MCP conductor_cancel_run")
+        );
+    }
+
+    // -- tool_resume_run ----------------------------------------------------
+
+    #[test]
+    fn test_dispatch_resume_run_missing_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_resume_run", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_resume_run_not_found() {
+        let (_f, db) = make_test_db();
+        let args = args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX");
+        let result = dispatch_tool(&db, "conductor_resume_run", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("not found"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_resume_run_already_running() {
+        use conductor_core::workflow::WorkflowRunStatus;
+        let (_f, db) = make_test_db();
+        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Running);
+        let args = args_with("run_id", &run_id);
+        let result = dispatch_tool(&db, "conductor_resume_run", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("already running"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_resume_run_already_completed() {
+        use conductor_core::workflow::WorkflowRunStatus;
+        let (_f, db) = make_test_db();
+        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Completed);
+        let args = args_with("run_id", &run_id);
+        let result = dispatch_tool(&db, "conductor_resume_run", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Cannot resume a completed"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_resume_run_already_cancelled() {
+        use conductor_core::workflow::WorkflowRunStatus;
+        let (_f, db) = make_test_db();
+        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Cancelled);
+        let args = args_with("run_id", &run_id);
+        let result = dispatch_tool(&db, "conductor_resume_run", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("cancelled"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_resume_run_failed() {
+        use conductor_core::workflow::WorkflowRunStatus;
+        let (_f, db) = make_test_db();
+        let run_id = make_workflow_run_with_status(&db, WorkflowRunStatus::Failed);
+        let args = args_with("run_id", &run_id);
+        let result = dispatch_tool(&db, "conductor_resume_run", &args);
+        // Status validation passes for Failed runs — any error must come from setup
+        // (e.g. missing snapshot), not from the status check.
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            !text.contains("already running"),
+            "should not get 'already running' for a Failed run; got: {text}"
+        );
+        assert!(
+            !text.contains("Cannot resume a completed"),
+            "should not get 'completed' error for a Failed run; got: {text}"
+        );
+        assert!(
+            !text.contains("Cannot resume a cancelled"),
+            "should not get 'cancelled' error for a Failed run; got: {text}"
         );
     }
 

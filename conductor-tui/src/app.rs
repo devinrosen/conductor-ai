@@ -1998,6 +1998,7 @@ impl App {
                         model: None,
                         from_step: None,
                         restart: false,
+                        db_path: None,
                     };
 
                     let result = resume_workflow_standalone(&params);
