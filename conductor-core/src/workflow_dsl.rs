@@ -34,7 +34,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ConductorError, Result};
-use crate::text_util::resolve_conductor_subdir;
+use crate::text_util::{resolve_conductor_subdir, resolve_conductor_subdir_for_file};
 
 // ---------------------------------------------------------------------------
 // AST types
@@ -1403,21 +1403,16 @@ pub fn load_workflow_by_name(
 ) -> Result<WorkflowDef> {
     validate_workflow_name(name)?;
 
-    let workflows_dir = resolve_conductor_subdir(worktree_path, repo_path, "workflows")
-        .ok_or_else(|| {
-            ConductorError::Workflow(format!(
-                "Workflow '{name}' not found in .conductor/workflows/"
-            ))
-        })?;
+    let filename = format!("{name}.wf");
+    let workflows_dir =
+        resolve_conductor_subdir_for_file(worktree_path, repo_path, "workflows", &filename)
+            .ok_or_else(|| {
+                ConductorError::Workflow(format!(
+                    "Workflow '{name}' not found in .conductor/workflows/"
+                ))
+            })?;
 
-    let path = workflows_dir.join(format!("{name}.wf"));
-    if !path.is_file() {
-        return Err(ConductorError::Workflow(format!(
-            "Workflow '{name}' not found in .conductor/workflows/"
-        )));
-    }
-
-    parse_workflow_file(&path)
+    parse_workflow_file(&workflows_dir.join(&filename))
 }
 
 /// Count the total number of nodes in a node list (for display).

@@ -11,7 +11,9 @@ use serde::Deserialize;
 
 use crate::agent_config::{default_role, AgentRole};
 use crate::error::{ConductorError, Result};
-use crate::text_util::{parse_frontmatter, resolve_conductor_subdir};
+use crate::text_util::{
+    parse_frontmatter, resolve_conductor_subdir, resolve_conductor_subdir_for_file,
+};
 use crate::workflow_dsl::WorkflowTrigger;
 
 /// YAML frontmatter for a workflow `.md` file.
@@ -248,21 +250,16 @@ pub fn load_workflow_by_name(
 ) -> Result<WorkflowDef> {
     crate::workflow_dsl::validate_workflow_name(name)?;
 
-    let workflows_dir = resolve_conductor_subdir(worktree_path, repo_path, "workflows")
-        .ok_or_else(|| {
-            ConductorError::Workflow(format!(
-                "Workflow '{name}' not found in .conductor/workflows/"
-            ))
-        })?;
+    let filename = format!("{name}.md");
+    let workflows_dir =
+        resolve_conductor_subdir_for_file(worktree_path, repo_path, "workflows", &filename)
+            .ok_or_else(|| {
+                ConductorError::Workflow(format!(
+                    "Workflow '{name}' not found in .conductor/workflows/"
+                ))
+            })?;
 
-    let path = workflows_dir.join(format!("{name}.md"));
-    if !path.is_file() {
-        return Err(ConductorError::Workflow(format!(
-            "Workflow '{name}' not found in .conductor/workflows/"
-        )));
-    }
-
-    parse_workflow_file(&path)
+    parse_workflow_file(&workflows_dir.join(&filename))
 }
 
 #[cfg(test)]
