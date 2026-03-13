@@ -1691,9 +1691,6 @@ impl<'a> AgentManager<'a> {
         optional_row(result)
     }
 
-    /// Reap orphaned agent runs whose tmux windows have disappeared.
-    ///
-    /// Queries all runs with an active status (`running` or `waiting_for_feedback`),
     /// Returns counts of active agent runs (running / waiting_for_feedback) per repo_id.
     /// Repos with no active runs are absent from the map.
     pub fn active_run_counts_by_repo(&self) -> Result<HashMap<String, ActiveAgentCounts>> {
@@ -1723,6 +1720,9 @@ impl<'a> AgentManager<'a> {
         Ok(map)
     }
 
+    /// Reap orphaned agent runs whose tmux windows have disappeared.
+    ///
+    /// Queries all runs with an active status (`running` or `waiting_for_feedback`),
     /// checks whether their tmux window still exists, and for any orphans:
     /// 1. Attempts log-file recovery via `try_recover_from_log()` (the agent may
     ///    have completed but the handler didn't fire).
