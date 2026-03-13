@@ -222,6 +222,24 @@ impl<'a> TicketSyncer<'a> {
         Ok(())
     }
 
+    /// Fetch a single ticket by repo ID + external source ID (e.g. GitHub issue number).
+    /// Returns `TicketNotFound` if no matching ticket exists.
+    pub fn get_by_source_id(&self, repo_id: &str, source_id: &str) -> Result<Ticket> {
+        self.conn
+            .query_row(
+                "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json
+                 FROM tickets WHERE repo_id = ?1 AND source_id = ?2",
+                params![repo_id, source_id],
+                map_ticket_row,
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ConductorError::TicketNotFound {
+                    id: source_id.to_string(),
+                },
+                _ => ConductorError::Database(e),
+            })
+    }
+
     /// Fetch a single ticket by its internal (ULID) ID.
     pub fn get_by_id(&self, ticket_id: &str) -> Result<Ticket> {
         self.conn

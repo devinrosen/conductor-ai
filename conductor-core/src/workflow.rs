@@ -1693,7 +1693,11 @@ pub struct WorkflowExecInput<'a> {
     /// If set, the workflow run ID is written here immediately after the run record is
     /// created (before any steps execute). Used by callers that need to return the ID
     /// to an external client while execution continues in the background.
-    pub run_id_notify: Option<std::sync::Arc<std::sync::Mutex<Option<String>>>>,
+    ///
+    /// The `Condvar` is notified once the ID has been written, allowing waiters to
+    /// block efficiently instead of spinning.
+    pub run_id_notify:
+        Option<std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)>>,
 }
 
 /// Execute a workflow definition against a worktree.
@@ -1785,10 +1789,10 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     )?;
 
     // Notify any waiting caller of the freshly-created run ID.
-    if let Some(slot) = &input.run_id_notify {
-        if let Ok(mut guard) = slot.lock() {
-            *guard = Some(wf_run.id.clone());
-        }
+    if let Some(pair) = &input.run_id_notify {
+        let (lock, cvar) = pair.as_ref();
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) = Some(wf_run.id.clone());
+        cvar.notify_one();
     }
 
     // Persist default_bot_name so it can be restored on resume.
@@ -1978,7 +1982,8 @@ pub struct WorkflowExecStandalone {
     pub target_label: Option<String>,
     /// If set, the workflow run ID is written here immediately after the run record is
     /// created (before any steps execute). See [`WorkflowExecInput::run_id_notify`].
-    pub run_id_notify: Option<std::sync::Arc<std::sync::Mutex<Option<String>>>>,
+    pub run_id_notify:
+        Option<std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)>>,
 }
 
 /// Execute a workflow in a self-contained manner: opens its own database
@@ -6537,8 +6542,8 @@ And here is my actual output:
 
         let workflow = make_empty_workflow();
 
-        let slot: std::sync::Arc<std::sync::Mutex<Option<String>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(None));
+        let slot: std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)> =
+            std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
 
         let input = WorkflowExecInput {
             conn: &conn,
@@ -6562,6 +6567,7 @@ And here is my actual output:
         execute_workflow(&input).expect("workflow should complete");
 
         let notified_id = slot
+            .0
             .lock()
             .expect("mutex not poisoned")
             .clone()

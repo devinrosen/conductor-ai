@@ -345,23 +345,19 @@ fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<String> {
             let repo_mgr = RepoManager::new(&conn, &config);
             let repo = repo_mgr.get_by_slug(repo_slug)?;
             let syncer = TicketSyncer::new(&conn);
-            let tickets = syncer.list(Some(&repo.id))?;
-            if let Some(ticket) = tickets.iter().find(|t| t.source_id == source_id) {
-                let labels = syncer.get_labels(&ticket.id)?;
-                let label_str: Vec<String> = labels.iter().map(|l| l.label.clone()).collect();
-                return Ok(format!(
-                    "source_id: {}\ntitle: {}\nstate: {}\nlabels: {}\nassignee: {}\nurl: {}\nbody:\n{}\n",
-                    ticket.source_id,
-                    ticket.title,
-                    ticket.state,
-                    label_str.join(", "),
-                    ticket.assignee.as_deref().unwrap_or("none"),
-                    ticket.url,
-                    ticket.body
-                ));
-            } else {
-                anyhow::bail!("Ticket {source_id} not found in {repo_slug}");
-            }
+            let ticket = syncer.get_by_source_id(&repo.id, source_id)?;
+            let labels = syncer.get_labels(&ticket.id)?;
+            let label_str: Vec<String> = labels.iter().map(|l| l.label.clone()).collect();
+            return Ok(format!(
+                "source_id: {}\ntitle: {}\nstate: {}\nlabels: {}\nassignee: {}\nurl: {}\nbody:\n{}\n",
+                ticket.source_id,
+                ticket.title,
+                ticket.state,
+                label_str.join(", "),
+                ticket.assignee.as_deref().unwrap_or("none"),
+                ticket.url,
+                ticket.body
+            ));
         }
     }
 
@@ -828,11 +824,19 @@ fn tool_sync_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
             Err(e) => errors.push(format!("{}: {e}", source.source_type)),
         }
     }
-    let mut msg = format!("Synced {total_synced} tickets, {total_closed} closed for {repo_slug}.");
-    for err in errors {
-        msg.push_str(&format!("\nerror: {err}"));
+    if errors.is_empty() {
+        tool_ok(format!(
+            "Synced {total_synced} tickets, {total_closed} closed for {repo_slug}."
+        ))
+    } else {
+        let mut msg = format!(
+            "Sync failed for {repo_slug}. Synced {total_synced} tickets, {total_closed} closed."
+        );
+        for err in errors {
+            msg.push_str(&format!("\nerror: {err}"));
+        }
+        tool_err(msg)
     }
-    tool_ok(msg)
 }
 
 fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
@@ -893,9 +897,10 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
         (None, repo.local_path.clone())
     };
 
-    // Slot receives the actual workflow run ID as soon as execute_workflow creates it
-    // (before any steps execute), allowing us to return it immediately to the caller.
-    let run_id_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    // Condvar-based notification: the workflow engine writes the run ID here and
+    // signals the condvar once the run record is created (before any steps execute).
+    let notify_pair: Arc<(Mutex<Option<String>>, std::sync::Condvar)> =
+        Arc::new((Mutex::new(None), std::sync::Condvar::new()));
 
     // Fire-and-forget: execute in a background thread
     let standalone = WorkflowExecStandalone {
@@ -910,42 +915,48 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
         exec_config: WorkflowExecConfig::default(),
         inputs,
         target_label: Some(repo_slug.to_string()),
-        run_id_notify: Some(Arc::clone(&run_id_slot)),
+        run_id_notify: Some(Arc::clone(&notify_pair)),
     };
 
     // Slot receives the error message if execute_workflow_standalone fails before
-    // creating the run record (i.e., before writing to run_id_slot).
+    // creating the run record (i.e., before writing to run_id_notify).
     let error_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let error_slot_bg = Arc::clone(&error_slot);
+    let notify_pair_bg = Arc::clone(&notify_pair);
 
     std::thread::spawn(move || {
         if let Err(e) = execute_workflow_standalone(&standalone) {
-            if let Ok(mut guard) = error_slot_bg.lock() {
-                *guard = Some(e.to_string());
-            }
+            *error_slot_bg.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
+            // Wake the waiter so it surfaces the error immediately.
+            notify_pair_bg.1.notify_one();
         }
     });
 
-    // Wait up to 2 s for the background thread to create the workflow run record.
-    let run_id = {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            {
-                let id_guard = run_id_slot.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(id) = id_guard.as_ref() {
-                    break id.clone();
-                }
-                // Surface early startup errors immediately instead of waiting for timeout.
-                let err_guard = error_slot.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(err) = err_guard.as_ref() {
-                    return tool_err(format!("Workflow failed to start: {err}"));
-                }
-            }
-            if std::time::Instant::now() >= deadline {
-                return tool_err("Workflow started but run_id was not available within 2 s");
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+    // Block (without spinning) until the run record is created or 2 s elapses.
+    let (lock, cvar) = notify_pair.as_ref();
+    let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let (guard, _timed_out) = cvar
+        .wait_timeout_while(guard, std::time::Duration::from_secs(2), |v| {
+            v.is_none()
+                && error_slot
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .is_none()
+        })
+        .unwrap_or_else(|e| e.into_inner());
+
+    // Surface startup errors before checking for the run ID.
+    if let Some(err) = error_slot
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        return tool_err(format!("Workflow failed to start: {err}"));
+    }
+
+    let run_id = match guard.as_ref() {
+        Some(id) => id.clone(),
+        None => return tool_err("Workflow started but run_id was not available within 2 s"),
     };
 
     tool_ok(format!(
