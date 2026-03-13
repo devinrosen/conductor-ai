@@ -40,6 +40,34 @@ pub fn resolve_conductor_subdir(
     None
 }
 
+/// Resolve a `.conductor/<subdir>` directory for a specific file, preferring `worktree_path`
+/// over `repo_path`, but only committing to a candidate when the specific file exists there.
+///
+/// Unlike `resolve_conductor_subdir` (which stops at the first *directory* that exists),
+/// this function gates on file existence so that a worktree that has the directory but not
+/// the specific file falls through to the repo root.
+///
+/// Returns `Some(dir)` — the directory containing the file — or `None` if the file
+/// is absent from both locations.
+pub fn resolve_conductor_subdir_for_file(
+    worktree_path: &str,
+    repo_path: &str,
+    subdir: &str,
+    filename: &str,
+) -> Option<PathBuf> {
+    if !worktree_path.is_empty() {
+        let dir = PathBuf::from(worktree_path).join(".conductor").join(subdir);
+        if dir.join(filename).is_file() {
+            return Some(dir);
+        }
+    }
+    let dir = PathBuf::from(repo_path).join(".conductor").join(subdir);
+    if dir.join(filename).is_file() {
+        return Some(dir);
+    }
+    None
+}
+
 /// Truncate a string at a char boundary no greater than `max_bytes`.
 pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
@@ -116,6 +144,95 @@ mod tests {
             "workflows",
         );
         assert_eq!(result, Some(wt_workflows));
+    }
+
+    // ── resolve_conductor_subdir_for_file ──────────────────────────────────
+
+    #[test]
+    fn test_resolve_for_file_file_in_worktree() {
+        let wt = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        let wt_dir = wt.path().join(".conductor").join("workflows");
+        fs::create_dir_all(&wt_dir).unwrap();
+        fs::write(wt_dir.join("deploy.wf"), "content").unwrap();
+
+        let result = resolve_conductor_subdir_for_file(
+            wt.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "workflows",
+            "deploy.wf",
+        );
+        assert_eq!(result, Some(wt_dir));
+    }
+
+    #[test]
+    fn test_resolve_for_file_dir_in_worktree_file_only_in_repo() {
+        // Bug case: worktree has the directory but not the specific file.
+        let wt = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        // Create directory in worktree but NOT the file.
+        fs::create_dir_all(wt.path().join(".conductor").join("workflows")).unwrap();
+        // Create file only in repo.
+        let repo_dir = repo.path().join(".conductor").join("workflows");
+        fs::create_dir_all(&repo_dir).unwrap();
+        fs::write(repo_dir.join("deploy.wf"), "content").unwrap();
+
+        let result = resolve_conductor_subdir_for_file(
+            wt.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "workflows",
+            "deploy.wf",
+        );
+        assert_eq!(result, Some(repo_dir));
+    }
+
+    #[test]
+    fn test_resolve_for_file_both_have_file_worktree_wins() {
+        let wt = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        let wt_dir = wt.path().join(".conductor").join("workflows");
+        let repo_dir = repo.path().join(".conductor").join("workflows");
+        fs::create_dir_all(&wt_dir).unwrap();
+        fs::create_dir_all(&repo_dir).unwrap();
+        fs::write(wt_dir.join("deploy.wf"), "wt content").unwrap();
+        fs::write(repo_dir.join("deploy.wf"), "repo content").unwrap();
+
+        let result = resolve_conductor_subdir_for_file(
+            wt.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "workflows",
+            "deploy.wf",
+        );
+        assert_eq!(result, Some(wt_dir));
+    }
+
+    #[test]
+    fn test_resolve_for_file_absent_from_both_returns_none() {
+        let wt = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        let result = resolve_conductor_subdir_for_file(
+            wt.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "workflows",
+            "deploy.wf",
+        );
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_resolve_for_file_empty_worktree_uses_repo() {
+        let repo = TempDir::new().unwrap();
+        let repo_dir = repo.path().join(".conductor").join("workflows");
+        fs::create_dir_all(&repo_dir).unwrap();
+        fs::write(repo_dir.join("deploy.wf"), "content").unwrap();
+
+        let result = resolve_conductor_subdir_for_file(
+            "",
+            repo.path().to_str().unwrap(),
+            "workflows",
+            "deploy.wf",
+        );
+        assert_eq!(result, Some(repo_dir));
     }
 
     #[test]
