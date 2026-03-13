@@ -1,6 +1,6 @@
 # Themes
 
-Conductor TUI supports two ways to configure the color theme.
+Conductor TUI supports built-in named themes and custom themes dropped into `~/.conductor/themes/`.
 
 ## Named built-in themes
 
@@ -13,16 +13,22 @@ theme = "nord"
 
 Available names: `conductor` (default), `nord`, `gruvbox`, `catppuccin_mocha`.
 
-## Custom base16 TOML file
+## Custom themes folder
 
-Set `theme_path` to a path pointing at a [base16](https://github.com/tinted-theming/home)-format TOML file. When `theme_path` is set it takes precedence over `theme`.
+Drop `.toml`, `.yaml`, or `.yml` base16 theme files into `~/.conductor/themes/`. The directory is created automatically on first run.
+
+Custom themes appear in the TUI theme picker (press **T**) alongside built-ins. The picker rescans the folder each time it opens, so newly added files are available without restarting.
+
+To use a custom theme on startup, set its filename stem (without extension) as the `theme` value:
 
 ```toml
 [general]
-theme_path = "~/.config/conductor/my-theme.toml"
+theme = "my-theme"   # loads ~/.conductor/themes/my-theme.toml (or .yaml/.yml)
 ```
 
-### Minimal example
+### TOML format (conductor-native)
+
+Compatible with [tinted-theming/base16](https://github.com/tinted-theming/home):
 
 ```toml
 base00 = "#1d2021"
@@ -45,6 +51,38 @@ base0F = "#d65d0e"
 
 Hex values may optionally include the `#` prefix. All required slots must be present.
 
+The display label in the picker is the filename stem (e.g. `my-theme`).
+
+### YAML format (tinted-theming community files)
+
+Compatible with the [tinted-theming/base16-schemes](https://github.com/tinted-theming/base16-schemes) repository:
+
+```yaml
+system: base16
+name: "My Theme"
+author: "Author Name"
+variant: dark
+palette:
+  base00: "1d2021"
+  base01: "282828"
+  base02: "32302f"
+  base03: "504945"
+  base04: "bdae93"
+  base05: "d5c4a1"
+  base06: "ebdbb2"
+  base07: "fbf1c7"
+  base08: "fb4934"
+  base09: "fe8019"
+  base0A: "fabd2f"
+  base0B: "b8bb26"
+  base0C: "8ec07c"
+  base0D: "83a598"
+  base0E: "d3869b"
+  base0F: "d65d0e"
+```
+
+Hex values have no `#` prefix. The `name:` field is used as the display label in the picker; the filename stem is used as a fallback if `name:` is absent.
+
 ### Base16 → semantic role mapping
 
 | Base16 slot | Semantic roles |
@@ -63,4 +101,4 @@ Slots `base00`, `base01`, `base04`, `base06`, `base07`, `base09`, `base0F` are p
 
 ### Ready-made themes
 
-The [tinted-theming](https://tinted-theming.github.io/tinted-theming/) project maintains hundreds of base16-compatible themes you can use directly.
+The [tinted-theming](https://tinted-theming.github.io/tinted-theming/) project maintains hundreds of base16-compatible YAML themes. Download any `.yaml` file from [base16-schemes](https://github.com/tinted-theming/base16-schemes) and place it in `~/.conductor/themes/`.

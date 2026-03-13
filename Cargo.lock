@@ -356,6 +356,7 @@ dependencies = [
  "ratatui",
  "rusqlite",
  "serde_json",
+ "serde_yml",
  "tempfile",
  "toml",
  "tracing",

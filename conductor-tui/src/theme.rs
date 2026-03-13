@@ -42,17 +42,38 @@ impl Default for Theme {
 }
 
 impl Theme {
-    /// Resolve a theme by name. Returns `Err` with a descriptive message listing
-    /// valid names when the name is not recognized.
+    /// Resolve a theme by name.
+    ///
+    /// Lookup order:
+    /// 1. Built-in named themes (conductor, nord, gruvbox, catppuccin_mocha)
+    /// 2. `~/.conductor/themes/<name>.toml`
+    /// 3. `~/.conductor/themes/<name>.yaml`
+    /// 4. `~/.conductor/themes/<name>.yml`
     pub fn from_name(name: &str) -> Result<Self, String> {
         match name {
             "conductor" => Ok(Self::conductor()),
             "nord" => Ok(Self::nord()),
             "gruvbox" => Ok(Self::gruvbox()),
             "catppuccin_mocha" => Ok(Self::catppuccin_mocha()),
-            _ => Err(format!(
-                "unknown theme \"{name}\". Available themes: conductor, nord, gruvbox, catppuccin_mocha"
-            )),
+            _ => {
+                let dir = conductor_core::config::themes_dir();
+                let toml_path = dir.join(format!("{name}.toml"));
+                if toml_path.exists() {
+                    return Self::from_base16_file(&toml_path);
+                }
+                let yaml_path = dir.join(format!("{name}.yaml"));
+                if yaml_path.exists() {
+                    return Self::from_base16_yaml_file(&yaml_path);
+                }
+                let yml_path = dir.join(format!("{name}.yml"));
+                if yml_path.exists() {
+                    return Self::from_base16_yaml_file(&yml_path);
+                }
+                Err(format!(
+                    "unknown theme \"{name}\". Built-in themes: conductor, nord, gruvbox, catppuccin_mocha. \
+                     Custom themes go in ~/.conductor/themes/ as .toml, .yaml, or .yml files."
+                ))
+            }
         }
     }
 
@@ -170,6 +191,67 @@ impl Theme {
         })
     }
 
+    /// Load a theme from a [tinted-theming](https://github.com/tinted-theming/base16-schemes)
+    /// YAML file.
+    ///
+    /// Expected structure:
+    /// ```yaml
+    /// name: "My Theme"
+    /// palette:
+    ///   base00: "1d2021"
+    ///   base08: "fb4934"
+    ///   # ...
+    /// ```
+    ///
+    /// Hex values have no `#` prefix (the existing `parse_hex_color` handles either form).
+    pub fn from_base16_yaml_file(path: &Path) -> Result<Self, String> {
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed to read theme file {}: {e}", path.display()))?;
+        let value: serde_yml::Value = serde_yml::from_str(&contents)
+            .map_err(|e| format!("failed to parse theme file {}: {e}", path.display()))?;
+
+        let palette = value
+            .get("palette")
+            .ok_or_else(|| "missing \"palette\" section in theme file".to_string())?;
+
+        let get = |slot: &str| -> Result<Color, String> {
+            let hex = palette
+                .get(slot)
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| format!("missing required base16 slot \"{slot}\" in theme file"))?;
+            parse_hex_color(slot, hex)
+        };
+
+        let base02 = get("base02")?;
+        let base03 = get("base03")?;
+        let base05 = get("base05")?;
+        let base08 = get("base08")?;
+        let base0a = get("base0A")?;
+        let base0b = get("base0B")?;
+        let base0c = get("base0C")?;
+        let base0d = get("base0D")?;
+        let base0e = get("base0E")?;
+
+        Ok(Self {
+            highlight_bg: base02,
+            border_inactive: base03,
+            status_cancelled: base03,
+            label_secondary: base03,
+            label_primary: base05,
+            status_failed: base08,
+            label_error: base08,
+            status_running: base0a,
+            label_warning: base0a,
+            label_accent: base0a,
+            status_completed: base0b,
+            border_focused: base0c,
+            group_header: base0c,
+            label_info: base0d,
+            label_url: base0d,
+            status_waiting: base0e,
+        })
+    }
+
     /// Catppuccin Mocha — dark pastel palette (catppuccin.com)
     pub fn catppuccin_mocha() -> Self {
         Self {
@@ -191,6 +273,81 @@ impl Theme {
             group_header: Color::Rgb(0xB4, 0xBE, 0xFE),     // Lavender
         }
     }
+}
+
+/// Returns all themes: built-in named themes followed by custom themes from
+/// `~/.conductor/themes/`, sorted alphabetically by display label.
+///
+/// Call this at theme-picker-open time so newly dropped files appear without
+/// restarting the TUI.
+pub fn all_themes() -> Vec<(String, String)> {
+    let mut themes: Vec<(String, String)> = KNOWN_THEMES
+        .iter()
+        .map(|(name, label)| (name.to_string(), label.to_string()))
+        .collect();
+    themes.extend(scan_custom_themes());
+    themes
+}
+
+/// Scan `~/.conductor/themes/` for valid base16 theme files (.toml, .yaml, .yml).
+///
+/// Returns `(stem, display_label)` pairs sorted by display label (case-insensitive).
+/// Silently skips files that are unreadable or fail to parse.
+pub fn scan_custom_themes() -> Vec<(String, String)> {
+    let dir = conductor_core::config::themes_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return vec![];
+    };
+
+    let mut results: Vec<(String, String)> = Vec::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        let Some(stem) = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+
+        match ext {
+            "toml" => {
+                if Theme::from_base16_file(&path).is_ok() {
+                    results.push((stem.clone(), stem));
+                }
+            }
+            "yaml" | "yml" => {
+                if Theme::from_base16_yaml_file(&path).is_ok() {
+                    let display = yaml_display_name(&path, &stem);
+                    results.push((stem, display));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    results.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+    results
+}
+
+/// Read the `name:` field from a tinted-theming YAML file for use as a display label.
+/// Falls back to `stem` if the field is absent or the file can't be parsed.
+fn yaml_display_name(path: &Path, stem: &str) -> String {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return stem.to_string();
+    };
+    let Ok(value): Result<serde_yml::Value, _> = serde_yml::from_str(&contents) else {
+        return stem.to_string();
+    };
+    value
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(stem)
+        .to_string()
 }
 
 /// Parse a 6-character hex color string (with optional `#` prefix) into `Color::Rgb`.

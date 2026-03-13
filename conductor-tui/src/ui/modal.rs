@@ -1476,12 +1476,11 @@ pub fn render_gate_action(
 pub fn render_theme_picker(
     frame: &mut Frame,
     area: Rect,
+    themes: &[(String, String)],
     selected: usize,
     original_name: &str,
     theme: &Theme,
 ) {
-    use crate::theme::KNOWN_THEMES;
-
     let popup = centered_rect(40, 50, area);
     frame.render_widget(Clear, popup);
 
@@ -1498,9 +1497,9 @@ pub fn render_theme_picker(
     lines.push(Line::from(""));
 
     // Theme list
-    for (i, (name, label)) in KNOWN_THEMES.iter().enumerate() {
+    for (i, (name, label)) in themes.iter().enumerate() {
         let is_selected = i == selected;
-        let is_original = *name == original_name;
+        let is_original = name == original_name;
 
         let prefix = if is_selected { "\u{25b8} " } else { "  " };
         let current_marker = if is_original { " (current)" } else { "" };

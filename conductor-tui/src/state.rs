@@ -409,7 +409,10 @@ pub enum Modal {
     },
     /// In-TUI theme picker: browse named themes with live preview.
     ThemePicker {
-        /// Index into `KNOWN_THEMES`.
+        /// Snapshot of all available themes at picker-open time (built-ins + custom).
+        /// Stored here so list changes mid-open don't cause index mismatches.
+        themes: Vec<(String, String)>,
+        /// Index into `themes`.
         selected: usize,
         /// Theme active when the picker was opened; restored on Esc.
         original_theme: crate::theme::Theme,

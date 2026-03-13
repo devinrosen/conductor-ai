@@ -111,8 +111,10 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
-        Modal::ThemePicker { selected, .. } => {
-            let len = crate::theme::KNOWN_THEMES.len();
+        Modal::ThemePicker {
+            themes, selected, ..
+        } => {
+            let len = themes.len().max(1);
             match key.code {
                 KeyCode::Up | KeyCode::Char('k') => {
                     let new_idx = if *selected == 0 {
@@ -907,6 +909,10 @@ mod tests {
     fn theme_picker_state(selected: usize) -> AppState {
         let mut state = AppState::new();
         state.modal = Modal::ThemePicker {
+            themes: crate::theme::KNOWN_THEMES
+                .iter()
+                .map(|(n, l)| (n.to_string(), l.to_string()))
+                .collect(),
             selected,
             original_theme: crate::theme::Theme::default(),
             original_name: "conductor".to_string(),

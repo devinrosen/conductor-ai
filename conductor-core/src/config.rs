@@ -105,13 +105,10 @@ pub struct GeneralConfig {
     /// into agent prompts. Defaults to true; set to false to disable.
     #[serde(default = "default_true")]
     pub inject_startup_context: bool,
-    /// TUI color theme. One of: "conductor" (default), "nord", "gruvbox", "catppuccin_mocha".
-    /// Omit to use the default conductor theme.
+    /// TUI color theme. One of: "conductor" (default), "nord", "gruvbox", "catppuccin_mocha",
+    /// or the stem of a file in `~/.conductor/themes/`. Omit to use the default conductor theme.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
-    /// Path to a base16 TOML theme file. Takes precedence over `theme` when both are set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub theme_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,7 +156,6 @@ impl Default for GeneralConfig {
             model: None,
             inject_startup_context: true,
             theme: None,
-            theme_path: None,
         }
     }
 }
@@ -201,6 +197,11 @@ pub fn config_path() -> PathBuf {
 /// Returns the directory for agent log files.
 pub fn agent_log_dir() -> PathBuf {
     conductor_dir().join("agent-logs")
+}
+
+/// Returns the directory for user-supplied theme files: ~/.conductor/themes/
+pub fn themes_dir() -> PathBuf {
+    conductor_dir().join("themes")
 }
 
 /// Returns the log file path for a given agent run ID.
@@ -341,6 +342,7 @@ fn save_config_to(config: &Config, path: &std::path::Path) -> Result<()> {
 pub fn ensure_dirs(config: &Config) -> Result<()> {
     std::fs::create_dir_all(conductor_dir())?;
     std::fs::create_dir_all(&config.general.workspace_root)?;
+    std::fs::create_dir_all(themes_dir())?;
     Ok(())
 }
 
