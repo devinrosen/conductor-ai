@@ -1404,17 +1404,16 @@ fn resolve_ticket_id(
 
     // PR URL path
     if ticket_id_str.contains("/pull/") {
-        let pr_number = github::parse_pr_number_from_url(ticket_id_str).ok_or_else(|| {
-            format!("could not parse PR number from URL: {ticket_id_str}")
-        })?;
-        let branch = github::get_pr_head_branch(&repo.remote_url, pr_number)
-            .map_err(|e| e.to_string())?;
+        let pr_number = github::parse_pr_number_from_url(ticket_id_str)
+            .ok_or_else(|| format!("could not parse PR number from URL: {ticket_id_str}"))?;
+        let branch =
+            github::get_pr_head_branch(&repo.remote_url, pr_number).map_err(|e| e.to_string())?;
         let wt = worktree_mgr
             .get_by_branch(&repo.id, &branch)
             .map_err(|e| e.to_string())?;
-        let ticket_id = wt.ticket_id.ok_or_else(|| {
-            format!("worktree for branch {branch} has no linked ticket")
-        })?;
+        let ticket_id = wt
+            .ticket_id
+            .ok_or_else(|| format!("worktree for branch {branch} has no linked ticket"))?;
         let ticket = syncer.get_by_id(&ticket_id).map_err(|e| e.to_string())?;
         return Ok((ticket.source_type, ticket.source_id));
     }
@@ -1487,9 +1486,7 @@ fn tool_sync_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
                     let issue_number: i64 = match source_id.parse() {
                         Ok(n) => n,
                         Err(_) => {
-                            return tool_err(format!(
-                                "invalid GitHub issue number: {source_id}"
-                            ))
+                            return tool_err(format!("invalid GitHub issue number: {source_id}"))
                         }
                     };
                     github::fetch_github_issue(&cfg.owner, &cfg.repo, issue_number)

@@ -78,10 +78,8 @@ pub fn fetch_jira_issue(issue_key: &str, base_url: &str) -> Result<TicketInput> 
 
     let json_str = String::from_utf8_lossy(&output.stdout);
     let mut tickets = parse_jira_issues(&json_str, base_url)?;
-    tickets.pop().ok_or_else(|| {
-        ConductorError::TicketNotFound {
-            id: issue_key.to_string(),
-        }
+    tickets.pop().ok_or_else(|| ConductorError::TicketNotFound {
+        id: issue_key.to_string(),
     })
 }
 
