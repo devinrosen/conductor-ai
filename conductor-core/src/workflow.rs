@@ -651,6 +651,57 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
+    /// Cancel a workflow run, best-effort cancelling any in-progress steps and
+    /// their child agent runs before marking the run itself as cancelled.
+    ///
+    /// Returns an error only if the run is not found or is already in a
+    /// terminal state (`completed`, `failed`, or `cancelled`).  Step and
+    /// child-run cancellation failures are silently ignored (best-effort).
+    pub fn cancel_run(&self, run_id: &str, reason: &str) -> Result<()> {
+        let run = self
+            .get_workflow_run(run_id)?
+            .ok_or_else(|| ConductorError::Workflow(format!("Workflow run not found: {run_id}")))?;
+
+        if matches!(
+            run.status,
+            WorkflowRunStatus::Completed | WorkflowRunStatus::Failed | WorkflowRunStatus::Cancelled
+        ) {
+            return Err(ConductorError::Workflow(format!(
+                "Run {run_id} is already in terminal state: {}",
+                run.status
+            )));
+        }
+
+        let agent_mgr = AgentManager::new(self.conn);
+        if let Ok(steps) = self.get_workflow_steps(run_id) {
+            for step in steps {
+                if matches!(
+                    step.status,
+                    WorkflowStepStatus::Completed
+                        | WorkflowStepStatus::Failed
+                        | WorkflowStepStatus::Skipped
+                        | WorkflowStepStatus::TimedOut
+                ) {
+                    continue;
+                }
+                if let Some(ref child_id) = step.child_run_id {
+                    let _ = agent_mgr.update_run_cancelled(child_id);
+                }
+                let _ = self.update_step_status(
+                    &step.id,
+                    WorkflowStepStatus::Failed,
+                    step.child_run_id.as_deref(),
+                    Some(reason),
+                    None,
+                    None,
+                    None,
+                );
+            }
+        }
+
+        self.update_workflow_status(run_id, WorkflowRunStatus::Cancelled, Some(reason))
+    }
+
     /// Insert a workflow step record.
     pub fn insert_step(
         &self,

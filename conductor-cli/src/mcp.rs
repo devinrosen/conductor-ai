@@ -1372,8 +1372,7 @@ fn tool_push_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -> 
 }
 
 fn tool_cancel_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
-    use conductor_core::agent::AgentManager;
-    use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus, WorkflowStepStatus};
+    use conductor_core::workflow::WorkflowManager;
 
     let run_id = require_arg!(args, "run_id");
     let (conn, _config) = match open_db_and_config(db_path) {
@@ -1386,50 +1385,7 @@ fn tool_cancel_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> Cal
         Ok(None) => return tool_err(format!("Workflow run not found: {run_id}")),
         Err(e) => return tool_err(e),
     };
-
-    if matches!(
-        run.status,
-        WorkflowRunStatus::Completed | WorkflowRunStatus::Failed | WorkflowRunStatus::Cancelled
-    ) {
-        return tool_err(format!(
-            "Run {run_id} is already in terminal state: {}",
-            run.status
-        ));
-    }
-
-    // Best-effort: cancel in-progress steps and their child agent runs.
-    let agent_mgr = AgentManager::new(&conn);
-    if let Ok(steps) = wf_mgr.get_workflow_steps(run_id) {
-        for step in steps {
-            if matches!(
-                step.status,
-                WorkflowStepStatus::Completed
-                    | WorkflowStepStatus::Failed
-                    | WorkflowStepStatus::Skipped
-                    | WorkflowStepStatus::TimedOut
-            ) {
-                continue;
-            }
-            if let Some(ref child_id) = step.child_run_id {
-                let _ = agent_mgr.update_run_cancelled(child_id);
-            }
-            let _ = wf_mgr.update_step_status(
-                &step.id,
-                WorkflowStepStatus::Failed,
-                step.child_run_id.as_deref(),
-                Some("Cancelled via MCP conductor_cancel_run"),
-                None,
-                None,
-                None,
-            );
-        }
-    }
-
-    match wf_mgr.update_workflow_status(
-        run_id,
-        WorkflowRunStatus::Cancelled,
-        Some("Cancelled via MCP conductor_cancel_run"),
-    ) {
+    match wf_mgr.cancel_run(run_id, "Cancelled via MCP conductor_cancel_run") {
         Ok(()) => tool_ok(format!(
             "Workflow run {} ('{}') cancelled.",
             run_id, run.workflow_name
