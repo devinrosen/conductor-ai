@@ -166,40 +166,61 @@ impl Theme {
         build_theme_from_base16(|slot| get(slot))
     }
 
-    /// Load a theme from a [tinted-theming](https://github.com/tinted-theming/base16-schemes)
-    /// YAML file.
+    /// Load a theme from a base16 YAML file.
     ///
-    /// Expected structure:
+    /// Supports both the classic flat format (used by tinted-theming/base16-schemes)
+    /// and the newer nested palette format, trying flat first:
+    ///
     /// ```yaml
+    /// # Classic flat format (base16-schemes)
+    /// scheme: "My Theme"
+    /// base00: "1d2021"
+    /// base08: "fb4934"
+    /// ```
+    ///
+    /// ```yaml
+    /// # Nested palette format
     /// name: "My Theme"
     /// palette:
     ///   base00: "1d2021"
     ///   base08: "fb4934"
-    ///   # ...
     /// ```
     ///
-    /// Hex values have no `#` prefix (the existing `parse_hex_color` handles either form).
+    /// Hex values may include or omit the `#` prefix.
     pub fn from_base16_yaml_file(path: &Path) -> Result<Self, String> {
         let contents = std::fs::read_to_string(path)
             .map_err(|e| format!("failed to read theme file {}: {e}", path.display()))?;
         let value: serde_yml::Value = serde_yml::from_str(&contents)
             .map_err(|e| format!("failed to parse theme file {}: {e}", path.display()))?;
 
-        let palette = value.get("palette").ok_or_else(|| {
-            format!(
-                "{}: missing \"palette\" section in theme file",
-                path.display()
-            )
-        })?;
-
-        let get = |slot: &str| -> Result<Color, String> {
-            let hex = palette.get(slot).and_then(|v| v.as_str()).ok_or_else(|| {
+        // Detect format: if base16 slots are at the top level (classic flat format),
+        // use them directly. Otherwise expect a nested `palette:` section.
+        let get: Box<dyn Fn(&str) -> Result<Color, String>> = if value.get("base08").is_some() {
+            Box::new(|slot: &str| {
+                let hex = value.get(slot).and_then(|v| v.as_str()).ok_or_else(|| {
+                    format!(
+                        "{}: missing required base16 slot \"{slot}\"",
+                        path.display()
+                    )
+                })?;
+                parse_hex_color(slot, hex).map_err(|e| format!("{}: {e}", path.display()))
+            })
+        } else {
+            let palette = value.get("palette").ok_or_else(|| {
                 format!(
-                    "{}: missing required base16 slot \"{slot}\"",
+                    "{}: missing \"palette\" section in theme file",
                     path.display()
                 )
             })?;
-            parse_hex_color(slot, hex).map_err(|e| format!("{}: {e}", path.display()))
+            Box::new(|slot: &str| {
+                let hex = palette.get(slot).and_then(|v| v.as_str()).ok_or_else(|| {
+                    format!(
+                        "{}: missing required base16 slot \"{slot}\"",
+                        path.display()
+                    )
+                })?;
+                parse_hex_color(slot, hex).map_err(|e| format!("{}: {e}", path.display()))
+            })
         };
 
         build_theme_from_base16(|slot| get(slot))
@@ -302,8 +323,9 @@ pub fn scan_custom_themes() -> (Vec<(String, String)>, Vec<String>) {
     (results, warnings)
 }
 
-/// Read the `name:` field from a tinted-theming YAML file for use as a display label.
-/// Falls back to `stem` if the field is absent or the file can't be parsed.
+/// Read the display name from a base16 YAML file.
+/// Tries `scheme:` first (classic flat format), then `name:` (nested format).
+/// Falls back to `stem` if neither field is present or the file can't be parsed.
 fn yaml_display_name(path: &Path, stem: &str) -> String {
     let Ok(contents) = std::fs::read_to_string(path) else {
         return stem.to_string();
@@ -312,7 +334,8 @@ fn yaml_display_name(path: &Path, stem: &str) -> String {
         return stem.to_string();
     };
     value
-        .get("name")
+        .get("scheme")
+        .or_else(|| value.get("name"))
         .and_then(|v| v.as_str())
         .unwrap_or(stem)
         .to_string()
