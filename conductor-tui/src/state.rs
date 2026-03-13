@@ -157,10 +157,33 @@ pub enum WorkflowsFocus {
     Runs,
 }
 
+/// Whether a target header row represents a worktree or a PR.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetType {
+    Worktree,
+    Pr,
+}
+
 /// A row in the visible workflow runs list.
-/// Either a root/parent run or an indented child run.
+/// Either a group header, a root/parent run, or an indented child run.
 #[derive(Debug, Clone)]
 pub enum WorkflowRunRow {
+    /// Top-level repo group header (global mode only).
+    RepoHeader {
+        repo_slug: String,
+        collapsed: bool,
+        run_count: usize,
+    },
+    /// Second-level target header (worktree or PR) within a repo group (global mode only).
+    TargetHeader {
+        /// Composite key `"repo_slug/target_key"` used as the collapse-state key.
+        target_key: String,
+        /// Human-readable label shown in the row.
+        label: String,
+        target_type: TargetType,
+        collapsed: bool,
+        run_count: usize,
+    },
     Parent {
         run_id: String,
         collapsed: bool,
@@ -174,12 +197,37 @@ pub enum WorkflowRunRow {
 }
 
 impl WorkflowRunRow {
-    pub fn run_id(&self) -> &str {
+    /// Returns the run ID for `Parent`/`Child` rows; `None` for header rows.
+    pub fn run_id(&self) -> Option<&str> {
         match self {
-            WorkflowRunRow::Parent { run_id, .. } => run_id,
-            WorkflowRunRow::Child { run_id, .. } => run_id,
+            WorkflowRunRow::Parent { run_id, .. } => Some(run_id),
+            WorkflowRunRow::Child { run_id, .. } => Some(run_id),
+            WorkflowRunRow::RepoHeader { .. } | WorkflowRunRow::TargetHeader { .. } => None,
         }
     }
+}
+
+/// Parse a `target_label` string into `(repo_slug, target_key, TargetType)`.
+///
+/// Two formats exist:
+/// - Worktree: `"repo_slug/wt_slug"` → `(repo_slug, wt_slug, Worktree)`
+/// - PR: `"owner/repo#N"` → `("unknown", label, Pr)` — caller should fall back to repo_id lookup
+/// - No slash: `("unknown", label, Worktree)`
+pub fn parse_target_label(label: &str) -> (String, String, TargetType) {
+    if label.contains('#') {
+        // PR format: "owner/repo#N" — we cannot derive the conductor repo slug from the label.
+        return ("unknown".to_string(), label.to_string(), TargetType::Pr);
+    }
+    if let Some(slash_pos) = label.find('/') {
+        let repo_slug = label[..slash_pos].to_string();
+        let target_key = label[slash_pos + 1..].to_string();
+        return (repo_slug, target_key, TargetType::Worktree);
+    }
+    (
+        "unknown".to_string(),
+        label.to_string(),
+        TargetType::Worktree,
+    )
 }
 
 impl WorkflowsFocus {
@@ -872,6 +920,10 @@ pub struct AppState {
     pub selected_workflow_run_id: Option<String>,
     /// Set of parent workflow run IDs that are currently collapsed in the runs pane.
     pub collapsed_workflow_run_ids: HashSet<String>,
+    /// Set of repo slugs whose group header is collapsed in global mode.
+    pub collapsed_repo_headers: HashSet<String>,
+    /// Set of composite `"repo_slug/target_key"` strings whose target header is collapsed in global mode.
+    pub collapsed_target_headers: HashSet<String>,
     /// Tracks which run IDs have had their default collapse state initialized.
     collapse_initialized: HashSet<String>,
 
@@ -935,6 +987,8 @@ impl AppState {
             step_agent_event_index: 0,
             selected_workflow_run_id: None,
             collapsed_workflow_run_ids: HashSet::new(),
+            collapsed_repo_headers: HashSet::new(),
+            collapsed_target_headers: HashSet::new(),
             collapse_initialized: HashSet::new(),
             should_quit: false,
             show_closed_tickets: false,
@@ -1293,6 +1347,9 @@ impl AppState {
     /// Returns the flat, ordered list of visible workflow run rows.
     /// Roots appear first; their expanded children follow immediately after.
     /// Runs returned DESC by the DB (newest first); children are sorted ASC (oldest first).
+    ///
+    /// In global mode (no worktree selected), runs are grouped by repo → target with
+    /// collapsible `RepoHeader` and `TargetHeader` rows prepended to each group.
     pub fn visible_workflow_run_rows(&self) -> Vec<WorkflowRunRow> {
         let runs = &self.data.workflow_runs;
         let known_ids: HashSet<&str> = runs.iter().map(|r| r.id.as_str()).collect();
@@ -1320,28 +1377,165 @@ impl AppState {
             .flat_map(|v| v.iter().map(|r| r.id.as_str()))
             .collect();
 
-        let mut result = Vec::new();
+        let global_mode = self.selected_worktree_id.is_none();
+
+        if !global_mode {
+            // Non-global mode: existing flat list unchanged.
+            let mut result = Vec::new();
+            for run in runs {
+                if child_ids.contains(run.id.as_str()) {
+                    continue;
+                }
+                let my_children = children_map
+                    .get(run.id.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+                let child_count = my_children.len();
+                let collapsed = self.collapsed_workflow_run_ids.contains(&run.id);
+                result.push(WorkflowRunRow::Parent {
+                    run_id: run.id.clone(),
+                    collapsed,
+                    child_count,
+                });
+                if !collapsed {
+                    for child in my_children {
+                        result.push(WorkflowRunRow::Child {
+                            run_id: child.id.clone(),
+                            parent_id: run.id.clone(),
+                        });
+                    }
+                }
+            }
+            return result;
+        }
+
+        // Global mode: group root runs by (repo_slug, target_key).
+        let repo_slug_map: HashMap<&str, &str> = self
+            .data
+            .repos
+            .iter()
+            .map(|r| (r.id.as_str(), r.slug.as_str()))
+            .collect();
+
+        // Collect (repo_slug, target_key, target_type, run) for every root run,
+        // preserving the DB order (newest first).
+        let mut groups: Vec<(String, String, TargetType, &WorkflowRun)> = Vec::new();
         for run in runs {
             if child_ids.contains(run.id.as_str()) {
                 continue;
             }
-            let my_children = children_map
-                .get(run.id.as_str())
-                .cloned()
-                .unwrap_or_default();
-            let child_count = my_children.len();
-            let collapsed = self.collapsed_workflow_run_ids.contains(&run.id);
-            result.push(WorkflowRunRow::Parent {
-                run_id: run.id.clone(),
-                collapsed,
-                child_count,
+            let (mut repo_slug, target_key, target_type) = run
+                .target_label
+                .as_deref()
+                .map(parse_target_label)
+                .unwrap_or_else(|| ("unknown".to_string(), String::new(), TargetType::Worktree));
+
+            // For PR runs (or any run where repo_slug could not be parsed from label),
+            // fall back to repo_id lookup.
+            if repo_slug == "unknown" {
+                if let Some(rid) = run.repo_id.as_deref() {
+                    if let Some(&slug) = repo_slug_map.get(rid) {
+                        repo_slug = slug.to_string();
+                    }
+                }
+            }
+
+            groups.push((repo_slug, target_key, target_type, run));
+        }
+
+        // Determine ordered list of repos and, within each repo, ordered targets.
+        let mut seen_repos: HashSet<String> = HashSet::new();
+        let mut repo_order: Vec<String> = Vec::new();
+        let mut seen_targets: HashSet<String> = HashSet::new(); // "repo/target_key"
+                                                                // target_order[repo_slug] = Vec<(target_key, TargetType)>
+        let mut target_order: HashMap<String, Vec<(String, TargetType)>> = HashMap::new();
+
+        for (repo_slug, target_key, target_type, _) in &groups {
+            if seen_repos.insert(repo_slug.clone()) {
+                repo_order.push(repo_slug.clone());
+            }
+            let composite = format!("{}/{}", repo_slug, target_key);
+            if seen_targets.insert(composite) {
+                target_order
+                    .entry(repo_slug.clone())
+                    .or_default()
+                    .push((target_key.clone(), target_type.clone()));
+            }
+        }
+
+        // Build the final visible row list.
+        let mut result = Vec::new();
+        for repo_slug in &repo_order {
+            let run_count = groups
+                .iter()
+                .filter(|(rs, _, _, _)| rs == repo_slug)
+                .count();
+            let repo_collapsed = self.collapsed_repo_headers.contains(repo_slug.as_str());
+
+            result.push(WorkflowRunRow::RepoHeader {
+                repo_slug: repo_slug.clone(),
+                collapsed: repo_collapsed,
+                run_count,
             });
-            if !collapsed {
-                for child in my_children {
-                    result.push(WorkflowRunRow::Child {
-                        run_id: child.id.clone(),
-                        parent_id: run.id.clone(),
+
+            if repo_collapsed {
+                continue;
+            }
+
+            let repo_targets = target_order
+                .get(repo_slug)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+
+            for (target_key, target_type) in repo_targets {
+                let composite_key = format!("{}/{}", repo_slug, target_key);
+                let target_run_count = groups
+                    .iter()
+                    .filter(|(rs, tk, _, _)| rs == repo_slug && tk == target_key)
+                    .count();
+                let target_collapsed = self.collapsed_target_headers.contains(&composite_key);
+
+                let label = if target_key.is_empty() {
+                    repo_slug.clone()
+                } else {
+                    target_key.clone()
+                };
+
+                result.push(WorkflowRunRow::TargetHeader {
+                    target_key: composite_key.clone(),
+                    label,
+                    target_type: target_type.clone(),
+                    collapsed: target_collapsed,
+                    run_count: target_run_count,
+                });
+
+                if target_collapsed {
+                    continue;
+                }
+
+                for (rs, tk, _, run) in &groups {
+                    if rs != repo_slug || tk != target_key {
+                        continue;
+                    }
+                    let my_children = children_map
+                        .get(run.id.as_str())
+                        .cloned()
+                        .unwrap_or_default();
+                    let child_count = my_children.len();
+                    let collapsed = self.collapsed_workflow_run_ids.contains(&run.id);
+                    result.push(WorkflowRunRow::Parent {
+                        run_id: run.id.clone(),
+                        collapsed,
+                        child_count,
                     });
+                    if !collapsed {
+                        for child in my_children {
+                            result.push(WorkflowRunRow::Child {
+                                run_id: child.id.clone(),
+                                parent_id: run.id.clone(),
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -2224,15 +2418,22 @@ mod tests {
         }
     }
 
+    /// Helper: put state into single-worktree (non-global) mode.
+    fn set_worktree_mode(state: &mut AppState) {
+        state.selected_worktree_id = Some("wt-id".into());
+    }
+
     #[test]
     fn visible_workflow_run_rows_empty() {
-        let state = AppState::new();
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
         assert!(state.visible_workflow_run_rows().is_empty());
     }
 
     #[test]
     fn visible_workflow_run_rows_single_parent_no_children() {
         let mut state = AppState::new();
+        set_worktree_mode(&mut state);
         state.data.workflow_runs = vec![make_wf_run_full("p1", WorkflowRunStatus::Running, None)];
         let rows = state.visible_workflow_run_rows();
         assert_eq!(rows.len(), 1);
@@ -2244,6 +2445,7 @@ mod tests {
     #[test]
     fn visible_workflow_run_rows_parent_with_child_expanded() {
         let mut state = AppState::new();
+        set_worktree_mode(&mut state);
         state.data.workflow_runs = vec![
             make_wf_run_full("p1", WorkflowRunStatus::Running, None),
             make_wf_run_full("c1", WorkflowRunStatus::Running, Some("p1")),
@@ -2259,6 +2461,7 @@ mod tests {
     #[test]
     fn visible_workflow_run_rows_parent_with_child_collapsed() {
         let mut state = AppState::new();
+        set_worktree_mode(&mut state);
         state.data.workflow_runs = vec![
             make_wf_run_full("p1", WorkflowRunStatus::Running, None),
             make_wf_run_full("c1", WorkflowRunStatus::Running, Some("p1")),
@@ -2274,6 +2477,7 @@ mod tests {
     #[test]
     fn visible_workflow_run_rows_orphaned_child_treated_as_root() {
         let mut state = AppState::new();
+        set_worktree_mode(&mut state);
         // c1 references a parent not in the list — should appear as a root
         state.data.workflow_runs = vec![make_wf_run_full(
             "c1",
@@ -2284,6 +2488,173 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert!(
             matches!(&rows[0], WorkflowRunRow::Parent { run_id, child_count: 0, .. } if run_id == "c1")
+        );
+    }
+
+    // --- global mode grouping tests ---
+
+    fn make_wf_run_with_label(
+        id: &str,
+        target_label: Option<&str>,
+        repo_id: Option<&str>,
+    ) -> conductor_core::workflow::WorkflowRun {
+        conductor_core::workflow::WorkflowRun {
+            id: id.into(),
+            workflow_name: "test-workflow".into(),
+            worktree_id: None,
+            parent_run_id: "run-1".into(),
+            status: WorkflowRunStatus::Running,
+            dry_run: false,
+            trigger: "manual".into(),
+            started_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
+            result_summary: None,
+            definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
+            ticket_id: None,
+            repo_id: repo_id.map(|s| s.into()),
+            parent_workflow_run_id: None,
+            target_label: target_label.map(|s| s.into()),
+            default_bot_name: None,
+        }
+    }
+
+    #[test]
+    fn parse_target_label_worktree_format() {
+        let (repo, key, ty) = parse_target_label("my-repo/feat-123");
+        assert_eq!(repo, "my-repo");
+        assert_eq!(key, "feat-123");
+        assert_eq!(ty, TargetType::Worktree);
+    }
+
+    #[test]
+    fn parse_target_label_pr_format() {
+        let (repo, key, ty) = parse_target_label("owner/repo#42");
+        assert_eq!(repo, "unknown");
+        assert_eq!(key, "owner/repo#42");
+        assert_eq!(ty, TargetType::Pr);
+    }
+
+    #[test]
+    fn parse_target_label_no_slash() {
+        let (repo, key, ty) = parse_target_label("standalone");
+        assert_eq!(repo, "unknown");
+        assert_eq!(key, "standalone");
+        assert_eq!(ty, TargetType::Worktree);
+    }
+
+    #[test]
+    fn global_mode_groups_by_repo_then_target() {
+        // Two worktree runs for the same repo, one for another repo.
+        let mut state = AppState::new(); // global mode (no selected_worktree_id)
+        state.data.workflow_runs = vec![
+            make_wf_run_with_label("r1", Some("repo-a/feat-1"), None),
+            make_wf_run_with_label("r2", Some("repo-a/feat-2"), None),
+            make_wf_run_with_label("r3", Some("repo-b/feat-3"), None),
+        ];
+        let rows = state.visible_workflow_run_rows();
+
+        // Expected structure (8 rows total):
+        // RepoHeader(repo-a), TargetHeader(feat-1), Parent(r1),
+        //                     TargetHeader(feat-2), Parent(r2),
+        // RepoHeader(repo-b), TargetHeader(feat-3), Parent(r3)
+        assert_eq!(rows.len(), 8);
+        assert!(
+            matches!(&rows[0], WorkflowRunRow::RepoHeader { repo_slug, .. } if repo_slug == "repo-a")
+        );
+        assert!(
+            matches!(&rows[1], WorkflowRunRow::TargetHeader { label, .. } if label == "feat-1")
+        );
+        assert!(matches!(&rows[2], WorkflowRunRow::Parent { run_id, .. } if run_id == "r1"));
+        assert!(
+            matches!(&rows[3], WorkflowRunRow::TargetHeader { label, .. } if label == "feat-2")
+        );
+        assert!(matches!(&rows[4], WorkflowRunRow::Parent { run_id, .. } if run_id == "r2"));
+        assert!(
+            matches!(&rows[5], WorkflowRunRow::RepoHeader { repo_slug, .. } if repo_slug == "repo-b")
+        );
+        assert!(
+            matches!(&rows[6], WorkflowRunRow::TargetHeader { label, .. } if label == "feat-3")
+        );
+        assert!(matches!(&rows[7], WorkflowRunRow::Parent { run_id, .. } if run_id == "r3"));
+    }
+
+    #[test]
+    fn global_mode_collapsed_repo_hides_children() {
+        let mut state = AppState::new();
+        state.data.workflow_runs = vec![
+            make_wf_run_with_label("r1", Some("repo-a/feat-1"), None),
+            make_wf_run_with_label("r2", Some("repo-b/feat-2"), None),
+        ];
+        state.collapsed_repo_headers.insert("repo-a".into());
+        let rows = state.visible_workflow_run_rows();
+        // repo-a collapsed → only header, repo-b expanded → header + target + run
+        assert_eq!(rows.len(), 4);
+        assert!(
+            matches!(&rows[0], WorkflowRunRow::RepoHeader { repo_slug, collapsed: true, .. } if repo_slug == "repo-a")
+        );
+        assert!(
+            matches!(&rows[1], WorkflowRunRow::RepoHeader { repo_slug, collapsed: false, .. } if repo_slug == "repo-b")
+        );
+    }
+
+    #[test]
+    fn global_mode_collapsed_target_hides_runs() {
+        let mut state = AppState::new();
+        state.data.workflow_runs = vec![
+            make_wf_run_with_label("r1", Some("repo-a/feat-1"), None),
+            make_wf_run_with_label("r2", Some("repo-a/feat-2"), None),
+        ];
+        state
+            .collapsed_target_headers
+            .insert("repo-a/feat-1".into());
+        let rows = state.visible_workflow_run_rows();
+        // RepoHeader, TargetHeader(feat-1 collapsed), TargetHeader(feat-2), Parent(r2)
+        assert_eq!(rows.len(), 4);
+        assert!(matches!(&rows[0], WorkflowRunRow::RepoHeader { .. }));
+        assert!(
+            matches!(&rows[1], WorkflowRunRow::TargetHeader { label, collapsed: true, .. } if label == "feat-1")
+        );
+        assert!(
+            matches!(&rows[2], WorkflowRunRow::TargetHeader { label, collapsed: false, .. } if label == "feat-2")
+        );
+        assert!(matches!(&rows[3], WorkflowRunRow::Parent { run_id, .. } if run_id == "r2"));
+    }
+
+    #[test]
+    fn global_mode_pr_run_uses_repo_id_fallback() {
+        use conductor_core::repo::Repo;
+        let mut state = AppState::new();
+        state.data.repos = vec![Repo {
+            id: "repo-id-1".into(),
+            slug: "my-repo".into(),
+            remote_url: String::new(),
+            local_path: String::new(),
+            default_branch: String::new(),
+            workspace_dir: String::new(),
+            created_at: String::new(),
+            model: None,
+            allow_agent_issue_creation: false,
+        }];
+        state.data.workflow_runs = vec![make_wf_run_with_label(
+            "pr1",
+            Some("owner/repo#99"),
+            Some("repo-id-1"),
+        )];
+        let rows = state.visible_workflow_run_rows();
+        // RepoHeader should show "my-repo" (from repo_id lookup, not "unknown")
+        assert!(
+            matches!(&rows[0], WorkflowRunRow::RepoHeader { repo_slug, .. } if repo_slug == "my-repo")
+        );
+    }
+
+    #[test]
+    fn global_mode_run_without_label_buckets_under_unknown() {
+        let mut state = AppState::new();
+        state.data.workflow_runs = vec![make_wf_run_with_label("r1", None, None)];
+        let rows = state.visible_workflow_run_rows();
+        assert!(
+            matches!(&rows[0], WorkflowRunRow::RepoHeader { repo_slug, .. } if repo_slug == "unknown")
         );
     }
 

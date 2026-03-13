@@ -733,20 +733,37 @@ impl App {
 
             Action::ToggleWorkflowRunCollapse => {
                 let visible = self.state.visible_workflow_run_rows();
-                if let Some(crate::state::WorkflowRunRow::Parent { run_id, .. }) =
-                    visible.get(self.state.workflow_run_index)
-                {
-                    let run_id = run_id.clone();
-                    if self.state.collapsed_workflow_run_ids.contains(&run_id) {
-                        self.state.collapsed_workflow_run_ids.remove(&run_id);
-                    } else {
-                        self.state.collapsed_workflow_run_ids.insert(run_id);
+                match visible.get(self.state.workflow_run_index) {
+                    Some(crate::state::WorkflowRunRow::RepoHeader { repo_slug, .. }) => {
+                        let key = repo_slug.clone();
+                        if self.state.collapsed_repo_headers.contains(&key) {
+                            self.state.collapsed_repo_headers.remove(&key);
+                        } else {
+                            self.state.collapsed_repo_headers.insert(key);
+                        }
                     }
-                    // Clamp index after visibility change.
-                    let new_len = self.state.visible_workflow_run_rows().len();
-                    if new_len > 0 && self.state.workflow_run_index >= new_len {
-                        self.state.workflow_run_index = new_len - 1;
+                    Some(crate::state::WorkflowRunRow::TargetHeader { target_key, .. }) => {
+                        let key = target_key.clone();
+                        if self.state.collapsed_target_headers.contains(&key) {
+                            self.state.collapsed_target_headers.remove(&key);
+                        } else {
+                            self.state.collapsed_target_headers.insert(key);
+                        }
                     }
+                    Some(crate::state::WorkflowRunRow::Parent { run_id, .. }) => {
+                        let run_id = run_id.clone();
+                        if self.state.collapsed_workflow_run_ids.contains(&run_id) {
+                            self.state.collapsed_workflow_run_ids.remove(&run_id);
+                        } else {
+                            self.state.collapsed_workflow_run_ids.insert(run_id);
+                        }
+                    }
+                    _ => {}
+                }
+                // Clamp index after visibility change.
+                let new_len = self.state.visible_workflow_run_rows().len();
+                if new_len > 0 && self.state.workflow_run_index >= new_len {
+                    self.state.workflow_run_index = new_len - 1;
                 }
             }
 
@@ -1603,9 +1620,12 @@ impl App {
                     }
                     WorkflowsFocus::Runs => {
                         // Enter workflow run detail (works for both parent and child rows).
+                        // Header rows: Enter is a no-op (Space toggles collapse instead).
                         let visible = self.state.visible_workflow_run_rows();
                         if let Some(row) = visible.get(self.state.workflow_run_index) {
-                            let target_id = row.run_id().to_string();
+                            let Some(target_id) = row.run_id().map(|s| s.to_string()) else {
+                                return; // header row — Enter is a no-op
+                            };
                             if let Some(run) = self
                                 .state
                                 .data
