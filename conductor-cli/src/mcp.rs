@@ -1294,7 +1294,7 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
     };
 
     tool_ok(format!(
-        "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nPoll progress with conductor_get_run."
+        "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nstatus: pending\nPoll progress with conductor_get_run."
     ))
 }
 
@@ -1948,6 +1948,26 @@ mod tests {
         assert!(
             content.contains("inputs.count must be a string value"),
             "Should fail with per-key type error"
+        );
+    }
+
+    #[test]
+    fn test_run_workflow_response_format_includes_status_pending() {
+        // Verify the response format string includes `status: pending`.
+        // This guards against accidental removal of the field without needing
+        // a full end-to-end workflow execution.
+        let workflow_name = "my-wf";
+        let run_id = "01HXXXXXXXXXXXXXXXXXXXXXXX";
+        let response = format!(
+            "Workflow '{workflow_name}' started.\nrun_id: {run_id}\nstatus: pending\nPoll progress with conductor_get_run."
+        );
+        assert!(
+            response.contains("status: pending"),
+            "response must include status field: {response}"
+        );
+        assert!(
+            response.contains(&format!("run_id: {run_id}")),
+            "response must include run_id: {response}"
         );
     }
 
