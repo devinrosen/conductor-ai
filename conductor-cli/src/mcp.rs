@@ -918,6 +918,16 @@ fn conductor_tools() -> Vec<Tool> {
                 ("slug", "Worktree slug", true),
             ]),
         ),
+        Tool::new(
+            "conductor_get_step_log",
+            "Retrieve the full agent log for a named step in a workflow run. \
+             Use this to diagnose step failures. The step must have an associated agent run \
+             (gate steps and skipped steps do not have logs).",
+            schema(&[
+                ("run_id", "Workflow run ID", true),
+                ("step_name", "Step name (as shown in conductor_get_run output)", true),
+            ]),
+        ),
     ]
 }
 
@@ -948,6 +958,7 @@ fn dispatch_tool(
         "conductor_resume_run" => tool_resume_run(db_path, args),
         "conductor_submit_agent_feedback" => tool_submit_agent_feedback(db_path, args),
         "conductor_get_worktree" => tool_get_worktree(db_path, args),
+        "conductor_get_step_log" => tool_get_step_log(db_path, args),
         _ => tool_err(format!("Unknown tool: {name}")),
     }
 }
@@ -1833,6 +1844,75 @@ fn tool_submit_agent_feedback(
             "Feedback submitted for run {run_id}. Agent has been resumed."
         )),
         Err(e) => tool_err(e),
+    }
+}
+
+fn tool_get_step_log(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+    use conductor_core::agent::AgentManager;
+    use conductor_core::workflow::WorkflowManager;
+
+    let run_id = require_arg!(args, "run_id");
+    let step_name = require_arg!(args, "step_name");
+
+    let (conn, _config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    // Verify the workflow run exists.
+    match wf_mgr.get_workflow_run(run_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => return tool_err(format!("Workflow run {run_id} not found")),
+        Err(e) => return tool_err(e),
+    }
+
+    // Find all steps for this run and pick the last matching step_name.
+    let steps = match wf_mgr.get_workflow_steps(run_id) {
+        Ok(s) => s,
+        Err(e) => return tool_err(e),
+    };
+    let step = steps
+        .into_iter()
+        .filter(|s| s.step_name == step_name)
+        .max_by_key(|s| s.iteration);
+    let step = match step {
+        Some(s) => s,
+        None => {
+            return tool_err(format!(
+                "Step '{step_name}' not found in workflow run {run_id}"
+            ))
+        }
+    };
+
+    // Gate/skipped steps have no child_run_id.
+    let child_run_id = match step.child_run_id.as_deref() {
+        Some(id) => id.to_string(),
+        None => {
+            return tool_err(format!(
+                "Step '{step_name}' has no associated agent run \
+                 (gate steps and skipped steps do not produce logs)"
+            ))
+        }
+    };
+
+    // Resolve the log file path.
+    let agent_mgr = AgentManager::new(&conn);
+    let log_path = match agent_mgr.get_run(&child_run_id) {
+        Ok(Some(agent_run)) => match agent_run.log_file {
+            Some(path) => PathBuf::from(path),
+            None => conductor_core::config::agent_log_path(&child_run_id),
+        },
+        Ok(None) => conductor_core::config::agent_log_path(&child_run_id),
+        Err(e) => return tool_err(e),
+    };
+
+    match std::fs::read_to_string(&log_path) {
+        Ok(contents) => tool_ok(contents),
+        Err(e) => tool_err(format!(
+            "Log file not found for step '{step_name}' (agent run {child_run_id}): {e}"
+        )),
     }
 }
 
@@ -3722,5 +3802,220 @@ workflow build {
     /// Build an args map from an already-constructed Map (pass-through helper).
     fn result_args(m: serde_json::Map<String, Value>) -> serde_json::Map<String, Value> {
         m
+    }
+
+    // -- tool_get_step_log --------------------------------------------------
+
+    /// Helper: create a workflow run with one step. Returns (run_id, step_id).
+    fn make_run_with_step(db_path: &std::path::Path, step_name: &str) -> (String, String) {
+        use conductor_core::agent::AgentManager;
+        use conductor_core::db::open_database;
+        use conductor_core::workflow::WorkflowManager;
+
+        let conn = open_database(db_path).expect("open db");
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(None, "workflow", None, None)
+            .expect("create parent run");
+        let mgr = WorkflowManager::new(&conn);
+        let run = mgr
+            .create_workflow_run("test-wf", None, &parent.id, false, "manual", None)
+            .expect("create workflow run");
+        let step_id = mgr
+            .insert_step(&run.id, step_name, "actor", false, 0, 0)
+            .expect("insert step");
+        (run.id, step_id)
+    }
+
+    #[test]
+    fn test_dispatch_get_step_log_missing_run_id() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_get_step_log", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_get_step_log_missing_step_name() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(
+            &db,
+            "conductor_get_step_log",
+            &args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX"),
+        );
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_get_step_log_nonexistent_run() {
+        let (_f, db) = make_test_db();
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "run_id".to_string(),
+            Value::String("01HXXXXXXXXXXXXXXXXXXXXXXX".to_string()),
+        );
+        args.insert("step_name".to_string(), Value::String("build".to_string()));
+        let result = dispatch_tool(&db, "conductor_get_step_log", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("not found"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_get_step_log_step_not_found() {
+        let (_f, db) = make_test_db();
+        let (run_id, _step_id) = make_run_with_step(&db, "build");
+        let mut args = serde_json::Map::new();
+        args.insert("run_id".to_string(), Value::String(run_id));
+        args.insert(
+            "step_name".to_string(),
+            Value::String("nonexistent-step".to_string()),
+        );
+        let result = dispatch_tool(&db, "conductor_get_step_log", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("not found"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_get_step_log_no_child_run() {
+        // A step with no child_run_id (gate/skipped step) should return an error.
+        let (_f, db) = make_test_db();
+        let (run_id, _step_id) = make_run_with_step(&db, "review-gate");
+        let mut args = serde_json::Map::new();
+        args.insert("run_id".to_string(), Value::String(run_id));
+        args.insert(
+            "step_name".to_string(),
+            Value::String("review-gate".to_string()),
+        );
+        let result = dispatch_tool(&db, "conductor_get_step_log", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("no associated agent run"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_get_step_log_log_file_missing() {
+        // Step has a child_run_id but no log file exists on disk.
+        use conductor_core::agent::AgentManager;
+        use conductor_core::db::open_database;
+        use conductor_core::workflow::{WorkflowManager, WorkflowStepStatus};
+
+        let (_f, db) = make_test_db();
+        let (run_id, step_id) = make_run_with_step(&db, "build");
+
+        // Create a child agent run and link it to the step.
+        let conn = open_database(&db).expect("open db");
+        let agent_mgr = AgentManager::new(&conn);
+        let child_run = agent_mgr
+            .create_run(None, "agent", None, None)
+            .expect("create child run");
+        let mgr = WorkflowManager::new(&conn);
+        mgr.update_step_status(
+            &step_id,
+            WorkflowStepStatus::Completed,
+            Some(&child_run.id),
+            Some("done"),
+            None,
+            None,
+            None,
+        )
+        .expect("update step");
+
+        let mut args = serde_json::Map::new();
+        args.insert("run_id".to_string(), Value::String(run_id));
+        args.insert("step_name".to_string(), Value::String("build".to_string()));
+        let result = dispatch_tool(&db, "conductor_get_step_log", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Log file not found"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_get_step_log_success() {
+        // Happy path: step has child_run linked to an agent run with a log file.
+        use conductor_core::agent::AgentManager;
+        use conductor_core::db::open_database;
+        use conductor_core::workflow::{WorkflowManager, WorkflowStepStatus};
+        use std::io::Write as _;
+
+        let (_f, db) = make_test_db();
+        let (run_id, step_id) = make_run_with_step(&db, "test-step");
+
+        // Write a temporary log file.
+        let log_file = tempfile::NamedTempFile::new().expect("temp log file");
+        writeln!(log_file.as_file(), "agent log line 1").expect("write");
+        writeln!(log_file.as_file(), "agent log line 2").expect("write");
+        let log_path = log_file.path().to_str().unwrap().to_string();
+
+        // Create a child agent run with the log_file path stored.
+        let conn = open_database(&db).expect("open db");
+        let agent_mgr = AgentManager::new(&conn);
+        let child_run = agent_mgr
+            .create_run(None, "agent", None, None)
+            .expect("create child run");
+        // Store the log file path on the agent run.
+        conn.execute(
+            "UPDATE agent_runs SET log_file = ?1 WHERE id = ?2",
+            rusqlite::params![log_path, child_run.id],
+        )
+        .expect("update log_file");
+
+        let mgr = WorkflowManager::new(&conn);
+        mgr.update_step_status(
+            &step_id,
+            WorkflowStepStatus::Completed,
+            Some(&child_run.id),
+            Some("done"),
+            None,
+            None,
+            None,
+        )
+        .expect("update step");
+
+        let mut args = serde_json::Map::new();
+        args.insert("run_id".to_string(), Value::String(run_id));
+        args.insert(
+            "step_name".to_string(),
+            Value::String("test-step".to_string()),
+        );
+        let result = dispatch_tool(&db, "conductor_get_step_log", &args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "get_step_log should succeed; got: {:?}",
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("agent log line 1"), "got: {text}");
+        assert!(text.contains("agent log line 2"), "got: {text}");
     }
 }
