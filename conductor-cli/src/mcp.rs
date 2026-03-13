@@ -945,6 +945,16 @@ fn conductor_tools() -> Vec<Tool> {
              author, draft status, review decision, and CI status for each open PR.",
             schema(&[("repo", "Repo slug (e.g. my-repo)", true)]),
         ),
+        Tool::new(
+            "conductor_validate_workflow",
+            "Validate a workflow definition. Checks for missing agents, missing prompt \
+             snippets, cycles, and semantic errors (dataflow, required inputs). \
+             Returns pass/fail status and a list of errors if any are found.",
+            schema(&[
+                ("repo", "Repo slug (e.g. my-repo)", true),
+                ("workflow", "Workflow name (without .wf extension)", true),
+            ]),
+        ),
     ]
 }
 
@@ -977,6 +987,7 @@ fn dispatch_tool(
         "conductor_get_worktree" => tool_get_worktree(db_path, args),
         "conductor_get_step_log" => tool_get_step_log(db_path, args),
         "conductor_list_prs" => tool_list_prs(db_path, args),
+        "conductor_validate_workflow" => tool_validate_workflow(db_path, args),
         _ => tool_err(format!("Unknown tool: {name}")),
     }
 }
@@ -1976,6 +1987,98 @@ fn tool_list_prs(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallT
         ));
     }
     tool_ok(out)
+}
+
+fn tool_validate_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+    use conductor_core::agent_config::AgentSpec;
+    use conductor_core::repo::RepoManager;
+    use conductor_core::workflow::WorkflowManager;
+    use conductor_core::workflow::{
+        collect_agent_names, detect_workflow_cycles, validate_workflow_semantics,
+    };
+
+    let repo_slug = require_arg!(args, "repo");
+    let workflow_name = require_arg!(args, "workflow");
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+        Ok(r) => r,
+        Err(e) => return tool_err(e),
+    };
+
+    let wt_path = &repo.local_path;
+    let repo_path = &repo.local_path;
+
+    let workflow = match WorkflowManager::load_def_by_name(wt_path, repo_path, workflow_name) {
+        Ok(w) => w,
+        Err(e) => return tool_err(e),
+    };
+
+    let mut all_refs = collect_agent_names(&workflow.body);
+    all_refs.extend(collect_agent_names(&workflow.always));
+    all_refs.sort();
+    all_refs.dedup();
+
+    let specs: Vec<AgentSpec> = all_refs.iter().map(AgentSpec::from).collect();
+    let missing_agents = conductor_core::agent_config::find_missing_agents(
+        wt_path,
+        repo_path,
+        &specs,
+        Some(workflow_name),
+    );
+
+    let all_snippets = workflow.collect_all_snippet_refs();
+    let missing_snippets = conductor_core::prompt_config::find_missing_snippets(
+        wt_path,
+        repo_path,
+        &all_snippets,
+        Some(workflow_name),
+    );
+
+    let wt_path2 = wt_path.clone();
+    let repo_path2 = repo_path.clone();
+    let loader = |wf_name: &str| {
+        WorkflowManager::load_def_by_name(&wt_path2, &repo_path2, wf_name)
+            .map_err(|e| e.to_string())
+    };
+
+    let cycle_err = detect_workflow_cycles(&workflow.name, &loader).err();
+
+    let report = validate_workflow_semantics(&workflow, &loader);
+
+    let mut errors: Vec<String> = Vec::new();
+    for agent in &missing_agents {
+        errors.push(format!("Missing agent: {agent}"));
+    }
+    for snippet in &missing_snippets {
+        errors.push(format!("Missing prompt snippet: {snippet}"));
+    }
+    if let Some(msg) = cycle_err {
+        errors.push(format!("Cycle detected: {msg}"));
+    }
+    for err in &report.errors {
+        if let Some(hint) = &err.hint {
+            errors.push(format!("{} (hint: {hint})", err.message));
+        } else {
+            errors.push(err.message.clone());
+        }
+    }
+
+    if errors.is_empty() {
+        tool_ok(format!(
+            "status: PASS\n\nWorkflow '{workflow_name}' is valid."
+        ))
+    } else {
+        let error_list = errors
+            .iter()
+            .map(|e| format!("- {e}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        tool_ok(format!("status: FAIL\n\nErrors:\n{error_list}"))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4137,5 +4240,45 @@ workflow build {
             .map(|t| t.text.as_str())
             .unwrap_or("");
         assert!(text.contains("No open PRs"), "got: {text}");
+    }
+
+    // -- tool_validate_workflow ---------------------------------------------
+
+    #[test]
+    fn test_validate_workflow_missing_repo_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_validate_workflow", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_validate_workflow_missing_workflow_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(
+            &db,
+            "conductor_validate_workflow",
+            &args_with("repo", "my-repo"),
+        );
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_validate_workflow_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let mut a = empty_args();
+        a.insert("repo".into(), Value::String("ghost-repo".into()));
+        a.insert("workflow".into(), Value::String("deploy".into()));
+        let result = dispatch_tool(&db, "conductor_validate_workflow", &a);
+        assert_eq!(result.is_error, Some(true));
     }
 }
