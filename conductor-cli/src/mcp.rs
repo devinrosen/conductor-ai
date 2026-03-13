@@ -746,6 +746,12 @@ fn conductor_tools() -> Vec<Tool> {
             "List available workflow definitions for a repo. Returns workflow names, descriptions, and trigger types.",
             schema(&[("repo", "Repo slug (e.g. my-repo)", true)]),
         ),
+        Tool::new(
+            "conductor_list_repos",
+            "List all registered repos and their slugs. Use this to discover valid repo slugs \
+             required by other conductor tools.",
+            schema(&[]),
+        ),
     ]
 }
 
@@ -771,6 +777,7 @@ fn dispatch_tool(
         "conductor_reject_gate" => tool_reject_gate(db_path, args),
         "conductor_push_worktree" => tool_push_worktree(db_path, args),
         "conductor_list_workflows" => tool_list_workflows(db_path, args),
+        "conductor_list_repos" => tool_list_repos(db_path),
         _ => tool_err(format!("Unknown tool: {name}")),
     }
 }
@@ -783,6 +790,30 @@ fn open_db_and_config(
     let conn = open_database(db_path)?;
     let config = load_config()?;
     Ok((conn, config))
+}
+
+fn tool_list_repos(db_path: &Path) -> CallToolResult {
+    use conductor_core::repo::RepoManager;
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+    let repos = match RepoManager::new(&conn, &config).list() {
+        Ok(r) => r,
+        Err(e) => return tool_err(e),
+    };
+    if repos.is_empty() {
+        return tool_ok("No repos registered. Use `conductor repo add` to register one.");
+    }
+    let mut out = String::new();
+    for r in repos {
+        out.push_str(&format!(
+            "slug: {}\nlocal_path: {}\nremote_url: {}\ndefault_branch: {}\n\n",
+            r.slug, r.local_path, r.remote_url, r.default_branch
+        ));
+    }
+    tool_ok(out)
 }
 
 fn tool_list_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
@@ -1721,6 +1752,62 @@ mod tests {
         let steps = mgr.get_workflow_steps(&run_id).expect("get steps");
         assert_eq!(steps[0].gate_feedback.as_deref(), Some("Needs more work"));
         assert_eq!(steps[0].gate_approved_by.as_deref(), Some("mcp"));
+    }
+
+    // -- tool_list_repos ----------------------------------------------------
+
+    #[test]
+    fn test_dispatch_list_repos_empty_db() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_list_repos", &empty_args());
+        assert_ne!(result.is_error, Some(true), "empty list should succeed");
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("No repos registered"),
+            "expected empty message, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_list_repos_populated() {
+        use conductor_core::config::load_config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+            let config = load_config().expect("load config");
+            RepoManager::new(&conn, &config)
+                .add(
+                    "my-repo",
+                    "/tmp/my-repo",
+                    "https://github.com/acme/my-repo",
+                    None,
+                )
+                .expect("add repo");
+        }
+        let result = dispatch_tool(&db, "conductor_list_repos", &empty_args());
+        assert_ne!(result.is_error, Some(true), "populated list should succeed");
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("my-repo"),
+            "expected slug in output, got: {text}"
+        );
+        assert!(
+            text.contains("/tmp/my-repo"),
+            "expected local_path in output, got: {text}"
+        );
+        assert!(
+            text.contains("https://github.com/acme/my-repo"),
+            "expected remote_url in output, got: {text}"
+        );
     }
 
     // -- tool_create_worktree -----------------------------------------------
