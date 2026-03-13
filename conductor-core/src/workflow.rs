@@ -1097,6 +1097,45 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// Like `list_all_workflow_runs` but with an optional status filter and pagination offset.
+    /// Covers all repos; the active-worktree guard is identical to `list_all_workflow_runs`.
+    pub fn list_all_workflow_runs_filtered_paginated(
+        &self,
+        status: Option<WorkflowRunStatus>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<WorkflowRun>> {
+        if let Some(s) = status {
+            let status_str = s.to_string();
+            query_collect(
+                self.conn,
+                &format!(
+                    "SELECT workflow_runs.* \
+                     FROM workflow_runs \
+                     LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                     WHERE (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
+                       AND workflow_runs.status = ?1 \
+                     ORDER BY workflow_runs.started_at DESC LIMIT {limit} OFFSET {offset}"
+                ),
+                params![status_str],
+                row_to_workflow_run,
+            )
+        } else {
+            query_collect(
+                self.conn,
+                &format!(
+                    "SELECT workflow_runs.* \
+                     FROM workflow_runs \
+                     LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                     WHERE workflow_runs.worktree_id IS NULL OR worktrees.status = 'active' \
+                     ORDER BY workflow_runs.started_at DESC LIMIT {limit} OFFSET {offset}"
+                ),
+                params![],
+                row_to_workflow_run,
+            )
+        }
+    }
+
     /// List recent workflow runs for a specific repo, ordered by started_at DESC.
     /// Unlike `list_all_workflow_runs` + filter, this queries directly by `repo_id`
     /// so older per-repo runs beyond a global cap are never silently omitted.
@@ -5569,6 +5608,78 @@ And here is my actual output:
         let names: Vec<&str> = all.iter().map(|r| r.workflow_name.as_str()).collect();
         assert!(names.contains(&"active-run"));
         assert!(names.contains(&"ephemeral-run"));
+    }
+
+    #[test]
+    fn test_list_all_workflow_runs_filtered_paginated_status_filter() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        // Create one run and leave it in Pending state.
+        let p1 = agent_mgr.create_run(Some("w1"), "wf1", None, None).unwrap();
+        mgr.create_workflow_run("pending-run", Some("w1"), &p1.id, false, "manual", None)
+            .unwrap();
+
+        // Create a second run and advance it to Completed.
+        let p2 = agent_mgr.create_run(Some("w1"), "wf2", None, None).unwrap();
+        let r2 = mgr
+            .create_workflow_run("done-run", Some("w1"), &p2.id, false, "manual", None)
+            .unwrap();
+        mgr.update_workflow_status(&r2.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+
+        let completed = mgr
+            .list_all_workflow_runs_filtered_paginated(Some(WorkflowRunStatus::Completed), 100, 0)
+            .unwrap();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].workflow_name, "done-run");
+
+        let pending = mgr
+            .list_all_workflow_runs_filtered_paginated(Some(WorkflowRunStatus::Pending), 100, 0)
+            .unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].workflow_name, "pending-run");
+    }
+
+    #[test]
+    fn test_list_all_workflow_runs_filtered_paginated_offset() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let mgr = WorkflowManager::new(&conn);
+
+        for i in 0..4 {
+            let p = agent_mgr
+                .create_run(Some("w1"), &format!("wf{i}"), None, None)
+                .unwrap();
+            mgr.create_workflow_run(
+                &format!("flow-{i}"),
+                Some("w1"),
+                &p.id,
+                false,
+                "manual",
+                None,
+            )
+            .unwrap();
+        }
+
+        let page1 = mgr
+            .list_all_workflow_runs_filtered_paginated(None, 2, 0)
+            .unwrap();
+        assert_eq!(page1.len(), 2);
+
+        let page2 = mgr
+            .list_all_workflow_runs_filtered_paginated(None, 2, 2)
+            .unwrap();
+        assert_eq!(page2.len(), 2);
+
+        // All 4 unique
+        let all_ids: std::collections::HashSet<_> = page1
+            .iter()
+            .chain(page2.iter())
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(all_ids.len(), 4);
     }
 
     #[test]

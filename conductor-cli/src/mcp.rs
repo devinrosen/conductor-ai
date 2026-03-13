@@ -484,6 +484,20 @@ fn format_run_summary_line(run: &conductor_core::workflow::WorkflowRun) -> Strin
     )
 }
 
+fn format_run_summary_line_with_repo(
+    run: &conductor_core::workflow::WorkflowRun,
+    repo_slug: Option<&str>,
+) -> String {
+    format!(
+        "repo: {}\nid: {}\nworkflow: {}\nstatus: {}\nstarted_at: {}\n\n",
+        repo_slug.unwrap_or("unknown"),
+        run.id,
+        run.workflow_name,
+        run.status,
+        run.started_at
+    )
+}
+
 fn format_run_detail(
     run: &conductor_core::workflow::WorkflowRun,
     steps: &[conductor_core::workflow::WorkflowRunStep],
@@ -704,10 +718,15 @@ fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_list_runs",
-            "List recent workflow runs for a repo (optionally filtered by worktree and/or status). \
-             Supports pagination via limit (default 50) and offset (default 0).",
+            "List recent workflow runs, optionally filtered by repo, worktree, and/or status. \
+             When repo is omitted, runs across all registered repos are returned and each row \
+             includes a repo field. Supports pagination via limit (default 50) and offset (default 0).",
             schema(&[
-                ("repo", "Repo slug", true),
+                (
+                    "repo",
+                    "Repo slug (optional; omit to list runs across all repos)",
+                    false,
+                ),
                 (
                     "worktree",
                     "Worktree slug or branch name to filter by (optional)",
@@ -1189,9 +1208,14 @@ fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> Call
     use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
     use conductor_core::worktree::WorktreeManager;
 
-    let repo_slug = require_arg!(args, "repo");
+    let repo_slug = get_arg(args, "repo");
     let worktree_slug = get_arg(args, "worktree");
     let status_str = get_arg(args, "status");
+
+    // worktree filter is repo-scoped and meaningless without a repo
+    if worktree_slug.is_some() && repo_slug.is_none() {
+        return tool_err("worktree filter requires a repo argument");
+    }
 
     let status: Option<WorkflowRunStatus> = match status_str {
         Some(s) => match s.parse::<WorkflowRunStatus>() {
@@ -1212,45 +1236,83 @@ fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> Call
         Ok(v) => v,
         Err(e) => return tool_err(e),
     };
-    let repo_mgr = RepoManager::new(&conn, &config);
-    let repo = match repo_mgr.get_by_slug(repo_slug) {
-        Ok(r) => r,
-        Err(e) => return tool_err(e),
-    };
-
     let wf_mgr = WorkflowManager::new(&conn);
-    let runs = if let Some(wt_slug) = worktree_slug {
-        let wt_mgr = WorktreeManager::new(&conn, &config);
-        let wt = match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
-            Ok(w) => w,
+
+    if let Some(slug) = repo_slug {
+        // Per-repo path (existing behaviour)
+        let repo_mgr = RepoManager::new(&conn, &config);
+        let repo = match repo_mgr.get_by_slug(slug) {
+            Ok(r) => r,
             Err(e) => return tool_err(e),
         };
-        match wf_mgr.list_workflow_runs_filtered_paginated(&wt.id, status, limit, offset) {
-            Ok(r) => r,
-            Err(e) => return tool_err(e),
-        }
-    } else {
-        match wf_mgr.list_workflow_runs_by_repo_id_filtered(&repo.id, limit, offset, status) {
-            Ok(r) => r,
-            Err(e) => return tool_err(e),
-        }
-    };
 
-    if runs.is_empty() {
-        return tool_ok(format!("No workflow runs for {repo_slug}."));
+        let runs = if let Some(wt_slug) = worktree_slug {
+            let wt_mgr = WorktreeManager::new(&conn, &config);
+            let wt = match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
+                Ok(w) => w,
+                Err(e) => return tool_err(e),
+            };
+            match wf_mgr.list_workflow_runs_filtered_paginated(&wt.id, status, limit, offset) {
+                Ok(r) => r,
+                Err(e) => return tool_err(e),
+            }
+        } else {
+            match wf_mgr.list_workflow_runs_by_repo_id_filtered(&repo.id, limit, offset, status) {
+                Ok(r) => r,
+                Err(e) => return tool_err(e),
+            }
+        };
+
+        if runs.is_empty() {
+            return tool_ok(format!("No workflow runs for {slug}."));
+        }
+        let mut out = String::new();
+        for run in &runs {
+            out.push_str(&format_run_summary_line(run));
+        }
+        if runs.len() == limit {
+            out.push_str(&format!(
+                "\nShowing {offset}–{end} (limit {limit}). Pass offset={next} for more.",
+                end = offset + runs.len(),
+                next = offset + limit,
+            ));
+        }
+        tool_ok(out)
+    } else {
+        // Cross-repo path: return runs across all registered repos
+        let repo_mgr = RepoManager::new(&conn, &config);
+        let repos = match repo_mgr.list() {
+            Ok(r) => r,
+            Err(e) => return tool_err(e),
+        };
+        let repo_map: std::collections::HashMap<String, String> =
+            repos.into_iter().map(|r| (r.id, r.slug)).collect();
+
+        let runs = match wf_mgr.list_all_workflow_runs_filtered_paginated(status, limit, offset) {
+            Ok(r) => r,
+            Err(e) => return tool_err(e),
+        };
+
+        if runs.is_empty() {
+            return tool_ok("No workflow runs.".to_string());
+        }
+        let mut out = String::new();
+        for run in &runs {
+            let slug_for_run = run
+                .repo_id
+                .as_deref()
+                .and_then(|id| repo_map.get(id).map(|s| s.as_str()));
+            out.push_str(&format_run_summary_line_with_repo(run, slug_for_run));
+        }
+        if runs.len() == limit {
+            out.push_str(&format!(
+                "\nShowing {offset}–{end} (limit {limit}). Pass offset={next} for more.",
+                end = offset + runs.len(),
+                next = offset + limit,
+            ));
+        }
+        tool_ok(out)
     }
-    let mut out = String::new();
-    for run in &runs {
-        out.push_str(&format_run_summary_line(run));
-    }
-    if runs.len() == limit {
-        out.push_str(&format!(
-            "\nShowing {offset}–{end} (limit {limit}). Pass offset={next} for more.",
-            end = offset + runs.len(),
-            next = offset + limit,
-        ));
-    }
-    tool_ok(out)
 }
 
 fn tool_list_workflows(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
@@ -1554,9 +1616,140 @@ mod tests {
 
     #[test]
     fn test_dispatch_list_runs_missing_repo_arg() {
+        // repo is now optional — empty-args call should succeed (empty result)
         let (_f, db) = make_test_db();
         let result = dispatch_tool(&db, "conductor_list_runs", &empty_args());
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "empty repo should succeed, got: {:?}",
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
+        );
+    }
+
+    #[test]
+    fn test_dispatch_list_runs_worktree_without_repo_fails() {
+        let (_f, db) = make_test_db();
+        let args = args_with("worktree", "some-wt");
+        let result = dispatch_tool(&db, "conductor_list_runs", &args);
         assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("worktree filter requires a repo"),
+            "got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_list_runs_cross_repo() {
+        use conductor_core::agent::AgentManager;
+        use conductor_core::db::open_database;
+        use conductor_core::workflow::WorkflowManager;
+
+        let (_f, db) = make_test_db();
+        {
+            let conn = open_database(&db).expect("open db");
+
+            // Register two repos (make_test_db only runs migrations, no seed data)
+            conn.execute(
+                "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+                 VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+                [],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+                 VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', 'main', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+                [],
+            ).unwrap();
+            // Add active worktrees for both repos
+            conn.execute(
+                "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+                 VALUES ('w1', 'r1', 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z')",
+                [],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+                 VALUES ('w2', 'r2', 'feat-other', 'feat/other', '/tmp/ws2/other', 'active', '2024-01-01T00:00:00Z')",
+                [],
+            ).unwrap();
+
+            let agent_mgr = AgentManager::new(&conn);
+            let p1 = agent_mgr
+                .create_run(Some("w1"), "wf-a", None, None)
+                .unwrap();
+            let p2 = agent_mgr
+                .create_run(Some("w2"), "wf-b", None, None)
+                .unwrap();
+
+            let wf_mgr = WorkflowManager::new(&conn);
+            wf_mgr
+                .create_workflow_run_with_targets(
+                    "flow-a",
+                    Some("w1"),
+                    None,
+                    Some("r1"),
+                    &p1.id,
+                    false,
+                    "manual",
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+            wf_mgr
+                .create_workflow_run_with_targets(
+                    "flow-b",
+                    Some("w2"),
+                    None,
+                    Some("r2"),
+                    &p2.id,
+                    false,
+                    "manual",
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+        }
+
+        let result = dispatch_tool(&db, "conductor_list_runs", &empty_args());
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "cross-repo list should succeed, got: {:?}",
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("test-repo"),
+            "should include test-repo slug, got: {text}"
+        );
+        assert!(
+            text.contains("other-repo"),
+            "should include other-repo slug, got: {text}"
+        );
+        assert!(
+            text.contains("flow-a"),
+            "should include flow-a, got: {text}"
+        );
+        assert!(
+            text.contains("flow-b"),
+            "should include flow-b, got: {text}"
+        );
     }
 
     #[test]
