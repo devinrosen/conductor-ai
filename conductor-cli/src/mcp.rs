@@ -716,7 +716,8 @@ fn conductor_tools() -> Vec<Tool> {
     vec![
         Tool::new(
             "conductor_list_tickets",
-            "List tickets for a repo. Filters: label, search, include_closed.",
+            "List tickets for a repo. Filters: label, search, include_closed. \
+             Individual tickets with full body available at `conductor://ticket/{repo}/{id}`.",
             schema(&[
                 ("repo", "Repo slug (e.g. my-repo)", true),
                 (
@@ -734,7 +735,8 @@ fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_list_worktrees",
-            "List active worktrees for a repo.",
+            "List active worktrees for a repo. \
+             Individual worktrees available in detail via the `conductor://worktree/{repo}/{slug}` resource.",
             schema(&[("repo", "Repo slug", true)]),
         ),
         Tool::new(
@@ -811,7 +813,8 @@ fn conductor_tools() -> Vec<Tool> {
             "conductor_list_runs",
             "List recent workflow runs, optionally filtered by repo, worktree, and/or status. \
              When repo is omitted, runs across all registered repos are returned and each row \
-             includes a repo field. Supports pagination via limit (default 50) and offset (default 0).",
+             includes a repo field. Supports pagination via limit (default 50) and offset (default 0). \
+             For full step detail and conversation log on a specific run, read the `conductor://run/{run_id}` resource.",
             schema(&[
                 (
                     "repo",
@@ -838,7 +841,10 @@ fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_get_run",
-            "Get the status and step details of a workflow run.",
+            "Get the status and step details of a workflow run. \
+             For richer detail including the conversation log tail (last 20 messages from \
+             the Claude Code session), read the `conductor://run/{run_id}` resource — \
+             this context is not available from this tool.",
             schema(&[("run_id", "Workflow run ID", true)]),
         ),
         Tool::new(
@@ -871,14 +877,16 @@ fn conductor_tools() -> Vec<Tool> {
         ),
         Tool::new(
             "conductor_list_workflows",
-            "List available workflow definitions for a repo. Returns workflow names, descriptions, trigger types, and input schemas (name, required, default, description for each input).",
+            "List available workflow definitions for a repo. Returns workflow names, descriptions, trigger types, and input schemas (name, required, default, description for each input). \
+             Full workflow definitions also available at `conductor://workflows/{repo}`.",
             schema(&[("repo", "Repo slug (e.g. my-repo)", true)]),
         ),
         Tool::new(
             "conductor_list_repos",
             "List all registered repos and their slugs. Includes active run counts per repo \
              (running, waiting, pending) so you can triage work across repos at a glance. \
-             Use this to discover valid repo slugs required by other conductor tools.",
+             Use this to discover valid repo slugs required by other conductor tools. \
+             Also available as resources: `conductor://repos` (full list) and `conductor://repo/{slug}` (single repo detail).",
             schema(&[]),
         ),
         Tool::new(
@@ -912,7 +920,8 @@ fn conductor_tools() -> Vec<Tool> {
         Tool::new(
             "conductor_get_worktree",
             "Get rich detail for a single worktree: branch, status, path, model, \
-             linked ticket, associated PR with CI status, and latest agent/workflow run.",
+             linked ticket, associated PR with CI status, and latest agent/workflow run. \
+             Also available as the `conductor://worktree/{repo}/{slug}` resource.",
             schema(&[
                 ("repo", "Repo slug", true),
                 ("slug", "Worktree slug", true),
