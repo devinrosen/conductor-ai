@@ -9,12 +9,7 @@ workflow iterate-pr {
     max_iterations = 10
     on_max_iter    = fail
 
-    call sync-with-main
-
-    if sync-with-main.has_conflicts {
-      call resolve-conflicts
-      call push
-    }
+    call workflow rebase-worktree
 
     call workflow lint-fix
 
