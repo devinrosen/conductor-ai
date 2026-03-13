@@ -116,6 +116,7 @@ pub struct InputDecl {
     pub name: String,
     pub required: bool,
     pub default: Option<String>,
+    pub description: Option<String>,
 }
 
 /// A node in the workflow execution graph.
@@ -360,6 +361,7 @@ enum Token {
     Always,
     Required,
     Default,
+    Description,
     // Punctuation
     LBrace,
     RBrace,
@@ -532,6 +534,7 @@ impl Lexer {
             "always" => Token::Always,
             "required" => Token::Required,
             "default" => Token::Default,
+            "description" => Token::Description,
             _ => Token::Ident(s),
         })
     }
@@ -655,6 +658,7 @@ impl Parser {
             // Allow keywords to be used as identifiers in certain positions
             Token::Required => Ok("required".to_string()),
             Token::Default => Ok("default".to_string()),
+            Token::Description => Ok("description".to_string()),
             other => Err(format!("Expected identifier, got {other:?}")),
         }
     }
@@ -667,6 +671,7 @@ impl Parser {
             // Allow keyword tokens as values
             Token::Required => Ok(KvValue::Bare("required".to_string())),
             Token::Default => Ok(KvValue::Bare("default".to_string())),
+            Token::Description => Ok(KvValue::Bare("description".to_string())),
             Token::Call => Ok(KvValue::Bare("call".to_string())),
             Token::If => Ok(KvValue::Bare("if".to_string())),
             Token::Unless => Ok(KvValue::Bare("unless".to_string())),
@@ -710,6 +715,7 @@ impl Parser {
             Token::Ident(s) => Ok(AgentRef::Name(s)),
             Token::Required => Ok(AgentRef::Name("required".to_string())),
             Token::Default => Ok(AgentRef::Name("default".to_string())),
+            Token::Description => Ok(AgentRef::Name("description".to_string())),
             Token::StringLit(s) => Ok(AgentRef::Path(s)),
             other => Err(format!(
                 "Expected agent name (identifier) or path (quoted string), got {other:?}"
@@ -726,7 +732,7 @@ impl Parser {
             if self.pos + 1 < self.tokens.len() {
                 let is_kv_key = matches!(
                     self.peek(),
-                    Token::Ident(_) | Token::Required | Token::Default
+                    Token::Ident(_) | Token::Required | Token::Default | Token::Description
                 );
                 let next_is_eq = self.tokens.get(self.pos + 1) == Some(&Token::Equals);
                 if is_kv_key && next_is_eq {
@@ -787,34 +793,40 @@ impl Parser {
                     self.expect(&Token::LBrace)?;
                     while self.peek() != &Token::RBrace && self.peek() != &Token::Eof {
                         let input_name = self.expect_ident()?;
-                        match self.peek() {
-                            Token::Required => {
-                                self.advance();
-                                inputs.push(InputDecl {
-                                    name: input_name,
-                                    required: true,
-                                    default: None,
-                                });
-                            }
-                            Token::Default => {
-                                self.advance();
-                                self.expect(&Token::Equals)?;
-                                let value = self.expect_value()?.into_string();
-                                inputs.push(InputDecl {
-                                    name: input_name,
-                                    required: false,
-                                    default: Some(value),
-                                });
-                            }
-                            _ => {
-                                // Bare identifier — treat as required
-                                inputs.push(InputDecl {
-                                    name: input_name,
-                                    required: true,
-                                    default: None,
-                                });
+                        let mut required = false;
+                        let mut default: Option<String> = None;
+                        let mut description: Option<String> = None;
+                        // Collect optional modifiers: required, default = "...", description = "..."
+                        loop {
+                            match self.peek() {
+                                Token::Required => {
+                                    self.advance();
+                                    required = true;
+                                }
+                                Token::Default => {
+                                    self.advance();
+                                    self.expect(&Token::Equals)?;
+                                    default = Some(self.expect_value()?.into_string());
+                                }
+                                Token::Description => {
+                                    self.advance();
+                                    self.expect(&Token::Equals)?;
+                                    description = Some(self.expect_value()?.into_string());
+                                }
+                                _ => break,
                             }
                         }
+                        // A bare identifier with no default is treated as required.
+                        // Having only a description does not make an input optional.
+                        if !required && default.is_none() {
+                            required = true;
+                        }
+                        inputs.push(InputDecl {
+                            name: input_name,
+                            required,
+                            default,
+                            description,
+                        });
                     }
                     self.expect(&Token::RBrace)?;
                 }
@@ -3986,5 +3998,54 @@ workflow test {
             }
             other => panic!("Expected CallWorkflow, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_input_with_description_remains_required() {
+        // Regression: a description modifier must not silently change required→optional.
+        let src = r#"
+workflow w {
+    meta { trigger = "manual" targets = ["worktree"] }
+    inputs {
+        bare_required
+        explicit_required required
+        with_description description = "some help text"
+        with_desc_and_required required description = "help"
+        with_default default = "x"
+    }
+    call agent
+}
+"#;
+        let def = parse_workflow_str(src, "test.wf").unwrap();
+        assert_eq!(def.inputs.len(), 5);
+
+        // bare identifier → required
+        assert_eq!(def.inputs[0].name, "bare_required");
+        assert!(def.inputs[0].required, "bare input should be required");
+        assert!(def.inputs[0].default.is_none());
+        assert!(def.inputs[0].description.is_none());
+
+        // explicit `required` keyword
+        assert_eq!(def.inputs[1].name, "explicit_required");
+        assert!(def.inputs[1].required);
+
+        // description alone must NOT make the input optional
+        assert_eq!(def.inputs[2].name, "with_description");
+        assert!(
+            def.inputs[2].required,
+            "input with only a description must still be required"
+        );
+        assert_eq!(def.inputs[2].description.as_deref(), Some("some help text"));
+        assert!(def.inputs[2].default.is_none());
+
+        // explicit required + description
+        assert_eq!(def.inputs[3].name, "with_desc_and_required");
+        assert!(def.inputs[3].required);
+        assert_eq!(def.inputs[3].description.as_deref(), Some("help"));
+
+        // default makes it optional
+        assert_eq!(def.inputs[4].name, "with_default");
+        assert!(!def.inputs[4].required);
+        assert_eq!(def.inputs[4].default.as_deref(), Some("x"));
     }
 }
