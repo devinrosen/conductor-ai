@@ -690,6 +690,7 @@ impl App {
             Action::RunWorkflow => self.handle_run_workflow(),
             Action::RunPrWorkflow => self.handle_run_pr_workflow(),
             Action::ResumeWorkflow => self.handle_resume_workflow(),
+            Action::ResumeWorktreeWorkflow => self.handle_resume_worktree_workflow(),
             Action::CancelWorkflow => self.handle_cancel_workflow(),
             Action::ApproveGate => self.handle_approve_gate(),
             Action::RejectGate => self.handle_reject_gate(),
@@ -5913,6 +5914,42 @@ impl App {
             message: format!("Resume workflow run '{}'?", run.workflow_name),
             on_confirm: ConfirmAction::ResumeWorkflow {
                 workflow_run_id: run.id.clone(),
+            },
+        };
+    }
+
+    fn handle_resume_worktree_workflow(&mut self) {
+        let worktree_id = match self.state.selected_worktree_id.as_deref() {
+            Some(id) => id.to_string(),
+            None => return,
+        };
+
+        let run = match self
+            .state
+            .data
+            .latest_workflow_runs_by_worktree
+            .get(&worktree_id)
+            .cloned()
+        {
+            Some(r) => r,
+            None => {
+                self.state.status_message = Some("No workflow runs for this worktree".to_string());
+                return;
+            }
+        };
+
+        if let Err(e) =
+            conductor_core::workflow::validate_resume_preconditions(&run.status, false, None)
+        {
+            self.state.status_message = Some(format!("Cannot resume: {e}"));
+            return;
+        }
+
+        self.state.modal = Modal::Confirm {
+            title: "Resume Workflow".to_string(),
+            message: format!("Resume workflow run '{}'?", run.workflow_name),
+            on_confirm: ConfirmAction::ResumeWorkflow {
+                workflow_run_id: run.id,
             },
         };
     }

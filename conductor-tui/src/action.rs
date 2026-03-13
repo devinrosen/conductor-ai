@@ -285,6 +285,8 @@ pub enum Action {
     RunWorkflow,
     RunPrWorkflow,
     ResumeWorkflow,
+    /// Resume the latest failed/paused workflow run for the selected worktree (WorktreeDetail view).
+    ResumeWorktreeWorkflow,
     CancelWorkflow,
     ApproveGate,
     RejectGate,
