@@ -392,6 +392,101 @@ pub fn parse_github_remote(remote_url: &str) -> Option<(String, String)> {
     None
 }
 
+/// Rich PR detail returned by [`get_pr_detail`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrDetail {
+    pub number: i64,
+    pub title: String,
+    pub url: String,
+    pub state: String,     // "OPEN" | "MERGED" | "CLOSED"
+    pub ci_status: String, // "passing" | "failing" | "pending" | "none" | "unknown"
+}
+
+/// Reduce a `statusCheckRollup` JSON array to a single CI status string.
+fn reduce_ci_status(rollup: &[serde_json::Value]) -> String {
+    if rollup.is_empty() {
+        return "none".to_string();
+    }
+    let mut any_failure = false;
+    let mut any_pending = false;
+    let mut all_success = true;
+    for check in rollup {
+        let conclusion = check.get("conclusion").and_then(|v| v.as_str());
+        match conclusion {
+            Some("FAILURE") | Some("ERROR") | Some("TIMED_OUT") | Some("CANCELLED") => {
+                any_failure = true;
+                all_success = false;
+            }
+            Some("SUCCESS") => {}
+            Some("NEUTRAL") | Some("SKIPPED") => {
+                // neutral/skipped don't block overall success
+            }
+            None | Some("PENDING") | Some("") | Some("ACTION_REQUIRED") => {
+                any_pending = true;
+                all_success = false;
+            }
+            _ => {
+                all_success = false;
+            }
+        }
+    }
+    if any_failure {
+        "failing".to_string()
+    } else if all_success {
+        "passing".to_string()
+    } else if any_pending {
+        "pending".to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
+/// Intermediate deserialization shape for `get_pr_detail` response.
+#[derive(Deserialize)]
+struct RawPrDetail {
+    number: i64,
+    title: String,
+    url: String,
+    state: String,
+    #[serde(rename = "statusCheckRollup", default)]
+    status_check_rollup: Vec<serde_json::Value>,
+}
+
+/// Get rich PR detail for a branch from GitHub. Returns `None` on any error
+/// (gh unavailable, non-GitHub remote, no PR found). Uses `--state all` so
+/// merged/closed PRs are included.
+pub fn get_pr_detail(remote_url: &str, branch: &str) -> Option<PrDetail> {
+    let (owner, repo) = parse_github_remote(remote_url)?;
+    let slug = repo_slug(&owner, &repo);
+    let output = run_gh(&[
+        "pr",
+        "list",
+        "--repo",
+        &slug,
+        "--head",
+        branch,
+        "--state",
+        "all",
+        "--json",
+        "number,title,url,state,statusCheckRollup",
+        "--limit",
+        "1",
+    ])
+    .ok()?;
+
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let items: Vec<RawPrDetail> = serde_json::from_str(json_str.trim()).ok()?;
+    let raw = items.into_iter().next()?;
+    let ci_status = reduce_ci_status(&raw.status_check_rollup);
+    Some(PrDetail {
+        number: raw.number,
+        title: raw.title,
+        url: raw.url,
+        state: raw.state,
+        ci_status,
+    })
+}
+
 /// Detect the PR number for a branch using `gh pr list`.
 pub fn detect_pr_number(remote_url: &str, branch: &str) -> Option<i64> {
     let (owner, repo) = parse_github_remote(remote_url)?;
