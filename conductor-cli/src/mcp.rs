@@ -937,6 +937,12 @@ fn conductor_tools() -> Vec<Tool> {
                 ("step_name", "Step name (as shown in conductor_get_run output)", true),
             ]),
         ),
+        Tool::new(
+            "conductor_list_prs",
+            "List open pull requests for a repo. Returns PR number, title, URL, branch, \
+             author, draft status, review decision, and CI status for each open PR.",
+            schema(&[("repo", "Repo slug (e.g. my-repo)", true)]),
+        ),
     ]
 }
 
@@ -968,6 +974,7 @@ fn dispatch_tool(
         "conductor_submit_agent_feedback" => tool_submit_agent_feedback(db_path, args),
         "conductor_get_worktree" => tool_get_worktree(db_path, args),
         "conductor_get_step_log" => tool_get_step_log(db_path, args),
+        "conductor_list_prs" => tool_list_prs(db_path, args),
         _ => tool_err(format!("Unknown tool: {name}")),
     }
 }
@@ -1923,6 +1930,53 @@ fn tool_get_step_log(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
             "Log file not found for step '{step_name}' (agent run {child_run_id}): {e}"
         )),
     }
+}
+
+fn tool_list_prs(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+    use conductor_core::github::list_open_prs;
+    use conductor_core::repo::RepoManager;
+
+    let repo_slug = require_arg!(args, "repo");
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+
+    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+        Ok(r) => r,
+        Err(e) => return tool_err(e),
+    };
+
+    let prs = match list_open_prs(&repo.remote_url) {
+        Ok(p) => p,
+        Err(e) => return tool_err(e),
+    };
+
+    if prs.is_empty() {
+        return tool_ok(format!("No open PRs found for repo '{repo_slug}'."));
+    }
+
+    let mut out = String::new();
+    for pr in &prs {
+        let draft_label = if pr.is_draft { " [DRAFT]" } else { "" };
+        let review = pr
+            .review_decision
+            .as_deref()
+            .unwrap_or("NONE");
+        out.push_str(&format!(
+            "#{number} — {title}{draft}\n  url: {url}\n  branch: {branch}\n  author: {author}\n  review: {review}\n  ci: {ci}\n\n",
+            number = pr.number,
+            title = pr.title,
+            draft = draft_label,
+            url = pr.url,
+            branch = pr.head_ref_name,
+            author = pr.author,
+            review = review,
+            ci = pr.ci_status,
+        ));
+    }
+    tool_ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -4026,5 +4080,59 @@ workflow build {
             .unwrap_or("");
         assert!(text.contains("agent log line 1"), "got: {text}");
         assert!(text.contains("agent log line 2"), "got: {text}");
+    }
+
+    // -- conductor_list_prs -------------------------------------------------
+
+    #[test]
+    fn test_dispatch_list_prs_missing_repo_arg() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_list_prs", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("Missing required argument"), "got: {text}");
+    }
+
+    #[test]
+    fn test_dispatch_list_prs_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let args = args_with("repo", "nonexistent-repo");
+        let result = dispatch_tool(&db, "conductor_list_prs", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("not found"),
+            "expected 'not found' error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_dispatch_list_prs_non_github_repo_returns_empty() {
+        use conductor_core::db::open_database;
+        let (_f, db) = make_test_db();
+        {
+            // Register a non-GitHub repo (no open PRs can be fetched).
+            let conn = open_database(&db).expect("open db");
+            conn.execute(
+                "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+                 VALUES ('r1', 'local-repo', '/tmp/repo', 'file:///tmp/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+                [],
+            ).unwrap();
+        }
+        let args = args_with("repo", "local-repo");
+        let result = dispatch_tool(&db, "conductor_list_prs", &args);
+        // Non-GitHub repos yield empty PR list — tool_ok with "No open PRs" message.
+        assert_ne!(result.is_error, Some(true), "should not error for non-GitHub repo");
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("No open PRs"), "got: {text}");
     }
 }

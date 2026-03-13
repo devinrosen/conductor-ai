@@ -59,11 +59,13 @@ pub struct IssueRef {
 pub struct GithubPr {
     pub number: i64,
     pub title: String,
+    pub url: String,
     pub author: String,
     pub state: String,
     pub head_ref_name: String,
     pub is_draft: bool,
     pub review_decision: Option<String>,
+    pub ci_status: String,
 }
 
 /// Intermediate deserialization shape for a single PR entry from `gh pr list --json`.
@@ -78,6 +80,8 @@ struct PrAuthor {
 struct RawPr {
     number: i64,
     title: String,
+    #[serde(default)]
+    url: String,
     author: PrAuthor,
     state: String,
     #[serde(rename = "headRefName")]
@@ -86,6 +90,8 @@ struct RawPr {
     is_draft: bool,
     #[serde(rename = "reviewDecision", default)]
     review_decision: Option<String>,
+    #[serde(rename = "statusCheckRollup", default)]
+    status_check_rollup: Vec<serde_json::Value>,
 }
 
 /// Parse `gh pr list --json` output into [`GithubPr`] values.
@@ -100,14 +106,19 @@ fn parse_prs_json(json: &str) -> Vec<GithubPr> {
     };
     raw_prs
         .into_iter()
-        .map(|r| GithubPr {
-            number: r.number,
-            title: r.title,
-            author: r.author.login,
-            state: r.state,
-            head_ref_name: r.head_ref_name,
-            is_draft: r.is_draft,
-            review_decision: r.review_decision,
+        .map(|r| {
+            let ci_status = reduce_ci_status(&r.status_check_rollup);
+            GithubPr {
+                number: r.number,
+                title: r.title,
+                url: r.url,
+                author: r.author.login,
+                state: r.state,
+                head_ref_name: r.head_ref_name,
+                is_draft: r.is_draft,
+                review_decision: r.review_decision,
+                ci_status,
+            }
         })
         .collect()
 }
@@ -130,7 +141,7 @@ pub fn list_open_prs(remote_url: &str) -> Result<Vec<GithubPr>> {
         "--state",
         "open",
         "--json",
-        "number,title,author,state,headRefName,isDraft,reviewDecision",
+        "number,title,url,author,state,headRefName,isDraft,reviewDecision,statusCheckRollup",
         "--limit",
         "50",
     ]) {
@@ -866,20 +877,24 @@ mod tests {
             {
                 "number": 42,
                 "title": "feat: add PR pane",
+                "url": "https://github.com/owner/repo/pull/42",
                 "author": {"login": "alice"},
                 "state": "OPEN",
                 "headRefName": "feat/42-add-pr-pane",
                 "isDraft": false,
-                "reviewDecision": "REVIEW_REQUIRED"
+                "reviewDecision": "REVIEW_REQUIRED",
+                "statusCheckRollup": [{"conclusion": "SUCCESS"}, {"conclusion": "SUCCESS"}]
             },
             {
                 "number": 7,
                 "title": "fix: correct typo",
+                "url": "https://github.com/owner/repo/pull/7",
                 "author": {"login": "bob"},
                 "state": "OPEN",
                 "headRefName": "fix/7-typo",
                 "isDraft": true,
-                "reviewDecision": null
+                "reviewDecision": null,
+                "statusCheckRollup": [{"conclusion": "FAILURE"}]
             }
         ]"#;
 
@@ -887,15 +902,19 @@ mod tests {
         assert_eq!(prs.len(), 2);
         assert_eq!(prs[0].number, 42);
         assert_eq!(prs[0].title, "feat: add PR pane");
+        assert_eq!(prs[0].url, "https://github.com/owner/repo/pull/42");
         assert_eq!(prs[0].author, "alice");
         assert_eq!(prs[0].state, "OPEN");
         assert_eq!(prs[0].head_ref_name, "feat/42-add-pr-pane");
         assert!(!prs[0].is_draft);
         assert_eq!(prs[0].review_decision.as_deref(), Some("REVIEW_REQUIRED"));
+        assert_eq!(prs[0].ci_status, "passing");
         assert_eq!(prs[1].number, 7);
+        assert_eq!(prs[1].url, "https://github.com/owner/repo/pull/7");
         assert_eq!(prs[1].author, "bob");
         assert!(prs[1].is_draft);
         assert!(prs[1].review_decision.is_none());
+        assert_eq!(prs[1].ci_status, "failing");
     }
 
     #[test]
