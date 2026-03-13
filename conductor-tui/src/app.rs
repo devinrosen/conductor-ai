@@ -1194,6 +1194,8 @@ impl App {
             View::WorkflowRunDetail => {
                 self.state.view = View::Dashboard;
                 self.state.selected_workflow_run_id = None;
+                self.state.column_focus = crate::state::ColumnFocus::Workflow;
+                self.state.workflows_focus = WorkflowsFocus::Runs;
             }
         }
     }
@@ -6255,6 +6257,101 @@ mod tests {
         let mut idx = 0;
         wrap_decrement(&mut idx, 0);
         assert_eq!(idx, 0);
+    }
+
+    fn make_test_app() -> App {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conductor_core::db::migrations::run(&conn).unwrap();
+        App::new(
+            conn,
+            conductor_core::config::Config::default(),
+            crate::theme::Theme::default(),
+        )
+    }
+
+    fn make_test_run(id: &str) -> conductor_core::workflow::WorkflowRun {
+        conductor_core::workflow::WorkflowRun {
+            id: id.into(),
+            workflow_name: "test".into(),
+            worktree_id: Some("w1".into()),
+            parent_run_id: String::new(),
+            status: conductor_core::workflow::WorkflowRunStatus::Running,
+            dry_run: false,
+            trigger: "manual".into(),
+            started_at: "2026-01-01T00:00:00Z".into(),
+            ended_at: None,
+            result_summary: None,
+            definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
+            ticket_id: None,
+            repo_id: None,
+            parent_workflow_run_id: None,
+            target_label: None,
+            default_bot_name: None,
+        }
+    }
+
+    #[test]
+    fn test_toggle_workflow_column_off_moves_focus_to_content() {
+        let mut app = make_test_app();
+        app.state.workflow_column_visible = true;
+        app.state.column_focus = crate::state::ColumnFocus::Workflow;
+        app.handle_action(Action::ToggleWorkflowColumn);
+        assert!(!app.state.workflow_column_visible);
+        assert_eq!(app.state.column_focus, crate::state::ColumnFocus::Content);
+    }
+
+    #[test]
+    fn test_toggle_workflow_column_on_preserves_focus() {
+        let mut app = make_test_app();
+        app.state.workflow_column_visible = false;
+        app.state.column_focus = crate::state::ColumnFocus::Content;
+        app.handle_action(Action::ToggleWorkflowColumn);
+        assert!(app.state.workflow_column_visible);
+        assert_eq!(app.state.column_focus, crate::state::ColumnFocus::Content);
+    }
+
+    #[test]
+    fn test_workflow_column_select_run_enters_detail_view() {
+        let mut app = make_test_app();
+        app.state.selected_worktree_id = Some("w1".into());
+        app.state.data.workflow_runs = vec![make_test_run("run1")];
+        app.state.column_focus = crate::state::ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Runs;
+        app.state.workflow_run_index = 0;
+        app.handle_action(Action::Select);
+        assert_eq!(app.state.view, View::WorkflowRunDetail);
+        assert_eq!(app.state.column_focus, crate::state::ColumnFocus::Content);
+        assert_eq!(app.state.selected_workflow_run_id.as_deref(), Some("run1"));
+    }
+
+    #[test]
+    fn test_workflow_column_select_header_row_is_noop() {
+        // Global mode (selected_worktree_id = None): first visible row is a group header.
+        // Pressing Enter on a header should be a no-op.
+        let mut app = make_test_app();
+        let mut run = make_test_run("run1");
+        run.worktree_id = None;
+        app.state.data.workflow_runs = vec![run];
+        app.state.column_focus = crate::state::ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Runs;
+        app.state.workflow_run_index = 0; // points at repo/target header in global mode
+        app.handle_action(Action::Select);
+        assert_eq!(app.state.view, View::Dashboard);
+        assert!(app.state.selected_workflow_run_id.is_none());
+    }
+
+    #[test]
+    fn test_back_from_workflow_run_detail_restores_workflow_column_focus() {
+        let mut app = make_test_app();
+        app.state.view = View::WorkflowRunDetail;
+        app.state.column_focus = crate::state::ColumnFocus::Content;
+        app.state.selected_workflow_run_id = Some("run1".into());
+        app.handle_action(Action::Back);
+        assert_eq!(app.state.view, View::Dashboard);
+        assert_eq!(app.state.column_focus, crate::state::ColumnFocus::Workflow);
+        assert_eq!(app.state.workflows_focus, WorkflowsFocus::Runs);
+        assert!(app.state.selected_workflow_run_id.is_none());
     }
 
     #[test]

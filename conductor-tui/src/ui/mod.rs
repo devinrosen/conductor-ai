@@ -4,7 +4,6 @@ mod help;
 pub(crate) mod helpers;
 mod modal;
 mod repo_detail;
-mod tickets;
 mod workflow_column;
 mod workflows;
 mod worktree_detail;

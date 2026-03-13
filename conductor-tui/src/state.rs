@@ -2364,6 +2364,8 @@ mod tests {
         state.column_focus = ColumnFocus::Workflow;
         state.workflows_focus = WorkflowsFocus::Runs;
         state.workflow_run_index = 1;
+        // Use non-global mode (worktree selected) so the single run produces exactly one row.
+        state.selected_worktree_id = Some("w1".into());
         state.data.workflow_runs = vec![make_wf_run_full("r1", WorkflowRunStatus::Running, None)];
         let (idx, len) = state.focused_index_and_len();
         assert_eq!(idx, 1);
