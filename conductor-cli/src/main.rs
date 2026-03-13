@@ -1564,12 +1564,22 @@ fn main() -> Result<()> {
             } => {
                 let (wt_path, repo_path) = if let Some(ref dir) = path {
                     (dir.clone(), dir.clone())
-                } else if repo.is_some() || worktree.is_some() {
+                } else if repo.is_some() && worktree.is_some() {
                     let repo_mgr = RepoManager::new(&conn, &config);
                     let r = repo_mgr.get_by_slug(repo.as_deref().unwrap())?;
                     let wt_mgr = WorktreeManager::new(&conn, &config);
                     let wt = wt_mgr.get_by_slug(&r.id, worktree.as_deref().unwrap())?;
                     (wt.path, r.local_path)
+                } else if repo.is_some() || worktree.is_some() {
+                    anyhow::bail!(
+                        "--repo and --worktree must be supplied together; \
+                         got only {}. Pass both or omit both to auto-detect from CWD.",
+                        if repo.is_some() {
+                            "--repo"
+                        } else {
+                            "--worktree"
+                        }
+                    );
                 } else {
                     let cwd = std::env::current_dir()?;
                     let wt_mgr = WorktreeManager::new(&conn, &config);
