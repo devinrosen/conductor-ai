@@ -208,7 +208,6 @@ fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource>> {
     let all_worktrees = wt_mgr.list(None, false)?;
 
     let wf_mgr = WorkflowManager::new(&conn);
-    let all_runs = wf_mgr.list_all_workflow_runs(200)?;
 
     for repo in &repos {
         resources.push(make_resource(
@@ -259,12 +258,10 @@ fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource>> {
             ));
         }
 
-        // Recent workflow runs filtered by repo_id (bulk fetched above)
-        for run in all_runs
-            .iter()
-            .filter(|r| r.repo_id.as_deref() == Some(&repo.id))
-            .take(50)
-        {
+        // Per-repo workflow runs: query directly by repo_id to avoid the global
+        // cap silently dropping older runs when many repos are registered.
+        let repo_runs = wf_mgr.list_workflow_runs_by_repo_id(&repo.id, 50)?;
+        for run in &repo_runs {
             resources.push(make_resource(
                 format!("conductor://run/{}", run.id),
                 format!("run:{}", run.id),
@@ -400,11 +397,14 @@ fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<String> {
             );
             if let Some(ticket_id) = &wt.ticket_id {
                 let syncer = TicketSyncer::new(&conn);
-                if let Ok(ticket) = syncer.get_by_id(ticket_id) {
-                    out.push_str(&format!(
+                match syncer.get_by_id(ticket_id) {
+                    Ok(ticket) => out.push_str(&format!(
                         "linked_ticket: #{} — {}\n",
                         ticket.source_id, ticket.title
-                    ));
+                    )),
+                    Err(e) => out.push_str(&format!(
+                        "linked_ticket_error: could not load ticket {ticket_id}: {e}\n"
+                    )),
                 }
             }
             return Ok(out);
@@ -952,7 +952,13 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
 
     let run_id = match guard.as_ref() {
         Some(id) => id.clone(),
-        None => return tool_err("Workflow started but run_id was not available within 2 s"),
+        None => {
+            return tool_err(
+                "Workflow started but run ID was not available within 2 s. \
+             The workflow may still be running in the background — \
+             use conductor_list_runs to check status.",
+            )
+        }
     };
 
     tool_ok(format!(
@@ -1613,6 +1619,60 @@ mod tests {
         args.insert("slug".to_string(), Value::String("feat-wt".to_string()));
         let result = dispatch_tool(&db, "conductor_push_worktree", &args);
         assert_eq!(result.is_error, Some(true));
+    }
+
+    // -- get_by_source_id (conductor-core TicketSyncer) ----------------------
+
+    #[test]
+    fn test_get_by_source_id_not_found() {
+        use conductor_core::db::open_database;
+        use conductor_core::tickets::TicketSyncer;
+
+        let (_f, db) = make_test_db();
+        let conn = open_database(&db).expect("open db");
+        let syncer = TicketSyncer::new(&conn);
+        let result = syncer.get_by_source_id("nonexistent-repo", "999");
+        assert!(result.is_err(), "should fail for unknown repo+source_id");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("999") || err.to_lowercase().contains("not found"),
+            "error should mention the source_id or 'not found', got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_get_by_source_id_success() {
+        use conductor_core::config::Config;
+        use conductor_core::db::open_database;
+        use conductor_core::repo::RepoManager;
+        use conductor_core::tickets::{TicketInput, TicketSyncer};
+
+        let (_f, db) = make_test_db();
+        let conn = open_database(&db).expect("open db");
+        let config = Config::default();
+        let repo = RepoManager::new(&conn, &config)
+            .add("test-repo", "/tmp/test", "https://github.com/x/y", None)
+            .expect("add repo");
+        let ticket = TicketInput {
+            source_id: "42".to_string(),
+            source_type: "github".to_string(),
+            title: "Test ticket".to_string(),
+            body: "body".to_string(),
+            state: "open".to_string(),
+            labels: "".to_string(),
+            assignee: None,
+            priority: None,
+            url: "https://github.com/x/y/issues/42".to_string(),
+            raw_json: "{}".to_string(),
+            label_details: vec![],
+        };
+        let syncer = TicketSyncer::new(&conn);
+        syncer.sync_and_close_tickets(&repo.id, "github", &[ticket]);
+        let found = syncer
+            .get_by_source_id(&repo.id, "42")
+            .expect("ticket should be found");
+        assert_eq!(found.source_id, "42");
+        assert_eq!(found.title, "Test ticket");
     }
 
     // -- list_workflow_runs_by_repo_id (conductor-core) ---------------------
