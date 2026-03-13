@@ -111,6 +111,26 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::ThemePicker { selected, .. } => {
+            let len = crate::theme::KNOWN_THEMES.len();
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let new_idx = if *selected == 0 {
+                        len - 1
+                    } else {
+                        selected - 1
+                    };
+                    return Action::ThemePreview(new_idx);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let new_idx = (selected + 1) % len;
+                    return Action::ThemePreview(new_idx);
+                }
+                KeyCode::Enter => return Action::InputSubmit,
+                KeyCode::Esc => return Action::DismissModal,
+                _ => {}
+            }
+        }
         Modal::IssueSourceManager { .. } => {
             return match key.code {
                 KeyCode::Esc => Action::DismissModal,
@@ -430,6 +450,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         // Toggle global status bar expansion (useful when 4+ items are active)
         KeyCode::Char('!') => Action::ToggleStatusBar,
+
+        // Open the in-TUI theme picker
+        KeyCode::Char('T') => Action::ShowThemePicker,
 
         // CRUD actions
         KeyCode::Char('a') => Action::AddRepo,
@@ -877,6 +900,85 @@ mod tests {
             message: "Creating worktree…".to_string(),
         };
         state
+    }
+
+    // --- ThemePicker key-handler tests ---
+
+    fn theme_picker_state(selected: usize) -> AppState {
+        let mut state = AppState::new();
+        state.modal = Modal::ThemePicker {
+            selected,
+            original_theme: crate::theme::Theme::default(),
+            original_name: "conductor".to_string(),
+        };
+        state
+    }
+
+    #[test]
+    fn theme_picker_esc_dismisses_modal() {
+        let state = theme_picker_state(0);
+        assert!(matches!(
+            map_key(key(KeyCode::Esc), &state),
+            Action::DismissModal
+        ));
+    }
+
+    #[test]
+    fn theme_picker_enter_submits() {
+        let state = theme_picker_state(0);
+        assert!(matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::InputSubmit
+        ));
+    }
+
+    #[test]
+    fn theme_picker_down_and_j_preview_next() {
+        let len = crate::theme::KNOWN_THEMES.len();
+        let state = theme_picker_state(0);
+        assert!(matches!(
+            map_key(key(KeyCode::Down), &state),
+            Action::ThemePreview(1)
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('j')), &state),
+            Action::ThemePreview(1)
+        ));
+        // wraps around at end
+        let state_at_end = theme_picker_state(len - 1);
+        assert!(matches!(
+            map_key(key(KeyCode::Down), &state_at_end),
+            Action::ThemePreview(0)
+        ));
+    }
+
+    #[test]
+    fn theme_picker_up_and_k_preview_prev() {
+        let len = crate::theme::KNOWN_THEMES.len();
+        let state = theme_picker_state(1);
+        assert!(matches!(
+            map_key(key(KeyCode::Up), &state),
+            Action::ThemePreview(0)
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('k')), &state),
+            Action::ThemePreview(0)
+        ));
+        // wraps around at start
+        let state_at_start = theme_picker_state(0);
+        assert!(matches!(
+            map_key(key(KeyCode::Up), &state_at_start),
+            Action::ThemePreview(idx) if idx == len - 1
+        ));
+    }
+
+    #[test]
+    fn theme_picker_unhandled_key_falls_through_to_none() {
+        let state = theme_picker_state(0);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('x')), &state),
+            Action::None
+        ));
     }
 
     #[test]

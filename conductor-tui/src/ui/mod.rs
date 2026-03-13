@@ -238,5 +238,10 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             &state.theme,
         ),
         Modal::Progress { message } => modal::render_progress(frame, area, message, &state.theme),
+        Modal::ThemePicker {
+            selected,
+            original_name,
+            ..
+        } => modal::render_theme_picker(frame, area, *selected, original_name, &state.theme),
     }
 }
