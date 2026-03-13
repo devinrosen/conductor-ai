@@ -163,34 +163,7 @@ impl Theme {
             parse_hex_color(slot, hex).map_err(|e| format!("{}: {e}", path.display()))
         };
 
-        let base02 = get("base02")?;
-        let base03 = get("base03")?;
-        let base05 = get("base05")?;
-        let base08 = get("base08")?;
-        let base0a = get("base0A")?;
-        let base0b = get("base0B")?;
-        let base0c = get("base0C")?;
-        let base0d = get("base0D")?;
-        let base0e = get("base0E")?;
-
-        Ok(Self {
-            highlight_bg: base02,
-            border_inactive: base03,
-            status_cancelled: base03,
-            label_secondary: base03,
-            label_primary: base05,
-            status_failed: base08,
-            label_error: base08,
-            status_running: base0a,
-            label_warning: base0a,
-            label_accent: base0a,
-            status_completed: base0b,
-            border_focused: base0c,
-            group_header: base0c,
-            label_info: base0d,
-            label_url: base0d,
-            status_waiting: base0e,
-        })
+        build_theme_from_base16(|slot| get(slot))
     }
 
     /// Load a theme from a [tinted-theming](https://github.com/tinted-theming/base16-schemes)
@@ -229,34 +202,7 @@ impl Theme {
             parse_hex_color(slot, hex).map_err(|e| format!("{}: {e}", path.display()))
         };
 
-        let base02 = get("base02")?;
-        let base03 = get("base03")?;
-        let base05 = get("base05")?;
-        let base08 = get("base08")?;
-        let base0a = get("base0A")?;
-        let base0b = get("base0B")?;
-        let base0c = get("base0C")?;
-        let base0d = get("base0D")?;
-        let base0e = get("base0E")?;
-
-        Ok(Self {
-            highlight_bg: base02,
-            border_inactive: base03,
-            status_cancelled: base03,
-            label_secondary: base03,
-            label_primary: base05,
-            status_failed: base08,
-            label_error: base08,
-            status_running: base0a,
-            label_warning: base0a,
-            label_accent: base0a,
-            status_completed: base0b,
-            border_focused: base0c,
-            group_header: base0c,
-            label_info: base0d,
-            label_url: base0d,
-            status_waiting: base0e,
-        })
+        build_theme_from_base16(|slot| get(slot))
     }
 
     /// Catppuccin Mocha — dark pastel palette (catppuccin.com)
@@ -370,6 +316,41 @@ fn yaml_display_name(path: &Path, stem: &str) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or(stem)
         .to_string()
+}
+
+/// Extract the nine required base16 slots via `get` and assemble a `Theme`.
+///
+/// Both the TOML and YAML loaders share this construction logic; they differ
+/// only in how they build the `get` closure (top-level value vs. `palette` sub-key).
+fn build_theme_from_base16(get: impl Fn(&str) -> Result<Color, String>) -> Result<Theme, String> {
+    let base02 = get("base02")?;
+    let base03 = get("base03")?;
+    let base05 = get("base05")?;
+    let base08 = get("base08")?;
+    let base0a = get("base0A")?;
+    let base0b = get("base0B")?;
+    let base0c = get("base0C")?;
+    let base0d = get("base0D")?;
+    let base0e = get("base0E")?;
+
+    Ok(Theme {
+        highlight_bg: base02,
+        border_inactive: base03,
+        status_cancelled: base03,
+        label_secondary: base03,
+        label_primary: base05,
+        status_failed: base08,
+        label_error: base08,
+        status_running: base0a,
+        label_warning: base0a,
+        label_accent: base0a,
+        status_completed: base0b,
+        border_focused: base0c,
+        group_header: base0c,
+        label_info: base0d,
+        label_url: base0d,
+        status_waiting: base0e,
+    })
 }
 
 /// Parse a 6-character hex color string (with optional `#` prefix) into `Color::Rgb`.

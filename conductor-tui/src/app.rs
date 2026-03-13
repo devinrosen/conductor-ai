@@ -3369,13 +3369,22 @@ impl App {
             message: "Loading themes…".into(),
         };
         std::thread::spawn(move || {
-            let (themes, warnings) = crate::theme::all_themes();
+            let (all, mut warnings) = crate::theme::all_themes();
             // Pre-load all Theme objects so keypress preview is an in-memory
             // lookup with no file I/O on the TUI main thread.
-            let loaded_themes: Vec<crate::theme::Theme> = themes
-                .iter()
-                .map(|(name, _)| crate::theme::Theme::from_name(name).unwrap_or_default())
-                .collect();
+            // Themes that fail to re-parse are excluded from both lists so the
+            // picker never shows an entry with silently-incorrect preview colors.
+            let mut themes: Vec<(String, String)> = Vec::new();
+            let mut loaded_themes: Vec<crate::theme::Theme> = Vec::new();
+            for (name, label) in all {
+                match crate::theme::Theme::from_name(&name) {
+                    Ok(t) => {
+                        themes.push((name, label));
+                        loaded_themes.push(t);
+                    }
+                    Err(e) => warnings.push(e),
+                }
+            }
             let _ = bg_tx.send(Action::ThemesLoaded {
                 themes,
                 loaded_themes,
