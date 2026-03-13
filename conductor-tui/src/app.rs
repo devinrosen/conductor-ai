@@ -3387,6 +3387,9 @@ impl App {
         };
         let name = name.to_string();
         let Some(bg_tx) = self.bg_tx.clone() else {
+            self.state.modal = Modal::Error {
+                message: "Cannot save theme: background sender not ready.".into(),
+            };
             return;
         };
         // Update in-memory config immediately (non-blocking). Also clear
