@@ -21,9 +21,10 @@ where
     let fk_was_on: i64 = conn.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
     conn.pragma_update(None, "foreign_keys", "off")?;
     let result = f();
-    // Always restore original state, even if `f` errored
+    // Always restore original state, even if `f` errored.
+    // Discard any restore error so the original closure error is never masked.
     let restore_val = if fk_was_on != 0 { "on" } else { "off" };
-    conn.pragma_update(None, "foreign_keys", restore_val)?;
+    let _ = conn.pragma_update(None, "foreign_keys", restore_val);
     result
 }
 
