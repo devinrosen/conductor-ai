@@ -1,12 +1,12 @@
 ---
 source: conductor-tui/tests/tui_snapshots.rs
-assertion_line: 167
+assertion_line: 171
 expression: render_to_string(&state)
 ---
-" Conductor  Dashboard                                                                                                   "
-"┌ Repos ───────────────────────────────────────┐┌ Worktrees (0 active) ────────────────────────────────────────────────┐"
-"│                                              ││                                                                      │"
-"│                                              ││                                                                      │"
+"┌ Repos ──────────────────────┐┌ Worktrees (0 active) ───────────────────────┐┌ All Workflow Definitions ──────────────┐"
+"│                             ││                                             ││                                        │"
+"│                             ││                                             ││                                        │"
+"│                             ││                                             ││                                        │"
 "│                       ┌ Help ────────────────────────────────────────────────────────────────┐                       │"
 "│                       │Keybindings                                                           │                       │"
 "│                       │                                                                      │                       │"
@@ -18,8 +18,8 @@ expression: render_to_string(&state)
 "│                       │  gg / Home           Jump to top of list                             │                       │"
 "│                       │  Ctrl+d / Ctrl+u     Half-page down / up                             │                       │"
 "│                       │  Enter               Drill into selected item                        │                       │"
-"│                       │  Esc                 Back to previous view                           │                       │"
-"│                       │  1                   Dashboard                                       │                       │"
+"│                       │  Esc                 Back to previous view                           │───────────────────────┘"
+"│                       │  1                   Dashboard                                       │s (Space=expand/collaps┐"
 "│                       │  2                   Tickets view                                    │                       │"
 "│                       │  3                   Workflows view                                  │                       │"
 "│                       │  ?                   Toggle this help                                │                       │"
@@ -30,8 +30,8 @@ expression: render_to_string(&state)
 "│                       │  a                   Register repository                             │                       │"
 "│                       │  c                   Create worktree                                 │                       │"
 "│                       │  d                   Delete (worktree/repo)                          │                       │"
-"└───────────────────────│  s                   Sync tickets                                    │───────────────────────┘"
-"┌ Tickets (hiding closed│  W                   Manage work targets                             │───────────────────────┐"
+"│                       │  s                   Sync tickets                                    │                       │"
+"│                       │  W                   Manage work targets                             │                       │"
 "│                       │  S                   Manage issue sources                            │                       │"
 "│                       │  A                   Toggle closed tickets                           │                       │"
 "│                       │  w                   Run workflow on current item                    │                       │"
@@ -39,7 +39,7 @@ expression: render_to_string(&state)
 "│                       │  /                   Filter/search                                   │                       │"
 "│                       │                                                                      │                       │"
 "│                       └──────────────────────────────────────────────────────────────────────┘                       │"
-"│                                                                                                                      │"
-"│                                                                                                                      │"
-"└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
-"Tab:panel  j/k:nav  Enter:select  a:add repo  c:create  s:sync  ?:help  q:quit                                          "
+"│                             ││                                             ││                                        │"
+"│                             ││                                             ││                                        │"
+"└─────────────────────────────┘└─────────────────────────────────────────────┘└────────────────────────────────────────┘"
+"[Dashboard]  Tab:panel  Ctrl+h/l:column  \:workflows  q:quit                                                            "

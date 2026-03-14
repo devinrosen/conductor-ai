@@ -3,7 +3,7 @@ use conductor_core::{
     tickets::Ticket,
     worktree::{Worktree, WorktreeStatus},
 };
-use conductor_tui::state::{AppState, Modal, View, WorktreeDetailFocus};
+use conductor_tui::state::{AppState, Modal, RepoDetailFocus, View, WorktreeDetailFocus};
 use conductor_tui::ui;
 use ratatui::{backend::TestBackend, Terminal};
 
@@ -209,19 +209,6 @@ fn snap_dashboard_populated() {
 }
 
 #[test]
-fn snap_tickets_view() {
-    let mut state = make_state();
-    let repos = make_repos();
-    let tickets = make_tickets(&repos);
-    state.data.repos = repos;
-    state.data.tickets = tickets.clone();
-    state.data.rebuild_maps();
-    state.filtered_tickets = tickets;
-    state.view = View::Tickets;
-    insta::assert_snapshot!(render_to_string(&state));
-}
-
-#[test]
 fn snap_repo_detail() {
     let mut state = make_state();
     let repos = make_repos();
@@ -238,6 +225,29 @@ fn snap_repo_detail() {
     state.data.worktrees = worktrees;
     state.data.tickets = tickets;
     state.data.rebuild_maps();
+    state.view = View::RepoDetail;
+    insta::assert_snapshot!(render_to_string(&state));
+}
+
+#[test]
+fn snap_repo_detail_tickets_focus() {
+    let mut state = make_state();
+    let repos = make_repos();
+    let worktrees = make_worktrees(&repos);
+    let tickets = make_tickets(&repos);
+    state.selected_repo_id = Some(repos[0].id.clone());
+    state.detail_worktrees = worktrees
+        .iter()
+        .filter(|w| w.repo_id == repos[0].id)
+        .cloned()
+        .collect();
+    state.detail_tickets = tickets.clone();
+    state.data.repos = repos;
+    state.data.worktrees = worktrees;
+    state.data.tickets = tickets;
+    state.data.rebuild_maps();
+    state.rebuild_filtered_tickets();
+    state.repo_detail_focus = RepoDetailFocus::Tickets;
     state.view = View::RepoDetail;
     insta::assert_snapshot!(render_to_string(&state));
 }
