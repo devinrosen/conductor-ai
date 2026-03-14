@@ -1660,24 +1660,22 @@ fn main() -> Result<()> {
 
                 // Collect and validate output schemas.
                 let all_schemas = workflow.collect_all_schema_refs();
-                let missing_schemas = schema_config::find_missing_schemas(
-                    &wt_path,
-                    &repo_path,
-                    &all_schemas,
-                    Some(&name),
-                );
+                let schema_issues =
+                    schema_config::check_schemas(&wt_path, &repo_path, &all_schemas, Some(&name));
                 if !all_schemas.is_empty() {
                     println!("  Schemas referenced: {}", all_schemas.len());
-                    if missing_schemas.is_empty() {
-                        println!("  All schemas found.");
+                    if schema_issues.is_empty() {
+                        println!("  All schemas found and valid.");
                     } else {
-                        println!(
-                            "\n  MISSING schemas ({}/{}):",
-                            missing_schemas.len(),
-                            all_schemas.len()
-                        );
-                        for s in &missing_schemas {
-                            println!("    - {s}");
+                        for issue in &schema_issues {
+                            match issue {
+                                schema_config::SchemaIssue::Missing(s) => {
+                                    println!("\n  MISSING schema: {s}");
+                                }
+                                schema_config::SchemaIssue::Invalid { name: s, error } => {
+                                    println!("\n  INVALID schema: {s}\n    {error}");
+                                }
+                            }
                         }
                         has_errors = true;
                     }
