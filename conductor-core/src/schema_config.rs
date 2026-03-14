@@ -934,6 +934,25 @@ fn derive_default_markers(value: &serde_json::Value) -> Vec<String> {
     markers
 }
 
+/// Check whether all referenced output schemas exist (for validation).
+///
+/// Returns a list of schema names/paths that could not be found.
+pub fn find_missing_schemas(
+    worktree_path: &str,
+    repo_path: &str,
+    schema_names: &[String],
+    workflow_name: Option<&str>,
+) -> Vec<String> {
+    schema_names
+        .iter()
+        .filter(|name| {
+            let schema_ref = SchemaRef::from_str_value(name);
+            load_schema(worktree_path, repo_path, &schema_ref, workflow_name).is_err()
+        })
+        .cloned()
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

@@ -68,6 +68,24 @@ impl WorkflowDef {
         refs.dedup();
         refs
     }
+
+    /// Collect all output schema references across body and always blocks, sorted and deduplicated.
+    pub fn collect_all_schema_refs(&self) -> Vec<String> {
+        let mut refs = collect_schema_refs(&self.body);
+        refs.extend(collect_schema_refs(&self.always));
+        refs.sort();
+        refs.dedup();
+        refs
+    }
+
+    /// Collect all bot names referenced across body and always blocks, sorted and deduplicated.
+    pub fn collect_all_bot_names(&self) -> Vec<String> {
+        let mut names = collect_bot_names(&self.body);
+        names.extend(collect_bot_names(&self.always));
+        names.sort();
+        names.dedup();
+        names
+    }
 }
 
 /// A structured parse warning produced when a `.wf` file fails to load.
@@ -1539,6 +1557,71 @@ pub fn collect_workflow_refs(nodes: &[WorkflowNode]) -> Vec<String> {
         }
     }
     refs
+}
+
+/// Collect all output schema references (`output =` values) from a node tree.
+pub fn collect_schema_refs(nodes: &[WorkflowNode]) -> Vec<String> {
+    let mut refs = Vec::new();
+    for node in nodes {
+        match node {
+            WorkflowNode::Call(n) => {
+                if let Some(ref s) = n.output {
+                    refs.push(s.clone());
+                }
+            }
+            WorkflowNode::Do(n) => {
+                if let Some(ref s) = n.output {
+                    refs.push(s.clone());
+                }
+                refs.extend(collect_schema_refs(&n.body));
+            }
+            WorkflowNode::Parallel(n) => {
+                if let Some(ref s) = n.output {
+                    refs.push(s.clone());
+                }
+                refs.extend(n.call_outputs.values().cloned());
+            }
+            WorkflowNode::If(n) => refs.extend(collect_schema_refs(&n.body)),
+            WorkflowNode::Unless(n) => refs.extend(collect_schema_refs(&n.body)),
+            WorkflowNode::While(n) => refs.extend(collect_schema_refs(&n.body)),
+            WorkflowNode::DoWhile(n) => refs.extend(collect_schema_refs(&n.body)),
+            WorkflowNode::Always(n) => refs.extend(collect_schema_refs(&n.body)),
+            WorkflowNode::CallWorkflow(_) | WorkflowNode::Gate(_) => {}
+        }
+    }
+    refs
+}
+
+/// Collect all bot names (`bot_name =` values) from a node tree.
+pub fn collect_bot_names(nodes: &[WorkflowNode]) -> Vec<String> {
+    let mut names = Vec::new();
+    for node in nodes {
+        match node {
+            WorkflowNode::Call(n) => {
+                if let Some(ref b) = n.bot_name {
+                    names.push(b.clone());
+                }
+            }
+            WorkflowNode::CallWorkflow(n) => {
+                if let Some(ref b) = n.bot_name {
+                    names.push(b.clone());
+                }
+            }
+            WorkflowNode::Gate(n) => {
+                if let Some(ref b) = n.bot_name {
+                    names.push(b.clone());
+                }
+            }
+            WorkflowNode::If(n) => names.extend(collect_bot_names(&n.body)),
+            WorkflowNode::Unless(n) => names.extend(collect_bot_names(&n.body)),
+            WorkflowNode::While(n) => names.extend(collect_bot_names(&n.body)),
+            WorkflowNode::DoWhile(n) => names.extend(collect_bot_names(&n.body)),
+            WorkflowNode::Do(n) => names.extend(collect_bot_names(&n.body)),
+            WorkflowNode::Parallel(_) => {}
+            WorkflowNode::Always(n) => names.extend(collect_bot_names(&n.body)),
+        }
+    }
+    names
 }
 
 /// Maximum allowed workflow nesting depth.
