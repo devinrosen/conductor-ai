@@ -5,6 +5,8 @@ workflow review-pr {
     targets     = ["pr", "worktree"]
   }
 
+  call detect-db-migrations { output = "db-check" }
+
   parallel {
     output    = "review-findings"
     with      = ["review-diff-scope", "off-diff-findings"]
@@ -15,7 +17,7 @@ workflow review-pr {
     call review-dry-abstraction { retries = 1 }
     call review-error-handling  { retries = 1 }
     call review-test-coverage   { retries = 1 }
-    call review-db-migrations   { retries = 1 }
+    call review-db-migrations   { retries = 1 skip_unless = "detect-db-migrations.has_db_migrations" }
   }
 
   call review-aggregator { output = "review-aggregator" retries = 1 as = "conductor-ai-reviewer" }

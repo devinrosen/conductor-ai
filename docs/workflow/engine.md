@@ -244,15 +244,29 @@ same worktree, so they must be read-only or operate on non-overlapping files.
 | `min_success = N` | Minimum agents that must succeed; default is all |
 | `with = [<snippet>, ...]` | Prompt snippets applied to every call in the block |
 
-Individual calls within a `parallel` block can add their own snippets:
+Individual calls within a `parallel` block can add their own options:
+
+| Per-call option | Description |
+|---|---|
+| `output = "<schema>"` | Override the block-level output schema for this call |
+| `with = [<snippet>, ...]` | Additional prompt snippets appended after block-level snippets |
+| `skip_unless = "step.marker"` | Skip this call unless the named prior step emitted the named marker |
 
 ```
 parallel {
   with = ["review-diff-scope"]
   call review-security
   call review-migrations { with = ["migration-rules"] }
+  call review-db-migrations { skip_unless = "detect-db-migrations.has_db_migrations" }
 }
 ```
+
+**`skip_unless` semantics:** the call is skipped entirely if the named prior step did not
+emit the named marker. The step is recorded in the DB with `status = skipped` so it is
+visible in `workflow run-show` and the TUI, but contributes no markers or context to the
+parallel block's aggregate output. The parallel block still succeeds (skipped calls count
+toward `effective_successes`). On resume, condition-skipped steps re-evaluate — they are
+not treated as completed.
 
 Block-level `with` snippets are prepended; per-call `with` snippets are appended
 after them. See [Prompt snippets](#prompt-snippets) below.

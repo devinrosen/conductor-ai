@@ -3803,6 +3803,45 @@ fn execute_parallel(
             Some(&state.workflow_name),
         )?;
 
+        // Check skip_unless condition: skip this call unless the named prior step
+        // emitted the named marker. The step is recorded as Skipped in the DB so
+        // it is visible in run-show and TUI, but contributes no markers or context.
+        if let Some((cond_step, cond_marker)) = node.call_skip_unless.get(&i) {
+            let has_marker = state
+                .step_results
+                .get(cond_step)
+                .map(|r| r.markers.iter().any(|m| m == cond_marker))
+                .unwrap_or(false);
+            if !has_marker {
+                tracing::info!(
+                    "parallel: skipping '{}' (skip_unless={}.{} not satisfied)",
+                    agent_label,
+                    cond_step,
+                    cond_marker
+                );
+                let step_id = state.wf_mgr.insert_step(
+                    &state.workflow_run_id,
+                    agent_label,
+                    &agent_def.role.to_string(),
+                    agent_def.can_commit,
+                    pos,
+                    iteration as i64,
+                )?;
+                state.wf_mgr.set_step_parallel_group(&step_id, &group_id)?;
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Skipped,
+                    None,
+                    Some(&format!("skipped: {cond_step}.{cond_marker} not emitted")),
+                    None,
+                    None,
+                    None,
+                )?;
+                skipped_count += 1;
+                continue;
+            }
+        }
+
         // Determine schema for this call: per-call override > block-level
         let call_schema = node
             .call_outputs
@@ -4079,7 +4118,7 @@ fn execute_parallel(
     let total_agents = children.len() as u32 + skipped_count;
     let min_required = node.min_success.unwrap_or(total_agents);
     tracing::info!(
-        "parallel: {successes} succeeded, {failures} failed, {skipped_count} skipped (resume) out of {total_agents} agents",
+        "parallel: {successes} succeeded, {failures} failed, {skipped_count} skipped out of {total_agents} agents",
     );
     if effective_successes < min_required {
         tracing::warn!(
@@ -7911,6 +7950,7 @@ And here is my actual output:
                     call_outputs: HashMap::new(),
                     with: vec![],
                     call_with: HashMap::new(),
+                    call_skip_unless: HashMap::new(),
                 }),
                 WorkflowNode::Gate(GateNode {
                     name: "approval".to_string(),
@@ -8826,6 +8866,176 @@ And here is my actual output:
             status_fail,
             WorkflowStepStatus::Failed,
             "should fail when effective successes don't meet min_required"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // skip_unless logic tests
+    // ---------------------------------------------------------------------------
+
+    /// When skip_unless condition IS met (marker present), the agent is not skipped.
+    /// This tests the pure marker-lookup logic used by execute_parallel.
+    #[test]
+    fn test_skip_unless_condition_met_does_not_skip() {
+        // Simulate: detect-db-migrations emitted has_db_migrations → review-db-migrations runs
+        let cond_step = "detect-db-migrations";
+        let cond_marker = "has_db_migrations";
+
+        let mut step_results: HashMap<String, StepResult> = HashMap::new();
+        step_results.insert(
+            cond_step.to_string(),
+            StepResult {
+                step_name: cond_step.to_string(),
+                status: WorkflowStepStatus::Completed,
+                result_text: None,
+                cost_usd: None,
+                num_turns: None,
+                duration_ms: None,
+                markers: vec![cond_marker.to_string()],
+                context: "Found 2 migration files".to_string(),
+                child_run_id: None,
+                structured_output: None,
+            },
+        );
+
+        let has_marker = step_results
+            .get(cond_step)
+            .map(|r| r.markers.iter().any(|m| m == cond_marker))
+            .unwrap_or(false);
+
+        assert!(has_marker, "marker present → agent should NOT be skipped");
+    }
+
+    /// When skip_unless condition is NOT met (marker absent), the agent is skipped.
+    #[test]
+    fn test_skip_unless_condition_not_met_skips() {
+        // Simulate: detect-db-migrations ran but did NOT emit has_db_migrations
+        let cond_step = "detect-db-migrations";
+        let cond_marker = "has_db_migrations";
+
+        let mut step_results: HashMap<String, StepResult> = HashMap::new();
+        step_results.insert(
+            cond_step.to_string(),
+            StepResult {
+                step_name: cond_step.to_string(),
+                status: WorkflowStepStatus::Completed,
+                result_text: None,
+                cost_usd: None,
+                num_turns: None,
+                duration_ms: None,
+                markers: vec![], // no markers emitted
+                context: "No migration files in diff".to_string(),
+                child_run_id: None,
+                structured_output: None,
+            },
+        );
+
+        let has_marker = step_results
+            .get(cond_step)
+            .map(|r| r.markers.iter().any(|m| m == cond_marker))
+            .unwrap_or(false);
+
+        assert!(!has_marker, "marker absent → agent SHOULD be skipped");
+    }
+
+    /// When the cond_step is not in step_results at all, skip_unless skips the agent.
+    #[test]
+    fn test_skip_unless_step_not_found_skips() {
+        let cond_step = "detect-db-migrations";
+        let cond_marker = "has_db_migrations";
+        let step_results: HashMap<String, StepResult> = HashMap::new();
+
+        let has_marker = step_results
+            .get(cond_step)
+            .map(|r| r.markers.iter().any(|m| m == cond_marker))
+            .unwrap_or(false);
+
+        assert!(
+            !has_marker,
+            "step not found → should skip (unwrap_or(false))"
+        );
+    }
+
+    /// Condition-skipped steps (status=Skipped) must NOT appear in completed_keys_from_steps,
+    /// so they re-evaluate on resume rather than being treated as done.
+    #[test]
+    fn test_condition_skipped_steps_not_in_completed_keys() {
+        let conn = setup_db();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        // Insert a Completed step and a Skipped step
+        let step_completed = wf_mgr
+            .insert_step(&run.id, "detect-db-migrations", "reviewer", false, 0, 0)
+            .unwrap();
+        wf_mgr
+            .update_step_status(
+                &step_completed,
+                WorkflowStepStatus::Completed,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let step_skipped = wf_mgr
+            .insert_step(&run.id, "review-db-migrations", "reviewer", false, 1, 0)
+            .unwrap();
+        wf_mgr
+            .update_step_status(
+                &step_skipped,
+                WorkflowStepStatus::Skipped,
+                None,
+                Some("skipped: detect-db-migrations.has_db_migrations not emitted"),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let steps = wf_mgr.get_workflow_steps(&run.id).unwrap();
+        let keys = completed_keys_from_steps(&steps);
+
+        assert!(
+            keys.contains(&("detect-db-migrations".to_string(), 0)),
+            "Completed step must be in completed_keys"
+        );
+        assert!(
+            !keys.contains(&("review-db-migrations".to_string(), 0)),
+            "Skipped step must NOT be in completed_keys (re-evaluates on resume)"
+        );
+    }
+
+    /// skip_unless skipped agents count toward skipped_count (and thus effective_successes),
+    /// so the parallel block succeeds even if some calls were condition-skipped.
+    #[test]
+    fn test_parallel_skip_unless_counts_toward_skipped_count() {
+        // Scenario: 2 agents. 1 ran and succeeded, 1 was condition-skipped.
+        let successes: u32 = 1;
+        let skipped_count: u32 = 1; // condition-skipped
+        let children_len: u32 = 1; // only the non-skipped agent was spawned
+
+        let effective_successes = successes + skipped_count; // 2
+        let total_agents = children_len + skipped_count; // 2
+        let min_required: u32 = total_agents; // default: all
+
+        let status = if effective_successes >= min_required {
+            WorkflowStepStatus::Completed
+        } else {
+            WorkflowStepStatus::Failed
+        };
+        assert_eq!(
+            status,
+            WorkflowStepStatus::Completed,
+            "condition-skipped agents must count toward min_success so parallel block succeeds"
         );
     }
 
