@@ -3191,7 +3191,7 @@ workflow parent {
         match &def.body[1] {
             WorkflowNode::Parallel(p) => {
                 assert_eq!(p.calls.len(), 2);
-                assert!(p.call_skip_unless.get(&0).is_none());
+                assert!(!p.call_skip_unless.contains_key(&0));
                 assert_eq!(
                     p.call_skip_unless.get(&1),
                     Some(&(
@@ -3237,7 +3237,7 @@ workflow parent {
             WorkflowNode::Parallel(p) => {
                 assert_eq!(p.output.as_deref(), Some("findings"));
                 assert_eq!(p.with, vec!["scope".to_string()]);
-                assert!(p.call_skip_unless.get(&0).is_none());
+                assert!(!p.call_skip_unless.contains_key(&0));
                 assert_eq!(
                     p.call_skip_unless.get(&1),
                     Some(&("detect-check".to_string(), "flag".to_string()))
