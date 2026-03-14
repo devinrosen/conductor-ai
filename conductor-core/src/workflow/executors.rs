@@ -816,10 +816,7 @@ pub(super) fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) ->
     Ok(())
 }
 
-pub(super) fn execute_do_while(
-    state: &mut ExecutionState<'_>,
-    node: &DoWhileNode,
-) -> Result<()> {
+pub(super) fn execute_do_while(state: &mut ExecutionState<'_>, node: &DoWhileNode) -> Result<()> {
     let mut iteration = 0u32;
     let mut prev_marker_sets: Vec<HashSet<String>> = Vec::new();
 

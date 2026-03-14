@@ -32,8 +32,9 @@ pub use output::{parse_conductor_output, ConductorOutput};
 pub use status::{WorkflowRunStatus, WorkflowStepStatus};
 pub use types::{
     ActiveWorkflowCounts, ContextEntry, MetadataEntry, StepResult, WorkflowExecConfig,
-    WorkflowExecInput, WorkflowExecStandalone, WorkflowResumeInput, WorkflowResumeStandalone,
-    WorkflowResult, WorkflowRun, WorkflowRunContext, WorkflowRunStep, WorkflowStepSummary,
+    WorkflowExecInput, WorkflowExecStandalone, WorkflowResult, WorkflowResumeInput,
+    WorkflowResumeStandalone, WorkflowRun, WorkflowRunContext, WorkflowRunStep,
+    WorkflowStepSummary,
 };
 
 use crate::agent_config::AgentSpec;
@@ -61,7 +62,7 @@ mod tests {
     use crate::schema_config::OutputSchema;
     use crate::workflow_dsl::{
         AgentRef, ApprovalMode, CallNode, DoNode, DoWhileNode, GateNode, GateType, IfNode,
-        InputDecl, OnMaxIter, OnTimeout, ParallelNode, UnlessNode, WhileNode,
+        OnMaxIter, OnTimeout, ParallelNode, UnlessNode, WhileNode,
     };
 
     use std::time::Duration;
@@ -72,27 +73,21 @@ mod tests {
     use crate::workflow_dsl::WorkflowNode;
 
     use super::engine::{
-        bubble_up_child_step_results, check_max_iterations, check_stuck, completed_keys_from_steps,
-        execute_nodes, execute_single_node, fetch_child_final_output, record_step_failure,
-        record_step_success, resolve_child_inputs, restore_completed_step, restore_step,
-        run_on_fail_agent, should_skip, ExecutionState, ResumeContext,
+        bubble_up_child_step_results, completed_keys_from_steps, fetch_child_final_output,
+        resolve_child_inputs, restore_completed_step, ExecutionState, ResumeContext,
     };
     use super::executors::{
-        execute_call, execute_do, execute_do_while, execute_gate, execute_if, execute_parallel,
-        execute_unless, execute_while, handle_gate_timeout,
+        execute_call, execute_do, execute_do_while, execute_unless, execute_while,
+        handle_gate_timeout,
     };
-    use super::helpers::{
-        build_workflow_summary, collect_leaf_step_keys, find_max_completed_while_iteration,
-        sanitize_tmux_name,
-    };
-    use super::manager::{row_to_workflow_run, row_to_workflow_step, WorkflowManager};
-    use super::output::{interpret_agent_output, parse_conductor_output, ConductorOutput};
-    use super::prompt_builder::{build_agent_prompt, build_variable_map, substitute_variables};
+    use super::helpers::find_max_completed_while_iteration;
+    use super::manager::WorkflowManager;
+    use super::output::{interpret_agent_output, parse_conductor_output};
+    use super::prompt_builder::{build_variable_map, substitute_variables};
     use super::status::{WorkflowRunStatus, WorkflowStepStatus};
     use super::types::{
-        ActiveWorkflowCounts, ContextEntry, MetadataEntry, StepKey, StepResult, WorkflowExecConfig,
-        WorkflowExecInput, WorkflowResumeInput, WorkflowResult, WorkflowRun, WorkflowRunStep,
-        WorkflowStepSummary,
+        ContextEntry, MetadataEntry, StepKey, StepResult, WorkflowExecConfig, WorkflowExecInput,
+        WorkflowResumeInput, WorkflowRun, WorkflowRunStep,
     };
     use super::*;
 

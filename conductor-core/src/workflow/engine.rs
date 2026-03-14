@@ -7,14 +7,14 @@ use crate::agent_config::AgentSpec;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
 use crate::schema_config::OutputSchema;
-use crate::worktree::WorktreeManager;
 use crate::workflow_dsl::{self, WorkflowDef, WorkflowNode};
+use crate::worktree::WorktreeManager;
 
 use super::manager::WorkflowManager;
 use super::status::{WorkflowRunStatus, WorkflowStepStatus};
 use super::types::{
     ContextEntry, StepKey, StepResult, WorkflowExecConfig, WorkflowExecInput,
-    WorkflowExecStandalone, WorkflowResumeInput, WorkflowResumeStandalone, WorkflowResult,
+    WorkflowExecStandalone, WorkflowResult, WorkflowResumeInput, WorkflowResumeStandalone,
     WorkflowRunStep,
 };
 
@@ -697,10 +697,7 @@ pub(super) fn execute_single_node(
     Ok(())
 }
 
-pub(super) fn execute_nodes(
-    state: &mut ExecutionState<'_>,
-    nodes: &[WorkflowNode],
-) -> Result<()> {
+pub(super) fn execute_nodes(state: &mut ExecutionState<'_>, nodes: &[WorkflowNode]) -> Result<()> {
     for node in nodes {
         if !state.all_succeeded && state.exec_config.fail_fast {
             break;

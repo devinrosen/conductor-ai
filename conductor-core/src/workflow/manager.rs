@@ -13,8 +13,8 @@ use crate::workflow_dsl;
 use super::constants::{RUN_COLUMNS, STEP_COLUMNS};
 use super::status::{WorkflowRunStatus, WorkflowStepStatus};
 use super::types::{
-    ActiveWorkflowCounts, StepKey, WorkflowRun, WorkflowRunStep, WorkflowStepSummary,
-    WorkflowRunContext,
+    ActiveWorkflowCounts, StepKey, WorkflowRun, WorkflowRunContext, WorkflowRunStep,
+    WorkflowStepSummary,
 };
 
 /// Manages workflow definitions, execution, and persistence.
@@ -1048,8 +1048,10 @@ impl<'a> WorkflowManager<'a> {
     pub fn list_defs(
         worktree_path: &str,
         repo_path: &str,
-    ) -> Result<(Vec<crate::workflow_dsl::WorkflowDef>, Vec<crate::workflow_dsl::WorkflowWarning>)>
-    {
+    ) -> Result<(
+        Vec<crate::workflow_dsl::WorkflowDef>,
+        Vec<crate::workflow_dsl::WorkflowWarning>,
+    )> {
         workflow_dsl::load_workflow_defs(worktree_path, repo_path)
     }
 
