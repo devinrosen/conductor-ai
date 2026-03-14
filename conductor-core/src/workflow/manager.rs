@@ -224,9 +224,15 @@ impl<'a> WorkflowManager<'a> {
                     continue;
                 }
                 if let Some(ref child_id) = step.child_run_id {
-                    let _ = agent_mgr.update_run_cancelled(child_id);
+                    if let Err(e) = agent_mgr.update_run_cancelled(child_id) {
+                        tracing::warn!(
+                            step_id = %step.id,
+                            child_run_id = %child_id,
+                            "Failed to mark child agent run as cancelled during workflow cancellation: {e}"
+                        );
+                    }
                 }
-                let _ = self.update_step_status(
+                if let Err(e) = self.update_step_status(
                     &step.id,
                     WorkflowStepStatus::Failed,
                     step.child_run_id.as_deref(),
@@ -234,7 +240,12 @@ impl<'a> WorkflowManager<'a> {
                     None,
                     None,
                     None,
-                );
+                ) {
+                    tracing::warn!(
+                        step_id = %step.id,
+                        "Failed to update step status to Failed during workflow cancellation: {e}"
+                    );
+                }
             }
         }
 
