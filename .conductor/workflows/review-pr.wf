@@ -6,18 +6,19 @@ workflow review-pr {
   }
 
   call detect-db-migrations { output = "db-check" }
+  call detect-file-types    { output = "file-types" }
 
   parallel {
     output    = "review-findings"
     with      = ["review-diff-scope", "off-diff-findings"]
     fail_fast = false
     call review-architecture    { retries = 1 }
-    call review-security        { retries = 1 }
-    call review-performance     { retries = 1 }
     call review-dry-abstraction { retries = 1 }
-    call review-error-handling  { retries = 1 }
-    call review-test-coverage   { retries = 1 }
-    call review-db-migrations   { retries = 1 if = "detect-db-migrations.has_db_migrations" }
+    call review-security        { retries = 1  if = "detect-file-types.has_code_changes" }
+    call review-performance     { retries = 1  if = "detect-file-types.has_code_changes" }
+    call review-error-handling  { retries = 1  if = "detect-file-types.has_code_changes" }
+    call review-test-coverage   { retries = 1  if = "detect-file-types.has_code_changes" }
+    call review-db-migrations   { retries = 1  if = "detect-db-migrations.has_db_migrations" }
   }
 
   call review-aggregator { output = "review-aggregator" retries = 1 as = "conductor-ai-reviewer" }

@@ -1,0 +1,10 @@
+fields:
+  context:
+    type: string
+    desc: "Summary of file type detection (e.g. 'Found 3 code file(s) in diff')"
+  markers?:
+    type: array
+    desc: "Active markers emitted by the agent (has_code_changes when code files found)"
+
+markers:
+  has_code_changes: "markers.length > 0"
