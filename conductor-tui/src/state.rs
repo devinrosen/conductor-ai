@@ -1054,6 +1054,12 @@ fn push_children(
     }
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     pub fn new() -> Self {
         Self {
@@ -1719,6 +1725,7 @@ impl AppState {
 
     /// Called on each tick: clears `status_message` (and `status_message_at`) if
     /// the message has been visible for longer than `timeout`.
+    #[allow(dead_code)]
     pub(crate) fn tick_status_message(&mut self, timeout: Duration) {
         if let Some(at) = self.status_message_at {
             if at.elapsed() > timeout {
@@ -1730,6 +1737,7 @@ impl AppState {
 
     /// Updates `status_message_at` to reflect a change in `status_message` presence.
     /// `had_message` is whether a message was present before the action ran.
+    #[allow(dead_code)]
     pub(crate) fn track_status_message_change(&mut self, had_message: bool) {
         match (had_message, self.status_message.is_some()) {
             (false, true) => self.status_message_at = Some(Instant::now()),
