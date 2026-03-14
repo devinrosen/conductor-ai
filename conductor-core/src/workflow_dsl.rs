@@ -285,19 +285,21 @@ pub struct ParallelNode {
     pub calls: Vec<AgentRef>,
     /// Block-level output schema reference (applies to all calls unless overridden).
     pub output: Option<String>,
-    /// Per-call output schema overrides, keyed by index in `calls`.
+    /// Per-call output schema overrides, keyed by index (as string) in `calls`.
+    /// String keys are used because JSON object keys are always strings and serde_json
+    /// cannot coerce them back to integer types on deserialization.
     #[serde(default)]
-    pub call_outputs: HashMap<usize, String>,
+    pub call_outputs: HashMap<String, String>,
     /// Block-level prompt snippet references (applied to all calls).
     #[serde(default)]
     pub with: Vec<String>,
-    /// Per-call prompt snippet additions, keyed by index in `calls`.
+    /// Per-call prompt snippet additions, keyed by index (as string) in `calls`.
     #[serde(default)]
-    pub call_with: HashMap<usize, Vec<String>>,
-    /// Per-call `if` conditions keyed by index in `calls`.
+    pub call_with: HashMap<String, Vec<String>>,
+    /// Per-call `if` conditions keyed by index (as string) in `calls`.
     /// Value is (step_name, marker_name). Run the call only if that marker is present.
-    #[serde(default)]
-    pub call_if: HashMap<usize, (String, String)>,
+    #[serde(default, alias = "call_skip_unless")]
+    pub call_if: HashMap<String, (String, String)>,
 }
 
 fn default_true() -> bool {
@@ -1181,23 +1183,23 @@ impl Parser {
             .unwrap_or_default();
 
         let mut calls = Vec::new();
-        let mut call_outputs: HashMap<usize, String> = HashMap::new();
-        let mut call_with: HashMap<usize, Vec<String>> = HashMap::new();
-        let mut call_if: HashMap<usize, (String, String)> = HashMap::new();
+        let mut call_outputs: HashMap<String, String> = HashMap::new();
+        let mut call_with: HashMap<String, Vec<String>> = HashMap::new();
+        let mut call_if: HashMap<String, (String, String)> = HashMap::new();
         while self.peek() == &Token::Call {
             self.advance(); // consume "call"
             let agent = self.expect_agent_ref()?;
-            let idx = calls.len();
+            let idx = calls.len().to_string();
             // Check for per-call options block { output = "...", with = [...], if = "step.marker" }
             if self.peek() == &Token::LBrace {
                 self.advance();
                 let mut call_kvs = self.parse_kvs()?;
                 self.expect(&Token::RBrace)?;
                 if let Some(o) = call_kvs.get("output") {
-                    call_outputs.insert(idx, o.as_str().to_string());
+                    call_outputs.insert(idx.clone(), o.as_str().to_string());
                 }
                 if let Some(w) = call_kvs.remove("with") {
-                    call_with.insert(idx, w.into_string_array());
+                    call_with.insert(idx.clone(), w.into_string_array());
                 }
                 if let Some(v) = call_kvs.get("if") {
                     let s = v.as_str();
@@ -3167,9 +3169,9 @@ workflow parent {
             WorkflowNode::Parallel(p) => {
                 assert_eq!(p.output.as_deref(), Some("review-findings"));
                 assert_eq!(p.calls.len(), 2);
-                assert!(p.call_outputs.is_empty() || !p.call_outputs.contains_key(&0));
+                assert!(p.call_outputs.is_empty() || !p.call_outputs.contains_key("0"));
                 assert_eq!(
-                    p.call_outputs.get(&1).map(|s| s.as_str()),
+                    p.call_outputs.get("1").map(|s| s.as_str()),
                     Some("lint-results")
                 );
             }
@@ -3252,9 +3254,9 @@ workflow parent {
         match &def.body[0] {
             WorkflowNode::Parallel(p) => {
                 assert_eq!(p.with, vec!["review-diff-scope".to_string()]);
-                assert!(!p.call_with.contains_key(&0));
+                assert!(!p.call_with.contains_key("0"));
                 assert_eq!(
-                    p.call_with.get(&1).unwrap(),
+                    p.call_with.get("1").unwrap(),
                     &vec!["migration-rules".to_string()]
                 );
             }
@@ -3277,9 +3279,9 @@ workflow parent {
         match &def.body[1] {
             WorkflowNode::Parallel(p) => {
                 assert_eq!(p.calls.len(), 2);
-                assert!(!p.call_if.contains_key(&0));
+                assert!(!p.call_if.contains_key("0"));
                 assert_eq!(
-                    p.call_if.get(&1),
+                    p.call_if.get("1"),
                     Some(&(
                         "detect-db-migrations".to_string(),
                         "has_db_migrations".to_string()
@@ -3287,6 +3289,57 @@ workflow parent {
                 );
             }
             _ => panic!("Expected Parallel node"),
+        }
+    }
+
+    #[test]
+    fn test_parallel_call_if_snapshot_roundtrip() {
+        // Regression test: HashMap<String, (String, String)> must survive serde_json
+        // serialize → deserialize. Previously the key type was HashMap<usize, ...> which
+        // caused "invalid type: string "6", expected usize" on resume because JSON object
+        // keys are always strings and serde_json's MapKeyDeserializer does not coerce
+        // string keys to integer types.
+        let input = r#"workflow test {
+            meta { targets = ["worktree"] }
+            call detect-db-migrations
+            call detect-file-types
+            parallel {
+                fail_fast = false
+                call review-architecture    { retries = 1 }
+                call review-dry-abstraction { retries = 1 }
+                call review-security        { retries = 1 if = "detect-file-types.has_code_changes" }
+                call review-performance     { retries = 1 if = "detect-file-types.has_code_changes" }
+                call review-error-handling  { retries = 1 if = "detect-file-types.has_code_changes" }
+                call review-test-coverage   { retries = 1 if = "detect-file-types.has_code_changes" }
+                call review-db-migrations   { retries = 1 if = "detect-db-migrations.has_db_migrations" }
+            }
+        }"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        // Serialize to JSON (as stored in the DB snapshot) and deserialize back.
+        let json = serde_json::to_string(&def).expect("serialize failed");
+        let def2: WorkflowDef = serde_json::from_str(&json).expect(
+            "deserialize failed — HashMap<String, (String, String)> must round-trip through JSON",
+        );
+        match &def2.body[2] {
+            WorkflowNode::Parallel(p) => {
+                assert_eq!(p.calls.len(), 7);
+                // call_if should survive the round-trip with correct string keys
+                assert_eq!(
+                    p.call_if.get("6"),
+                    Some(&(
+                        "detect-db-migrations".to_string(),
+                        "has_db_migrations".to_string()
+                    ))
+                );
+                assert_eq!(
+                    p.call_if.get("2"),
+                    Some(&(
+                        "detect-file-types".to_string(),
+                        "has_code_changes".to_string()
+                    ))
+                );
+            }
+            _ => panic!("Expected Parallel node at index 2"),
         }
     }
 
@@ -3323,13 +3376,13 @@ workflow parent {
             WorkflowNode::Parallel(p) => {
                 assert_eq!(p.output.as_deref(), Some("findings"));
                 assert_eq!(p.with, vec!["scope".to_string()]);
-                assert!(!p.call_if.contains_key(&0));
+                assert!(!p.call_if.contains_key("0"));
                 assert_eq!(
-                    p.call_if.get(&1),
+                    p.call_if.get("1"),
                     Some(&("detect-check".to_string(), "flag".to_string()))
                 );
-                assert_eq!(p.call_outputs.get(&1).map(|s| s.as_str()), Some("b-out"));
-                assert_eq!(p.call_with.get(&1), Some(&vec!["extra".to_string()]));
+                assert_eq!(p.call_outputs.get("1").map(|s| s.as_str()), Some("b-out"));
+                assert_eq!(p.call_with.get("1"), Some(&vec!["extra".to_string()]));
             }
             _ => panic!("Expected Parallel node"),
         }

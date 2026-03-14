@@ -981,7 +981,7 @@ pub(super) fn execute_parallel(
         // Check per-call `if` condition: skip this call unless the named prior step
         // emitted the named marker. The step is recorded as Skipped in the DB so
         // it is visible in run-show and TUI, but contributes no markers or context.
-        if let Some((cond_step, cond_marker)) = node.call_if.get(&i) {
+        if let Some((cond_step, cond_marker)) = node.call_if.get(&i.to_string()) {
             let has_marker = state
                 .step_results
                 .get(cond_step)
@@ -1020,14 +1020,14 @@ pub(super) fn execute_parallel(
         // Determine schema for this call: per-call override > block-level
         let call_schema = node
             .call_outputs
-            .get(&i)
+            .get(&i.to_string())
             .map(|name| resolve_schema(state, name))
             .transpose()?;
         let effective_schema = call_schema.as_ref().or(block_schema.as_ref());
 
         // Combine block-level `with` + per-call `with` additions
         let mut effective_with = node.with.clone();
-        if let Some(extra) = node.call_with.get(&i) {
+        if let Some(extra) = node.call_with.get(&i.to_string()) {
             effective_with.extend(extra.iter().cloned());
         }
 
