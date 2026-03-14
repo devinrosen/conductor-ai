@@ -1,0 +1,34 @@
+workflow analyze-repo-for-agents {
+  meta {
+    description = "Analyze a repo for large files and produce AI-optimized refactor recommendations"
+    trigger     = "manual"
+    targets     = ["worktree"]
+  }
+
+  inputs {
+    repo            required
+    threshold_lines default = "1500"
+    focus           default = ""
+  }
+
+  call collect-file-sizes
+  call identify-large-files
+
+  if identify-large-files.has_large_files {
+    call analyze-file-structure { retries = 1 }
+    call synthesize-repo-report
+
+    if analyze-file-structure.has_split_recommendations {
+      gate human_approval {
+        prompt     = "Review the report above. Approve to create GitHub issues for the high-priority refactoring recommendations, or reject to finish without filing issues."
+        timeout    = "48h"
+        on_timeout = continue
+      }
+      call create-repo-issues
+    }
+  }
+
+  unless identify-large-files.has_large_files {
+    call synthesize-repo-report
+  }
+}
