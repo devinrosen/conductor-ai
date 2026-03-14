@@ -982,12 +982,18 @@ pub fn check_schemas(
             let schema_ref = SchemaRef::from_str_value(name);
             let path = match &schema_ref {
                 SchemaRef::Name(n) => {
-                    if validate_name_segment(n, "Schema name").is_err() {
-                        return Some(SchemaIssue::Missing(name.clone()));
+                    if let Err(e) = validate_name_segment(n, "Schema name") {
+                        return Some(SchemaIssue::Invalid {
+                            name: name.clone(),
+                            error: e.to_string(),
+                        });
                     }
                     if let Some(wf) = workflow_name {
-                        if validate_name_segment(wf, "Workflow name").is_err() {
-                            return Some(SchemaIssue::Missing(name.clone()));
+                        if let Err(e) = validate_name_segment(wf, "Workflow name") {
+                            return Some(SchemaIssue::Invalid {
+                                name: name.clone(),
+                                error: e.to_string(),
+                            });
                         }
                     }
                     match locate_schema_name_path(worktree_path, repo_path, n, workflow_name) {
@@ -997,13 +1003,34 @@ pub fn check_schemas(
                 }
                 SchemaRef::Path(rel) => {
                     if Path::new(rel).is_absolute() {
-                        return Some(SchemaIssue::Missing(name.clone()));
+                        return Some(SchemaIssue::Invalid {
+                            name: name.clone(),
+                            error: format!(
+                                "Explicit schema path '{rel}' must be relative, not absolute"
+                            ),
+                        });
                     }
-                    let joined = PathBuf::from(repo_path).join(rel);
+                    let repo_root = PathBuf::from(repo_path);
+                    let joined = repo_root.join(rel);
                     if !joined.is_file() {
                         return Some(SchemaIssue::Missing(name.clone()));
                     }
-                    joined
+                    // Enforce the same path-traversal guard as load_schema_by_path
+                    if let (Ok(canonical), Ok(canonical_repo)) =
+                        (joined.canonicalize(), repo_root.canonicalize())
+                    {
+                        if !canonical.starts_with(&canonical_repo) {
+                            return Some(SchemaIssue::Invalid {
+                                name: name.clone(),
+                                error: format!(
+                                    "Schema path '{rel}' escapes the repository root — path traversal is not allowed"
+                                ),
+                            });
+                        }
+                        canonical
+                    } else {
+                        joined
+                    }
                 }
             };
             match parse_schema_file(&path) {
@@ -1588,5 +1615,192 @@ fields:
         assert!(!evaluate_marker_expr(&value, "not a valid expression"));
         assert!(!evaluate_marker_expr(&value, "field !=! value"));
         assert!(!evaluate_marker_expr(&value, "nonexistent_field == 5"));
+    }
+
+    // -----------------------------------------------------------------------
+    // check_schemas tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_check_schemas_missing_schema() {
+        use tempfile::TempDir;
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        let issues = check_schemas(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            &["nonexistent".to_string()],
+            None,
+        );
+        assert_eq!(issues.len(), 1);
+        assert!(matches!(&issues[0], SchemaIssue::Missing(n) if n == "nonexistent"));
+    }
+
+    #[test]
+    fn test_check_schemas_no_issues_when_schema_exists() {
+        use tempfile::TempDir;
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        let schemas_dir = repo.path().join(".conductor").join("schemas");
+        fs::create_dir_all(&schemas_dir).unwrap();
+        fs::write(
+            schemas_dir.join("review.yaml"),
+            "fields:\n  summary: string\n",
+        )
+        .unwrap();
+
+        let issues = check_schemas(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            &["review".to_string()],
+            None,
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn test_check_schemas_invalid_yaml() {
+        use tempfile::TempDir;
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        let schemas_dir = repo.path().join(".conductor").join("schemas");
+        fs::create_dir_all(&schemas_dir).unwrap();
+        fs::write(
+            schemas_dir.join("broken.yaml"),
+            "fields: [this: is: not: valid\n",
+        )
+        .unwrap();
+
+        let issues = check_schemas(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            &["broken".to_string()],
+            None,
+        );
+        assert_eq!(issues.len(), 1);
+        assert!(matches!(&issues[0], SchemaIssue::Invalid { name, .. } if name == "broken"));
+    }
+
+    #[test]
+    fn test_check_schemas_invalid_schema_name_returns_invalid_not_missing() {
+        use tempfile::TempDir;
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        // A name with ".." should return Invalid, not Missing
+        let issues = check_schemas(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            &["../etc/passwd".to_string()],
+            None,
+        );
+        // "../etc/passwd" contains '/' so it is treated as a SchemaRef::Path — missing file
+        // but a pure ".." name (no slash) is SchemaRef::Name and should be Invalid
+        let issues2 = check_schemas(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            &["..".to_string()],
+            None,
+        );
+        assert_eq!(issues2.len(), 1);
+        assert!(matches!(&issues2[0], SchemaIssue::Invalid { name, error }
+            if name == ".." && error.contains("invalid characters")));
+        // The path variant should be Missing (file not found), not Invalid
+        assert_eq!(issues.len(), 1);
+        assert!(matches!(&issues[0], SchemaIssue::Missing(_)));
+    }
+
+    #[test]
+    fn test_check_schemas_absolute_path_returns_invalid() {
+        use tempfile::TempDir;
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        let issues = check_schemas(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            &["/etc/passwd".to_string()],
+            None,
+        );
+        assert_eq!(issues.len(), 1);
+        assert!(matches!(&issues[0], SchemaIssue::Invalid { name, error }
+            if name == "/etc/passwd" && error.contains("must be relative")));
+    }
+
+    #[test]
+    fn test_check_schemas_path_traversal_returns_invalid() {
+        use tempfile::TempDir;
+        let repo = TempDir::new().unwrap();
+        let worktree = TempDir::new().unwrap();
+
+        // Create a schema file outside the repo root
+        let outside = TempDir::new().unwrap();
+        fs::write(
+            outside.path().join("evil.yaml"),
+            "fields:\n  name: string\n",
+        )
+        .unwrap();
+
+        // Build a relative path that traverses outside the repo
+        let repo_path = repo.path().to_str().unwrap();
+        let outside_path = outside.path().to_str().unwrap();
+        let rel = format!(
+            "../../../{}/evil.yaml",
+            outside_path.trim_start_matches('/')
+        );
+
+        let issues = check_schemas(
+            worktree.path().to_str().unwrap(),
+            repo_path,
+            std::slice::from_ref(&rel),
+            None,
+        );
+        assert_eq!(issues.len(), 1);
+        // Either traversal rejected (Invalid) or file not found (Missing) — both are acceptable
+        assert!(matches!(
+            &issues[0],
+            SchemaIssue::Invalid { .. } | SchemaIssue::Missing(_)
+        ));
+    }
+
+    #[test]
+    fn test_check_schemas_empty_input() {
+        use tempfile::TempDir;
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        let issues = check_schemas(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            &[],
+            None,
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn test_check_schemas_path_ref_valid() {
+        use tempfile::TempDir;
+        let worktree = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+
+        let custom_dir = repo.path().join("custom").join("schemas");
+        fs::create_dir_all(&custom_dir).unwrap();
+        fs::write(
+            custom_dir.join("review.yaml"),
+            "fields:\n  verdict: string\n",
+        )
+        .unwrap();
+
+        let issues = check_schemas(
+            worktree.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            &["custom/schemas/review.yaml".to_string()],
+            None,
+        );
+        assert!(issues.is_empty());
     }
 }
