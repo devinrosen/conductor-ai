@@ -5371,4 +5371,255 @@ workflow build {
             "should not fail on PR URL parse; got: {text}"
         );
     }
+
+    // -- conductor_upsert_ticket --------------------------------------------
+
+    fn full_ticket_args(repo: &str) -> serde_json::Map<String, Value> {
+        let mut m = serde_json::Map::new();
+        m.insert("repo".to_string(), Value::String(repo.to_string()));
+        m.insert(
+            "source_type".to_string(),
+            Value::String("github".to_string()),
+        );
+        m.insert("source_id".to_string(), Value::String("42".to_string()));
+        m.insert(
+            "title".to_string(),
+            Value::String("Test ticket".to_string()),
+        );
+        m.insert("state".to_string(), Value::String("open".to_string()));
+        m
+    }
+
+    fn seed_test_repo(db: &std::path::Path) {
+        use conductor_core::db::open_database;
+        let conn = open_database(db).expect("open db");
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+             VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+    }
+
+    #[test]
+    fn test_upsert_ticket_missing_repo() {
+        let (_f, db) = make_test_db();
+        let result = dispatch_tool(&db, "conductor_upsert_ticket", &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("Missing required argument"),
+            "expected missing arg error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_missing_source_type() {
+        let (_f, db) = make_test_db();
+        let mut args = full_ticket_args("test-repo");
+        args.remove("source_type");
+        let result = dispatch_tool(&db, "conductor_upsert_ticket", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("Missing required argument"),
+            "expected missing arg error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_missing_source_id() {
+        let (_f, db) = make_test_db();
+        let mut args = full_ticket_args("test-repo");
+        args.remove("source_id");
+        let result = dispatch_tool(&db, "conductor_upsert_ticket", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("Missing required argument"),
+            "expected missing arg error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_missing_title() {
+        let (_f, db) = make_test_db();
+        let mut args = full_ticket_args("test-repo");
+        args.remove("title");
+        let result = dispatch_tool(&db, "conductor_upsert_ticket", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("Missing required argument"),
+            "expected missing arg error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_missing_state() {
+        let (_f, db) = make_test_db();
+        let mut args = full_ticket_args("test-repo");
+        args.remove("state");
+        let result = dispatch_tool(&db, "conductor_upsert_ticket", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("Missing required argument"),
+            "expected missing arg error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_invalid_state() {
+        let (_f, db) = make_test_db();
+        let mut args = full_ticket_args("test-repo");
+        args.insert("state".to_string(), Value::String("pending".to_string()));
+        let result = dispatch_tool(&db, "conductor_upsert_ticket", &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("Invalid state"),
+            "expected invalid state error, got: {text}"
+        );
+        assert!(
+            text.contains("open"),
+            "should list valid states, got: {text}"
+        );
+        assert!(
+            text.contains("in_progress"),
+            "should list valid states, got: {text}"
+        );
+        assert!(
+            text.contains("closed"),
+            "should list valid states, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let args = full_ticket_args("ghost-repo");
+        let result = dispatch_tool(&db, "conductor_upsert_ticket", &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_upsert_ticket_success_minimal() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+        let args = full_ticket_args("test-repo");
+        let result = dispatch_tool(&db, "conductor_upsert_ticket", &args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "expected success, got: {:?}",
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("Upserted ticket github#42 into test-repo"),
+            "unexpected success message: {text}"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_idempotent() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+        let args = full_ticket_args("test-repo");
+        let result1 = dispatch_tool(&db, "conductor_upsert_ticket", &args);
+        assert_ne!(result1.is_error, Some(true));
+        let result2 = dispatch_tool(&db, "conductor_upsert_ticket", &args);
+        assert_ne!(
+            result2.is_error,
+            Some(true),
+            "second upsert should also succeed"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_optional_fields_default() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+        // Only required fields — no body, url, assignee, priority, labels
+        let args = full_ticket_args("test-repo");
+        let result = dispatch_tool(&db, "conductor_upsert_ticket", &args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "should succeed without optional fields"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_labels_comma_separated() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+        let mut args = full_ticket_args("test-repo");
+        args.insert(
+            "labels".to_string(),
+            Value::String("bug,enhancement,help wanted".to_string()),
+        );
+        let result = dispatch_tool(&db, "conductor_upsert_ticket", &args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "should succeed with comma-separated labels"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_labels_empty_string() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+        let mut args = full_ticket_args("test-repo");
+        args.insert("labels".to_string(), Value::String("".to_string()));
+        let result = dispatch_tool(&db, "conductor_upsert_ticket", &args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "empty labels string should succeed"
+        );
+    }
+
+    #[test]
+    fn test_upsert_ticket_labels_whitespace_trimmed() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+        let mut args = full_ticket_args("test-repo");
+        args.insert(
+            "labels".to_string(),
+            Value::String(" bug , enhancement ".to_string()),
+        );
+        let result = dispatch_tool(&db, "conductor_upsert_ticket", &args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "whitespace in labels should be trimmed and succeed"
+        );
+    }
 }
