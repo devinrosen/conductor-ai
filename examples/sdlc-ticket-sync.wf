@@ -1,0 +1,24 @@
+-- Example: sync tickets from an external sdlc MCP server into conductor.
+--
+-- This workflow pattern lets any third-party ticket system push tickets into
+-- conductor without modifying conductor-ai source code.  The external server
+-- calls `conductor_upsert_ticket` (via MCP) for each ticket it wants to sync.
+--
+-- Prerequisites:
+--   1. Register the target repo:  conductor repo register <remote-url>
+--   2. Start the conductor MCP server alongside your sdlc (or other) server.
+--   3. Run this workflow via: conductor_run_workflow workflow=sdlc-ticket-sync repo=<slug>
+--
+-- The actor agent is responsible for iterating over the external source and
+-- calling `conductor_upsert_ticket` for each ticket.  Adjust the agent prompt
+-- (in your repo's .conductor/agents/ directory) to match your source system.
+
+workflow sdlc-ticket-sync {
+  meta {
+    description = "Sync tickets from an external source (e.g. sdlc) into conductor via conductor_upsert_ticket"
+    trigger     = "manual"
+    targets     = ["repo"]
+  }
+
+  call sdlc-ticket-sync
+}

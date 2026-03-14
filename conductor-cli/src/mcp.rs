@@ -1034,6 +1034,23 @@ fn conductor_tools() -> Vec<Tool> {
             schema(&[("repo", "Repo slug to unregister (e.g. my-repo)", true)]),
         )
         .with_annotations(ToolAnnotations::new().destructive(false).read_only(false)),
+        Tool::new(
+            "conductor_upsert_ticket",
+            "Upsert a ticket from any external source into conductor. Idempotent on (repo, source_type, source_id). \
+             Use this from a sync workflow to keep tickets current without modifying conductor-ai source code.",
+            schema(&[
+                ("repo",        "Repo slug",                                           true),
+                ("source_type", "Free-form source identifier, e.g. 'sdlc', 'linear'", true),
+                ("source_id",   "Unique ID in the source system",                      true),
+                ("title",       "Ticket title",                                        true),
+                ("state",       "open | in_progress | closed",                         true),
+                ("body",        "Ticket body/description",                             false),
+                ("url",         "URL to the ticket in the source system",              false),
+                ("labels",      "Comma-separated label names",                         false),
+                ("assignee",    "Assignee username or name",                           false),
+                ("priority",    "Priority string",                                     false),
+            ]),
+        ),
     ]
 }
 
@@ -1070,6 +1087,7 @@ fn dispatch_tool(
         "conductor_validate_workflow" => tool_validate_workflow(db_path, args),
         "conductor_register_repo" => tool_register_repo(db_path, args),
         "conductor_unregister_repo" => tool_unregister_repo(db_path, args),
+        "conductor_upsert_ticket" => tool_upsert_ticket(db_path, args),
         _ => tool_err(format!("Unknown tool: {name}")),
     }
 }
@@ -1533,6 +1551,66 @@ fn tool_sync_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
             msg.push_str(&format!("\nerror: {err}"));
         }
         tool_err(msg)
+    }
+}
+
+fn tool_upsert_ticket(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+    use conductor_core::repo::RepoManager;
+    use conductor_core::tickets::{TicketInput, TicketSyncer};
+
+    let repo_slug = require_arg!(args, "repo");
+    let source_type = require_arg!(args, "source_type");
+    let source_id = require_arg!(args, "source_id");
+    let title = require_arg!(args, "title");
+    let state = require_arg!(args, "state");
+    let body = get_arg(args, "body").unwrap_or("").to_string();
+    let url = get_arg(args, "url").unwrap_or("").to_string();
+    let labels_raw = get_arg(args, "labels").unwrap_or("");
+    let labels: Vec<String> = labels_raw
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let labels_json = serde_json::to_string(&labels).unwrap_or_else(|_| "[]".into());
+    let assignee = get_arg(args, "assignee").map(|s| s.to_string());
+    let priority = get_arg(args, "priority").map(|s| s.to_string());
+
+    let valid_states = ["open", "in_progress", "closed"];
+    if !valid_states.contains(&state) {
+        return tool_err(format!(
+            "Invalid state '{state}'. Must be one of: open, in_progress, closed."
+        ));
+    }
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+        Ok(r) => r,
+        Err(e) => return tool_err(e),
+    };
+
+    let ticket_input = TicketInput {
+        source_type: source_type.to_string(),
+        source_id: source_id.to_string(),
+        title: title.to_string(),
+        body,
+        state: state.to_string(),
+        labels: labels_json,
+        label_details: vec![],
+        assignee,
+        priority,
+        url,
+        raw_json: "{}".to_string(),
+    };
+
+    let syncer = TicketSyncer::new(&conn);
+    match syncer.upsert_tickets(&repo.id, &[ticket_input]) {
+        Ok(_) => tool_ok(format!(
+            "Upserted ticket {source_type}#{source_id} into {repo_slug}."
+        )),
+        Err(e) => tool_err(format!("upsert failed: {e}")),
     }
 }
 

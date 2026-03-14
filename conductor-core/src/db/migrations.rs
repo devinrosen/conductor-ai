@@ -617,6 +617,16 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 35)?;
     }
 
+    // Migration 036: drop source_type CHECK constraint from tickets and repo_issue_sources.
+    // SQLite cannot drop CHECK constraints in-place; a table swap is required.
+    // PRAGMA foreign_keys = OFF must be set outside a transaction (handled in Rust).
+    if version < 36 {
+        conn.pragma_update(None, "foreign_keys", "off")?;
+        conn.execute_batch(include_str!("migrations/036_drop_source_type_check.sql"))?;
+        conn.pragma_update(None, "foreign_keys", "on")?;
+        bump_version(conn, 36)?;
+    }
+
     Ok(())
 }
 
@@ -650,6 +660,12 @@ mod tests {
                 id TEXT PRIMARY KEY, repo_id TEXT NOT NULL,
                 slug TEXT NOT NULL, branch TEXT NOT NULL, path TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL
+            );
+            CREATE TABLE repo_issue_sources (
+                id          TEXT PRIMARY KEY,
+                repo_id     TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+                source_type TEXT NOT NULL CHECK (source_type IN ('github', 'jira')),
+                config_json TEXT NOT NULL
             );
             CREATE TABLE tickets (
                 id TEXT PRIMARY KEY, repo_id TEXT NOT NULL,
