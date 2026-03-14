@@ -972,6 +972,7 @@ pub(super) fn restore_completed_step(
 }
 
 /// Fetch the final step's markers and context from a completed child workflow run.
+#[cfg(test)]
 pub(super) fn fetch_child_final_output(
     wf_mgr: &WorkflowManager<'_>,
     workflow_run_id: &str,
@@ -1015,8 +1016,95 @@ pub(super) fn fetch_child_final_output(
     }
 }
 
+/// Fetch both the final step output (markers + context) and all completed step
+/// results for a child workflow run in a single DB query.
+///
+/// This is a combined form of `fetch_child_final_output` +
+/// `bubble_up_child_step_results` that avoids issuing two identical
+/// `get_workflow_steps()` queries back-to-back.
+pub(super) fn fetch_child_completion_data(
+    wf_mgr: &WorkflowManager<'_>,
+    workflow_run_id: &str,
+) -> ((Vec<String>, String), HashMap<String, StepResult>) {
+    let steps = match wf_mgr.get_workflow_steps(workflow_run_id) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to fetch steps for child workflow run '{}': {e}",
+                workflow_run_id,
+            );
+            return ((Vec::new(), String::new()), HashMap::new());
+        }
+    };
+
+    // Derive final output from the last completed step.
+    let last_completed = steps
+        .iter()
+        .filter(|s| s.status == WorkflowStepStatus::Completed)
+        .max_by_key(|s| s.position);
+
+    let final_output = match last_completed {
+        Some(step) => {
+            let markers: Vec<String> = step
+                .markers_out
+                .as_deref()
+                .map(|m| {
+                    serde_json::from_str(m).unwrap_or_else(|e| {
+                        tracing::warn!(
+                            "Malformed markers_out JSON in step '{}': {e}",
+                            step.step_name,
+                        );
+                        Vec::new()
+                    })
+                })
+                .unwrap_or_default();
+            let context = step.context_out.clone().unwrap_or_default();
+            (markers, context)
+        }
+        None => (Vec::new(), String::new()),
+    };
+
+    // Build bubble-up map from all completed steps.
+    let child_steps = steps
+        .into_iter()
+        .filter(|s| s.status == WorkflowStepStatus::Completed)
+        .map(|s| {
+            let markers: Vec<String> = s
+                .markers_out
+                .as_deref()
+                .map(|m| {
+                    serde_json::from_str(m).unwrap_or_else(|e| {
+                        tracing::warn!(
+                            "Malformed markers_out JSON in child step '{}': {e}",
+                            s.step_name,
+                        );
+                        Vec::new()
+                    })
+                })
+                .unwrap_or_default();
+            let context = s.context_out.clone().unwrap_or_default();
+            let result = StepResult {
+                step_name: s.step_name.clone(),
+                status: WorkflowStepStatus::Completed,
+                result_text: s.result_text.clone(),
+                cost_usd: None,
+                num_turns: None,
+                duration_ms: None,
+                markers,
+                context,
+                child_run_id: s.child_run_id.clone(),
+                structured_output: s.structured_output.clone(),
+            };
+            (s.step_name, result)
+        })
+        .collect();
+
+    (final_output, child_steps)
+}
+
 /// Fetch all completed child steps and build minimal `StepResult` objects for
 /// merging into the parent's `step_results` map.
+#[cfg(test)]
 pub(super) fn bubble_up_child_step_results(
     wf_mgr: &WorkflowManager<'_>,
     workflow_run_id: &str,

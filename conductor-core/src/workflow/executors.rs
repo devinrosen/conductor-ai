@@ -12,9 +12,9 @@ use crate::workflow_dsl::{
 };
 
 use super::engine::{
-    bubble_up_child_step_results, check_max_iterations, check_stuck, execute_nodes,
-    fetch_child_final_output, record_step_failure, record_step_success, resolve_child_inputs,
-    resolve_schema, restore_step, run_on_fail_agent, should_skip, ExecutionState,
+    check_max_iterations, check_stuck, execute_nodes, fetch_child_completion_data,
+    record_step_failure, record_step_success, resolve_child_inputs, resolve_schema, restore_step,
+    run_on_fail_agent, should_skip, ExecutionState,
 };
 use super::helpers::{find_max_completed_while_iteration, sanitize_tmux_name};
 use super::output::{interpret_agent_output, parse_conductor_output};
@@ -433,8 +433,8 @@ pub(super) fn execute_call_workflow(
                     result.total_turns,
                 );
 
-                let (markers, context) =
-                    fetch_child_final_output(&state.wf_mgr, &result.workflow_run_id);
+                let ((markers, context), child_steps) =
+                    fetch_child_completion_data(&state.wf_mgr, &result.workflow_run_id);
 
                 let markers_json = serde_json::to_string(&markers).unwrap_or_default();
 
@@ -466,8 +466,6 @@ pub(super) fn execute_call_workflow(
                     None,
                 );
 
-                let child_steps =
-                    bubble_up_child_step_results(&state.wf_mgr, &result.workflow_run_id);
                 for (key, value) in child_steps {
                     state.step_results.entry(key).or_insert(value);
                 }
@@ -599,9 +597,10 @@ pub(super) fn execute_call_workflow(
                         result.total_turns,
                     );
 
-                    // Bubble up the child's final step output (markers + context)
-                    let (markers, context) =
-                        fetch_child_final_output(&state.wf_mgr, &result.workflow_run_id);
+                    // Bubble up the child's final step output (markers + context) and
+                    // all completed step results in a single DB query.
+                    let ((markers, context), child_steps) =
+                        fetch_child_completion_data(&state.wf_mgr, &result.workflow_run_id);
 
                     let markers_json = serde_json::to_string(&markers).unwrap_or_default();
 
@@ -635,8 +634,6 @@ pub(super) fn execute_call_workflow(
 
                     // Bubble up child step results so parent can reference internal
                     // sub-workflow markers (e.g. review-aggregator.has_review_issues).
-                    let child_steps =
-                        bubble_up_child_step_results(&state.wf_mgr, &result.workflow_run_id);
                     for (key, value) in child_steps {
                         state.step_results.entry(key).or_insert(value);
                     }
