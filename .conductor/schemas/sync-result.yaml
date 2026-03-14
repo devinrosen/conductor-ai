@@ -1,0 +1,11 @@
+fields:
+  status:
+    type: enum(up_to_date, synced, conflicting)
+    desc: "Result of the sync operation"
+  context:
+    type: string
+    desc: "Summary of what happened"
+
+markers:
+  is_up_to_date: "status == up_to_date"
+  has_conflicts: "status == conflicting"
