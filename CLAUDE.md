@@ -130,6 +130,30 @@ Reference implementations already using this pattern correctly:
 - Workflow execution and resume (`app.rs` ~lines 4893, 1705)
 - PR fetch background task (`background.rs`)
 
+## Worktree Workflow (REQUIRED)
+
+**Always create a conductor worktree before starting any fix or feature.** Never make changes directly on `main` or in the primary working directory.
+
+```bash
+# Create a worktree (branch auto-normalizes: feat- → feat/, fix- → fix/)
+cargo run --bin conductor -- worktree create conductor-ai <name>
+# e.g. cargo run --bin conductor -- worktree create conductor-ai fix-800-snapshot-crash
+#      cargo run --bin conductor -- worktree create conductor-ai feat-801-new-thing
+
+# Worktree lands at:
+~/.conductor/workspaces/conductor-ai/<name>/
+```
+
+Do all work — edits, builds, tests, commits — inside the worktree directory. Push and create the PR from there.
+
+```bash
+cd ~/.conductor/workspaces/conductor-ai/<name>
+# ... make changes, run cargo test, cargo fmt --all ...
+git add <files> && git commit -m "..."
+git push -u origin <branch>
+gh pr create ...
+```
+
 ## Key Conventions
 
 - All record IDs are ULIDs (sortable, collision-resistant)
