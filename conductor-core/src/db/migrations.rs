@@ -11,6 +11,22 @@ struct LegacyPlanStep {
     done: bool,
 }
 
+/// Reads the current `foreign_keys` pragma value, disables FK enforcement,
+/// runs the provided closure, and unconditionally restores the original value —
+/// even if the closure returns an error.
+fn with_foreign_keys_off<F>(conn: &Connection, f: F) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    let fk_was_on: i64 = conn.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
+    conn.pragma_update(None, "foreign_keys", "off")?;
+    let result = f();
+    // Always restore original state, even if `f` errored
+    let restore_val = if fk_was_on != 0 { "on" } else { "off" };
+    conn.pragma_update(None, "foreign_keys", restore_val)?;
+    result
+}
+
 fn bump_version(conn: &Connection, v: u32) -> Result<()> {
     conn.execute(
         "INSERT OR REPLACE INTO _conductor_meta (key, value) VALUES ('schema_version', ?1)",
@@ -220,11 +236,9 @@ pub fn run(conn: &Connection) -> Result<()> {
         .prepare("SELECT id FROM feedback_requests LIMIT 0")
         .is_ok();
     if !has_feedback_requests {
-        // Temporarily disable FK enforcement for the table swap
-        conn.pragma_update(None, "foreign_keys", "off")?;
-
-        conn.execute_batch(
-            "CREATE TABLE agent_runs_new (
+        with_foreign_keys_off(conn, || {
+            conn.execute_batch(
+                "CREATE TABLE agent_runs_new (
                 id                TEXT PRIMARY KEY,
                 worktree_id       TEXT NOT NULL REFERENCES worktrees(id) ON DELETE CASCADE,
                 claude_session_id TEXT,
@@ -250,10 +264,9 @@ pub fn run(conn: &Connection) -> Result<()> {
             ALTER TABLE agent_runs_new RENAME TO agent_runs;
             CREATE INDEX IF NOT EXISTS idx_agent_runs_parent ON agent_runs(parent_run_id);
             CREATE INDEX IF NOT EXISTS idx_agent_runs_worktree ON agent_runs(worktree_id);",
-        )?;
-
-        // Re-enable FK enforcement
-        conn.pragma_update(None, "foreign_keys", "on")?;
+            )?;
+            Ok(())
+        })?;
 
         // Now create the feedback_requests table
         conn.execute_batch(include_str!("migrations/018_feedback_requests.sql"))?;
@@ -287,10 +300,9 @@ pub fn run(conn: &Connection) -> Result<()> {
     }
     if version < 21 {
         // Recreate tables to update CHECK constraints (add 'waiting' status).
-        conn.pragma_update(None, "foreign_keys", "off")?;
-
-        conn.execute_batch(
-            "CREATE TABLE workflow_runs_new (
+        with_foreign_keys_off(conn, || {
+            conn.execute_batch(
+                "CREATE TABLE workflow_runs_new (
                 id                  TEXT PRIMARY KEY,
                 workflow_name       TEXT NOT NULL,
                 worktree_id         TEXT NOT NULL REFERENCES worktrees(id) ON DELETE CASCADE,
@@ -311,10 +323,10 @@ pub fn run(conn: &Connection) -> Result<()> {
             ALTER TABLE workflow_runs_new RENAME TO workflow_runs;
             CREATE INDEX IF NOT EXISTS idx_workflow_runs_worktree ON workflow_runs(worktree_id);
             CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent ON workflow_runs(parent_run_id);",
-        )?;
+            )?;
 
-        conn.execute_batch(
-            "CREATE TABLE workflow_run_steps_new (
+            conn.execute_batch(
+                "CREATE TABLE workflow_run_steps_new (
                 id                TEXT PRIMARY KEY,
                 workflow_run_id   TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
                 step_name         TEXT NOT NULL,
@@ -350,9 +362,10 @@ pub fn run(conn: &Connection) -> Result<()> {
             DROP TABLE workflow_run_steps;
             ALTER TABLE workflow_run_steps_new RENAME TO workflow_run_steps;
             CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run ON workflow_run_steps(workflow_run_id);",
-        )?;
+            )?;
 
-        conn.pragma_update(None, "foreign_keys", "on")?;
+            Ok(())
+        })?;
         bump_version(conn, 21)?;
     }
 
@@ -372,10 +385,9 @@ pub fn run(conn: &Connection) -> Result<()> {
     // SQLite requires a table swap because ALTER TABLE cannot modify CHECK constraints.
     // PRAGMA foreign_keys = OFF must be done outside a transaction (handled in Rust).
     if version < 24 {
-        conn.pragma_update(None, "foreign_keys", "off")?;
-
-        conn.execute_batch(
-            "BEGIN;
+        with_foreign_keys_off(conn, || {
+            conn.execute_batch(
+                "BEGIN;
             CREATE TABLE workflow_run_steps_new (
                 id                TEXT PRIMARY KEY,
                 workflow_run_id   TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
@@ -415,18 +427,17 @@ pub fn run(conn: &Connection) -> Result<()> {
             ALTER TABLE workflow_run_steps_new RENAME TO workflow_run_steps;
             CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run ON workflow_run_steps(workflow_run_id);
             COMMIT;",
-        )?;
-
-        conn.pragma_update(None, "foreign_keys", "on")?;
+            )?;
+            Ok(())
+        })?;
         bump_version(conn, 24)?;
     }
 
     // Migration 025: add 'workflow' to the workflow_run_steps role CHECK constraint.
     if version < 25 {
-        conn.pragma_update(None, "foreign_keys", "off")?;
-
-        conn.execute_batch(
-            "BEGIN;
+        with_foreign_keys_off(conn, || {
+            conn.execute_batch(
+                "BEGIN;
             CREATE TABLE workflow_run_steps_new (
                 id                TEXT PRIMARY KEY,
                 workflow_run_id   TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
@@ -466,9 +477,9 @@ pub fn run(conn: &Connection) -> Result<()> {
             ALTER TABLE workflow_run_steps_new RENAME TO workflow_run_steps;
             CREATE INDEX IF NOT EXISTS idx_workflow_run_steps_run ON workflow_run_steps(workflow_run_id);
             COMMIT;",
-        )?;
-
-        conn.pragma_update(None, "foreign_keys", "on")?;
+            )?;
+            Ok(())
+        })?;
         bump_version(conn, 25)?;
     }
 
@@ -487,10 +498,9 @@ pub fn run(conn: &Connection) -> Result<()> {
     // and make agent_runs.worktree_id nullable with FK preserved (for ephemeral PR runs
     // that have no registered worktree).
     if version < 27 {
-        conn.pragma_update(None, "foreign_keys", "off")?;
-
-        conn.execute_batch(
-            "BEGIN;
+        with_foreign_keys_off(conn, || {
+            conn.execute_batch(
+                "BEGIN;
 
             -- Recreate workflow_runs with nullable worktree_id
             CREATE TABLE workflow_runs_new (
@@ -541,9 +551,9 @@ pub fn run(conn: &Connection) -> Result<()> {
             CREATE INDEX IF NOT EXISTS idx_agent_runs_worktree ON agent_runs(worktree_id);
 
             COMMIT;",
-        )?;
-
-        conn.pragma_update(None, "foreign_keys", "on")?;
+            )?;
+            Ok(())
+        })?;
         bump_version(conn, 27)?;
     }
 
@@ -621,9 +631,10 @@ pub fn run(conn: &Connection) -> Result<()> {
     // SQLite cannot drop CHECK constraints in-place; a table swap is required.
     // PRAGMA foreign_keys = OFF must be set outside a transaction (handled in Rust).
     if version < 36 {
-        conn.pragma_update(None, "foreign_keys", "off")?;
-        conn.execute_batch(include_str!("migrations/036_drop_source_type_check.sql"))?;
-        conn.pragma_update(None, "foreign_keys", "on")?;
+        with_foreign_keys_off(conn, || {
+            conn.execute_batch(include_str!("migrations/036_drop_source_type_check.sql"))?;
+            Ok(())
+        })?;
         bump_version(conn, 36)?;
     }
 
@@ -773,5 +784,32 @@ mod tests {
             )
             .unwrap();
         assert_eq!(null_count, 1);
+    }
+
+    /// Verifies that `with_foreign_keys_off` restores FK enforcement even when
+    /// the closure returns an error.
+    #[test]
+    fn test_foreign_keys_restored_on_migration_error() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        // Enable FK enforcement before the call.
+        conn.pragma_update(None, "foreign_keys", "on").unwrap();
+
+        // Call with a closure that always fails.
+        let result = with_foreign_keys_off(&conn, || {
+            Err(crate::error::ConductorError::Git(
+                "simulated migration error".to_string(),
+            ))
+        });
+        assert!(result.is_err(), "helper must propagate the closure error");
+
+        // FK pragma must be restored to ON despite the error.
+        let fk_on: i64 = conn
+            .pragma_query_value(None, "foreign_keys", |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            fk_on, 1,
+            "foreign_keys pragma must be restored to ON after closure error"
+        );
     }
 }
