@@ -22,10 +22,16 @@ where
     conn.pragma_update(None, "foreign_keys", "off")?;
     let result = f();
     // Always restore original state, even if `f` errored.
-    // Discard any restore error so the original closure error is never masked.
     let restore_val = if fk_was_on != 0 { "on" } else { "off" };
-    let _ = conn.pragma_update(None, "foreign_keys", restore_val);
-    result
+    let restore_result: Result<()> = conn
+        .pragma_update(None, "foreign_keys", restore_val)
+        .map_err(Into::into);
+    match result {
+        // Closure failed: return original error; discard restore error to avoid masking it.
+        Err(original) => Err(original),
+        // Closure succeeded: propagate any restore error so FK enforcement is never silently lost.
+        Ok(()) => restore_result,
+    }
 }
 
 fn bump_version(conn: &Connection, v: u32) -> Result<()> {
