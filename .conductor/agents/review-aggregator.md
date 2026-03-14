@@ -126,8 +126,15 @@ Steps:
 
 ## Phase 4 — Produce output
 
-6. Produce your CONDUCTOR_OUTPUT:
+6. Produce your CONDUCTOR_OUTPUT with the correct structured fields so the workflow engine can derive outcome markers automatically from the schema:
 
-If ANY reviewer reported critical or warning issues, include `has_review_issues` in your CONDUCTOR_OUTPUT markers and list the blocking findings in your context.
+   - Set `overall_approved: true` if **all** reviewers approved (no critical or warning findings). Set `overall_approved: false` if **any** reviewer reported a critical or warning finding.
+   - Populate `blocking_findings` with every critical and warning finding collected across all reviewers. Include warnings here — use `severity: "warning"` for warning-level items and `severity: "critical"` for critical items. Leave the array empty if there are no blocking findings.
 
-If all reviewers are clean (or only have suggestions), do NOT include that marker. Include a brief "All reviewers approve" message in your context.
+   The engine will derive markers from those fields automatically:
+   - `overall_approved == true` → emits `approved`
+   - `blocking_findings.length > 0` → emits `has_blocking_findings`
+   - Any entry in `blocking_findings` with `severity == warning` → emits `has_warnings`
+   - `overall_approved == false` → emits `has_review_issues` (kept for backward compatibility)
+
+   In your `context` field, include a brief summary: "All reviewers approved." or a short description of the blocking findings found.

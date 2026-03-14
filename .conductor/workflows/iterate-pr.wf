@@ -15,9 +15,9 @@ workflow iterate-pr {
 
     call workflow review-pr
 
-    if review-pr.has_review_issues {
+    if review-pr.has_blocking_findings {
       call address-reviews
       call workflow lint-fix
     }
-  } while review-pr.has_review_issues
+  } while review-pr.has_blocking_findings
 }

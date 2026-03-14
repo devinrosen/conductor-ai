@@ -20,3 +20,6 @@ fields:
 
 markers:
   has_review_issues: "overall_approved == false"
+  approved: "overall_approved == true"
+  has_blocking_findings: "blocking_findings.length > 0"
+  has_warnings: "blocking_findings[severity == warning].length > 0"
