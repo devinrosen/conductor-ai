@@ -18,5 +18,5 @@ workflow review-pr {
     call review-db-migrations   { retries = 1 }
   }
 
-  call review-aggregator { output = "review-aggregator" }
+  call review-aggregator { output = "review-aggregator", retries = 1 }
 }
