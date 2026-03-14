@@ -1,0 +1,10 @@
+fields:
+  mergeable:
+    type: enum(MERGEABLE, CONFLICTING, UNKNOWN)
+    desc: "GitHub's computed mergeability for this PR"
+  merge_state_status:
+    type: string
+    desc: "GitHub mergeStateStatus (CLEAN, DIRTY, BLOCKED, UNSTABLE, etc.)"
+
+markers:
+  has_conflicts: "mergeable == CONFLICTING"

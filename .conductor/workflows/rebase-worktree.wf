@@ -5,11 +5,15 @@ workflow rebase-worktree {
     targets     = ["worktree"]
   }
 
-  call sync-with-main
+  call check-mergeability { output = "merge-check" }
 
-  if sync-with-main.has_conflicts {
-    call resolve-conflicts
+  if check-mergeability.has_conflicts {
+    call sync-with-main
+
+    if sync-with-main.has_conflicts {
+      call resolve-conflicts
+    }
+
+    call push
   }
-
-  call push
 }
