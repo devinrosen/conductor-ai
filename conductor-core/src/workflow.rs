@@ -1487,6 +1487,36 @@ impl<'a> WorkflowManager<'a> {
         Ok(reaped)
     }
 
+    /// Find the most-recently-started child workflow run that can be resumed:
+    /// failed, pending, waiting, or timed_out status for the given parent + child
+    /// workflow name. Returns `None` if no such run exists.
+    ///
+    /// `running` is excluded to avoid interfering with a genuinely-active child.
+    /// `completed` and `cancelled` are excluded as they are terminal or irrecoverable.
+    pub fn find_resumable_child_run(
+        &self,
+        parent_workflow_run_id: &str,
+        child_workflow_name: &str,
+    ) -> Result<Option<WorkflowRun>> {
+        let result = self.conn.query_row(
+            &format!(
+                "SELECT {RUN_COLUMNS} FROM workflow_runs \
+                 WHERE parent_workflow_run_id = ?1 \
+                   AND workflow_name = ?2 \
+                   AND status IN ('failed', 'pending', 'waiting', 'timed_out') \
+                 ORDER BY started_at DESC \
+                 LIMIT 1"
+            ),
+            params![parent_workflow_run_id, child_workflow_name],
+            row_to_workflow_run,
+        );
+        match result {
+            Ok(run) => Ok(Some(run)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Find the waiting gate step for a workflow run.
     pub fn find_waiting_gate(&self, workflow_run_id: &str) -> Result<Option<WorkflowRunStep>> {
         let result = self.conn.query_row(
@@ -3179,6 +3209,138 @@ fn execute_call_workflow(
     // Retry loop
     let max_attempts = 1 + node.retries;
     let mut last_error = String::new();
+
+    // Pre-loop: if a prior child run exists in a resumable state, try resuming it
+    // before starting fresh. This preserves already-completed steps inside the child.
+    // The resume attempt does not count against max_attempts.
+    if let Some(prior_child) = state
+        .wf_mgr
+        .find_resumable_child_run(&state.workflow_run_id, &node.workflow)?
+    {
+        let step_id = state.wf_mgr.insert_step(
+            &state.workflow_run_id,
+            &wf_step_name,
+            "workflow",
+            false,
+            pos,
+            iteration as i64,
+        )?;
+
+        state.wf_mgr.update_step_status(
+            &step_id,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            Some(0),
+        )?;
+
+        tracing::info!(
+            "Step 'workflow:{}': resuming prior child run '{}'",
+            node.workflow,
+            prior_child.id,
+        );
+
+        let resume_input = WorkflowResumeInput {
+            conn: state.conn,
+            config: state.config,
+            workflow_run_id: &prior_child.id,
+            model: state.model.as_deref(),
+            from_step: None,
+            restart: false,
+        };
+
+        match resume_workflow(&resume_input) {
+            Ok(result) if result.all_succeeded => {
+                tracing::info!(
+                    "Sub-workflow '{}' resumed and completed: cost=${:.4}, {} turns",
+                    node.workflow,
+                    result.total_cost,
+                    result.total_turns,
+                );
+
+                let (markers, context) =
+                    fetch_child_final_output(&state.wf_mgr, &result.workflow_run_id);
+
+                let markers_json = serde_json::to_string(&markers).unwrap_or_default();
+
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Completed,
+                    None,
+                    Some(&format!("Sub-workflow '{}' completed", node.workflow)),
+                    Some(&context),
+                    Some(&markers_json),
+                    Some(0),
+                )?;
+
+                record_step_success(
+                    state,
+                    step_key.clone(),
+                    &node.workflow,
+                    Some(format!(
+                        "Sub-workflow '{}' completed successfully",
+                        node.workflow
+                    )),
+                    Some(result.total_cost),
+                    Some(result.total_turns),
+                    Some(result.total_duration_ms),
+                    markers,
+                    context,
+                    Some(result.workflow_run_id.clone()),
+                    iteration,
+                    None,
+                );
+
+                let child_steps =
+                    bubble_up_child_step_results(&state.wf_mgr, &result.workflow_run_id);
+                for (key, value) in child_steps {
+                    state.step_results.entry(key).or_insert(value);
+                }
+
+                return Ok(());
+            }
+            Ok(result) => {
+                let msg = format!("Sub-workflow '{}' failed (resume)", node.workflow);
+                tracing::warn!(
+                    "'{}': resume of child run '{}' did not succeed (all_succeeded=false)",
+                    node.workflow,
+                    result.workflow_run_id,
+                );
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    None,
+                    Some(&msg),
+                    None,
+                    None,
+                    Some(0),
+                )?;
+                last_error = msg;
+                // Fall through to the retry loop
+            }
+            Err(e) => {
+                let msg = format!("Sub-workflow '{}' resume error: {e}", node.workflow);
+                tracing::warn!(
+                    "'{}': error resuming child run '{}': {e}",
+                    node.workflow,
+                    prior_child.id,
+                );
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    None,
+                    Some(&msg),
+                    None,
+                    None,
+                    Some(0),
+                )?;
+                last_error = msg;
+                // Fall through to the retry loop
+            }
+        }
+    }
 
     for attempt in 0..max_attempts {
         let step_id = state.wf_mgr.insert_step(
@@ -10626,6 +10788,91 @@ And here is my actual output:
         assert!(
             err.to_string().contains("not found"),
             "expected not-found error, got: {err}"
+        );
+    }
+
+    // ── find_resumable_child_run ──────────────────────────────────────────────
+
+    #[test]
+    fn test_find_resumable_child_run_returns_failed() {
+        let conn = setup_db();
+        insert_workflow_run(&conn, "parent1", "parent-wf", "failed", None);
+        insert_workflow_run(&conn, "child1", "child-wf", "failed", Some("parent1"));
+
+        let mgr = WorkflowManager::new(&conn);
+        let result = mgr.find_resumable_child_run("parent1", "child-wf").unwrap();
+        assert!(result.is_some(), "failed child run should be found");
+        assert_eq!(result.unwrap().id, "child1");
+    }
+
+    #[test]
+    fn test_find_resumable_child_run_ignores_completed() {
+        let conn = setup_db();
+        insert_workflow_run(&conn, "parent1", "parent-wf", "failed", None);
+        insert_workflow_run(&conn, "child1", "child-wf", "completed", Some("parent1"));
+
+        let mgr = WorkflowManager::new(&conn);
+        let result = mgr.find_resumable_child_run("parent1", "child-wf").unwrap();
+        assert!(result.is_none(), "completed child run must not be returned");
+    }
+
+    #[test]
+    fn test_find_resumable_child_run_ignores_running() {
+        let conn = setup_db();
+        insert_workflow_run(&conn, "parent1", "parent-wf", "running", None);
+        insert_workflow_run(&conn, "child1", "child-wf", "running", Some("parent1"));
+
+        let mgr = WorkflowManager::new(&conn);
+        let result = mgr.find_resumable_child_run("parent1", "child-wf").unwrap();
+        assert!(result.is_none(), "running child run must not be returned");
+    }
+
+    #[test]
+    fn test_find_resumable_child_run_ignores_cancelled() {
+        let conn = setup_db();
+        insert_workflow_run(&conn, "parent1", "parent-wf", "failed", None);
+        insert_workflow_run(&conn, "child1", "child-wf", "cancelled", Some("parent1"));
+
+        let mgr = WorkflowManager::new(&conn);
+        let result = mgr.find_resumable_child_run("parent1", "child-wf").unwrap();
+        assert!(result.is_none(), "cancelled child run must not be returned");
+    }
+
+    #[test]
+    fn test_find_resumable_child_run_picks_most_recent() {
+        let conn = setup_db();
+        insert_workflow_run(&conn, "parent1", "parent-wf", "failed", None);
+
+        // Insert two failed child runs with distinct timestamps
+        let agent_mgr = AgentManager::new(&conn);
+        let p1 = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+        let p2 = agent_mgr.create_run(None, "workflow", None, None).unwrap();
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at, \
+              parent_workflow_run_id) \
+             VALUES ('older-child', 'child-wf', NULL, ?1, 'failed', 0, 'manual', \
+                     '2025-01-01T00:00:00Z', 'parent1')",
+            params![p1.id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workflow_runs \
+             (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at, \
+              parent_workflow_run_id) \
+             VALUES ('newer-child', 'child-wf', NULL, ?1, 'failed', 0, 'manual', \
+                     '2025-06-01T00:00:00Z', 'parent1')",
+            params![p2.id],
+        )
+        .unwrap();
+
+        let mgr = WorkflowManager::new(&conn);
+        let result = mgr.find_resumable_child_run("parent1", "child-wf").unwrap();
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap().id,
+            "newer-child",
+            "most recently started child must be returned"
         );
     }
 }
