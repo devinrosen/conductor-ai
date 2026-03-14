@@ -1999,7 +1999,15 @@ fn run_agent(
     };
 
     // Build effective prompt with optional startup context
-    let config = load_config().unwrap_or_default();
+    let config = match load_config() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "[conductor] Warning: failed to load config, GitHub App auth will be skipped: {e}"
+            );
+            conductor_core::config::Config::default()
+        }
+    };
     let effective_prompt = if config.general.inject_startup_context {
         let context =
             build_startup_context(conn, run.worktree_id.as_deref(), run_id, worktree_path);
@@ -2139,6 +2147,9 @@ fn run_agent(
         // than the human `gh` CLI user. Fall back gracefully when not configured.
         match github_app::resolve_named_app_token(&config, bot_name, "agent-run") {
             github_app::TokenResolution::AppToken(token) => {
+                if let Some(name) = bot_name {
+                    eprintln!("[conductor] Using GitHub App token for bot identity: {name}");
+                }
                 cmd.env("GH_TOKEN", token);
             }
             github_app::TokenResolution::Fallback { reason } => {
@@ -2146,7 +2157,13 @@ fn run_agent(
                     "[conductor] Warning: GitHub App token failed, agents will use gh user identity: {reason}"
                 );
             }
-            github_app::TokenResolution::NotConfigured => {}
+            github_app::TokenResolution::NotConfigured => {
+                if let Some(name) = bot_name {
+                    eprintln!(
+                        "[conductor] Warning: bot name '{name}' specified but no matching GitHub App found in config — agents will use gh user identity"
+                    );
+                }
+            }
         }
 
         if let Some(m) = model {
