@@ -17,7 +17,7 @@ workflow review-pr {
     call review-dry-abstraction { retries = 1 }
     call review-error-handling  { retries = 1 }
     call review-test-coverage   { retries = 1 }
-    call review-db-migrations   { retries = 1 skip_unless = "detect-db-migrations.has_db_migrations" }
+    call review-db-migrations   { retries = 1 if = "detect-db-migrations.has_db_migrations" }
   }
 
   call review-aggregator { output = "review-aggregator" retries = 1 as = "conductor-ai-reviewer" }

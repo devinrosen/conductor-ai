@@ -250,18 +250,18 @@ Individual calls within a `parallel` block can add their own options:
 |---|---|
 | `output = "<schema>"` | Override the block-level output schema for this call |
 | `with = [<snippet>, ...]` | Additional prompt snippets appended after block-level snippets |
-| `skip_unless = "step.marker"` | Skip this call unless the named prior step emitted the named marker |
+| `if = "step.marker"` | Run this call only if the named prior step emitted the named marker |
 
 ```
 parallel {
   with = ["review-diff-scope"]
   call review-security
   call review-migrations { with = ["migration-rules"] }
-  call review-db-migrations { skip_unless = "detect-db-migrations.has_db_migrations" }
+  call review-db-migrations { if = "detect-db-migrations.has_db_migrations" }
 }
 ```
 
-**`skip_unless` semantics:** the call is skipped entirely if the named prior step did not
+**`if` semantics:** the call is skipped entirely if the named prior step did not
 emit the named marker. The step is recorded in the DB with `status = skipped` so it is
 visible in `workflow run-show` and the TUI, but contributes no markers or context to the
 parallel block's aggregate output. The parallel block still succeeds (skipped calls count

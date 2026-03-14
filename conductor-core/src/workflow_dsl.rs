@@ -276,10 +276,10 @@ pub struct ParallelNode {
     /// Per-call prompt snippet additions, keyed by index in `calls`.
     #[serde(default)]
     pub call_with: HashMap<usize, Vec<String>>,
-    /// Per-call skip_unless conditions keyed by index in `calls`.
-    /// Value is (step_name, marker_name). Skip the call unless that marker is present.
+    /// Per-call `if` conditions keyed by index in `calls`.
+    /// Value is (step_name, marker_name). Run the call only if that marker is present.
     #[serde(default)]
-    pub call_skip_unless: HashMap<usize, (String, String)>,
+    pub call_if: HashMap<usize, (String, String)>,
 }
 
 fn default_true() -> bool {
@@ -663,6 +663,7 @@ impl Parser {
             Token::Required => Ok("required".to_string()),
             Token::Default => Ok("default".to_string()),
             Token::Description => Ok("description".to_string()),
+            Token::If => Ok("if".to_string()),
             other => Err(format!("Expected identifier, got {other:?}")),
         }
     }
@@ -736,7 +737,11 @@ impl Parser {
             if self.pos + 1 < self.tokens.len() {
                 let is_kv_key = matches!(
                     self.peek(),
-                    Token::Ident(_) | Token::Required | Token::Default | Token::Description
+                    Token::Ident(_)
+                        | Token::Required
+                        | Token::Default
+                        | Token::Description
+                        | Token::If
                 );
                 let next_is_eq = self.tokens.get(self.pos + 1) == Some(&Token::Equals);
                 if is_kv_key && next_is_eq {
@@ -1160,12 +1165,12 @@ impl Parser {
         let mut calls = Vec::new();
         let mut call_outputs: HashMap<usize, String> = HashMap::new();
         let mut call_with: HashMap<usize, Vec<String>> = HashMap::new();
-        let mut call_skip_unless: HashMap<usize, (String, String)> = HashMap::new();
+        let mut call_if: HashMap<usize, (String, String)> = HashMap::new();
         while self.peek() == &Token::Call {
             self.advance(); // consume "call"
             let agent = self.expect_agent_ref()?;
             let idx = calls.len();
-            // Check for per-call options block { output = "...", with = [...], skip_unless = "step.marker" }
+            // Check for per-call options block { output = "...", with = [...], if = "step.marker" }
             if self.peek() == &Token::LBrace {
                 self.advance();
                 let mut call_kvs = self.parse_kvs()?;
@@ -1176,14 +1181,12 @@ impl Parser {
                 if let Some(w) = call_kvs.remove("with") {
                     call_with.insert(idx, w.into_string_array());
                 }
-                if let Some(v) = call_kvs.get("skip_unless") {
+                if let Some(v) = call_kvs.get("if") {
                     let s = v.as_str();
                     let (step_name, marker_name) = s.split_once('.').ok_or_else(|| {
-                        format!(
-                            "skip_unless value `{s}` must be in the form `step.marker` (no dot found)"
-                        )
+                        format!("if value `{s}` must be in the form `step.marker` (no dot found)")
                     })?;
-                    call_skip_unless.insert(idx, (step_name.to_string(), marker_name.to_string()));
+                    call_if.insert(idx, (step_name.to_string(), marker_name.to_string()));
                 }
             }
             calls.push(agent);
@@ -1202,7 +1205,7 @@ impl Parser {
             call_outputs,
             with: block_with,
             call_with,
-            call_skip_unless,
+            call_if,
         })
     }
 
@@ -1705,9 +1708,9 @@ fn validate_nodes<F>(
                 produced.insert(n.workflow.clone());
             }
             WorkflowNode::Parallel(n) => {
-                // Validate skip_unless references before inserting produced keys,
-                // since skip_unless must reference steps produced *before* this block.
-                for (step_name, _marker) in n.call_skip_unless.values() {
+                // Validate `if` condition references before inserting produced keys,
+                // since conditions must reference steps produced *before* this block.
+                for (step_name, _marker) in n.call_if.values() {
                     check_condition_reachable(step_name, produced, errors);
                 }
                 for call in &n.calls {
@@ -3177,23 +3180,23 @@ workflow parent {
     }
 
     #[test]
-    fn test_parallel_skip_unless_parsed() {
+    fn test_parallel_if_parsed() {
         let input = r#"workflow test {
             meta { targets = ["worktree"] }
             call detect-db-migrations
             parallel {
                 fail_fast = false
                 call review-security    { retries = 1 }
-                call review-db-migrations { retries = 1 skip_unless = "detect-db-migrations.has_db_migrations" }
+                call review-db-migrations { retries = 1 if = "detect-db-migrations.has_db_migrations" }
             }
         }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
         match &def.body[1] {
             WorkflowNode::Parallel(p) => {
                 assert_eq!(p.calls.len(), 2);
-                assert!(!p.call_skip_unless.contains_key(&0));
+                assert!(!p.call_if.contains_key(&0));
                 assert_eq!(
-                    p.call_skip_unless.get(&1),
+                    p.call_if.get(&1),
                     Some(&(
                         "detect-db-migrations".to_string(),
                         "has_db_migrations".to_string()
@@ -3205,11 +3208,11 @@ workflow parent {
     }
 
     #[test]
-    fn test_parallel_skip_unless_malformed_no_dot() {
+    fn test_parallel_if_malformed_no_dot() {
         let input = r#"workflow test {
             meta { targets = ["worktree"] }
             parallel {
-                call review-db-migrations { skip_unless = "no-dot-here" }
+                call review-db-migrations { if = "no-dot-here" }
             }
         }"#;
         let err = parse_workflow_str(input, "test.wf").unwrap_err();
@@ -3220,7 +3223,7 @@ workflow parent {
     }
 
     #[test]
-    fn test_parallel_skip_unless_with_output_and_with() {
+    fn test_parallel_if_with_output_and_with() {
         let input = r#"workflow test {
             meta { targets = ["worktree"] }
             call detect-check
@@ -3229,7 +3232,7 @@ workflow parent {
                 with   = ["scope"]
                 fail_fast = false
                 call agent-a { retries = 1 }
-                call agent-b { output = "b-out" with = ["extra"] skip_unless = "detect-check.flag" }
+                call agent-b { output = "b-out" with = ["extra"] if = "detect-check.flag" }
             }
         }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
@@ -3237,9 +3240,9 @@ workflow parent {
             WorkflowNode::Parallel(p) => {
                 assert_eq!(p.output.as_deref(), Some("findings"));
                 assert_eq!(p.with, vec!["scope".to_string()]);
-                assert!(!p.call_skip_unless.contains_key(&0));
+                assert!(!p.call_if.contains_key(&0));
                 assert_eq!(
-                    p.call_skip_unless.get(&1),
+                    p.call_if.get(&1),
                     Some(&("detect-check".to_string(), "flag".to_string()))
                 );
                 assert_eq!(p.call_outputs.get(&1).map(|s| s.as_str()), Some("b-out"));
@@ -3250,11 +3253,11 @@ workflow parent {
     }
 
     #[test]
-    fn test_parallel_skip_unless_validation_step_not_produced() {
+    fn test_parallel_if_validation_step_not_produced() {
         let input = r#"workflow test {
             meta { targets = ["worktree"] }
             parallel {
-                call review-db-migrations { skip_unless = "detect-db-migrations.has_db_migrations" }
+                call review-db-migrations { if = "detect-db-migrations.has_db_migrations" }
             }
         }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();
@@ -3272,12 +3275,12 @@ workflow parent {
     }
 
     #[test]
-    fn test_parallel_skip_unless_validation_step_produced() {
+    fn test_parallel_if_validation_step_produced() {
         let input = r#"workflow test {
             meta { targets = ["worktree"] }
             call detect-db-migrations
             parallel {
-                call review-db-migrations { skip_unless = "detect-db-migrations.has_db_migrations" }
+                call review-db-migrations { if = "detect-db-migrations.has_db_migrations" }
             }
         }"#;
         let def = parse_workflow_str(input, "test.wf").unwrap();

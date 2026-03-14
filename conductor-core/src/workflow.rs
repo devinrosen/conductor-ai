@@ -3803,10 +3803,10 @@ fn execute_parallel(
             Some(&state.workflow_name),
         )?;
 
-        // Check skip_unless condition: skip this call unless the named prior step
+        // Check per-call `if` condition: skip this call unless the named prior step
         // emitted the named marker. The step is recorded as Skipped in the DB so
         // it is visible in run-show and TUI, but contributes no markers or context.
-        if let Some((cond_step, cond_marker)) = node.call_skip_unless.get(&i) {
+        if let Some((cond_step, cond_marker)) = node.call_if.get(&i) {
             let has_marker = state
                 .step_results
                 .get(cond_step)
@@ -3814,7 +3814,7 @@ fn execute_parallel(
                 .unwrap_or(false);
             if !has_marker {
                 tracing::info!(
-                    "parallel: skipping '{}' (skip_unless={}.{} not satisfied)",
+                    "parallel: skipping '{}' (if={}.{} not satisfied)",
                     agent_label,
                     cond_step,
                     cond_marker
@@ -7950,7 +7950,7 @@ And here is my actual output:
                     call_outputs: HashMap::new(),
                     with: vec![],
                     call_with: HashMap::new(),
-                    call_skip_unless: HashMap::new(),
+                    call_if: HashMap::new(),
                 }),
                 WorkflowNode::Gate(GateNode {
                     name: "approval".to_string(),
@@ -8870,13 +8870,13 @@ And here is my actual output:
     }
 
     // ---------------------------------------------------------------------------
-    // skip_unless logic tests
+    // per-call `if` condition logic tests
     // ---------------------------------------------------------------------------
 
-    /// When skip_unless condition IS met (marker present), the agent is not skipped.
+    /// When `if` condition IS met (marker present), the agent is not skipped.
     /// This tests the pure marker-lookup logic used by execute_parallel.
     #[test]
-    fn test_skip_unless_condition_met_does_not_skip() {
+    fn test_if_condition_met_does_not_skip() {
         // Simulate: detect-db-migrations emitted has_db_migrations → review-db-migrations runs
         let cond_step = "detect-db-migrations";
         let cond_marker = "has_db_migrations";
@@ -8906,9 +8906,9 @@ And here is my actual output:
         assert!(has_marker, "marker present → agent should NOT be skipped");
     }
 
-    /// When skip_unless condition is NOT met (marker absent), the agent is skipped.
+    /// When `if` condition is NOT met (marker absent), the agent is skipped.
     #[test]
-    fn test_skip_unless_condition_not_met_skips() {
+    fn test_if_condition_not_met_skips() {
         // Simulate: detect-db-migrations ran but did NOT emit has_db_migrations
         let cond_step = "detect-db-migrations";
         let cond_marker = "has_db_migrations";
@@ -8938,9 +8938,9 @@ And here is my actual output:
         assert!(!has_marker, "marker absent → agent SHOULD be skipped");
     }
 
-    /// When the cond_step is not in step_results at all, skip_unless skips the agent.
+    /// When the cond_step is not in step_results at all, `if` skips the agent.
     #[test]
-    fn test_skip_unless_step_not_found_skips() {
+    fn test_if_step_not_found_skips() {
         let cond_step = "detect-db-migrations";
         let cond_marker = "has_db_migrations";
         let step_results: HashMap<String, StepResult> = HashMap::new();
@@ -9014,10 +9014,10 @@ And here is my actual output:
         );
     }
 
-    /// skip_unless skipped agents count toward skipped_count (and thus effective_successes),
+    /// `if`-skipped agents count toward skipped_count (and thus effective_successes),
     /// so the parallel block succeeds even if some calls were condition-skipped.
     #[test]
-    fn test_parallel_skip_unless_counts_toward_skipped_count() {
+    fn test_parallel_if_counts_toward_skipped_count() {
         // Scenario: 2 agents. 1 ran and succeeded, 1 was condition-skipped.
         let successes: u32 = 1;
         let skipped_count: u32 = 1; // condition-skipped
