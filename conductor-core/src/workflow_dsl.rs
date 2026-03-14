@@ -298,7 +298,7 @@ pub struct ParallelNode {
     pub call_with: HashMap<String, Vec<String>>,
     /// Per-call `if` conditions keyed by index (as string) in `calls`.
     /// Value is (step_name, marker_name). Run the call only if that marker is present.
-    #[serde(default, alias = "call_skip_unless")]
+    #[serde(default)]
     pub call_if: HashMap<String, (String, String)>,
 }
 
