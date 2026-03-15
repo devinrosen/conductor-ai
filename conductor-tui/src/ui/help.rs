@@ -34,7 +34,6 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
         help_line("q", "Quit", theme),
         help_line("[ / ]", "Focus content / workflow column", theme),
         help_line("\\", "Toggle workflow column", theme),
-        help_line("H", "Toggle completed/cancelled workflow runs", theme),
         Line::from(""),
         Line::from(Span::styled(
             "Global Actions",
@@ -51,6 +50,20 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
         help_line("A", "Toggle closed tickets", theme),
         help_line("w", "Open workflow picker", theme),
         help_line("/", "Filter/search", theme),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Workflow Column",
+            Style::default()
+                .fg(theme.label_accent)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        help_line("H", "Toggle completed/cancelled runs", theme),
+        help_line("r", "Run selected workflow", theme),
+        help_line("v", "View workflow definition (Defs tab)", theme),
+        help_line("e", "Edit workflow definition in $EDITOR (Defs tab)", theme),
+        help_line("Space", "Collapse/expand run group (Runs tab)", theme),
+        help_line("l / →", "Toggle step tree pane (Defs tab)", theme),
         Line::from(""),
         Line::from(Span::styled(
             "Worktree Detail — Info Panel (Tab to switch)",
