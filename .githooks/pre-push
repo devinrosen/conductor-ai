@@ -1,0 +1,56 @@
+#!/bin/sh
+# Pre-push hook: run Playwright E2E tests when conductor-web files change.
+# Enable with: git config core.hooksPath .githooks
+# Skip with:   SKIP_E2E=1 git push
+
+set -e
+
+if [ "${SKIP_E2E:-0}" = "1" ]; then
+  echo "info: SKIP_E2E=1 — skipping Playwright E2E tests." >&2
+  exit 0
+fi
+
+# Check whether any conductor-web files are in the commits being pushed.
+remote="$1"
+url="$2"
+
+range=""
+while read local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    # New branch: compare against the merge base with main.
+    base=$(git merge-base HEAD origin/main 2>/dev/null || echo "")
+    if [ -n "$base" ]; then
+      range="$base..$local_sha"
+    else
+      range="$local_sha"
+    fi
+  else
+    range="$remote_sha..$local_sha"
+  fi
+done
+
+if [ -z "$range" ]; then
+  exit 0
+fi
+
+if ! git diff --name-only "$range" 2>/dev/null | grep -q '^conductor-web/'; then
+  exit 0
+fi
+
+FRONTEND_DIR="conductor-web/frontend"
+
+if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
+  echo "error: $FRONTEND_DIR/node_modules not found." >&2
+  echo "Run: cd $FRONTEND_DIR && bun install" >&2
+  exit 1
+fi
+
+if [ ! -f "target/debug/conductor-web" ]; then
+  echo "info: building conductor-web binary for E2E tests..." >&2
+  cargo build --bin conductor-web
+fi
+
+echo "info: running Playwright E2E tests (SKIP_E2E=1 to skip)..." >&2
+cd "$FRONTEND_DIR"
+bunx playwright install --with-deps chromium webkit >/dev/null 2>&1
+bun run test:e2e
