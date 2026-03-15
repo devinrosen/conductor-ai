@@ -263,8 +263,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         match key.code {
             KeyCode::Char('d') => return Action::HalfPageDown,
             KeyCode::Char('u') => return Action::HalfPageUp,
-            KeyCode::Char('h') => return Action::FocusContentColumn,
-            KeyCode::Char('l') => return Action::FocusWorkflowColumn,
             _ => {}
         }
     }
@@ -1074,24 +1072,6 @@ mod tests {
 
     fn ctrl(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::CONTROL)
-    }
-
-    #[test]
-    fn ctrl_l_maps_to_focus_workflow_column() {
-        let state = AppState::new();
-        assert!(matches!(
-            map_key(ctrl(KeyCode::Char('l')), &state),
-            Action::FocusWorkflowColumn
-        ));
-    }
-
-    #[test]
-    fn ctrl_h_maps_to_focus_content_column() {
-        let state = AppState::new();
-        assert!(matches!(
-            map_key(ctrl(KeyCode::Char('h')), &state),
-            Action::FocusContentColumn
-        ));
     }
 
     #[test]
