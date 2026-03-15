@@ -45,11 +45,30 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
     let wt_height = (state.detail_worktrees.len() as u16 + 2)
         .max(3)
         .min(area.height / 3);
+
+    // PRs pane: count visual rows (group headers + items), capped at 1/4 of height.
+    let pr_visual_rows = {
+        let mut count = 0u16;
+        let mut prev_group = "";
+        for pr in &state.detail_prs {
+            let g = pr_group_key(pr);
+            if g != prev_group {
+                count += 1;
+                prev_group = g;
+            }
+            count += 1;
+        }
+        count
+    };
+    let pr_height = (pr_visual_rows + 2).max(3).min(area.height / 4);
+
+    // Layout: Info | Worktrees | PRs | Tickets
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(9),
             Constraint::Length(wt_height),
+            Constraint::Length(pr_height),
             Constraint::Min(0),
         ])
         .split(area);
@@ -186,13 +205,6 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
     }
     frame.render_stateful_widget(wt_list, layout[1], &mut wt_state);
 
-    // Bottom row: Tickets (left, fills space) | PRs (right, narrower when empty).
-    let pr_width_pct = if state.detail_prs.is_empty() { 25 } else { 40 };
-    let bottom = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(0), Constraint::Percentage(pr_width_pct)])
-        .split(layout[2]);
-
     // Scoped tickets
     let ticket_focused = state.column_focus == ColumnFocus::Content
         && state.repo_detail_focus == RepoDetailFocus::Tickets;
@@ -264,7 +276,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
     if ticket_focused && !state.filtered_detail_tickets.is_empty() {
         ticket_state.select(Some(state.detail_ticket_index));
     }
-    frame.render_stateful_widget(ticket_list, bottom[0], &mut ticket_state);
+    frame.render_stateful_widget(ticket_list, layout[3], &mut ticket_state);
 
     // PRs pane
     let pr_focused = state.column_focus == ColumnFocus::Content
@@ -368,5 +380,5 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         );
         pr_list_state.select(Some(visual_idx));
     }
-    frame.render_stateful_widget(pr_list, bottom[1], &mut pr_list_state);
+    frame.render_stateful_widget(pr_list, layout[2], &mut pr_list_state);
 }
