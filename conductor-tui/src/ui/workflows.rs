@@ -828,6 +828,8 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
     let context = workflow_context_label(state);
     // In global mode (no worktree or repo selected), show target context on each run row.
     let global_mode = state.selected_worktree_id.is_none() && state.selected_repo_id.is_none();
+    // In repo-detail mode, show slug label rows above run groups and indent run rows.
+    let repo_detail_mode = state.selected_repo_id.is_some() && state.selected_worktree_id.is_none();
 
     let visible = state.visible_workflow_run_rows();
 
@@ -884,6 +886,14 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         Style::default().fg(state.theme.label_secondary),
                     )]));
                 }
+                WorkflowRunRow::SlugLabel { label } => {
+                    return ListItem::new(Line::from(vec![Span::styled(
+                        label.clone(),
+                        Style::default()
+                            .fg(state.theme.label_secondary)
+                            .add_modifier(Modifier::BOLD),
+                    )]));
+                }
                 WorkflowRunRow::Step {
                     step_name,
                     status,
@@ -892,7 +902,13 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                     role,
                     ..
                 } => {
-                    let base_indent = if global_mode { "    " } else { "" };
+                    let base_indent = if global_mode {
+                        "    "
+                    } else if repo_detail_mode {
+                        "  "
+                    } else {
+                        ""
+                    };
                     let level_indent = "  ".repeat(*depth as usize);
                     let (status_symbol, status_color) = status_display(status, &state.theme);
                     return ListItem::new(Line::from(vec![
@@ -921,7 +937,13 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                     depth,
                     ..
                 } => {
-                    let base_indent = if global_mode { "    " } else { "" };
+                    let base_indent = if global_mode {
+                        "    "
+                    } else if repo_detail_mode {
+                        "  "
+                    } else {
+                        ""
+                    };
                     let level_indent = "  ".repeat(*depth as usize);
                     let (status_symbol, status_color) = status_display(status, &state.theme);
                     return ListItem::new(Line::from(vec![
@@ -982,7 +1004,14 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                     };
 
                     // In global mode, indent run rows under their target header.
-                    let indent = if global_mode { "    " } else { "" };
+                    // In repo-detail mode, indent run rows under their slug label.
+                    let indent = if global_mode {
+                        "    "
+                    } else if repo_detail_mode {
+                        "  "
+                    } else {
+                        ""
+                    };
 
                     let mut spans = vec![
                         Span::raw(format!("{indent}{prefix}")),
@@ -1037,7 +1066,13 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                     child_count,
                     ..
                 } => {
-                    let base_indent = if global_mode { "    " } else { "" };
+                    let base_indent = if global_mode {
+                        "    "
+                    } else if repo_detail_mode {
+                        "  "
+                    } else {
+                        ""
+                    };
                     let level_indent = "  ".repeat(*depth as usize);
                     let toggle = if *child_count > 0 {
                         if *collapsed {

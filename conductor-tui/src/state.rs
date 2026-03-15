@@ -173,6 +173,8 @@ pub enum WorkflowRunRow {
         count: usize,
         depth: u8,
     },
+    /// A non-interactive worktree slug label shown above a group of runs in repo-detail mode.
+    SlugLabel { label: String },
 }
 
 impl WorkflowRunRow {
@@ -184,7 +186,8 @@ impl WorkflowRunRow {
             WorkflowRunRow::RepoHeader { .. }
             | WorkflowRunRow::TargetHeader { .. }
             | WorkflowRunRow::Step { .. }
-            | WorkflowRunRow::ParallelGroup { .. } => None,
+            | WorkflowRunRow::ParallelGroup { .. }
+            | WorkflowRunRow::SlugLabel { .. } => None,
         }
     }
 }
@@ -1358,7 +1361,12 @@ impl AppState {
 
         if !global_mode {
             // Non-global mode: flat list, optionally hiding completed/cancelled root runs.
+            // In repo-detail mode (repo selected, no worktree selected), emit SlugLabel rows
+            // above groups of runs sharing the same worktree slug.
+            let repo_detail_mode =
+                self.selected_repo_id.is_some() && self.selected_worktree_id.is_none();
             let mut result = Vec::new();
+            let mut last_emitted_slug: Option<String> = None;
             for run in runs {
                 if child_ids.contains(run.id.as_str()) {
                     continue;
@@ -1371,6 +1379,28 @@ impl AppState {
                 {
                     continue;
                 }
+
+                if repo_detail_mode {
+                    // Extract the worktree slug from target_label (format "repo/slug").
+                    let slug: Option<String> = run
+                        .target_label
+                        .as_deref()
+                        .map(parse_target_label)
+                        .and_then(|(_, target_key, _)| {
+                            if target_key.is_empty() {
+                                None
+                            } else {
+                                Some(target_key)
+                            }
+                        });
+                    if let Some(ref s) = slug {
+                        if last_emitted_slug.as_deref() != Some(s.as_str()) {
+                            result.push(WorkflowRunRow::SlugLabel { label: s.clone() });
+                            last_emitted_slug = Some(s.clone());
+                        }
+                    }
+                }
+
                 let child_count = children_map.get(run.id.as_str()).map_or(0, |v| v.len());
                 let collapsed = self.collapsed_workflow_run_ids.contains(&run.id);
                 result.push(WorkflowRunRow::Parent {
@@ -2612,6 +2642,87 @@ mod tests {
         assert!(
             matches!(&rows[4], WorkflowRunRow::Step { step_name, depth: 1, .. } if step_name == "deploy")
         );
+    }
+
+    // --- repo-detail mode slug label tests ---
+
+    fn make_wf_run_with_target(
+        id: &str,
+        target_label: Option<&str>,
+    ) -> conductor_core::workflow::WorkflowRun {
+        let mut run = make_wf_run_full(id, WorkflowRunStatus::Running, None);
+        run.target_label = target_label.map(|s| s.into());
+        run
+    }
+
+    /// Helper: put state into repo-detail mode (repo selected, no worktree selected).
+    fn set_repo_detail_mode(state: &mut AppState, repo_id: &str) {
+        state.selected_repo_id = Some(repo_id.into());
+        state.selected_worktree_id = None;
+    }
+
+    #[test]
+    fn repo_detail_mode_emits_slug_labels() {
+        let mut state = AppState::new();
+        set_repo_detail_mode(&mut state, "repo-1");
+        state.data.workflow_runs = vec![
+            make_wf_run_with_target("r1", Some("my-repo/feat-123")),
+            make_wf_run_with_target("r2", Some("my-repo/feat-456")),
+        ];
+        let rows = state.visible_workflow_run_rows();
+        // SlugLabel feat-123, Parent r1, SlugLabel feat-456, Parent r2
+        assert_eq!(rows.len(), 4);
+        assert!(matches!(&rows[0], WorkflowRunRow::SlugLabel { label } if label == "feat-123"));
+        assert!(matches!(&rows[1], WorkflowRunRow::Parent { run_id, .. } if run_id == "r1"));
+        assert!(matches!(&rows[2], WorkflowRunRow::SlugLabel { label } if label == "feat-456"));
+        assert!(matches!(&rows[3], WorkflowRunRow::Parent { run_id, .. } if run_id == "r2"));
+    }
+
+    #[test]
+    fn repo_detail_mode_consecutive_deduplication() {
+        let mut state = AppState::new();
+        set_repo_detail_mode(&mut state, "repo-1");
+        state.data.workflow_runs = vec![
+            make_wf_run_with_target("r1", Some("my-repo/feat-123")),
+            make_wf_run_with_target("r2", Some("my-repo/feat-123")),
+            make_wf_run_with_target("r3", Some("my-repo/feat-456")),
+        ];
+        let rows = state.visible_workflow_run_rows();
+        // Only one SlugLabel for feat-123 (consecutive), then one for feat-456
+        assert_eq!(rows.len(), 5); // slug-label + r1 + r2 + slug-label + r3
+        assert!(matches!(&rows[0], WorkflowRunRow::SlugLabel { label } if label == "feat-123"));
+        assert!(matches!(&rows[1], WorkflowRunRow::Parent { run_id, .. } if run_id == "r1"));
+        assert!(matches!(&rows[2], WorkflowRunRow::Parent { run_id, .. } if run_id == "r2"));
+        assert!(matches!(&rows[3], WorkflowRunRow::SlugLabel { label } if label == "feat-456"));
+        assert!(matches!(&rows[4], WorkflowRunRow::Parent { run_id, .. } if run_id == "r3"));
+    }
+
+    #[test]
+    fn repo_detail_mode_no_slug_label_for_missing_target() {
+        let mut state = AppState::new();
+        set_repo_detail_mode(&mut state, "repo-1");
+        state.data.workflow_runs = vec![make_wf_run_with_target("r1", None)];
+        let rows = state.visible_workflow_run_rows();
+        // No target_label → no SlugLabel, just the Parent row
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "r1"));
+    }
+
+    #[test]
+    fn worktree_detail_mode_no_slug_labels() {
+        // Worktree-detail mode must remain unchanged (flat list, no SlugLabel rows).
+        let mut state = AppState::new();
+        state.selected_worktree_id = Some("wt-id".into());
+        state.selected_repo_id = Some("repo-1".into());
+        state.data.workflow_runs = vec![
+            make_wf_run_with_target("r1", Some("my-repo/feat-123")),
+            make_wf_run_with_target("r2", Some("my-repo/feat-456")),
+        ];
+        let rows = state.visible_workflow_run_rows();
+        // No slug labels — just two Parent rows
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "r1"));
+        assert!(matches!(&rows[1], WorkflowRunRow::Parent { run_id, .. } if run_id == "r2"));
     }
 
     // --- ColumnFocus navigation tests ---
