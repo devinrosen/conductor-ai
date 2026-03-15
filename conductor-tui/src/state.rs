@@ -831,6 +831,8 @@ impl DataCache {
 
 pub struct AppState {
     pub view: View,
+    /// The view the user was in before entering WorkflowRunDetail (for back navigation).
+    pub previous_view: Option<View>,
     pub repo_detail_focus: RepoDetailFocus,
     pub modal: Modal,
     pub data: DataCache,
@@ -1014,6 +1016,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             view: View::Dashboard,
+            previous_view: None,
             repo_detail_focus: RepoDetailFocus::Worktrees,
             modal: Modal::None,
             data: DataCache::default(),

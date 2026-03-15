@@ -1183,7 +1183,7 @@ impl App {
                 self.state.selected_worktree_id = None;
             }
             View::WorkflowRunDetail => {
-                self.state.view = View::Dashboard;
+                self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
                 self.state.selected_workflow_run_id = None;
                 self.state.column_focus = crate::state::ColumnFocus::Workflow;
                 self.state.workflows_focus = WorkflowsFocus::Runs;
@@ -1291,6 +1291,7 @@ impl App {
                             self.state.selected_worktree_id = worktree_id;
                         }
                         self.state.selected_workflow_run_id = Some(run_id);
+                        self.state.previous_view = Some(self.state.view);
                         self.state.view = View::WorkflowRunDetail;
                         self.state.workflow_step_index = 0;
                         self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
@@ -6316,6 +6317,19 @@ mod tests {
         assert_eq!(app.state.column_focus, crate::state::ColumnFocus::Workflow);
         assert_eq!(app.state.workflows_focus, WorkflowsFocus::Runs);
         assert!(app.state.selected_workflow_run_id.is_none());
+    }
+
+    #[test]
+    fn test_back_from_workflow_run_detail_restores_previous_view() {
+        let mut app = make_test_app();
+        app.state.view = View::WorkflowRunDetail;
+        app.state.previous_view = Some(View::RepoDetail);
+        app.state.column_focus = crate::state::ColumnFocus::Content;
+        app.handle_action(Action::Back);
+        assert_eq!(app.state.view, View::RepoDetail);
+        assert_eq!(app.state.column_focus, crate::state::ColumnFocus::Workflow);
+        assert!(app.state.selected_workflow_run_id.is_none());
+        assert!(app.state.previous_view.is_none());
     }
 
     #[test]

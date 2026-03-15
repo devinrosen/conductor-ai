@@ -332,17 +332,34 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('w') => return Action::PickWorkflow,
             KeyCode::Char('y') => return Action::WorktreeDetailCopy,
             KeyCode::Char('o') => return Action::WorktreeDetailOpen,
-            KeyCode::Char('j') if focus == WorktreeDetailFocus::InfoPanel => {
+            KeyCode::Char('j')
+                if focus == WorktreeDetailFocus::InfoPanel
+                    && state.column_focus == ColumnFocus::Content =>
+            {
                 return Action::MoveDown
             }
-            KeyCode::Char('k') if focus == WorktreeDetailFocus::InfoPanel => return Action::MoveUp,
-            KeyCode::Char('j') if focus == WorktreeDetailFocus::LogPanel => {
+            KeyCode::Char('k')
+                if focus == WorktreeDetailFocus::InfoPanel
+                    && state.column_focus == ColumnFocus::Content =>
+            {
+                return Action::MoveUp
+            }
+            KeyCode::Char('j')
+                if focus == WorktreeDetailFocus::LogPanel
+                    && state.column_focus == ColumnFocus::Content =>
+            {
                 return Action::AgentActivityDown
             }
-            KeyCode::Char('k') if focus == WorktreeDetailFocus::LogPanel => {
+            KeyCode::Char('k')
+                if focus == WorktreeDetailFocus::LogPanel
+                    && state.column_focus == ColumnFocus::Content =>
+            {
                 return Action::AgentActivityUp
             }
-            KeyCode::Enter if focus == WorktreeDetailFocus::LogPanel => {
+            KeyCode::Enter
+                if focus == WorktreeDetailFocus::LogPanel
+                    && state.column_focus == ColumnFocus::Content =>
+            {
                 return Action::ExpandAgentEvent
             }
             KeyCode::Enter
@@ -666,6 +683,32 @@ mod tests {
     fn worktree_detail_enter_expands_agent_event_when_log_panel_focused() {
         let state = worktree_detail_state_with_focus(WorktreeDetailFocus::LogPanel);
         assert!(matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::ExpandAgentEvent
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_jk_routes_to_move_when_workflow_column_focused() {
+        // When workflow column has focus, j/k should not be captured by WorktreeDetail
+        // and should fall through to MoveDown/MoveUp for workflow column navigation.
+        let mut state = worktree_detail_state_with_focus(WorktreeDetailFocus::LogPanel);
+        state.column_focus = crate::state::ColumnFocus::Workflow;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('j')), &state),
+            Action::MoveDown
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('k')), &state),
+            Action::MoveUp
+        ));
+    }
+
+    #[test]
+    fn worktree_detail_enter_does_not_expand_when_workflow_column_focused() {
+        let mut state = worktree_detail_state_with_focus(WorktreeDetailFocus::LogPanel);
+        state.column_focus = crate::state::ColumnFocus::Workflow;
+        assert!(!matches!(
             map_key(key(KeyCode::Enter), &state),
             Action::ExpandAgentEvent
         ));
