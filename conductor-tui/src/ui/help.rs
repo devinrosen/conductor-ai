@@ -47,11 +47,9 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
         help_line("c", "Create worktree", theme),
         help_line("d", "Delete (worktree/repo)", theme),
         help_line("s", "Sync tickets", theme),
-        help_line("W", "Manage work targets", theme),
         help_line("S", "Manage issue sources", theme),
         help_line("A", "Toggle closed tickets", theme),
         help_line("w", "Open workflow picker", theme),
-        help_line("!", "Toggle status bar expansion", theme),
         help_line("/", "Filter/search", theme),
         Line::from(""),
         Line::from(Span::styled(
