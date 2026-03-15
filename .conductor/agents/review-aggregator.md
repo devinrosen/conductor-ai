@@ -119,16 +119,25 @@ Steps:
    ```
 
    **Step 5b — post or update PR comment** (with off-diff URLs filled in if any were filed):
+
+   First, write the full aggregated comment body to a temp file (avoids shell escaping issues with large/multiline bodies):
+   ```bash
+   cat > /tmp/pr_comment.md << 'CONDUCTOR_COMMENT_EOF'
+   <aggregated summary>
+   CONDUCTOR_COMMENT_EOF
+   ```
+
+   Then post or update using `-F body=@/tmp/pr_comment.md` (capital `-F` with `@filename` tells `gh api` to read the file contents — do NOT use lowercase `-f` which would post the literal path string):
    ```bash
    OWNER_REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
    if [ "$EXISTING_SWARM_COMMENT_ID" != "null" ] && [ -n "$EXISTING_SWARM_COMMENT_ID" ]; then
      # Edit existing swarm comment in place (preserves timestamp and notification thread)
      gh api --method PATCH "repos/$OWNER_REPO/issues/comments/$EXISTING_SWARM_COMMENT_ID" \
-       -f body="<aggregated summary>"
+       -F body=@/tmp/pr_comment.md
    else
      # Post new swarm comment
      gh api --method POST "repos/$OWNER_REPO/issues/<number>/comments" \
-       -f body="<aggregated summary>"
+       -F body=@/tmp/pr_comment.md
    fi
    ```
 
