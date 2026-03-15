@@ -354,9 +354,10 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                 WorkflowRunRow::Parent {
                     collapsed,
                     child_count,
+                    run_id,
                     ..
                 } => {
-                    // Prefix: collapse toggle indicator (only when there are children).
+                    // Prefix: collapse toggle indicator.
                     let prefix = if *child_count > 0 {
                         if *collapsed {
                             "▶ "
@@ -364,7 +365,12 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                             "▼ "
                         }
                     } else {
-                        "  "
+                        // Leaf run: show step expansion state.
+                        if state.expanded_step_run_ids.contains(run_id) {
+                            "▼ "
+                        } else {
+                            "▶ "
+                        }
                     };
 
                     // In global mode, indent run rows under their target header.

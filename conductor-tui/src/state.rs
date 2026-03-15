@@ -1497,7 +1497,15 @@ impl AppState {
 
     /// Call this after updating `self.data.workflow_runs`.
     /// Terminal runs (completed/failed/cancelled) are collapsed on first appearance.
+    /// Running leaf runs (no children) are auto-expanded to show steps.
     pub fn init_collapse_state(&mut self) {
+        let parent_ids: std::collections::HashSet<&str> = self
+            .data
+            .workflow_runs
+            .iter()
+            .filter_map(|r| r.parent_workflow_run_id.as_deref())
+            .collect();
+
         for run in &self.data.workflow_runs {
             if self.collapse_initialized.contains(&run.id) {
                 continue;
@@ -1509,8 +1517,11 @@ impl AppState {
                         | WorkflowRunStatus::Failed
                         | WorkflowRunStatus::Cancelled
                 );
+                let is_leaf = !parent_ids.contains(run.id.as_str());
                 if is_terminal {
                     self.collapsed_workflow_run_ids.insert(run.id.clone());
+                } else if matches!(run.status, WorkflowRunStatus::Running) && is_leaf {
+                    self.expanded_step_run_ids.insert(run.id.clone());
                 }
             }
             self.collapse_initialized.insert(run.id.clone());
