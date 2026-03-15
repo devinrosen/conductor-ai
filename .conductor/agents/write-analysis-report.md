@@ -27,7 +27,9 @@ Prior step context (per-persona UX analysis): {{prior_context}}
    mkdir -p docs/diagrams/analysis
    ```
 
-5. Write the report with the following structure:
+5. From the prior step's analysis, separate the per-persona sections (`## Persona: ...`) from the `## Cross-Persona Conflicts` block. Place per-persona content under `## Per-Persona Analysis` and the conflicts block under `## Conflicts Between Personas`.
+
+6. Write the report with the following structure:
    ```markdown
    # UX Analysis — <date>
 
@@ -39,7 +41,10 @@ Prior step context (per-persona UX analysis): {{prior_context}}
    <2–3 sentence overview of the most important findings>
 
    ## Per-Persona Analysis
-   <paste structured analysis from prior step>
+   <per-persona friction points and dead ends — excluding cross-persona conflicts>
+
+   ## Conflicts Between Personas
+   <cross-persona conflicts extracted from the ## Cross-Persona Conflicts block in the prior step's analysis>
 
    ## Top Recommendations
    1. <highest-impact fix>
@@ -47,11 +52,11 @@ Prior step context (per-persona UX analysis): {{prior_context}}
    3. <third>
    ```
 
-6. Commit the report:
+7. Commit the report:
    ```
    git add docs/diagrams/analysis/
    git commit -m "docs: add UX analysis report <date>"
    ```
 
-7. Emit `<<<CONDUCTOR_OUTPUT>>>` with:
+8. Emit `<<<CONDUCTOR_OUTPUT>>>` with:
    - `context`: path to the written report and a one-sentence summary of the top finding
