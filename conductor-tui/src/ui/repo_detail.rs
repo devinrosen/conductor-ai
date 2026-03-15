@@ -7,7 +7,7 @@ use ratatui::Frame;
 use conductor_core::github::GithubPr;
 
 use super::helpers::{shorten_paths, visual_idx_with_headers};
-use crate::state::{AppState, RepoDetailFocus};
+use crate::state::{AppState, ColumnFocus, RepoDetailFocus};
 
 fn pr_group_key(pr: &GithubPr) -> &'static str {
     if pr.is_draft {
@@ -51,7 +51,8 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         .split(area);
 
     // Repo info header
-    let info_focused = state.repo_detail_focus == RepoDetailFocus::Info;
+    let info_focused = state.column_focus == ColumnFocus::Content
+        && state.repo_detail_focus == RepoDetailFocus::Info;
     let info_border_color = if info_focused {
         state.theme.border_focused
     } else {
@@ -148,7 +149,8 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(info, layout[0]);
 
     // Scoped worktrees
-    let wt_focused = state.repo_detail_focus == RepoDetailFocus::Worktrees;
+    let wt_focused = state.column_focus == ColumnFocus::Content
+        && state.repo_detail_focus == RepoDetailFocus::Worktrees;
     let wt_border = if wt_focused {
         Style::default().fg(state.theme.border_focused)
     } else {
@@ -187,7 +189,8 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         .split(layout[2]);
 
     // Scoped tickets
-    let ticket_focused = state.repo_detail_focus == RepoDetailFocus::Tickets;
+    let ticket_focused = state.column_focus == ColumnFocus::Content
+        && state.repo_detail_focus == RepoDetailFocus::Tickets;
     let ticket_border = if ticket_focused {
         Style::default().fg(state.theme.border_focused)
     } else {
@@ -259,7 +262,8 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_stateful_widget(ticket_list, bottom[0], &mut ticket_state);
 
     // PRs pane
-    let pr_focused = state.repo_detail_focus == RepoDetailFocus::Prs;
+    let pr_focused = state.column_focus == ColumnFocus::Content
+        && state.repo_detail_focus == RepoDetailFocus::Prs;
     let pr_border = if pr_focused {
         Style::default().fg(state.theme.border_focused)
     } else {

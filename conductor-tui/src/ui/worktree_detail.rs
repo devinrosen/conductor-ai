@@ -7,7 +7,7 @@ use ratatui::Frame;
 use conductor_core::worktree::WorktreeStatus;
 
 use super::helpers::shorten_paths;
-use crate::state::{AppState, VisualRow, WorktreeDetailFocus};
+use crate::state::{AppState, ColumnFocus, VisualRow, WorktreeDetailFocus};
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     super::workflow_column::render_with_workflow_column(frame, area, state, render_content);
@@ -283,7 +283,8 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         Layout::vertical([Constraint::Length(info_height), Constraint::Min(3)]).split(area);
 
     // Top pane: worktree info
-    let info_focus = state.worktree_detail_focus == WorktreeDetailFocus::InfoPanel;
+    let info_focus = state.column_focus == ColumnFocus::Content
+        && state.worktree_detail_focus == WorktreeDetailFocus::InfoPanel;
     let info_border_color = if info_focus {
         state.theme.border_focused
     } else {
@@ -312,7 +313,8 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
 fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
     let events = &state.data.agent_events;
 
-    let log_focus = state.worktree_detail_focus == WorktreeDetailFocus::LogPanel;
+    let log_focus = state.column_focus == ColumnFocus::Content
+        && state.worktree_detail_focus == WorktreeDetailFocus::LogPanel;
     let log_border_color = if log_focus {
         state.theme.border_focused
     } else {
