@@ -1190,6 +1190,9 @@ impl App {
             }
             View::WorkflowRunDetail => {
                 self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
+                if let Some(prev_wt_id) = self.state.previous_selected_worktree_id.take() {
+                    self.state.selected_worktree_id = prev_wt_id;
+                }
                 self.state.selected_workflow_run_id = None;
                 self.state.column_focus = crate::state::ColumnFocus::Workflow;
                 self.state.workflows_focus = WorkflowsFocus::Runs;
@@ -1297,6 +1300,8 @@ impl App {
                     {
                         let run_id = run.id.clone();
                         let worktree_id = run.worktree_id.clone();
+                        self.state.previous_selected_worktree_id =
+                            Some(self.state.selected_worktree_id.clone());
                         if self.state.selected_worktree_id.is_none() {
                             self.state.selected_worktree_id = worktree_id;
                         }

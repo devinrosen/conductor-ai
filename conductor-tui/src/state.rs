@@ -833,6 +833,8 @@ pub struct AppState {
     pub view: View,
     /// The view the user was in before entering WorkflowRunDetail (for back navigation).
     pub previous_view: Option<View>,
+    /// The `selected_worktree_id` that was active before entering WorkflowRunDetail.
+    pub previous_selected_worktree_id: Option<Option<String>>,
     pub repo_detail_focus: RepoDetailFocus,
     pub modal: Modal,
     pub data: DataCache,
@@ -1020,6 +1022,7 @@ impl AppState {
         Self {
             view: View::Dashboard,
             previous_view: None,
+            previous_selected_worktree_id: None,
             repo_detail_focus: RepoDetailFocus::Worktrees,
             modal: Modal::None,
             data: DataCache::default(),

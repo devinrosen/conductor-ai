@@ -1378,3 +1378,172 @@ pub(super) fn row_to_workflow_step(row: &rusqlite::Row) -> rusqlite::Result<Work
         structured_output: row.get(24)?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::AgentManager;
+
+    fn setup_db() -> rusqlite::Connection {
+        let conn = crate::test_helpers::setup_db();
+        // Add a second repo and worktrees for cross-repo filtering tests
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+             VALUES ('r2', 'other-repo', '/tmp/repo2', 'https://github.com/test/repo2.git', 'main', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w2', 'r1', 'fix-bug', 'fix/bug', '/tmp/ws/fix-bug', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w3', 'r2', 'other-feat', 'feat/other', '/tmp/ws2/other-feat', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn
+    }
+
+    fn make_parent_id(conn: &rusqlite::Connection, wt_id: &str) -> String {
+        AgentManager::new(conn)
+            .create_run(Some(wt_id), "workflow", None, None)
+            .unwrap()
+            .id
+    }
+
+    // Helper to create a run linked to a worktree (worktree_id set, repo_id null — simulates
+    // the common case where runs are launched from a worktree context).
+    fn create_worktree_run(conn: &rusqlite::Connection, wt_id: &str) -> WorkflowRun {
+        let parent_id = make_parent_id(conn, wt_id);
+        WorkflowManager::new(conn)
+            .create_workflow_run("wf", Some(wt_id), &parent_id, false, "manual", None)
+            .unwrap()
+    }
+
+    // Helper to create a run linked directly to a repo (repo_id set, worktree_id null).
+    fn create_repo_run(conn: &rusqlite::Connection, repo_id: &str) -> WorkflowRun {
+        // Need a valid parent agent run; use w1 as the worktree for the agent run.
+        let parent_id = make_parent_id(conn, "w1");
+        WorkflowManager::new(conn)
+            .create_workflow_run_with_targets(
+                "wf",
+                None,
+                None,
+                Some(repo_id),
+                &parent_id,
+                false,
+                "manual",
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn test_list_workflow_runs_for_repo_includes_worktree_runs() {
+        // Runs linked to a worktree (repo_id NULL) should appear when querying by repo.
+        let conn = setup_db();
+        let run = create_worktree_run(&conn, "w1");
+        let runs = WorkflowManager::new(&conn)
+            .list_workflow_runs_for_repo("r1", 50)
+            .unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, run.id);
+    }
+
+    #[test]
+    fn test_list_workflow_runs_for_repo_includes_repo_targeted_runs() {
+        // Runs with repo_id set directly should also appear.
+        let conn = setup_db();
+        let run = create_repo_run(&conn, "r1");
+        let runs = WorkflowManager::new(&conn)
+            .list_workflow_runs_for_repo("r1", 50)
+            .unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, run.id);
+    }
+
+    #[test]
+    fn test_list_workflow_runs_for_repo_distinct_no_duplicates() {
+        // A run that matches both paths (repo_id = r1 AND worktree belongs to r1) should
+        // appear exactly once thanks to SELECT DISTINCT.
+        let conn = setup_db();
+        let parent_id = make_parent_id(&conn, "w1");
+        WorkflowManager::new(&conn)
+            .create_workflow_run_with_targets(
+                "wf",
+                Some("w1"),
+                None,
+                Some("r1"),
+                &parent_id,
+                false,
+                "manual",
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let runs = WorkflowManager::new(&conn)
+            .list_workflow_runs_for_repo("r1", 50)
+            .unwrap();
+        assert_eq!(
+            runs.len(),
+            1,
+            "run matching both join paths must appear only once"
+        );
+    }
+
+    #[test]
+    fn test_list_workflow_runs_for_repo_cross_repo_filtering() {
+        // Runs belonging to r2 must not appear when querying r1, and vice versa.
+        let conn = setup_db();
+        create_worktree_run(&conn, "w1"); // r1
+        create_worktree_run(&conn, "w3"); // r2 via worktree
+        create_repo_run(&conn, "r2"); // r2 directly
+
+        let r1_runs = WorkflowManager::new(&conn)
+            .list_workflow_runs_for_repo("r1", 50)
+            .unwrap();
+        assert_eq!(r1_runs.len(), 1);
+        let r2_runs = WorkflowManager::new(&conn)
+            .list_workflow_runs_for_repo("r2", 50)
+            .unwrap();
+        assert_eq!(r2_runs.len(), 2);
+    }
+
+    #[test]
+    fn test_list_workflow_runs_for_repo_limit() {
+        // Only `limit` most recent runs should be returned.
+        let conn = setup_db();
+        for _ in 0..5 {
+            create_worktree_run(&conn, "w1");
+        }
+        let runs = WorkflowManager::new(&conn)
+            .list_workflow_runs_for_repo("r1", 3)
+            .unwrap();
+        assert_eq!(runs.len(), 3);
+    }
+
+    #[test]
+    fn test_list_workflow_runs_for_repo_multiple_worktrees() {
+        // Runs from different worktrees of the same repo should all appear.
+        let conn = setup_db();
+        create_worktree_run(&conn, "w1");
+        create_worktree_run(&conn, "w2");
+        let runs = WorkflowManager::new(&conn)
+            .list_workflow_runs_for_repo("r1", 50)
+            .unwrap();
+        assert_eq!(runs.len(), 2);
+    }
+
+    #[test]
+    fn test_list_workflow_runs_for_repo_empty() {
+        let conn = setup_db();
+        let runs = WorkflowManager::new(&conn)
+            .list_workflow_runs_for_repo("r1", 50)
+            .unwrap();
+        assert!(runs.is_empty());
+    }
+}
