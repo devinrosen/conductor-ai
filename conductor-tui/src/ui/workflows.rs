@@ -985,16 +985,16 @@ fn event_kind_style(kind: &str) -> Style {
     }
 }
 
-fn status_display(status: &str, theme: &Theme) -> (String, Color) {
+fn status_display(status: &str, theme: &Theme) -> (&'static str, Color) {
     match status {
-        "pending" => ("○ pending".to_string(), Color::DarkGray),
-        "running" => ("⚙ running".to_string(), theme.status_running),
-        "completed" => ("✓ completed".to_string(), theme.status_completed),
-        "failed" => ("✗ failed".to_string(), theme.status_failed),
-        "cancelled" => ("⊘ cancelled".to_string(), theme.status_cancelled),
-        "waiting" => ("⏸ waiting".to_string(), theme.status_waiting),
-        "skipped" => ("⊘ skipped".to_string(), Color::DarkGray),
-        _ => (format!("? {status}"), Color::White),
+        "pending" => ("○", Color::DarkGray),
+        "running" => ("⚙", theme.label_accent),
+        "completed" => ("✓", theme.status_completed),
+        "failed" => ("✗", theme.status_failed),
+        "cancelled" => ("⊘", theme.status_cancelled),
+        "waiting" => ("⏸", theme.status_waiting),
+        "skipped" => ("⊘", Color::DarkGray),
+        _ => ("?", Color::White),
     }
 }
 
