@@ -1473,15 +1473,6 @@ impl AppState {
         }
     }
 
-    /// Get the currently selected worktree from the dashboard list.
-    /// Returns `None` when the cursor is on a repo row.
-    pub fn selected_worktree(&self) -> Option<&Worktree> {
-        match self.dashboard_rows().get(self.dashboard_index)? {
-            DashboardRow::Worktree(idx) => self.data.worktrees.get(*idx),
-            DashboardRow::Repo(_) => None,
-        }
-    }
-
     /// Get the currently selected ticket from the dashboard list.
     #[allow(dead_code)]
     pub fn selected_ticket(&self) -> Option<&Ticket> {

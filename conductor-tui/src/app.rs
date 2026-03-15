@@ -3552,7 +3552,7 @@ impl App {
                             },
                         };
                     }
-                    None => return,
+                    None => (),
                 }
             }
             View::WorktreeDetail => {
