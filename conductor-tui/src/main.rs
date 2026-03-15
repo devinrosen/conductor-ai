@@ -3,6 +3,7 @@ mod app;
 mod background;
 mod event;
 mod input;
+mod notify;
 mod state;
 mod theme;
 mod ui;

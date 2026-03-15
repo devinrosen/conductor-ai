@@ -36,6 +36,31 @@ fn default_work_targets() -> Vec<WorkTarget> {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NotificationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub workflows: WorkflowNotificationConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowNotificationConfig {
+    #[serde(default)]
+    pub on_success: bool,
+    #[serde(default = "default_true")]
+    pub on_failure: bool,
+}
+
+impl Default for WorkflowNotificationConfig {
+    fn default() -> Self {
+        Self {
+            on_success: false,
+            on_failure: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub general: GeneralConfig,
@@ -43,6 +68,8 @@ pub struct Config {
     pub defaults: DefaultsConfig,
     #[serde(default)]
     pub github: GitHubSettings,
+    #[serde(default)]
+    pub notifications: NotificationConfig,
 }
 
 /// Top-level `[github]` section.
@@ -629,6 +656,31 @@ app_id = 123456
             msg.contains("github.apps.developer"),
             "error message should mention github.apps.developer, got: {msg}"
         );
+    }
+
+    #[test]
+    fn test_notification_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(!config.notifications.enabled);
+        assert!(!config.notifications.workflows.on_success);
+        assert!(config.notifications.workflows.on_failure);
+    }
+
+    #[test]
+    fn test_notification_full_override() {
+        let config: Config = toml::from_str(
+            r#"
+            [notifications]
+            enabled = true
+            [notifications.workflows]
+            on_success = true
+            on_failure = false
+        "#,
+        )
+        .unwrap();
+        assert!(config.notifications.enabled);
+        assert!(config.notifications.workflows.on_success);
+        assert!(!config.notifications.workflows.on_failure);
     }
 
     #[test]

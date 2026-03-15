@@ -150,6 +150,7 @@ pub async fn run_workflow(
     let wt_id = worktree_id.clone();
 
     // Spawn background task to run the workflow
+    let wt_target_label = format!("{repo_slug}/{wt_slug}");
     let state_clone = state.clone();
     tokio::task::spawn(async move {
         let result = {
@@ -176,7 +177,6 @@ pub async fn run_workflow(
                 ..Default::default()
             };
 
-            let wt_target_label = format!("{repo_slug}/{wt_slug}");
             let input = WorkflowExecInput {
                 conn: &db,
                 config: &config,
@@ -201,11 +201,23 @@ pub async fn run_workflow(
 
         match result {
             Ok(res) => {
-                let status = if res.all_succeeded {
-                    "completed"
-                } else {
-                    "failed"
-                };
+                let succeeded = res.all_succeeded;
+                let status = if succeeded { "completed" } else { "failed" };
+
+                // Fire desktop notification off the async executor
+                if let Ok(cfg) = conductor_core::config::load_config() {
+                    let wf_name = workflow_name.clone();
+                    let label = wt_target_label.clone();
+                    tokio::task::spawn_blocking(move || {
+                        crate::notify::fire_workflow_notification(
+                            &cfg.notifications,
+                            &wf_name,
+                            Some(&label),
+                            succeeded,
+                        );
+                    });
+                }
+
                 state_clone
                     .events
                     .emit(ConductorEvent::WorkflowRunStatusChanged {
