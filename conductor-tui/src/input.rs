@@ -294,7 +294,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Right | KeyCode::Char('l')
                 if state.workflows_focus == crate::state::WorkflowsFocus::Defs =>
             {
-                return Action::NextPanel;
+                return Action::ToggleDefStepTree;
             }
             _ => {}
         }

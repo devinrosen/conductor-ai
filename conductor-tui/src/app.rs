@@ -693,6 +693,23 @@ impl App {
             Action::RejectGate => self.handle_reject_gate(),
             Action::ViewWorkflowDef => self.handle_view_workflow_def(),
             Action::EditWorkflowDef => self.handle_edit_workflow_def(),
+            Action::ToggleDefStepTree => {
+                if self.state.workflow_def_focus == WorkflowDefFocus::Steps {
+                    self.state.workflow_def_focus = WorkflowDefFocus::List;
+                } else {
+                    let has_steps = self
+                        .state
+                        .data
+                        .workflow_defs
+                        .get(self.state.workflow_def_index)
+                        .map(|d| !d.body.is_empty())
+                        .unwrap_or(false);
+                    if has_steps {
+                        self.state.workflow_def_focus = WorkflowDefFocus::Steps;
+                        self.state.workflow_def_step_index = 0;
+                    }
+                }
+            }
             Action::GateInputChar(c) => {
                 if let Modal::GateAction {
                     ref mut feedback, ..
@@ -1223,27 +1240,9 @@ impl App {
         use crate::state::ColumnFocus;
         match self.state.column_focus {
             ColumnFocus::Workflow => {
-                if self.state.workflows_focus == WorkflowsFocus::Defs {
-                    if self.state.workflow_def_focus == WorkflowDefFocus::Steps {
-                        // Exit step tree pane → back to definition list.
-                        self.state.workflow_def_focus = self.state.workflow_def_focus.toggle();
-                    } else {
-                        // Enter step tree pane only if the selected def has steps.
-                        let has_steps = self
-                            .state
-                            .data
-                            .workflow_defs
-                            .get(self.state.workflow_def_index)
-                            .map(|d| !d.body.is_empty())
-                            .unwrap_or(false);
-                        if has_steps {
-                            self.state.workflow_def_focus = self.state.workflow_def_focus.toggle();
-                            self.state.workflow_def_step_index = 0;
-                        } else {
-                            // Fall through to the normal Defs↔Runs toggle.
-                            self.state.workflows_focus = self.state.workflows_focus.toggle();
-                        }
-                    }
+                // Exit step tree first if active, then Tab toggles Defs↔Runs.
+                if self.state.workflow_def_focus == WorkflowDefFocus::Steps {
+                    self.state.workflow_def_focus = WorkflowDefFocus::List;
                 } else {
                     self.state.workflows_focus = self.state.workflows_focus.toggle();
                 }
