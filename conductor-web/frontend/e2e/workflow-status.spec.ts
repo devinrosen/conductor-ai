@@ -2,6 +2,9 @@ import { test, expect } from "./fixtures";
 import type { APIRequestContext } from "@playwright/test";
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Poll GET /api/workflows/runs/{id} until status matches or timeout elapses. */
 async function waitForRunStatus(
