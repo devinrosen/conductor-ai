@@ -812,6 +812,8 @@ impl<'a> WorkflowManager<'a> {
 
     /// List recent workflow runs for a specific repo, ordered by started_at DESC.
     /// Includes runs from all worktrees belonging to the repo, plus any repo-targeted runs.
+    /// Matches via `workflow_runs.repo_id` OR via the worktree join, since worktree-targeted
+    /// runs may have `repo_id = NULL` and are only linked to the repo through `worktrees.repo_id`.
     pub fn list_workflow_runs_for_repo(
         &self,
         repo_id: &str,
@@ -819,7 +821,13 @@ impl<'a> WorkflowManager<'a> {
     ) -> Result<Vec<WorkflowRun>> {
         query_collect(
             self.conn,
-            &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE repo_id = ?1 ORDER BY started_at DESC LIMIT {limit}"),
+            &format!(
+                "SELECT DISTINCT workflow_runs.* \
+                 FROM workflow_runs \
+                 LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+                 WHERE workflow_runs.repo_id = ?1 OR worktrees.repo_id = ?1 \
+                 ORDER BY workflow_runs.started_at DESC LIMIT {limit}"
+            ),
             params![repo_id],
             row_to_workflow_run,
         )
