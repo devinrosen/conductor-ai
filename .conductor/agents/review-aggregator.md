@@ -27,6 +27,15 @@ Steps:
    - If `{{pr_number}}` is set and does not contain `{{` (i.e. it was substituted), use it directly.
    - Otherwise run: `gh pr view --json number -q .number`
 
+2b. Look up any existing swarm comment (skip if `{{dry_run}}` is `true`):
+   ```bash
+   OWNER_REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+   EXISTING_SWARM_COMMENT_ID=$(gh api "repos/$OWNER_REPO/issues/<number>/comments" \
+     --jq '[.[] | select(.body | contains("<!-- conductor-review-swarm -->"))] | first | .id' \
+     2>/dev/null || echo "null")
+   ```
+   Store `EXISTING_SWARM_COMMENT_ID` (a number string or `"null"`) for use in Phase 3 Step 5b.
+
 3. If there are any off-diff findings (skip if `{{dry_run}}` is `true`), run these two reads in sequence:
 
    a. Fetch existing open off-diff issues once (used for dedup across all findings):
@@ -58,6 +67,8 @@ Steps:
    ### Suggestions (non-blocking)
    - **<reviewer>**: <suggestion text>
    - **<reviewer>**: <suggestion text>
+
+   <!-- conductor-review-swarm -->
    ```
    (Omit the `### Suggestions` section entirely if there are no suggestions.)
 
@@ -82,6 +93,8 @@ Steps:
 
    ### Suggestions (non-blocking)
    - **<reviewer>**: <suggestion text>
+
+   <!-- conductor-review-swarm -->
    ```
    (Omit the `### Suggestions` section entirely if there are no suggestions.)
 
@@ -105,9 +118,18 @@ Steps:
      --body "**Severity:** <severity>\n**Location:** <file>:<line>\n**Found by:** <reviewer agent>\n**PR branch:** <branch>\n\n<body>"
    ```
 
-   **Step 5b — post PR comment** (with off-diff URLs filled in if any were filed):
-   ```
-   gh pr comment <number> --body "<aggregated summary>"
+   **Step 5b — post or update PR comment** (with off-diff URLs filled in if any were filed):
+   ```bash
+   OWNER_REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+   if [ "$EXISTING_SWARM_COMMENT_ID" != "null" ] && [ -n "$EXISTING_SWARM_COMMENT_ID" ]; then
+     # Edit existing swarm comment in place (preserves timestamp and notification thread)
+     gh api --method PATCH "repos/$OWNER_REPO/issues/comments/$EXISTING_SWARM_COMMENT_ID" \
+       -f body="<aggregated summary>"
+   else
+     # Post new swarm comment
+     gh api --method POST "repos/$OWNER_REPO/issues/<number>/comments" \
+       -f body="<aggregated summary>"
+   fi
    ```
 
    **Step 5c — attempt formal review (best-effort; may fail if the bot opened the PR):**
