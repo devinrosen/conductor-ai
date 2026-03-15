@@ -1,0 +1,103 @@
+%% Generated 2026-03-15 — User journey sequence diagram covering the main conductor-ai flows
+sequenceDiagram
+    actor User
+    participant UI as CLI / TUI / Web
+    participant Core as conductor-core
+    participant DB as SQLite
+    participant Git as git / gh CLI
+    participant Tmux as tmux
+    participant Claude as Claude Code
+
+    rect rgb(220, 240, 255)
+        Note over User, DB: Repo Registration Flow
+        User->>UI: register repo (path, remote_url)
+        UI->>Core: RepoManager::register()
+        Core->>DB: INSERT INTO repos
+        DB-->>Core: repo record
+        Core-->>UI: Repo struct
+        UI-->>User: repo registered ✓
+    end
+
+    rect rgb(220, 255, 220)
+        Note over User, Git: Worktree Creation Flow
+        User->>UI: create worktree (repo, name)
+        UI->>Core: WorktreeManager::create()
+        Core->>DB: INSERT INTO worktrees (status=active)
+        Core->>Git: git branch + git worktree add
+        Core->>Git: install JS deps (if needed)
+        Git-->>Core: worktree path
+        Core-->>UI: Worktree struct
+        UI-->>User: worktree created at ~/.conductor/workspaces/...
+    end
+
+    rect rgb(255, 240, 220)
+        Note over User, Claude: Agent Run Flow
+        User->>UI: start agent (prompt)
+        UI->>Core: AgentManager::create_run()
+        Core->>DB: INSERT INTO agent_runs (status=running)
+        Core->>Tmux: new-window (claude-code + prompt)
+        Tmux->>Claude: spawn with log file
+        loop Agent working
+            Claude-->>Tmux: writes to log file
+            Core->>Core: scan log (polling)
+        end
+        alt Agent needs feedback
+            Claude-->>Core: [NEEDS_FEEDBACK] in log
+            Core->>DB: INSERT feedback_requests (status=pending)
+            Core->>DB: UPDATE agent_runs (status=waiting_for_feedback)
+            DB-->>UI: feedback_request event
+            UI-->>User: feedback prompt shown
+            User->>UI: provide feedback response
+            UI->>Core: feedback respond()
+            Core->>DB: UPDATE feedback_requests (status=responded)
+            Core->>Tmux: inject response into agent
+            Core->>DB: UPDATE agent_runs (status=running)
+        end
+        Claude-->>Core: result event JSON in log
+        Core->>DB: UPDATE agent_runs (status=completed, result_text, cost_usd)
+        Core-->>UI: run completed
+        UI-->>User: result displayed
+    end
+
+    rect rgb(240, 220, 255)
+        Note over User, Claude: Workflow Execution Flow
+        User->>UI: run workflow (name, inputs)
+        UI->>Core: WorkflowManager::run_workflow()
+        Core->>Core: WorkflowDSL::parse(.wf file)
+        Core->>DB: INSERT workflow_runs (status=pending)
+        Core->>DB: UPDATE workflow_runs (status=running)
+        loop For each workflow step
+            alt Actor step
+                Core->>Core: AgentManager::create_run()
+                Core->>DB: INSERT workflow_run_steps (status=running)
+                Core->>Tmux: spawn Claude Code
+                Claude-->>Core: completes
+                Core->>DB: UPDATE workflow_run_steps (status=completed)
+            else Gate step
+                Core->>DB: UPDATE workflow_run_steps (status=waiting)
+                Core-->>UI: gate prompt shown
+                User->>UI: approve / reject gate
+                UI->>Core: gate approve / reject
+                Core->>DB: UPDATE workflow_run_steps (gate_approved_by, status)
+            else Skipped (condition false)
+                Core->>DB: UPDATE workflow_run_steps (status=skipped)
+            end
+        end
+        Core->>DB: UPDATE workflow_runs (status=completed)
+        Core-->>UI: workflow finished
+        UI-->>User: result summary displayed
+    end
+
+    rect rgb(255, 255, 210)
+        Note over User, Git: Push & PR Flow
+        User->>UI: push worktree branch
+        UI->>Core: WorktreeManager::push()
+        Core->>Git: git push -u origin branch
+        Git-->>Core: push result
+        User->>UI: create PR
+        UI->>Core: WorktreeManager::create_pr()
+        Core->>Git: gh pr create
+        Git-->>Core: PR URL
+        Core-->>UI: PR URL
+        UI-->>User: PR created ✓
+    end

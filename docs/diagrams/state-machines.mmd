@@ -1,0 +1,64 @@
+%% Generated 2026-03-15 — Key state transitions for AgentRun, Worktree, WorkflowRun, and WorkflowStep
+stateDiagram-v2
+    [*] --> AgentRunStatus
+    state AgentRunStatus {
+        [*] --> Running : create_run()
+        Running --> WaitingForFeedback : agent emits [NEEDS_FEEDBACK]
+        WaitingForFeedback --> Running : feedback responded
+        WaitingForFeedback --> Cancelled : dismissed
+        Running --> Completed : result event captured
+        Running --> Failed : tmux window lost / error
+        Running --> Cancelled : user cancels
+        Completed --> [*]
+        Failed --> [*]
+        Cancelled --> [*]
+    }
+
+    [*] --> WorktreeStatus
+    state WorktreeStatus {
+        [*] --> Active : worktree create
+        Active --> Merged : PR merged
+        Active --> Abandoned : user abandons
+        Merged --> [*]
+        Abandoned --> [*]
+    }
+
+    [*] --> WorkflowRunStatus
+    state WorkflowRunStatus {
+        [*] --> Pending : run_workflow()
+        Pending --> Running : engine starts
+        Running --> Waiting : gate step reached
+        Waiting --> Running : gate approved
+        Waiting --> Failed : gate rejected / timed out
+        Running --> Completed : all steps done
+        Running --> Failed : step error
+        Running --> Cancelled : user cancels
+        Completed --> [*]
+        Failed --> [*]
+        Cancelled --> [*]
+    }
+
+    [*] --> WorkflowStepStatus
+    state WorkflowStepStatus {
+        [*] --> Pending : step defined
+        Pending --> Running : engine dispatches
+        Running --> Completed : step succeeds
+        Running --> Failed : step errors
+        Running --> Waiting : gate step
+        Waiting --> Running : gate approved
+        Waiting --> TimedOut : gate timeout
+        Pending --> Skipped : condition false
+        Completed --> [*]
+        Failed --> [*]
+        TimedOut --> [*]
+        Skipped --> [*]
+    }
+
+    [*] --> FeedbackStatus
+    state FeedbackStatus {
+        [*] --> Pending : agent requests feedback
+        Pending --> Responded : human responds
+        Pending --> Dismissed : human dismisses
+        Responded --> [*]
+        Dismissed --> [*]
+    }

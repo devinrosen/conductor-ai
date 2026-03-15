@@ -1,0 +1,58 @@
+%% Generated 2026-03-15 — How data moves between system layers in conductor-ai
+flowchart LR
+    subgraph UI["User Interface Layer"]
+        U_CLI["CLI\nUser"]
+        U_TUI["TUI\nUser"]
+        U_WEB["Web\nUser"]
+    end
+
+    subgraph Managers["Manager Layer (conductor-core)"]
+        RM["RepoManager"]
+        WM["WorktreeManager"]
+        AM["AgentManager"]
+        TS["TicketSyncer"]
+        WFM["WorkflowManager +\nWorkflowEngine"]
+    end
+
+    subgraph DB["Database Layer"]
+        T_repos["repos"]
+        T_wt["worktrees"]
+        T_tickets["tickets"]
+        T_runs["agent_runs\nagent_run_steps\nagent_run_events"]
+        T_feedback["feedback_requests"]
+        T_wfruns["workflow_runs\nworkflow_run_steps"]
+    end
+
+    subgraph Ext["External Tools"]
+        GIT["git\n(worktree ops)"]
+        GHCLI["gh CLI\n(issue sync / PR create)"]
+        TMUX["tmux\n(agent process)"]
+        CLAUDE["Claude Code\n(AI agent)"]
+        JIRA["jira-acli\n(ticket sync)"]
+    end
+
+    U_CLI & U_TUI & U_WEB -->|"register / create / start"| Managers
+
+    RM -->|"INSERT / SELECT / DELETE"| T_repos
+    WM -->|"INSERT / SELECT / UPDATE"| T_wt
+    WM -->|"git worktree add/remove"| GIT
+    TS -->|"UPSERT ON CONFLICT"| T_tickets
+    TS -->|"gh issue list"| GHCLI
+    TS -->|"jira-acli list"| JIRA
+    AM -->|"INSERT run record"| T_runs
+    AM -->|"INSERT feedback"| T_feedback
+    AM -->|"tmux new-window"| TMUX
+    TMUX -->|"spawns"| CLAUDE
+    CLAUDE -->|"writes log file"| AM
+    AM -->|"scan log → parse result"| T_runs
+    WFM -->|"INSERT / UPDATE"| T_wfruns
+    WFM -->|"spawn child AgentRun"| AM
+
+    T_repos --> RM
+    T_wt --> WM
+    T_tickets --> TS
+    T_runs --> AM
+    T_feedback --> AM
+    T_wfruns --> WFM
+
+    Managers -->|"results / structs"| U_CLI & U_TUI & U_WEB

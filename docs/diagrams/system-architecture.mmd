@@ -1,0 +1,61 @@
+%% Generated 2026-03-15 — High-level component/module graph for conductor-ai
+graph TD
+    subgraph Binaries["Binaries (conductor-cli / conductor-tui / conductor-web)"]
+        CLI["conductor-cli\n(clap subcommands)"]
+        TUI["conductor-tui\n(ratatui + crossterm)"]
+        WEB["conductor-web\n(axum + React frontend)"]
+    end
+
+    subgraph Core["conductor-core (library)"]
+        subgraph Managers
+            RM["RepoManager\nrepo.rs"]
+            WM["WorktreeManager\nworktree.rs"]
+            AM["AgentManager\nagent.rs"]
+            TS["TicketSyncer\ntickets.rs"]
+            WFM["WorkflowManager\nworkflow/manager.rs"]
+            ISM["IssueSourceManager\nissue_source.rs"]
+        end
+
+        subgraph WorkflowEngine["Workflow Engine"]
+            WFE["WorkflowEngine\nworkflow/engine.rs"]
+            WFX["Executors\nworkflow/executors.rs"]
+            WFD["DSL Parser\nworkflow_dsl.rs"]
+        end
+
+        ORCH["Orchestrator\norchestrator.rs"]
+        CFG["Config\nconfig.rs"]
+        ERR["ConductorError\nerror.rs"]
+        GH["GitHub Client\ngithub.rs"]
+        JIRA["Jira Client\njira_acli.rs"]
+        DB["DB Layer\ndb/mod.rs + migrations"]
+    end
+
+    subgraph Storage["Persistent Storage"]
+        SQLITE[("SQLite\n~/.conductor/conductor.db\nWAL mode")]
+        FS["Filesystem\n~/.conductor/workspaces/\n<repo>/<worktree>/"]
+    end
+
+    subgraph External["External Tools"]
+        GIT["git CLI"]
+        GHCLI["gh CLI"]
+        TMUX["tmux"]
+        CLAUDE["Claude Code CLI"]
+    end
+
+    CLI --> RM & WM & AM & TS & WFM
+    TUI --> RM & WM & AM & TS & WFM
+    WEB --> RM & WM & AM & TS & WFM
+
+    Managers --> DB
+    DB --> SQLITE
+    WM --> GIT & FS
+    AM --> TMUX & CLAUDE
+    TS --> GH & JIRA
+    GH --> GHCLI
+    WFM --> WFE
+    WFE --> WFX
+    WFX --> AM & ORCH
+    WFD --> WFM
+
+    CFG -.-> Managers
+    ERR -.-> Core

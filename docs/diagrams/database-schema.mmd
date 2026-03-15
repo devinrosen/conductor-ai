@@ -1,0 +1,193 @@
+%% Generated 2026-03-15 — Entity-relationship diagram for conductor.db (36 migrations)
+erDiagram
+    repos {
+        text id PK
+        text slug
+        text local_path
+        text remote_url
+        text default_branch
+        text workspace_dir
+        text created_at
+        text model
+        bool allow_agent_issue_creation
+    }
+
+    repo_issue_sources {
+        text id PK
+        text repo_id FK
+        text source_type
+        text config_json
+    }
+
+    worktrees {
+        text id PK
+        text repo_id FK
+        text slug
+        text branch
+        text path
+        text ticket_id FK
+        text status
+        text created_at
+        text completed_at
+        text base_branch
+        text model
+    }
+
+    tickets {
+        text id PK
+        text repo_id FK
+        text source_type
+        text source_id
+        text title
+        text body
+        text state
+        text labels
+        text assignee
+        text priority
+        text url
+        text synced_at
+        text raw_json
+    }
+
+    ticket_labels {
+        text ticket_id FK
+        text label
+        text color
+    }
+
+    agent_runs {
+        text id PK
+        text worktree_id FK
+        text claude_session_id
+        text prompt
+        text status
+        text result_text
+        real cost_usd
+        int num_turns
+        int duration_ms
+        text started_at
+        text ended_at
+        text tmux_window
+        text log_file
+        text model
+        text plan
+        text parent_run_id FK
+        int input_tokens
+        int output_tokens
+        int cache_read_input_tokens
+        int cache_creation_input_tokens
+        text bot_name
+    }
+
+    agent_run_steps {
+        text id PK
+        text run_id FK
+        int position
+        text description
+        text status
+        text started_at
+        text completed_at
+    }
+
+    agent_run_events {
+        text id PK
+        text run_id FK
+        text kind
+        text summary
+        text started_at
+        text ended_at
+        text metadata
+    }
+
+    agent_created_issues {
+        text id PK
+        text agent_run_id FK
+        text repo_id FK
+        text source_type
+        text source_id
+        text title
+        text url
+        text created_at
+    }
+
+    feedback_requests {
+        text id PK
+        text run_id FK
+        text prompt
+        text response
+        text status
+        text created_at
+        text responded_at
+    }
+
+    workflow_runs {
+        text id PK
+        text workflow_name
+        text worktree_id FK
+        text parent_run_id FK
+        text status
+        bool dry_run
+        text trigger
+        text started_at
+        text ended_at
+        text result_summary
+        text definition_snapshot
+        text inputs
+        text ticket_id FK
+        text repo_id FK
+        text parent_workflow_run_id FK
+        text target_label
+        text default_bot_name
+    }
+
+    workflow_run_steps {
+        text id PK
+        text workflow_run_id FK
+        text step_name
+        text role
+        bool can_commit
+        text condition_expr
+        text status
+        text child_run_id FK
+        int position
+        text started_at
+        text ended_at
+        text result_text
+        bool condition_met
+        int iteration
+        text parallel_group_id
+        text context_out
+        text markers_out
+        int retry_count
+        text gate_type
+        text gate_prompt
+        text gate_timeout
+        text gate_approved_by
+        text gate_approved_at
+        text gate_feedback
+        text structured_output
+    }
+
+    _conductor_meta {
+        text key PK
+        text value
+    }
+
+    repos ||--o{ repo_issue_sources : "has"
+    repos ||--o{ worktrees : "has"
+    repos ||--o{ tickets : "has"
+    repos ||--o{ agent_created_issues : "has"
+    repos ||--o{ workflow_runs : "targets"
+    worktrees ||--o{ agent_runs : "has"
+    worktrees ||--o{ workflow_runs : "runs in"
+    tickets ||--o{ worktrees : "linked to"
+    tickets ||--o{ workflow_runs : "targets"
+    agent_runs ||--o{ agent_run_steps : "has"
+    agent_runs ||--o{ agent_run_events : "emits"
+    agent_runs ||--o{ feedback_requests : "requests"
+    agent_runs ||--o{ agent_created_issues : "creates"
+    agent_runs ||--o| agent_runs : "parent"
+    workflow_runs ||--o{ workflow_run_steps : "has"
+    workflow_runs ||--o| workflow_runs : "parent"
+    workflow_run_steps ||--o| agent_runs : "spawns"
+    ticket_labels }o--|| tickets : "labels"
