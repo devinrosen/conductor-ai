@@ -26,46 +26,44 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
         let mut seen: HashMap<String, WorkflowRunStatus> = HashMap::new();
         loop {
             thread::sleep(interval);
-            if let Some(action) = poll_data() {
+            if let Some((action, config)) = poll_data() {
                 if let Action::DataRefreshed(ref payload) = action {
-                    if let Ok(config) = load_config() {
-                        let all_runs = payload
-                            .latest_workflow_runs_by_worktree
-                            .values()
-                            .chain(payload.active_non_worktree_workflow_runs.iter());
-                        for run in all_runs {
-                            let prev_terminal = seen
-                                .get(&run.id)
-                                .map(|s| {
-                                    matches!(
-                                        s,
-                                        WorkflowRunStatus::Completed | WorkflowRunStatus::Failed
-                                    )
-                                })
-                                .unwrap_or(false);
-                            let now_terminal = matches!(
-                                run.status,
-                                WorkflowRunStatus::Completed | WorkflowRunStatus::Failed
+                    let all_runs = payload
+                        .latest_workflow_runs_by_worktree
+                        .values()
+                        .chain(payload.active_non_worktree_workflow_runs.iter());
+                    for run in all_runs {
+                        let prev_terminal = seen
+                            .get(&run.id)
+                            .map(|s| {
+                                matches!(
+                                    s,
+                                    WorkflowRunStatus::Completed | WorkflowRunStatus::Failed
+                                )
+                            })
+                            .unwrap_or(false);
+                        let now_terminal = matches!(
+                            run.status,
+                            WorkflowRunStatus::Completed | WorkflowRunStatus::Failed
+                        );
+                        if now_terminal && !prev_terminal {
+                            crate::notify::fire_workflow_notification(
+                                &config.notifications,
+                                &run.workflow_name,
+                                run.target_label.as_deref(),
+                                matches!(run.status, WorkflowRunStatus::Completed),
                             );
-                            if now_terminal && !prev_terminal {
-                                crate::notify::fire_workflow_notification(
-                                    &config.notifications,
-                                    &run.workflow_name,
-                                    run.target_label.as_deref(),
-                                    matches!(run.status, WorkflowRunStatus::Completed),
-                                );
-                            }
-                            seen.insert(run.id.clone(), run.status.clone());
                         }
-                        // Prune stale entries to prevent unbounded growth
-                        let current_ids: std::collections::HashSet<&str> = payload
-                            .latest_workflow_runs_by_worktree
-                            .values()
-                            .chain(payload.active_non_worktree_workflow_runs.iter())
-                            .map(|r| r.id.as_str())
-                            .collect();
-                        seen.retain(|id, _| current_ids.contains(id.as_str()));
+                        seen.insert(run.id.clone(), run.status.clone());
                     }
+                    // Prune stale entries to prevent unbounded growth
+                    let current_ids: std::collections::HashSet<&str> = payload
+                        .latest_workflow_runs_by_worktree
+                        .values()
+                        .chain(payload.active_non_worktree_workflow_runs.iter())
+                        .map(|r| r.id.as_str())
+                        .collect();
+                    seen.retain(|id, _| current_ids.contains(id.as_str()));
                 }
                 if !tx.send(action) {
                     break;
@@ -75,8 +73,8 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
     });
 }
 
-/// Poll all data from the database. Returns a DataRefreshed action if successful.
-pub fn poll_data() -> Option<Action> {
+/// Poll all data from the database. Returns a DataRefreshed action and the loaded config if successful.
+pub fn poll_data() -> Option<(Action, conductor_core::config::Config)> {
     let db = db_path();
     let conn = open_database(&db).ok()?;
     let config = load_config().ok()?;
@@ -164,7 +162,7 @@ pub fn poll_data() -> Option<Action> {
         .get_step_summaries_for_runs(&active_run_id_refs)
         .unwrap_or_default();
 
-    Some(Action::DataRefreshed(Box::new(DataRefreshedPayload {
+    let action = Action::DataRefreshed(Box::new(DataRefreshedPayload {
         repos,
         worktrees,
         tickets,
@@ -174,7 +172,8 @@ pub fn poll_data() -> Option<Action> {
         latest_workflow_runs_by_worktree,
         workflow_step_summaries,
         active_non_worktree_workflow_runs,
-    })))
+    }));
+    Some((action, config))
 }
 
 /// Spawn the ticket sync timer. Syncs all repos every `interval`.
