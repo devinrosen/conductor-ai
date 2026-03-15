@@ -130,7 +130,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 }
                 KeyCode::Enter => return Action::InputSubmit,
                 KeyCode::Esc => return Action::DismissModal,
-                _ => {}
+                _ => return Action::None,
             }
         }
         Modal::IssueSourceManager { .. } => {
@@ -1032,6 +1032,17 @@ mod tests {
         let state = theme_picker_state(0);
         assert!(matches!(
             map_key(key(KeyCode::Char('x')), &state),
+            Action::None
+        ));
+    }
+
+    #[test]
+    fn theme_picker_q_does_not_quit() {
+        // Regression test for #847: pressing 'q' while ThemePicker is open
+        // must return Action::None, not Action::Quit.
+        let state = theme_picker_state(0);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('q')), &state),
             Action::None
         ));
     }
