@@ -167,7 +167,6 @@ pub enum Action {
     GoToBottom,
     HalfPageDown,
     HalfPageUp,
-    PendingG,
 
     // Filter
     EnterFilter,

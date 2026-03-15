@@ -85,8 +85,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Char('h') | KeyCode::Left => Action::ScrollLeft,
                 KeyCode::Char('l') | KeyCode::Right => Action::ScrollRight,
                 KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
-                KeyCode::Char('g') if state.pending_g => Action::GoToTop,
-                KeyCode::Char('g') => Action::PendingG,
+                KeyCode::Char('g') => Action::GoToTop,
                 KeyCode::Home => Action::GoToTop,
                 _ => Action::None,
             };
@@ -160,8 +159,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     Action::HalfPageUp
                 }
-                KeyCode::Char('g') if state.pending_g => Action::GoToTop,
-                KeyCode::Char('g') => Action::PendingG,
+                KeyCode::Char('g') => Action::GoToTop,
                 KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
                 KeyCode::Home => Action::GoToTop,
                 KeyCode::Enter => {
@@ -185,8 +183,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     Action::HalfPageUp
                 }
-                KeyCode::Char('g') if state.pending_g => Action::GoToTop,
-                KeyCode::Char('g') => Action::PendingG,
+                KeyCode::Char('g') => Action::GoToTop,
                 KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
                 KeyCode::Home => Action::GoToTop,
                 KeyCode::Char(' ') => Action::GithubDiscoverToggle,
@@ -249,12 +246,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char(c) => Action::FilterChar(c),
             _ => Action::None,
         };
-    }
-
-    // Vim-style scroll bindings (all views)
-    // Handle `gg` chord: pending g + g → jump to top
-    if state.pending_g && key.code == KeyCode::Char('g') {
-        return Action::GoToTop;
     }
 
     // Ctrl+d / Ctrl+u for half-page scroll (must precede normal match to avoid
@@ -466,7 +457,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         // Scroll navigation
         KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
-        KeyCode::Char('g') => Action::PendingG,
+        KeyCode::Char('g') => Action::GoToTop,
         KeyCode::Home => Action::GoToTop,
 
         // Toggle closed tickets visibility (all ticket views)

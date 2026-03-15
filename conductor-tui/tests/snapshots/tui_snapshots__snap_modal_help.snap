@@ -1,5 +1,6 @@
 ---
 source: conductor-tui/tests/tui_snapshots.rs
+assertion_line: 171
 expression: render_to_string(&state)
 ---
 "┌ Repos & Worktrees (0 active) ──────────────────────────────────────────────┐┌ All Workflow Definitions ──────────────┐"
@@ -14,7 +15,7 @@ expression: render_to_string(&state)
 "│                       │  Tab / Shift+Tab     Cycle panel focus                               │                       │"
 "│                       │  j / k               Navigate within panel                           │                       │"
 "│                       │  G / End             Jump to bottom of list                          │                       │"
-"│                       │  gg / Home           Jump to top of list                             │                       │"
+"│                       │  g / Home            Jump to top of list                             │                       │"
 "│                       │  Ctrl+d / Ctrl+u     Half-page down / up                             │                       │"
 "│                       │  Enter               Drill into selected item                        │                       │"
 "│                       │  Esc                 Back to previous view                           │───────────────────────┘"
