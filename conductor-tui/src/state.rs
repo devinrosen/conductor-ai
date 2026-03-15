@@ -889,9 +889,6 @@ pub struct AppState {
 
     // Agent activity list navigation (replaces the old Paragraph scroll offset)
     pub agent_list_state: RefCell<ListState>,
-    /// Tracks pending `g` keypress for `gg` chord (go to top)
-    pub pending_g: bool,
-
     // WorktreeDetail two-panel focus model
     pub worktree_detail_focus: WorktreeDetailFocus,
     /// Selected row index in the WorktreeDetail info panel (for j/k navigation and y/o actions).
@@ -1137,7 +1134,6 @@ impl AppState {
             filtered_tickets: Vec::new(),
             filtered_detail_tickets: Vec::new(),
             agent_list_state: RefCell::new(ListState::default()),
-            pending_g: false,
             worktree_detail_focus: WorktreeDetailFocus::InfoPanel,
             worktree_detail_selected_row: 0,
             repo_detail_info_row: 0,

@@ -26,7 +26,7 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
         help_line("Tab / Shift+Tab", "Cycle panel focus", theme),
         help_line("j / k", "Navigate within panel", theme),
         help_line("G / End", "Jump to bottom of list", theme),
-        help_line("gg / Home", "Jump to top of list", theme),
+        help_line("g / Home", "Jump to top of list", theme),
         help_line("Ctrl+d / Ctrl+u", "Half-page down / up", theme),
         help_line("Enter", "Drill into selected item", theme),
         help_line("Esc", "Back to previous view", theme),

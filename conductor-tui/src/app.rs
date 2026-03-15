@@ -280,20 +280,6 @@ impl App {
     }
 
     fn handle_action(&mut self, action: Action) -> bool {
-        // Manage pending_g chord state
-        match &action {
-            Action::PendingG => {
-                self.state.pending_g = true;
-                return true;
-            }
-            Action::None | Action::Tick => {
-                // Don't affect pending_g on no-ops / ticks
-            }
-            _ => {
-                self.state.pending_g = false;
-            }
-        }
-
         match action {
             Action::None => return false,
             Action::Tick => {
@@ -820,9 +806,6 @@ impl App {
                     self.state.workflow_run_index = new_len - 1;
                 }
             }
-
-            // PendingG is handled above before the match
-            Action::PendingG => unreachable!(),
 
             // Background results
             Action::PrsRefreshed { repo_id, mut prs } => {

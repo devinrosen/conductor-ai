@@ -1349,7 +1349,7 @@ pub fn render_event_detail(
         .collect();
 
     let hint = format!(
-        " j/k=scroll  h/l=pan  gg/G=top/bot  q/Esc=close  (line {}/{})",
+        " j/k=scroll  h/l=pan  g/G=top/bot  q/Esc=close  (line {}/{})",
         scroll_offset + 1,
         line_count.max(1),
     );
