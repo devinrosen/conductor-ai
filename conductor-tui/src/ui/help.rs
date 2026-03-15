@@ -101,6 +101,18 @@ pub fn render(frame: &mut Frame, area: Rect) {
         help_line("Enter", "Approve waiting gate step"),
         Line::from(""),
         Line::from(Span::styled(
+            "Workflow Definition Detail",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        help_line("j / k", "Scroll steps"),
+        help_line("w", "Run this workflow"),
+        help_line("e", "Edit in $EDITOR"),
+        help_line("Esc", "Back"),
+        Line::from(""),
+        Line::from(Span::styled(
             "Press Esc or ? to close",
             Style::default().fg(Color::DarkGray),
         )),

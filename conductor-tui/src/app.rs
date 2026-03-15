@@ -1201,6 +1201,13 @@ impl App {
                 // that was loaded while in WorkflowRunDetail.
                 self.poll_workflow_data_async();
             }
+            View::WorkflowDefDetail => {
+                self.state.view = self.state.previous_view.take().unwrap_or(View::Dashboard);
+                self.state.selected_workflow_def = None;
+                self.state.workflow_def_detail_scroll = 0;
+                self.state.column_focus = crate::state::ColumnFocus::Workflow;
+                self.state.workflows_focus = WorkflowsFocus::Defs;
+            }
         }
     }
 
@@ -1221,6 +1228,7 @@ impl App {
                 View::WorktreeDetail => {
                     self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
                 }
+                View::WorkflowDefDetail => {} // single panel — Tab is a no-op
             },
         }
     }
@@ -1242,6 +1250,7 @@ impl App {
                 View::WorktreeDetail => {
                     self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
                 }
+                View::WorkflowDefDetail => {} // single panel — Tab is a no-op
             },
         }
     }
@@ -1283,7 +1292,12 @@ impl App {
     fn workflow_column_select(&mut self) {
         match self.state.workflows_focus {
             WorkflowsFocus::Defs => {
-                self.handle_run_workflow();
+                if let Some(def) = self.selected_workflow_def() {
+                    self.state.selected_workflow_def = Some(def);
+                    self.state.workflow_def_detail_scroll = 0;
+                    self.state.previous_view = Some(self.state.view);
+                    self.state.view = View::WorkflowDefDetail;
+                }
             }
             WorkflowsFocus::Runs => {
                 let visible = self.state.visible_workflow_run_rows();
@@ -1430,6 +1444,10 @@ impl App {
                 self.state.worktree_detail_selected_row =
                     self.state.worktree_detail_selected_row.saturating_sub(1);
             }
+            View::WorkflowDefDetail => {
+                self.state.workflow_def_detail_scroll =
+                    self.state.workflow_def_detail_scroll.saturating_sub(1);
+            }
             _ => {}
         }
     }
@@ -1557,6 +1575,10 @@ impl App {
                     &mut self.state.worktree_detail_selected_row,
                     info_row::COUNT,
                 );
+            }
+            View::WorkflowDefDetail => {
+                self.state.workflow_def_detail_scroll =
+                    self.state.workflow_def_detail_scroll.saturating_add(1);
             }
             _ => {}
         }
@@ -1736,6 +1758,7 @@ impl App {
                 }
             }
             View::WorktreeDetail => {}
+            View::WorkflowDefDetail => {}
         }
     }
 

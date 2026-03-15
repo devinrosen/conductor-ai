@@ -55,6 +55,7 @@ pub enum View {
     RepoDetail,
     WorktreeDetail,
     WorkflowRunDetail,
+    WorkflowDefDetail,
 }
 
 /// A row in the unified dashboard list — either a repo header or a worktree entry.
@@ -928,6 +929,11 @@ pub struct AppState {
 
     /// Cached home directory path for `~` substitution in path display. Never changes.
     pub home_dir: Option<String>,
+
+    /// The workflow definition currently being viewed in WorkflowDefDetail.
+    pub selected_workflow_def: Option<conductor_core::workflow::WorkflowDef>,
+    /// Vertical scroll offset for the steps pane in WorkflowDefDetail.
+    pub workflow_def_detail_scroll: usize,
 }
 
 /// Append step rows for `run_id` when it is in `expanded_step_run_ids`.
@@ -1070,6 +1076,8 @@ impl AppState {
             workflow_column_visible: true,
             home_dir: dirs::home_dir().map(|p| p.to_string_lossy().into_owned()),
             theme: Theme::default(),
+            selected_workflow_def: None,
+            workflow_def_detail_scroll: 0,
         }
     }
 
@@ -1186,6 +1194,7 @@ impl AppState {
                     self.data.step_agent_events.len(),
                 ),
             },
+            View::WorkflowDefDetail => (self.workflow_def_detail_scroll, 0),
         }
     }
 
@@ -1214,6 +1223,9 @@ impl AppState {
                 WorkflowRunDetailFocus::Steps => self.workflow_step_index = index,
                 WorkflowRunDetailFocus::AgentActivity => self.step_agent_event_index = index,
             },
+            View::WorkflowDefDetail => {
+                self.workflow_def_detail_scroll = index;
+            }
         }
     }
 

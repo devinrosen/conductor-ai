@@ -88,6 +88,7 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
             View::RepoDetail => "Repo Detail",
             View::WorktreeDetail => "Worktree Detail",
             View::WorkflowRunDetail => "Workflow Run",
+            View::WorkflowDefDetail => "Workflow Definition",
         };
         format!("[{view_name}]  Tab:panel  [/]:column  \\:workflows  q:quit")
     };
