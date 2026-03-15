@@ -191,7 +191,11 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(border_color))
-                    .title(" All Workflow Definitions "),
+                    .title(if focused {
+                        " All Definitions  Enter=view  l=steps  r=run "
+                    } else {
+                        " All Workflow Definitions "
+                    }),
             )
             .highlight_style(
                 Style::default()
@@ -245,9 +249,16 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             })
             .collect();
 
-        let defs_title = match &context {
-            Some(label) => format!(" Workflow Definitions ({label}) "),
-            None => " Workflow Definitions ".to_string(),
+        let defs_title = if focused {
+            match &context {
+                Some(label) => format!(" Definitions ({label})  Enter=view  l=steps  r=run "),
+                None => " Definitions  Enter=view  l=steps  r=run ".to_string(),
+            }
+        } else {
+            match &context {
+                Some(label) => format!(" Workflow Definitions ({label}) "),
+                None => " Workflow Definitions ".to_string(),
+            }
         };
         let list = List::new(items)
             .block(
