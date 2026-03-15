@@ -4,6 +4,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
 
+use std::collections::HashSet;
+
 use conductor_core::workflow::{AgentRef, WorkflowDef, WorkflowNode};
 
 use crate::state::AppState;
@@ -173,7 +175,15 @@ fn render_steps(frame: &mut Frame, area: Rect, def: &WorkflowDef, state: &AppSta
             Style::default().fg(theme.label_secondary),
         ))));
     } else {
-        build_node_lines(&def.body, 0, &mut items, theme);
+        let seen = HashSet::new();
+        build_node_lines(
+            &def.body,
+            0,
+            &mut items,
+            theme,
+            &state.data.workflow_defs,
+            &seen,
+        );
         if !def.always.is_empty() {
             items.push(ListItem::new(Line::from("")));
             items.push(ListItem::new(Line::from(Span::styled(
@@ -182,7 +192,14 @@ fn render_steps(frame: &mut Frame, area: Rect, def: &WorkflowDef, state: &AppSta
                     .fg(theme.label_keyword)
                     .add_modifier(Modifier::BOLD),
             ))));
-            build_node_lines(&def.always, 1, &mut items, theme);
+            build_node_lines(
+                &def.always,
+                1,
+                &mut items,
+                theme,
+                &state.data.workflow_defs,
+                &seen,
+            );
         }
     }
 
@@ -214,11 +231,15 @@ fn render_steps(frame: &mut Frame, area: Rect, def: &WorkflowDef, state: &AppSta
 }
 
 /// Recursively build ListItems for a slice of WorkflowNodes, indented by `depth`.
+/// `workflow_defs` is used to inline-expand `CallWorkflow` nodes (always-expanded in this view).
+/// `seen` guards against infinite recursion from cyclic workflow references.
 fn build_node_lines(
     nodes: &[WorkflowNode],
     depth: usize,
     items: &mut Vec<ListItem>,
     theme: &crate::theme::Theme,
+    workflow_defs: &[WorkflowDef],
+    seen: &HashSet<String>,
 ) {
     let indent = "  ".repeat(depth);
     for node in nodes {
@@ -267,6 +288,30 @@ fn build_node_lines(
                     ));
                 }
                 items.push(ListItem::new(Line::from(spans)));
+                // Always expand sub-workflow inline in the detail view.
+                let child_indent = "  ".repeat(depth + 1);
+                if seen.contains(&c.workflow) {
+                    items.push(ListItem::new(Line::from(Span::styled(
+                        format!("{child_indent}(↺ recursive — not expanded)"),
+                        Style::default().fg(theme.label_secondary),
+                    ))));
+                } else if let Some(sub_def) = workflow_defs.iter().find(|d| d.name == c.workflow) {
+                    let mut new_seen = seen.clone();
+                    new_seen.insert(c.workflow.clone());
+                    build_node_lines(
+                        &sub_def.body,
+                        depth + 1,
+                        items,
+                        theme,
+                        workflow_defs,
+                        &new_seen,
+                    );
+                } else {
+                    items.push(ListItem::new(Line::from(Span::styled(
+                        format!("{child_indent}(workflow not found)"),
+                        Style::default().fg(theme.label_secondary),
+                    ))));
+                }
             }
             WorkflowNode::Gate(g) => {
                 items.push(ListItem::new(Line::from(vec![
@@ -305,7 +350,7 @@ fn build_node_lines(
                         Style::default().fg(theme.label_keyword),
                     ),
                 ])));
-                build_node_lines(&n.body, depth + 1, items, theme);
+                build_node_lines(&n.body, depth + 1, items, theme, workflow_defs, seen);
             }
             WorkflowNode::Unless(n) => {
                 items.push(ListItem::new(Line::from(vec![
@@ -321,7 +366,7 @@ fn build_node_lines(
                         Style::default().fg(theme.label_keyword),
                     ),
                 ])));
-                build_node_lines(&n.body, depth + 1, items, theme);
+                build_node_lines(&n.body, depth + 1, items, theme, workflow_defs, seen);
             }
             WorkflowNode::While(n) => {
                 items.push(ListItem::new(Line::from(vec![
@@ -341,7 +386,7 @@ fn build_node_lines(
                         Style::default().fg(theme.label_secondary),
                     ),
                 ])));
-                build_node_lines(&n.body, depth + 1, items, theme);
+                build_node_lines(&n.body, depth + 1, items, theme, workflow_defs, seen);
             }
             WorkflowNode::DoWhile(n) => {
                 items.push(ListItem::new(Line::from(vec![
@@ -353,7 +398,7 @@ fn build_node_lines(
                             .add_modifier(Modifier::BOLD),
                     ),
                 ])));
-                build_node_lines(&n.body, depth + 1, items, theme);
+                build_node_lines(&n.body, depth + 1, items, theme, workflow_defs, seen);
                 items.push(ListItem::new(Line::from(vec![
                     Span::raw(indent.clone()),
                     Span::styled(
@@ -382,7 +427,7 @@ fn build_node_lines(
                             .add_modifier(Modifier::BOLD),
                     ),
                 ])));
-                build_node_lines(&n.body, depth + 1, items, theme);
+                build_node_lines(&n.body, depth + 1, items, theme, workflow_defs, seen);
             }
             WorkflowNode::Parallel(p) => {
                 let modifier = if !p.fail_fast {
@@ -437,7 +482,7 @@ fn build_node_lines(
                             .add_modifier(Modifier::BOLD),
                     ),
                 ])));
-                build_node_lines(&a.body, depth + 1, items, theme);
+                build_node_lines(&a.body, depth + 1, items, theme, workflow_defs, seen);
             }
         }
     }

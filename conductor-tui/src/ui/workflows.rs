@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -300,8 +300,17 @@ pub(super) fn render_def_steps(frame: &mut Frame, area: Rect, state: &AppState) 
 
     let def = state.data.workflow_defs.get(state.workflow_def_index);
 
+    let empty_set = HashSet::new();
     let items = match def {
-        Some(d) if !d.body.is_empty() => build_def_step_lines(&d.body, 0, &state.theme),
+        Some(d) if !d.body.is_empty() => build_def_step_lines(
+            &d.body,
+            0,
+            &state.theme,
+            &state.data.workflow_defs,
+            &state.workflow_def_expanded_calls,
+            "",
+            &empty_set,
+        ),
         _ => vec![ListItem::new(Line::from(vec![Span::styled(
             "(no steps)",
             Style::default().fg(state.theme.label_secondary),
@@ -310,7 +319,7 @@ pub(super) fn render_def_steps(frame: &mut Frame, area: Rect, state: &AppState) 
 
     let total = items.len();
     let title = if total > 0 {
-        format!(" Steps ({total})  j/k=navigate  Esc=back ")
+        format!(" Steps ({total})  j/k=navigate  Enter=expand  Esc=back ")
     } else {
         " Steps  Esc=back ".to_string()
     };
@@ -388,15 +397,25 @@ pub(super) fn render_def_steps(frame: &mut Frame, area: Rect, state: &AppState) 
 
 /// Recursively build flat `ListItem`s from a `WorkflowNode` slice.
 /// Returns the items so callers can also use `.len()` for navigation bounds.
+///
+/// `workflow_defs` — all known workflow definitions (for inline CallWorkflow expansion).
+/// `expanded_calls` — set of dot-path strings identifying expanded CallWorkflow nodes.
+/// `path_prefix` — dot-path prefix for the current recursion level (e.g. `""` or `"2."`).
+/// `seen` — workflow names already in the current expansion stack (cycle guard).
 pub(crate) fn build_def_step_lines<'a>(
     nodes: &[WorkflowNode],
     depth: usize,
     theme: &crate::theme::Theme,
+    workflow_defs: &[WorkflowDef],
+    expanded_calls: &HashSet<String>,
+    path_prefix: &str,
+    seen: &HashSet<String>,
 ) -> Vec<ListItem<'a>> {
     let indent = "  ".repeat(depth);
     let mut items = Vec::new();
 
-    for node in nodes {
+    for (i, node) in nodes.iter().enumerate() {
+        let path = format!("{}{}", path_prefix, i);
         match node {
             WorkflowNode::Call(n) => {
                 items.push(ListItem::new(Line::from(vec![
@@ -409,14 +428,54 @@ pub(crate) fn build_def_step_lines<'a>(
                 ])));
             }
             WorkflowNode::CallWorkflow(n) => {
+                let is_expanded = expanded_calls.contains(&path);
+                let indicator = if is_expanded { "▼" } else { "▶" };
                 items.push(ListItem::new(Line::from(vec![
                     Span::raw(indent.clone()),
-                    Span::styled("[→ wf]  ", Style::default().fg(theme.label_accent)),
+                    Span::styled(
+                        format!("{indicator} [→ wf]  "),
+                        Style::default().fg(theme.label_accent),
+                    ),
                     Span::styled(
                         n.workflow.clone(),
                         Style::default().add_modifier(Modifier::BOLD),
                     ),
                 ])));
+                if is_expanded {
+                    let child_indent = "  ".repeat(depth + 1);
+                    if seen.contains(&n.workflow) {
+                        items.push(ListItem::new(Line::from(vec![
+                            Span::raw(child_indent),
+                            Span::styled(
+                                "(↺ recursive — not expanded)",
+                                Style::default().fg(theme.label_secondary),
+                            ),
+                        ])));
+                    } else if let Some(sub_def) =
+                        workflow_defs.iter().find(|d| d.name == n.workflow)
+                    {
+                        let mut new_seen = seen.clone();
+                        new_seen.insert(n.workflow.clone());
+                        let new_prefix = format!("{}.", path);
+                        items.extend(build_def_step_lines(
+                            &sub_def.body,
+                            depth + 1,
+                            theme,
+                            workflow_defs,
+                            expanded_calls,
+                            &new_prefix,
+                            &new_seen,
+                        ));
+                    } else {
+                        items.push(ListItem::new(Line::from(vec![
+                            Span::raw(child_indent),
+                            Span::styled(
+                                "(workflow not found)",
+                                Style::default().fg(theme.label_secondary),
+                            ),
+                        ])));
+                    }
+                }
             }
             WorkflowNode::Parallel(n) => {
                 let count = n.calls.len();
@@ -461,7 +520,15 @@ pub(crate) fn build_def_step_lines<'a>(
                         Style::default().fg(theme.label_secondary),
                     ),
                 ])));
-                items.extend(build_def_step_lines(&n.body, depth + 1, theme));
+                items.extend(build_def_step_lines(
+                    &n.body,
+                    depth + 1,
+                    theme,
+                    workflow_defs,
+                    expanded_calls,
+                    &format!("{}.", path),
+                    seen,
+                ));
             }
             WorkflowNode::Unless(n) => {
                 items.push(ListItem::new(Line::from(vec![
@@ -473,7 +540,15 @@ pub(crate) fn build_def_step_lines<'a>(
                         Style::default().fg(theme.label_secondary),
                     ),
                 ])));
-                items.extend(build_def_step_lines(&n.body, depth + 1, theme));
+                items.extend(build_def_step_lines(
+                    &n.body,
+                    depth + 1,
+                    theme,
+                    workflow_defs,
+                    expanded_calls,
+                    &format!("{}.", path),
+                    seen,
+                ));
             }
             WorkflowNode::While(n) => {
                 items.push(ListItem::new(Line::from(vec![
@@ -484,7 +559,15 @@ pub(crate) fn build_def_step_lines<'a>(
                         Style::default().fg(theme.label_secondary),
                     ),
                 ])));
-                items.extend(build_def_step_lines(&n.body, depth + 1, theme));
+                items.extend(build_def_step_lines(
+                    &n.body,
+                    depth + 1,
+                    theme,
+                    workflow_defs,
+                    expanded_calls,
+                    &format!("{}.", path),
+                    seen,
+                ));
             }
             WorkflowNode::DoWhile(n) => {
                 items.push(ListItem::new(Line::from(vec![
@@ -495,26 +578,231 @@ pub(crate) fn build_def_step_lines<'a>(
                         Style::default().fg(theme.label_secondary),
                     ),
                 ])));
-                items.extend(build_def_step_lines(&n.body, depth + 1, theme));
+                items.extend(build_def_step_lines(
+                    &n.body,
+                    depth + 1,
+                    theme,
+                    workflow_defs,
+                    expanded_calls,
+                    &format!("{}.", path),
+                    seen,
+                ));
             }
             WorkflowNode::Do(n) => {
                 items.push(ListItem::new(Line::from(vec![
                     Span::raw(indent.clone()),
                     Span::styled("[do]    ", Style::default().fg(theme.label_accent)),
                 ])));
-                items.extend(build_def_step_lines(&n.body, depth + 1, theme));
+                items.extend(build_def_step_lines(
+                    &n.body,
+                    depth + 1,
+                    theme,
+                    workflow_defs,
+                    expanded_calls,
+                    &format!("{}.", path),
+                    seen,
+                ));
             }
             WorkflowNode::Always(n) => {
                 items.push(ListItem::new(Line::from(vec![
                     Span::raw(indent.clone()),
                     Span::styled("[always]", Style::default().fg(theme.label_warning)),
                 ])));
-                items.extend(build_def_step_lines(&n.body, depth + 1, theme));
+                items.extend(build_def_step_lines(
+                    &n.body,
+                    depth + 1,
+                    theme,
+                    workflow_defs,
+                    expanded_calls,
+                    &format!("{}.", path),
+                    seen,
+                ));
             }
         }
     }
 
     items
+}
+
+/// Returns the dot-path of the `CallWorkflow` node at flat list index `target`,
+/// or `None` if the row at that index is not a `CallWorkflow` header.
+///
+/// Mirrors the traversal of `build_def_step_lines` exactly.
+/// Used by the binary (app.rs) — suppress dead_code warning from lib target.
+#[allow(dead_code)]
+pub(crate) fn get_def_step_node_at(
+    nodes: &[WorkflowNode],
+    workflow_defs: &[WorkflowDef],
+    expanded_calls: &HashSet<String>,
+    path_prefix: &str,
+    seen: &HashSet<String>,
+    target: usize,
+    counter: &mut usize,
+) -> Option<String> {
+    for (i, node) in nodes.iter().enumerate() {
+        let path = format!("{}{}", path_prefix, i);
+        match node {
+            WorkflowNode::Call(_) | WorkflowNode::Gate(_) => {
+                if *counter == target {
+                    return None;
+                }
+                *counter += 1;
+            }
+            WorkflowNode::Parallel(n) => {
+                if *counter == target {
+                    return None;
+                }
+                *counter += 1;
+                for _ in &n.calls {
+                    if *counter == target {
+                        return None;
+                    }
+                    *counter += 1;
+                }
+            }
+            WorkflowNode::CallWorkflow(n) => {
+                if *counter == target {
+                    return Some(path.clone());
+                }
+                *counter += 1;
+                if expanded_calls.contains(&path) {
+                    if seen.contains(&n.workflow) {
+                        // "(↺ recursive)" row
+                        if *counter == target {
+                            return None;
+                        }
+                        *counter += 1;
+                    } else if let Some(sub_def) =
+                        workflow_defs.iter().find(|d| d.name == n.workflow)
+                    {
+                        let mut new_seen = seen.clone();
+                        new_seen.insert(n.workflow.clone());
+                        let new_prefix = format!("{}.", path);
+                        if let Some(r) = get_def_step_node_at(
+                            &sub_def.body,
+                            workflow_defs,
+                            expanded_calls,
+                            &new_prefix,
+                            &new_seen,
+                            target,
+                            counter,
+                        ) {
+                            return Some(r);
+                        }
+                    } else {
+                        // "(workflow not found)" row
+                        if *counter == target {
+                            return None;
+                        }
+                        *counter += 1;
+                    }
+                }
+            }
+            WorkflowNode::If(n) => {
+                if *counter == target {
+                    return None;
+                }
+                *counter += 1;
+                if let Some(r) = get_def_step_node_at(
+                    &n.body,
+                    workflow_defs,
+                    expanded_calls,
+                    &format!("{}.", path),
+                    seen,
+                    target,
+                    counter,
+                ) {
+                    return Some(r);
+                }
+            }
+            WorkflowNode::Unless(n) => {
+                if *counter == target {
+                    return None;
+                }
+                *counter += 1;
+                if let Some(r) = get_def_step_node_at(
+                    &n.body,
+                    workflow_defs,
+                    expanded_calls,
+                    &format!("{}.", path),
+                    seen,
+                    target,
+                    counter,
+                ) {
+                    return Some(r);
+                }
+            }
+            WorkflowNode::While(n) => {
+                if *counter == target {
+                    return None;
+                }
+                *counter += 1;
+                if let Some(r) = get_def_step_node_at(
+                    &n.body,
+                    workflow_defs,
+                    expanded_calls,
+                    &format!("{}.", path),
+                    seen,
+                    target,
+                    counter,
+                ) {
+                    return Some(r);
+                }
+            }
+            WorkflowNode::DoWhile(n) => {
+                if *counter == target {
+                    return None;
+                }
+                *counter += 1;
+                if let Some(r) = get_def_step_node_at(
+                    &n.body,
+                    workflow_defs,
+                    expanded_calls,
+                    &format!("{}.", path),
+                    seen,
+                    target,
+                    counter,
+                ) {
+                    return Some(r);
+                }
+            }
+            WorkflowNode::Do(n) => {
+                if *counter == target {
+                    return None;
+                }
+                *counter += 1;
+                if let Some(r) = get_def_step_node_at(
+                    &n.body,
+                    workflow_defs,
+                    expanded_calls,
+                    &format!("{}.", path),
+                    seen,
+                    target,
+                    counter,
+                ) {
+                    return Some(r);
+                }
+            }
+            WorkflowNode::Always(n) => {
+                if *counter == target {
+                    return None;
+                }
+                *counter += 1;
+                if let Some(r) = get_def_step_node_at(
+                    &n.body,
+                    workflow_defs,
+                    expanded_calls,
+                    &format!("{}.", path),
+                    seen,
+                    target,
+                    counter,
+                ) {
+                    return Some(r);
+                }
+            }
+        }
+    }
+    None
 }
 
 pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {

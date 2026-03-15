@@ -974,6 +974,9 @@ pub struct AppState {
     pub workflow_def_focus: WorkflowDefFocus,
     /// Selected row index in the step tree pane (when `workflow_def_focus == Steps`).
     pub workflow_def_step_index: usize,
+    /// Set of dot-path strings identifying expanded `CallWorkflow` nodes in the step tree.
+    /// Cleared whenever `workflow_def_index` changes.
+    pub workflow_def_expanded_calls: HashSet<String>,
 }
 
 /// Append step rows for `run_id` when it is in `expanded_step_run_ids`.
@@ -1177,6 +1180,7 @@ impl AppState {
             workflow_def_detail_scroll: 0,
             workflow_def_focus: WorkflowDefFocus::List,
             workflow_def_step_index: 0,
+            workflow_def_expanded_calls: HashSet::new(),
         }
     }
 
