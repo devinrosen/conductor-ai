@@ -69,17 +69,6 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        help_line("r", "Run selected workflow definition", theme),
-        help_line("v", "View workflow definition", theme),
-        help_line("Space", "Expand / collapse workflow run", theme),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Workflow Column",
-            Style::default()
-                .fg(theme.label_accent)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
         help_line("H", "Toggle completed/cancelled runs", theme),
         help_line("r", "Run selected workflow", theme),
         help_line("v", "View workflow definition (Defs tab)", theme),
