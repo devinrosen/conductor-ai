@@ -33,6 +33,8 @@ expression: render_to_string(&state)
 "│                       │  A                   Toggle closed tickets                           │                       │"
 "│                       │  w                   Open workflow picker                            │                       │"
 "│                       │  /                   Filter/search                                   │                       │"
+"│                       │  T                   Open theme picker                               │                       │"
+"│                       │  L                   Filter tickets by label (repo detail)           │                       │"
 "│                       │                                                                      │                       │"
 "│                       │Workflow Column                                                       │                       │"
 "│                       │                                                                      │                       │"
