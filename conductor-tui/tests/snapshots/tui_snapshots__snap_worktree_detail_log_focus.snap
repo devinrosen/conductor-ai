@@ -2,7 +2,7 @@
 source: conductor-tui/tests/tui_snapshots.rs
 expression: render_to_string(&state)
 ---
-"┌ Worktree Detail ───────────────────────────────────────────────────────────┐┌ Workflow Definitions ──────────────────┐"
+"┌ Worktree Detail ───────────────────────────────────────────────────────────┐┌ Workflow Definitions (feat-123-add-logi┐"
 "│Worktree: feat-123-add-login                                                ││                                        │"
 "│Repo: my-app                                                                ││                                        │"
 "│Branch: feat/123-add-login                                                  ││                                        │"
@@ -18,7 +18,7 @@ expression: render_to_string(&state)
 "└────────────────────────────────────────────────────────────────────────────┘│                                        │"
 "┌ Agent Activity ────────────────────────────────────────────────────────────┐│                                        │"
 "│No agent activity                                                           │└────────────────────────────────────────┘"
-"│                                                                            │┌ Workflow Runs (Space=expand/collapse) ─┐"
+"│                                                                            │┌ Workflow Runs (feat-123-add-login) (Spa┐"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"

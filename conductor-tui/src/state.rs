@@ -1243,7 +1243,9 @@ impl AppState {
             .flat_map(|v| v.iter().map(|r| r.id.as_str()))
             .collect();
 
-        let global_mode = self.selected_worktree_id.is_none();
+        // Global mode: no worktree and no repo selected (Dashboard / all-repos view).
+        // Repo-scoped and worktree-scoped modes both use the flat list.
+        let global_mode = self.selected_worktree_id.is_none() && self.selected_repo_id.is_none();
 
         if !global_mode {
             // Non-global mode: existing flat list unchanged.

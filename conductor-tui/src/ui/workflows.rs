@@ -13,9 +13,33 @@ use super::helpers::{shorten_paths, visual_idx_with_headers};
 use crate::state::AppState;
 use crate::state::ColumnFocus;
 use crate::state::TargetType;
+use crate::state::View;
 use crate::state::WorkflowRunDetailFocus;
 use crate::state::WorkflowRunRow;
 use crate::state::WorkflowsFocus;
+
+/// Returns a short context label for workflow pane titles, e.g. "my-repo" or "feat-123".
+/// Returns `None` when in global (all-repos) mode.
+fn workflow_context_label(state: &AppState) -> Option<String> {
+    if let Some(ref wt_id) = state.selected_worktree_id {
+        let slug = state
+            .data
+            .worktrees
+            .iter()
+            .find(|w| &w.id == wt_id)
+            .map(|w| w.slug.clone());
+        return slug;
+    }
+    if state.view == View::RepoDetail {
+        let slug = state
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| state.data.repos.iter().find(|r| &r.id == id))
+            .map(|r| r.slug.clone());
+        return slug;
+    }
+    None
+}
 
 /// Render the Workflows split-pane view: defs (left) + runs (right).
 #[allow(dead_code)]
@@ -80,7 +104,8 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
         state.theme.border_inactive
     };
 
-    let global_mode = state.selected_worktree_id.is_none();
+    let context = workflow_context_label(state);
+    let global_mode = state.selected_worktree_id.is_none() && state.selected_repo_id.is_none();
 
     if global_mode {
         // Use pre-computed (repo_slug, def) pairs from state (populated by background thread).
@@ -172,7 +197,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
         }
         frame.render_stateful_widget(list, area, &mut list_state);
     } else {
-        // Single-worktree mode: flat list with description and target badges.
+        // Worktree-scoped or repo-scoped: flat list with description and target badges.
         let items: Vec<ListItem> = state
             .data
             .workflow_defs
@@ -211,12 +236,16 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             })
             .collect();
 
+        let defs_title = match &context {
+            Some(label) => format!(" Workflow Definitions ({label}) "),
+            None => " Workflow Definitions ".to_string(),
+        };
         let list = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(border_color))
-                    .title(" Workflow Definitions "),
+                    .title(defs_title),
             )
             .highlight_style(
                 Style::default()
@@ -242,8 +271,9 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
         state.theme.border_inactive
     };
 
-    // In global mode (no worktree selected), show target context on each run row.
-    let global_mode = state.selected_worktree_id.is_none();
+    let context = workflow_context_label(state);
+    // In global mode (no worktree or repo selected), show target context on each run row.
+    let global_mode = state.selected_worktree_id.is_none() && state.selected_repo_id.is_none();
 
     let visible = state.visible_workflow_run_rows();
 
@@ -471,10 +501,17 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
         })
         .collect();
 
+    let runs_title_owned;
     let runs_title = if global_mode {
         " All Workflow Runs (Space=expand/collapse) "
     } else {
-        " Workflow Runs (Space=expand/collapse) "
+        match &context {
+            Some(label) => {
+                runs_title_owned = format!(" Workflow Runs ({label}) (Space=expand/collapse) ");
+                &runs_title_owned
+            }
+            None => " Workflow Runs (Space=expand/collapse) ",
+        }
     };
 
     let list = List::new(items)

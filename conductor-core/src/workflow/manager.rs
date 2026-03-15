@@ -810,6 +810,21 @@ impl<'a> WorkflowManager<'a> {
         }
     }
 
+    /// List recent workflow runs for a specific repo, ordered by started_at DESC.
+    /// Includes runs from all worktrees belonging to the repo, plus any repo-targeted runs.
+    pub fn list_workflow_runs_for_repo(
+        &self,
+        repo_id: &str,
+        limit: usize,
+    ) -> Result<Vec<WorkflowRun>> {
+        query_collect(
+            self.conn,
+            &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE repo_id = ?1 ORDER BY started_at DESC LIMIT {limit}"),
+            params![repo_id],
+            row_to_workflow_run,
+        )
+    }
+
     /// Batch-lookup the parent `workflow_run_id` for a set of agent run IDs.
     ///
     /// Uses `workflow_run_steps.child_run_id` to find the link.  Returns a map

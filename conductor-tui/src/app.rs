@@ -4833,6 +4833,12 @@ impl App {
         }
 
         let wt_id = self.state.selected_worktree_id.clone();
+        // In RepoDetail with no worktree selected, scope to the selected repo.
+        let repo_id = if wt_id.is_none() && self.state.view == View::RepoDetail {
+            self.state.selected_repo_id.clone()
+        } else {
+            None
+        };
         let (worktree_path, repo_path) = if let Some(ref id) = wt_id {
             match self.resolve_worktree_paths(id) {
                 Some((wt_path, rp)) => (Some(wt_path), Some(rp)),
@@ -4854,6 +4860,7 @@ impl App {
             wt_id,
             worktree_path,
             repo_path,
+            repo_id,
             selected_run_id,
             selected_step_child_run_id,
             in_flight,
@@ -4875,14 +4882,26 @@ impl App {
                     self.state.status_message = Some(msg);
                 }
             }
+        } else if self.state.view == View::RepoDetail {
+            // Repo-scoped: defs cleared here, background poller will repopulate
+            self.state.data.workflow_defs.clear();
+            self.state.data.workflow_def_slugs.clear();
         } else {
             // Global mode: defs are cross-worktree, cleared here and populated by background poller
             self.state.data.workflow_defs.clear();
             self.state.data.workflow_def_slugs.clear();
         }
-        self.state.data.workflow_runs = wf_mgr
-            .list_workflow_runs_for_scope(self.state.selected_worktree_id.as_deref(), 50)
-            .unwrap_or_default();
+        self.state.data.workflow_runs =
+            if let Some(ref wt_id) = self.state.selected_worktree_id.clone() {
+                wf_mgr.list_workflow_runs(wt_id).unwrap_or_default()
+            } else if self.state.view == View::RepoDetail {
+                let repo_id = self.state.selected_repo_id.as_deref().unwrap_or("");
+                wf_mgr
+                    .list_workflow_runs_for_repo(repo_id, 50)
+                    .unwrap_or_default()
+            } else {
+                wf_mgr.list_all_workflow_runs(50).unwrap_or_default()
+            };
 
         // Load steps for the currently selected run
         self.state.init_collapse_state();

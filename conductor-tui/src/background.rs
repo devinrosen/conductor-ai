@@ -265,6 +265,7 @@ pub fn spawn_workflow_poller(
     worktree_id: Option<String>,
     worktree_path: Option<String>,
     repo_path: Option<String>,
+    repo_id: Option<String>,
     selected_run_id: Option<String>,
     selected_step_child_run_id: Option<String>,
 ) {
@@ -274,6 +275,7 @@ pub fn spawn_workflow_poller(
             worktree_id.as_deref(),
             worktree_path.as_deref(),
             repo_path.as_deref(),
+            repo_id.as_deref(),
             selected_run_id.as_deref(),
             selected_step_child_run_id.as_deref(),
         ) {
@@ -288,6 +290,7 @@ fn poll_workflow_data(
     worktree_id: Option<&str>,
     worktree_path: Option<&str>,
     repo_path: Option<&str>,
+    repo_id: Option<&str>,
     selected_run_id: Option<&str>,
     selected_step_child_run_id: Option<&str>,
 ) -> Option<Action> {
@@ -304,9 +307,38 @@ fn poll_workflow_data(
     ) = if selected_run_id.is_some() {
         (None, None, Vec::new())
     } else if let Some(wt_path) = worktree_path {
+        // Worktree-scoped: load defs from this worktree's filesystem path.
         let (defs, warnings) =
             WorkflowManager::list_defs(wt_path, repo_path.unwrap_or("")).unwrap_or_default();
         (Some(defs), Some(Vec::new()), warnings)
+    } else if let Some(rid) = repo_id {
+        // Repo-scoped: scan all active worktrees of this repo, deduplicate by name.
+        let mut all_defs: Vec<WorkflowDef> = Vec::new();
+        let mut all_warnings = Vec::new();
+        if let Ok(config) = conductor_core::config::load_config() {
+            let wt_mgr = conductor_core::worktree::WorktreeManager::new(&conn, &config);
+            let repo_mgr = conductor_core::repo::RepoManager::new(&conn, &config);
+            let rp = repo_mgr
+                .list()
+                .unwrap_or_default()
+                .into_iter()
+                .find(|r| r.id == rid)
+                .map(|r| r.local_path)
+                .unwrap_or_default();
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for wt in wt_mgr.list(None, true).unwrap_or_default() {
+                if wt.repo_id != rid {
+                    continue;
+                }
+                let (mut wt_defs, warnings) =
+                    WorkflowManager::list_defs(&wt.path, &rp).unwrap_or_default();
+                all_warnings.extend(warnings);
+                wt_defs.retain(|d| seen.insert(d.name.clone()));
+                all_defs.extend(wt_defs);
+            }
+        }
+        // def_slugs empty: all defs belong to the same repo, no slug labels needed.
+        (Some(all_defs), Some(Vec::new()), all_warnings)
     } else {
         // Global mode: scan every registered worktree for workflow definitions.
         let mut all_defs = Vec::new();
@@ -350,9 +382,15 @@ fn poll_workflow_data(
         (Some(all_defs), Some(all_slugs), all_warnings)
     };
     let wf_mgr = WorkflowManager::new(&conn);
-    let runs = wf_mgr
-        .list_workflow_runs_for_scope(worktree_id, 50)
-        .unwrap_or_default();
+    let runs = if let Some(wt_id) = worktree_id {
+        wf_mgr.list_workflow_runs(wt_id).unwrap_or_default()
+    } else if let Some(rid) = repo_id {
+        wf_mgr
+            .list_workflow_runs_for_repo(rid, 50)
+            .unwrap_or_default()
+    } else {
+        wf_mgr.list_all_workflow_runs(50).unwrap_or_default()
+    };
     let steps = if let Some(run_id) = selected_run_id {
         wf_mgr.get_workflow_steps(run_id).unwrap_or_default()
     } else {
@@ -407,6 +445,7 @@ pub fn spawn_workflow_poll_once(
     worktree_id: Option<String>,
     worktree_path: Option<String>,
     repo_path: Option<String>,
+    repo_id: Option<String>,
     selected_run_id: Option<String>,
     selected_step_child_run_id: Option<String>,
 ) {
@@ -415,6 +454,7 @@ pub fn spawn_workflow_poll_once(
             worktree_id.as_deref(),
             worktree_path.as_deref(),
             repo_path.as_deref(),
+            repo_id.as_deref(),
             selected_run_id.as_deref(),
             selected_step_child_run_id.as_deref(),
         ) {
@@ -430,6 +470,7 @@ pub fn spawn_workflow_poll_once_guarded(
     worktree_id: Option<String>,
     worktree_path: Option<String>,
     repo_path: Option<String>,
+    repo_id: Option<String>,
     selected_run_id: Option<String>,
     selected_step_child_run_id: Option<String>,
     in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -439,6 +480,7 @@ pub fn spawn_workflow_poll_once_guarded(
             worktree_id.as_deref(),
             worktree_path.as_deref(),
             repo_path.as_deref(),
+            repo_id.as_deref(),
             selected_run_id.as_deref(),
             selected_step_child_run_id.as_deref(),
         );
