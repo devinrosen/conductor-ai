@@ -1,0 +1,92 @@
+%% Generated 2026-03-15 — API surface and endpoint dependency graph for conductor-web
+graph LR
+    subgraph Client["Web Client (React)"]
+        FE["Frontend\nVite + Tailwind"]
+    end
+
+    subgraph API["conductor-web API (axum)"]
+        subgraph RepoAPI["Repo Management"]
+            R1["GET /api/repos"]
+            R2["POST /api/repos"]
+            R3["DELETE /api/repos/{id}"]
+            R4["PATCH /api/repos/{id}/model"]
+            R5["PATCH /api/repos/{id}/settings"]
+            R6["GET /api/github/orgs"]
+            R7["GET /api/github/repos"]
+        end
+
+        subgraph WorktreeAPI["Worktree Management"]
+            W1["GET /api/repos/{id}/worktrees"]
+            W2["POST /api/repos/{id}/worktrees"]
+            W3["DELETE /api/worktrees/{id}"]
+            W4["PATCH /api/worktrees/{id}/model"]
+            W5["POST /api/worktrees/{id}/push"]
+            W6["POST /api/worktrees/{id}/pr"]
+            W7["POST /api/worktrees/{id}/link-ticket"]
+        end
+
+        subgraph TicketAPI["Ticket Management"]
+            T1["GET /api/tickets"]
+            T2["GET /api/repos/{id}/tickets"]
+            T3["POST /api/repos/{id}/tickets/sync"]
+            T4["GET /api/tickets/{id}/detail"]
+            T5["GET /api/ticket-labels"]
+        end
+
+        subgraph AgentAPI["Agent Orchestration"]
+            A1["GET /api/worktrees/{id}/agent/runs"]
+            A2["POST /api/worktrees/{id}/agent/start"]
+            A3["POST /api/worktrees/{id}/agent/stop"]
+            A4["GET .../runs/{run_id}/events"]
+            A5["GET .../runs/{run_id}/tree"]
+            A6["POST .../agent/orchestrate"]
+            A7["POST .../agent/feedback"]
+            A8["POST .../feedback/{id}/respond"]
+        end
+
+        subgraph WorkflowAPI["Workflow Management"]
+            WF1["GET .../workflows/defs"]
+            WF2["POST .../workflows/run"]
+            WF3["GET .../workflows/runs"]
+            WF4["GET /api/workflows/runs/{id}"]
+            WF5["GET .../runs/{id}/steps"]
+            WF6["POST .../runs/{id}/cancel"]
+            WF7["POST .../runs/{id}/resume"]
+            WF8["POST .../runs/{id}/gate/approve"]
+            WF9["POST .../runs/{id}/gate/reject"]
+        end
+
+        subgraph ConfigAPI["Configuration"]
+            C1["GET /api/config/model"]
+            C2["PATCH /api/config/model"]
+            C3["GET /api/config/known-models"]
+            C4["POST /api/config/suggest-model"]
+            C5["GET /api/config/work-targets"]
+            C6["POST /api/config/work-targets"]
+            C7["PUT /api/config/work-targets"]
+        end
+
+        subgraph EventsAPI["Events (SSE)"]
+            E1["GET /api/events"]
+        end
+    end
+
+    subgraph Managers["conductor-core"]
+        RM["RepoManager"]
+        WM["WorktreeManager"]
+        AM["AgentManager"]
+        TS["TicketSyncer"]
+        WFM["WorkflowManager"]
+        CFG["Config"]
+    end
+
+    FE -->|"HTTP REST"| RepoAPI & WorktreeAPI & TicketAPI & AgentAPI & WorkflowAPI & ConfigAPI
+    FE -->|"SSE stream"| E1
+
+    RepoAPI --> RM
+    WorktreeAPI --> WM
+    TicketAPI --> TS
+    AgentAPI --> AM
+    WorkflowAPI --> WFM
+    ConfigAPI --> CFG
+    E1 -->|"EventBus broadcast"| FE
