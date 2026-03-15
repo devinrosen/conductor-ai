@@ -1193,6 +1193,10 @@ impl App {
                 self.state.selected_workflow_run_id = None;
                 self.state.column_focus = crate::state::ColumnFocus::Workflow;
                 self.state.workflows_focus = WorkflowsFocus::Runs;
+                // Re-poll immediately so the workflow column reflects the restored view's
+                // context (repo- or worktree-scoped) instead of showing stale global data
+                // that was loaded while in WorkflowRunDetail.
+                self.poll_workflow_data_async();
             }
         }
     }
