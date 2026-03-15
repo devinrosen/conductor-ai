@@ -6,6 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
+use conductor_core::workflow::WorkflowNode;
 use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStatus};
 
 use super::common::truncate;
@@ -14,6 +15,7 @@ use crate::state::AppState;
 use crate::state::ColumnFocus;
 use crate::state::TargetType;
 use crate::state::View;
+use crate::state::WorkflowDefFocus;
 use crate::state::WorkflowRunDetailFocus;
 use crate::state::WorkflowRunRow;
 use crate::state::WorkflowsFocus;
@@ -93,7 +95,13 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         .split(area);
 
     render_defs(frame, chunks[0], state);
-    render_runs(frame, chunks[1], state);
+    if state.workflows_focus == WorkflowsFocus::Defs
+        && state.workflow_def_focus == WorkflowDefFocus::Steps
+    {
+        render_def_steps(frame, chunks[1], state);
+    } else {
+        render_runs(frame, chunks[1], state);
+    }
 }
 
 pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -261,6 +269,188 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
         }
         frame.render_stateful_widget(list, area, &mut list_state);
     }
+}
+
+/// Render the step tree pane for the selected workflow definition.
+pub(super) fn render_def_steps(frame: &mut Frame, area: Rect, state: &AppState) {
+    let focused = state.column_focus == ColumnFocus::Workflow
+        && state.workflows_focus == WorkflowsFocus::Defs
+        && state.workflow_def_focus == WorkflowDefFocus::Steps;
+    let border_color = if focused {
+        state.theme.border_focused
+    } else {
+        state.theme.border_inactive
+    };
+
+    let def = state.data.workflow_defs.get(state.workflow_def_index);
+
+    let items = match def {
+        Some(d) if !d.body.is_empty() => build_def_step_lines(&d.body, 0, &state.theme),
+        _ => vec![ListItem::new(Line::from(vec![Span::styled(
+            "(no steps)",
+            Style::default().fg(state.theme.label_secondary),
+        )]))],
+    };
+
+    let total = items.len();
+    let title = if total > 0 {
+        format!(" Steps ({total})  j/k=navigate  Esc=back ")
+    } else {
+        " Steps  Esc=back ".to_string()
+    };
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color))
+                .title(title),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(state.theme.highlight_bg)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("");
+
+    let mut list_state = ListState::default();
+    if total > 0 {
+        list_state.select(Some(
+            state.workflow_def_step_index.min(total.saturating_sub(1)),
+        ));
+    }
+    frame.render_stateful_widget(list, area, &mut list_state);
+}
+
+/// Recursively build flat `ListItem`s from a `WorkflowNode` slice.
+/// Returns the items so callers can also use `.len()` for navigation bounds.
+pub(crate) fn build_def_step_lines<'a>(
+    nodes: &[WorkflowNode],
+    depth: usize,
+    theme: &crate::theme::Theme,
+) -> Vec<ListItem<'a>> {
+    let indent = "  ".repeat(depth);
+    let mut items = Vec::new();
+
+    for node in nodes {
+        match node {
+            WorkflowNode::Call(n) => {
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::styled("[call]  ", Style::default().fg(theme.label_accent)),
+                    Span::styled(
+                        n.agent.label().to_string(),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                ])));
+            }
+            WorkflowNode::CallWorkflow(n) => {
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::styled("[→ wf]  ", Style::default().fg(theme.label_accent)),
+                    Span::styled(
+                        n.workflow.clone(),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                ])));
+            }
+            WorkflowNode::Parallel(n) => {
+                let count = n.calls.len();
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::styled("[para]  ", Style::default().fg(theme.label_warning)),
+                    Span::styled(
+                        format!("{count} agents"),
+                        Style::default().fg(theme.label_secondary),
+                    ),
+                ])));
+                for call in &n.calls {
+                    let child_indent = "  ".repeat(depth + 1);
+                    items.push(ListItem::new(Line::from(vec![
+                        Span::raw(child_indent),
+                        Span::styled("└ ", Style::default().fg(theme.label_secondary)),
+                        Span::styled("[call]  ", Style::default().fg(theme.label_accent)),
+                        Span::raw::<String>(call.label().to_string()),
+                    ])));
+                }
+            }
+            WorkflowNode::Gate(n) => {
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::styled("[gate]  ", Style::default().fg(theme.label_warning)),
+                    Span::styled(
+                        n.name.clone(),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("  ({})", n.gate_type),
+                        Style::default().fg(theme.label_secondary),
+                    ),
+                ])));
+            }
+            WorkflowNode::If(n) => {
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::styled("[if]    ", Style::default().fg(theme.label_accent)),
+                    Span::styled(
+                        format!("{}.{}", n.step, n.marker),
+                        Style::default().fg(theme.label_secondary),
+                    ),
+                ])));
+                items.extend(build_def_step_lines(&n.body, depth + 1, theme));
+            }
+            WorkflowNode::Unless(n) => {
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::styled("[unless]", Style::default().fg(theme.label_accent)),
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("{}.{}", n.step, n.marker),
+                        Style::default().fg(theme.label_secondary),
+                    ),
+                ])));
+                items.extend(build_def_step_lines(&n.body, depth + 1, theme));
+            }
+            WorkflowNode::While(n) => {
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::styled("[while] ", Style::default().fg(theme.label_accent)),
+                    Span::styled(
+                        format!("{}.{}", n.step, n.marker),
+                        Style::default().fg(theme.label_secondary),
+                    ),
+                ])));
+                items.extend(build_def_step_lines(&n.body, depth + 1, theme));
+            }
+            WorkflowNode::DoWhile(n) => {
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::styled("[do]    ", Style::default().fg(theme.label_accent)),
+                    Span::styled(
+                        format!("while {}.{}", n.step, n.marker),
+                        Style::default().fg(theme.label_secondary),
+                    ),
+                ])));
+                items.extend(build_def_step_lines(&n.body, depth + 1, theme));
+            }
+            WorkflowNode::Do(n) => {
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::styled("[do]    ", Style::default().fg(theme.label_accent)),
+                ])));
+                items.extend(build_def_step_lines(&n.body, depth + 1, theme));
+            }
+            WorkflowNode::Always(n) => {
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::styled("[always]", Style::default().fg(theme.label_warning)),
+                ])));
+                items.extend(build_def_step_lines(&n.body, depth + 1, theme));
+            }
+        }
+    }
+
+    items
 }
 
 pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {

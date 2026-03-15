@@ -23,8 +23,8 @@ use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
 use crate::state::{
     info_row, repo_info_row, AppState, ConfirmAction, DashboardRow, FormAction, FormField,
-    InputAction, Modal, PostCreateChoice, RepoDetailFocus, View, WorkflowRunDetailFocus,
-    WorkflowsFocus, WorktreeDetailFocus,
+    InputAction, Modal, PostCreateChoice, RepoDetailFocus, View, WorkflowDefFocus,
+    WorkflowRunDetailFocus, WorkflowsFocus, WorktreeDetailFocus,
 };
 use crate::theme::Theme;
 use crate::ui;
@@ -1174,6 +1174,14 @@ impl App {
     }
 
     fn go_back(&mut self) {
+        // If the step tree pane is active, Esc exits the pane rather than the view.
+        if self.state.column_focus == crate::state::ColumnFocus::Workflow
+            && self.state.workflows_focus == WorkflowsFocus::Defs
+            && self.state.workflow_def_focus == WorkflowDefFocus::Steps
+        {
+            self.state.workflow_def_focus = WorkflowDefFocus::List;
+            return;
+        }
         match self.state.view {
             View::Dashboard => self.show_confirm_quit(),
             View::RepoDetail => {
@@ -1215,7 +1223,30 @@ impl App {
         use crate::state::ColumnFocus;
         match self.state.column_focus {
             ColumnFocus::Workflow => {
-                self.state.workflows_focus = self.state.workflows_focus.toggle();
+                if self.state.workflows_focus == WorkflowsFocus::Defs {
+                    if self.state.workflow_def_focus == WorkflowDefFocus::Steps {
+                        // Exit step tree pane → back to definition list.
+                        self.state.workflow_def_focus = self.state.workflow_def_focus.toggle();
+                    } else {
+                        // Enter step tree pane only if the selected def has steps.
+                        let has_steps = self
+                            .state
+                            .data
+                            .workflow_defs
+                            .get(self.state.workflow_def_index)
+                            .map(|d| !d.body.is_empty())
+                            .unwrap_or(false);
+                        if has_steps {
+                            self.state.workflow_def_focus = self.state.workflow_def_focus.toggle();
+                            self.state.workflow_def_step_index = 0;
+                        } else {
+                            // Fall through to the normal Defs↔Runs toggle.
+                            self.state.workflows_focus = self.state.workflows_focus.toggle();
+                        }
+                    }
+                } else {
+                    self.state.workflows_focus = self.state.workflows_focus.toggle();
+                }
             }
             ColumnFocus::Content => match self.state.view {
                 View::Dashboard => {} // single panel — Tab is a no-op
@@ -1237,7 +1268,13 @@ impl App {
         use crate::state::ColumnFocus;
         match self.state.column_focus {
             ColumnFocus::Workflow => {
-                self.state.workflows_focus = self.state.workflows_focus.toggle();
+                if self.state.workflows_focus == WorkflowsFocus::Defs
+                    && self.state.workflow_def_focus == WorkflowDefFocus::Steps
+                {
+                    self.state.workflow_def_focus = WorkflowDefFocus::List;
+                } else {
+                    self.state.workflows_focus = self.state.workflows_focus.toggle();
+                }
             }
             ColumnFocus::Content => match self.state.view {
                 View::Dashboard => {} // single panel — Tab is a no-op
@@ -1266,7 +1303,13 @@ impl App {
     fn workflow_column_move_up(&mut self) {
         match self.state.workflows_focus {
             WorkflowsFocus::Defs => {
-                self.state.workflow_def_index = self.state.workflow_def_index.saturating_sub(1);
+                if self.state.workflow_def_focus == WorkflowDefFocus::Steps {
+                    self.state.workflow_def_step_index =
+                        self.state.workflow_def_step_index.saturating_sub(1);
+                } else {
+                    self.state.workflow_def_index = self.state.workflow_def_index.saturating_sub(1);
+                    self.state.workflow_def_step_index = 0;
+                }
             }
             WorkflowsFocus::Runs => {
                 self.state.workflow_run_index = self.state.workflow_run_index.saturating_sub(1);
@@ -1277,10 +1320,29 @@ impl App {
     fn workflow_column_move_down(&mut self) {
         match self.state.workflows_focus {
             WorkflowsFocus::Defs => {
-                clamp_increment(
-                    &mut self.state.workflow_def_index,
-                    self.state.data.workflow_defs.len(),
-                );
+                if self.state.workflow_def_focus == WorkflowDefFocus::Steps {
+                    let step_count = self
+                        .state
+                        .data
+                        .workflow_defs
+                        .get(self.state.workflow_def_index)
+                        .map(|d| {
+                            crate::ui::workflows::build_def_step_lines(
+                                &d.body,
+                                0,
+                                &self.state.theme,
+                            )
+                            .len()
+                        })
+                        .unwrap_or(0);
+                    clamp_increment(&mut self.state.workflow_def_step_index, step_count);
+                } else {
+                    clamp_increment(
+                        &mut self.state.workflow_def_index,
+                        self.state.data.workflow_defs.len(),
+                    );
+                    self.state.workflow_def_step_index = 0;
+                }
             }
             WorkflowsFocus::Runs => {
                 let visible_len = self.state.visible_workflow_run_rows().len();

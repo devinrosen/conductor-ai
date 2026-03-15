@@ -275,14 +275,26 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         match key.code {
             KeyCode::Char('H') => return Action::ToggleCompletedRuns,
             KeyCode::Char('r') | KeyCode::Char('w') => return Action::RunWorkflow,
-            KeyCode::Char('v') if state.workflows_focus == crate::state::WorkflowsFocus::Defs => {
+            KeyCode::Char('v')
+                if state.workflows_focus == crate::state::WorkflowsFocus::Defs
+                    && state.workflow_def_focus == crate::state::WorkflowDefFocus::List =>
+            {
                 return Action::ViewWorkflowDef;
             }
-            KeyCode::Char('e') if state.workflows_focus == crate::state::WorkflowsFocus::Defs => {
+            KeyCode::Char('e')
+                if state.workflows_focus == crate::state::WorkflowsFocus::Defs
+                    && state.workflow_def_focus == crate::state::WorkflowDefFocus::List =>
+            {
                 return Action::EditWorkflowDef;
             }
             KeyCode::Char(' ') if state.workflows_focus == crate::state::WorkflowsFocus::Runs => {
                 return Action::ToggleWorkflowRunCollapse;
+            }
+            // Right / l: enter or exit the step tree pane when viewing defs.
+            KeyCode::Right | KeyCode::Char('l')
+                if state.workflows_focus == crate::state::WorkflowsFocus::Defs =>
+            {
+                return Action::NextPanel;
             }
             _ => {}
         }

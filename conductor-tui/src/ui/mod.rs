@@ -6,7 +6,7 @@ mod modal;
 mod repo_detail;
 mod workflow_column;
 mod workflow_def_detail;
-mod workflows;
+pub(crate) mod workflows;
 mod worktree_detail;
 
 use ratatui::Frame;

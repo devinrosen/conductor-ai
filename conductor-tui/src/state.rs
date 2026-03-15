@@ -220,6 +220,25 @@ impl WorkflowRunDetailFocus {
     }
 }
 
+/// Focus state for the workflow column when viewing workflow definitions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkflowDefFocus {
+    /// Definition list has focus; right column shows workflow runs.
+    #[default]
+    List,
+    /// Step tree has focus; right column shows the step tree for the selected def.
+    Steps,
+}
+
+impl WorkflowDefFocus {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::List => Self::Steps,
+            Self::Steps => Self::List,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WorktreeDetailFocus {
     #[default]
@@ -934,6 +953,11 @@ pub struct AppState {
     pub selected_workflow_def: Option<conductor_core::workflow::WorkflowDef>,
     /// Vertical scroll offset for the steps pane in WorkflowDefDetail.
     pub workflow_def_detail_scroll: usize,
+
+    /// Which sub-pane of the workflow column Defs view has focus.
+    pub workflow_def_focus: WorkflowDefFocus,
+    /// Selected row index in the step tree pane (when `workflow_def_focus == Steps`).
+    pub workflow_def_step_index: usize,
 }
 
 /// Append step rows for `run_id` when it is in `expanded_step_run_ids`.
@@ -1078,6 +1102,8 @@ impl AppState {
             theme: Theme::default(),
             selected_workflow_def: None,
             workflow_def_detail_scroll: 0,
+            workflow_def_focus: WorkflowDefFocus::List,
+            workflow_def_step_index: 0,
         }
     }
 
