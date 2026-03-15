@@ -368,10 +368,6 @@ impl App {
             }
             Action::Select => self.select(),
 
-            // View navigation
-            Action::GoToDashboard => {
-                self.state.view = View::Dashboard;
-            }
             Action::FocusContentColumn => {
                 self.state.column_focus = crate::state::ColumnFocus::Content;
             }

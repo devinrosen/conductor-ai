@@ -68,8 +68,6 @@ pub enum Action {
     MoveDown,
     Select,
 
-    // Views
-    GoToDashboard,
     FocusContentColumn,
     FocusWorkflowColumn,
     ToggleWorkflowColumn,

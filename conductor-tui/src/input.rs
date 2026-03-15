@@ -460,9 +460,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         KeyCode::Char('S') => Action::ManageIssueSources,
         KeyCode::Char('o') => Action::OpenTicketUrl,
 
-        // Direct view navigation
-        KeyCode::Char('1') => Action::GoToDashboard,
-
         _ => Action::None,
     }
 }
