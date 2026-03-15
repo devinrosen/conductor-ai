@@ -1,0 +1,13 @@
+workflow test-workflow {
+  meta {
+    description = "Minimal test workflow with a single human-approval gate — used by E2E tests"
+    trigger     = "manual"
+    targets     = ["worktree"]
+  }
+
+  gate human_approval {
+    prompt     = "E2E test gate — approve to complete the workflow"
+    timeout    = "1h"
+    on_timeout = fail
+  }
+}

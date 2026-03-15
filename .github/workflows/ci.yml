@@ -36,3 +36,6 @@ jobs:
       - run: cd conductor-web/frontend && bun install && bun run build
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+
+  # Playwright E2E tests run locally via the pre-push git hook (.githooks/pre-push).
+  # See CLAUDE.md for setup: git config core.hooksPath .githooks

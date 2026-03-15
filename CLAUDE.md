@@ -23,8 +23,12 @@ cd conductor-web/frontend && bun install && bun run build
 
 No Makefile/justfile — use `cargo` directly.
 
-# One-time dev setup: enable pre-commit hook that runs cargo fmt --all --check
+# One-time dev setup: enable git hooks (pre-commit fmt check + pre-push E2E tests)
 git config core.hooksPath .githooks
+
+# Playwright E2E tests run automatically on push when conductor-web files change.
+# To skip: SKIP_E2E=1 git push
+# To run manually: cd conductor-web/frontend && bun run test:e2e
 
 ## Architecture
 
