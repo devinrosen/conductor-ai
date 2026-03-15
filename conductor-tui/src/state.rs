@@ -1382,15 +1382,16 @@ impl AppState {
 
                 if repo_detail_mode {
                     // Extract the worktree slug from target_label (format "repo/slug").
+                    // PR-format labels ("owner/repo#42") are TargetType::Pr and must be skipped.
                     let slug: Option<String> = run
                         .target_label
                         .as_deref()
                         .map(parse_target_label)
-                        .and_then(|(_, target_key, _)| {
-                            if target_key.is_empty() {
-                                None
-                            } else {
+                        .and_then(|(_, target_key, target_type)| {
+                            if target_type == TargetType::Worktree && !target_key.is_empty() {
                                 Some(target_key)
+                            } else {
+                                None
                             }
                         });
                     if let Some(ref s) = slug {
@@ -2704,6 +2705,18 @@ mod tests {
         state.data.workflow_runs = vec![make_wf_run_with_target("r1", None)];
         let rows = state.visible_workflow_run_rows();
         // No target_label → no SlugLabel, just the Parent row
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "r1"));
+    }
+
+    #[test]
+    fn repo_detail_mode_no_slug_label_for_pr_format_target() {
+        // PR-format labels ("owner/repo#42") must not be emitted as SlugLabel rows.
+        let mut state = AppState::new();
+        set_repo_detail_mode(&mut state, "repo-1");
+        state.data.workflow_runs = vec![make_wf_run_with_target("r1", Some("owner/repo#42"))];
+        let rows = state.visible_workflow_run_rows();
+        // PR-format target → no SlugLabel, just the Parent row
         assert_eq!(rows.len(), 1);
         assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "r1"));
     }
