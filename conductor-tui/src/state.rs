@@ -2384,7 +2384,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn visible_workflow_run_rows_filters_completed_by_default() {
         let mut state = AppState::new();
         set_worktree_mode(&mut state);
@@ -2408,6 +2407,7 @@ mod tests {
         assert_eq!(state.hidden_workflow_run_count(), 0);
     }
 
+    #[test]
     fn visible_workflow_run_rows_no_steps_without_data() {
         // Even if a run is in expanded_step_run_ids, if there are no steps in
         // workflow_run_steps for that run, no Step rows should appear.

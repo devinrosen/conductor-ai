@@ -258,7 +258,7 @@ fn sync_repo(
 
 /// Spawn the workflow data poller. Polls workflow runs/steps for the given
 /// worktree and run IDs every `interval` and sends WorkflowDataRefreshed events.
-#[allow(dead_code)]
+#[allow(dead_code, clippy::too_many_arguments)]
 pub fn spawn_workflow_poller(
     tx: BackgroundSender,
     interval: Duration,
@@ -465,6 +465,7 @@ pub fn spawn_workflow_poll_once(
 
 /// Like [`spawn_workflow_poll_once`] but clears an `AtomicBool` guard when done,
 /// so the caller can prevent concurrent polls.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_workflow_poll_once_guarded(
     tx: BackgroundSender,
     worktree_id: Option<String>,
