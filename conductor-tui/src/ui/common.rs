@@ -181,9 +181,22 @@ pub fn worktree_list_item_with_prefix(
     let agent_run = state.data.latest_agent_runs.get(&wt.id);
     let wf_run = state.data.latest_workflow_runs_by_worktree.get(&wt.id);
 
-    // Symbol and color: agent wins if present, otherwise fall back to workflow.
-    let status_symbol: Option<(&'static str, ratatui::style::Color)> = if let Some(run) = agent_run
-    {
+    // Symbol priority: an active workflow run (Running/Waiting) always wins so the
+    // root-level status is shown even when an agent step has already completed.
+    // Agent status wins only when no active workflow run is present.
+    let wf_active = wf_run.is_some_and(|wf| {
+        matches!(
+            wf.status,
+            WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
+        )
+    });
+    let status_symbol: Option<(&'static str, ratatui::style::Color)> = if wf_active {
+        wf_run.and_then(|wf| match wf.status {
+            WorkflowRunStatus::Running => Some(("⚙", state.theme.label_accent)),
+            WorkflowRunStatus::Waiting => Some(("⏸", state.theme.status_waiting)),
+            _ => None,
+        })
+    } else if let Some(run) = agent_run {
         Some(match run.status {
             AgentRunStatus::Running => ("⚙", state.theme.status_running),
             AgentRunStatus::WaitingForFeedback => ("⏸", state.theme.status_waiting),
