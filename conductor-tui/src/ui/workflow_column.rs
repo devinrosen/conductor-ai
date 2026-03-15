@@ -15,7 +15,13 @@ pub fn render_workflow_column(frame: &mut Frame, area: Rect, state: &AppState) {
         .split(area);
 
     super::workflows::render_defs(frame, chunks[0], state);
-    super::workflows::render_runs(frame, chunks[1], state);
+    if state.workflows_focus == crate::state::WorkflowsFocus::Defs
+        && state.workflow_def_focus == crate::state::WorkflowDefFocus::Steps
+    {
+        super::workflows::render_def_steps(frame, chunks[1], state);
+    } else {
+        super::workflows::render_runs(frame, chunks[1], state);
+    }
 }
 
 /// Render a view split into a content pane (65%) and the persistent workflow column (35%).
