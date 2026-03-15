@@ -1,0 +1,25 @@
+workflow update-diagrams {
+  meta {
+    description = "Update Mermaid diagrams based on a ticket; gates on ticket readiness before touching files"
+    trigger     = "manual"
+    targets     = ["worktree"]
+  }
+
+  inputs {
+    repo   required
+    ticket required
+    types  default = ""
+  }
+
+  call read-ticket
+
+  if read-ticket.is_refined {
+    call identify-affected-diagrams
+    call update-diagram-files
+    call push-and-pr
+  }
+
+  unless read-ticket.is_refined {
+    call report-open-questions
+  }
+}

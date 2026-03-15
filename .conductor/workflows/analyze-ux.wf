@@ -1,0 +1,19 @@
+workflow analyze-ux {
+  meta {
+    description = "Run a per-persona UX analysis across all Mermaid diagrams and write a dated report"
+    trigger     = "manual"
+    targets     = ["repo"]
+  }
+
+  inputs {
+    repo     required
+    personas default = ""
+    focus    default = ""
+  }
+
+  call read-personas
+  call read-diagrams
+  call analyze-per-persona
+  call write-analysis-report
+  call push-and-pr
+}

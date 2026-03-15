@@ -1,0 +1,21 @@
+workflow generate-diagrams {
+  meta {
+    description = "Generate Mermaid diagram files for a repo; bootstraps personas.md on first run"
+    trigger     = "manual"
+    targets     = ["repo"]
+  }
+
+  inputs {
+    repo  required
+    types default = "ux,architecture,data-flow,state-machines,api,db"
+  }
+
+  call check-personas-exist
+
+  unless check-personas-exist.personas_exist {
+    call extract-personas
+  }
+
+  call generate-diagram-files
+  call push-and-pr
+}
