@@ -106,12 +106,12 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <h2 className="text-xl font-bold text-gray-900">Dashboard</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => setDiscoverOpen(true)}
-            className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
+            className="px-3 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
           >
             Discover from GitHub
           </button>
@@ -152,8 +152,8 @@ export function DashboardPage() {
         {activeWorktrees.length === 0 ? (
           <EmptyState message="No active worktrees" />
         ) : (
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
+            <table className="w-full text-sm min-w-[480px]">
               <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
                 <tr>
                   <th className="px-4 py-2">Branch</th>

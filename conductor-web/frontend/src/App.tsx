@@ -3,6 +3,7 @@ import { AppShell } from "./components/layout/AppShell";
 import { DashboardPage } from "./pages/DashboardPage";
 import { RepoDetailPage } from "./pages/RepoDetailPage";
 import { WorktreeDetailPage } from "./pages/WorktreeDetailPage";
+import { WorkflowRunDetailPage } from "./pages/WorkflowRunDetailPage";
 import { TicketsPage } from "./pages/TicketsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
@@ -17,6 +18,10 @@ const router = createBrowserRouter([
       {
         path: "repos/:repoId/worktrees/:worktreeId",
         element: <WorktreeDetailPage />,
+      },
+      {
+        path: "repos/:repoId/worktrees/:worktreeId/workflows/runs/:runId",
+        element: <WorkflowRunDetailPage />,
       },
       { path: "settings", element: <SettingsPage /> },
       { path: "*", element: <NotFoundPage /> },

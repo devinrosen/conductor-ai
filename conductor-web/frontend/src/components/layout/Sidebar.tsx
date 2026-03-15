@@ -8,13 +8,34 @@ const linkClass = ({ isActive }: { isActive: boolean }) =>
       : "text-gray-700 hover:bg-gray-100"
   }`;
 
-export function Sidebar() {
+interface SidebarProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+export function Sidebar({ open, onClose }: SidebarProps) {
   const { repos, loading } = useRepos();
 
   return (
-    <aside className="w-60 shrink-0 border-r border-gray-200 bg-white flex flex-col">
-      <div className="px-4 py-4 border-b border-gray-200">
+    <aside
+      className={`
+        fixed inset-y-0 left-0 z-40 w-60 shrink-0 border-r border-gray-200 bg-white flex flex-col
+        transform transition-transform duration-200 ease-in-out
+        ${open ? "translate-x-0" : "-translate-x-full"}
+        md:static md:translate-x-0 md:inset-auto
+      `}
+    >
+      <div className="px-4 py-4 border-b border-gray-200 flex items-center justify-between">
         <h1 className="text-lg font-bold text-gray-900">Conductor</h1>
+        {/* Close button only shown on mobile */}
+        <button
+          onClick={onClose}
+          className="md:hidden flex items-center justify-center rounded text-gray-500 hover:bg-gray-100"
+          style={{ minHeight: 44, minWidth: 44 }}
+          aria-label="Close menu"
+        >
+          ✕
+        </button>
       </div>
 
       <nav className="flex-1 overflow-auto p-3 space-y-1">

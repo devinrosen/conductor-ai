@@ -1,18 +1,18 @@
 import { useState, useEffect, useCallback } from "react";
+import { Link } from "react-router";
 import { api } from "../../api/client";
-import type { WorkflowDefSummary, WorkflowRun, WorkflowRunStep } from "../../api/types";
+import type { WorkflowDefSummary, WorkflowRun } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 
 interface WorkflowPanelProps {
+  repoId: string;
   worktreeId: string;
 }
 
-export function WorkflowPanel({ worktreeId }: WorkflowPanelProps) {
+export function WorkflowPanel({ repoId, worktreeId }: WorkflowPanelProps) {
   const [defs, setDefs] = useState<WorkflowDefSummary[]>([]);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
-  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
-  const [steps, setSteps] = useState<WorkflowRunStep[]>([]);
   const [runModalDef, setRunModalDef] = useState<WorkflowDefSummary | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -37,41 +37,9 @@ export function WorkflowPanel({ worktreeId }: WorkflowPanelProps) {
     return () => clearInterval(interval);
   }, [fetchData]);
 
-  const loadSteps = useCallback(async (runId: string) => {
-    if (expandedRunId === runId) {
-      setExpandedRunId(null);
-      return;
-    }
-    try {
-      const data = await api.getWorkflowSteps(runId);
-      setSteps(data);
-      setExpandedRunId(runId);
-    } catch {
-      // ignore
-    }
-  }, [expandedRunId]);
-
   const handleCancel = async (runId: string) => {
     try {
       await api.cancelWorkflow(runId);
-      fetchData();
-    } catch {
-      // ignore
-    }
-  };
-
-  const handleApprove = async (runId: string, feedback?: string) => {
-    try {
-      await api.approveGate(runId, feedback);
-      fetchData();
-    } catch {
-      // ignore
-    }
-  };
-
-  const handleReject = async (runId: string) => {
-    try {
-      await api.rejectGate(runId);
       fetchData();
     } catch {
       // ignore
@@ -147,27 +115,24 @@ export function WorkflowPanel({ worktreeId }: WorkflowPanelProps) {
           <div className="space-y-2">
             {runs.map((run) => (
               <div key={run.id} className="bg-gray-800 rounded-lg border border-gray-700">
-                <div
-                  className="flex items-center justify-between p-3 cursor-pointer hover:bg-gray-750"
-                  onClick={() => loadSteps(run.id)}
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="font-medium text-gray-200">{run.workflow_name}</span>
+                <div className="flex items-center justify-between p-3">
+                  <Link
+                    to={`/repos/${repoId}/worktrees/${worktreeId}/workflows/runs/${run.id}`}
+                    className="flex items-center gap-3 hover:opacity-80 min-w-0"
+                  >
+                    <span className="font-medium text-gray-200 truncate">{run.workflow_name}</span>
                     <StatusBadge status={run.status} />
                     {run.dry_run && (
-                      <span className="text-xs px-1.5 py-0.5 bg-yellow-900 text-yellow-300 rounded">
+                      <span className="text-xs px-1.5 py-0.5 bg-yellow-900 text-yellow-300 rounded shrink-0">
                         dry-run
                       </span>
                     )}
-                  </div>
-                  <div className="flex items-center gap-3">
+                  </Link>
+                  <div className="flex items-center gap-3 shrink-0 ml-3">
                     <TimeAgo date={run.started_at} />
                     {(run.status === "running" || run.status === "waiting") && (
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleCancel(run.id);
-                        }}
+                        onClick={() => handleCancel(run.id)}
                         className="px-2 py-0.5 text-xs bg-red-700 hover:bg-red-600 text-white rounded"
                       >
                         Cancel
@@ -175,66 +140,6 @@ export function WorkflowPanel({ worktreeId }: WorkflowPanelProps) {
                     )}
                   </div>
                 </div>
-
-                {/* Expanded steps */}
-                {expandedRunId === run.id && (
-                  <div className="border-t border-gray-700 p-3">
-                    {steps.length === 0 ? (
-                      <p className="text-gray-500 text-sm">No steps recorded.</p>
-                    ) : (
-                      <div className="space-y-2">
-                        {steps.map((step) => (
-                          <div
-                            key={step.id}
-                            className="flex items-center justify-between py-1.5 px-2 rounded bg-gray-900"
-                          >
-                            <div className="flex items-center gap-2">
-                              <span className="text-gray-400 text-xs w-6 text-right">
-                                {step.position}
-                              </span>
-                              <span className="text-gray-200 text-sm">{step.step_name}</span>
-                              <StatusBadge status={step.status} />
-                              {step.iteration > 0 && (
-                                <span className="text-xs text-gray-500">
-                                  iter {step.iteration}
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {step.retry_count > 0 && (
-                                <span className="text-xs text-yellow-400">
-                                  {step.retry_count} retries
-                                </span>
-                              )}
-                              {step.gate_type && step.status === "waiting" && (
-                                <div className="flex gap-1">
-                                  <button
-                                    onClick={() => handleApprove(run.id)}
-                                    className="px-2 py-0.5 text-xs bg-green-700 hover:bg-green-600 text-white rounded"
-                                  >
-                                    Approve
-                                  </button>
-                                  <button
-                                    onClick={() => handleReject(run.id)}
-                                    className="px-2 py-0.5 text-xs bg-red-700 hover:bg-red-600 text-white rounded"
-                                  >
-                                    Reject
-                                  </button>
-                                </div>
-                              )}
-                              {step.started_at && (
-                                <TimeAgo date={step.started_at} />
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {run.result_summary && (
-                      <p className="mt-2 text-sm text-gray-400">{run.result_summary}</p>
-                    )}
-                  </div>
-                )}
               </div>
             ))}
           </div>
@@ -280,7 +185,7 @@ function RunWorkflowModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md border border-gray-600">
         <h3 className="text-lg font-semibold text-gray-200 mb-4">
           Run: {def.name}

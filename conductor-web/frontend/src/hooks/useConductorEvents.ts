@@ -10,6 +10,8 @@ export type ConductorEventType =
   | "agent_started"
   | "agent_stopped"
   | "agent_event"
+  | "feedback_requested"
+  | "feedback_submitted"
   | "work_targets_changed"
   | "issue_sources_changed"
   | "lagged";
@@ -59,6 +61,8 @@ export function useConductorEvents(
       "agent_started",
       "agent_stopped",
       "agent_event",
+      "feedback_requested",
+      "feedback_submitted",
       "work_targets_changed",
       "issue_sources_changed",
       "lagged",

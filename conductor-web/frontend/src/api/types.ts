@@ -251,3 +251,12 @@ export interface RunWorkflowRequest {
   dry_run?: boolean;
   inputs?: Record<string, string>;
 }
+
+export interface FeedbackRequest {
+  id: string;
+  run_id: string;
+  prompt: string;
+  response: string | null;
+  status: "pending" | "responded" | "dismissed";
+  created_at: string;
+}

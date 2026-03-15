@@ -13,6 +13,7 @@ import { ModelPicker } from "../components/shared/ModelPicker";
 import { AgentStatusDisplay } from "../components/agents/AgentStatusDisplay";
 import { AgentActivityLog } from "../components/agents/AgentActivityLog";
 import { AgentPlanChecklist } from "../components/agents/AgentPlanChecklist";
+import { AgentFeedbackModal } from "../components/agents/AgentFeedbackModal";
 import {
   useConductorEvents,
   type ConductorEventType,
@@ -64,6 +65,7 @@ export function WorktreeDetailPage() {
   const [agentLoading, setAgentLoading] = useState(false);
   const [stopConfirm, setStopConfirm] = useState(false);
   const [orchestrateModalOpen, setOrchestrateModalOpen] = useState(false);
+  const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
 
   useHotkeys([
     { key: "d", handler: () => setDeleteConfirm(true), description: "Delete worktree", enabled: !deleteConfirm && !promptModalOpen && !stopConfirm },
@@ -76,6 +78,12 @@ export function WorktreeDetailPage() {
 
   const isActive = worktree?.status === "active";
   const isRunning = latestRun ? isActiveRun(latestRun) : false;
+  const isWaitingForFeedback = latestRun?.status === "waiting_for_feedback";
+
+  // Open feedback modal whenever agent is waiting for feedback
+  useEffect(() => {
+    setFeedbackModalOpen(!!isWaitingForFeedback);
+  }, [isWaitingForFeedback]);
 
   // Tickets available for linking: same repo, not already linked to this worktree
   const availableTickets = tickets?.filter(
@@ -154,6 +162,8 @@ export function WorktreeDetailPage() {
       agent_started: handleAgentChange,
       agent_stopped: handleAgentChange,
       agent_event: handleAgentChange,
+      feedback_requested: handleAgentChange,
+      feedback_submitted: handleAgentChange,
     };
     return map;
   }, [repoId, worktreeId, refetchWorktrees, refetchTickets, refreshAgent]);
@@ -311,7 +321,7 @@ export function WorktreeDetailPage() {
         </Link>
       </div>
 
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h2 className="text-xl font-bold text-gray-900">
             {worktree.branch}
@@ -320,7 +330,7 @@ export function WorktreeDetailPage() {
         </div>
         <button
           onClick={() => setDeleteConfirm(true)}
-          className="px-3 py-1.5 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
+          className="px-3 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50 sm:self-auto"
         >
           Delete Worktree
         </button>
@@ -411,25 +421,25 @@ export function WorktreeDetailPage() {
             Actions
           </h3>
           <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={handlePush}
                 disabled={pushing}
-                className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                className="px-3 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
               >
                 {pushing ? "Pushing..." : "Push Branch"}
               </button>
               <button
                 onClick={() => handleCreatePr(false)}
                 disabled={creatingPr}
-                className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                className="px-3 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
               >
                 {creatingPr ? "Creating..." : "Create PR"}
               </button>
               <button
                 onClick={() => handleCreatePr(true)}
                 disabled={creatingPr}
-                className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                className="px-3 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
               >
                 Draft PR
               </button>
@@ -542,8 +552,8 @@ export function WorktreeDetailPage() {
         </button>
       </div>
 
-      {activeTab === "workflows" && worktreeId && (
-        <WorkflowPanel worktreeId={worktreeId} />
+      {activeTab === "workflows" && worktreeId && repoId && (
+        <WorkflowPanel repoId={repoId} worktreeId={worktreeId} />
       )}
 
       {/* Agent Section */}
@@ -677,6 +687,18 @@ export function WorktreeDetailPage() {
         onConfirm={handleDelete}
         onCancel={() => setDeleteConfirm(false)}
       />
+
+      {worktreeId && (
+        <AgentFeedbackModal
+          worktreeId={worktreeId}
+          open={feedbackModalOpen}
+          onClose={() => setFeedbackModalOpen(false)}
+          onSubmitted={() => {
+            setFeedbackModalOpen(false);
+            refreshAgent();
+          }}
+        />
+      )}
     </div>
   );
 }

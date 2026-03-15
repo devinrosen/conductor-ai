@@ -26,6 +26,7 @@ import type {
   WorkflowRun,
   WorkflowRunStep,
   RunWorkflowRequest,
+  FeedbackRequest,
 } from "./types";
 
 const BASE = "/api";
@@ -218,6 +219,19 @@ export const api = {
     request<DiscoverableRepo[]>(
       owner ? `/github/repos?owner=${encodeURIComponent(owner)}` : "/github/repos",
     ),
+
+  // Agent Feedback
+  getPendingFeedback: (worktreeId: string) =>
+    request<FeedbackRequest | null>(`/worktrees/${worktreeId}/agent/feedback`),
+  submitFeedback: (worktreeId: string, feedbackId: string, response: string) =>
+    request<FeedbackRequest>(`/worktrees/${worktreeId}/agent/feedback/${feedbackId}/respond`, {
+      method: "POST",
+      body: JSON.stringify({ response }),
+    }),
+  dismissFeedback: (worktreeId: string, feedbackId: string) =>
+    request<void>(`/worktrees/${worktreeId}/agent/feedback/${feedbackId}/dismiss`, {
+      method: "POST",
+    }),
 
   // Workflows
   listWorkflowDefs: (worktreeId: string) =>

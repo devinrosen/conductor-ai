@@ -115,12 +115,12 @@ export function TicketsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <h2 className="text-xl font-bold text-gray-900">Tickets</h2>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
           <button
             onClick={() => setShowClosed((v) => !v)}
-            className={`px-3 py-1.5 text-sm rounded-md border ${
+            className={`px-3 py-2 text-sm rounded-md border ${
               showClosed
                 ? "border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
                 : "border-gray-300 text-gray-600 hover:bg-gray-50"
@@ -134,7 +134,7 @@ export function TicketsPage() {
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter by title, ID, or label..."
-            className="w-80 px-3 py-1.5 text-sm rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            className="w-full sm:w-80 px-3 py-2 text-sm rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
           />
         </div>
       </div>
@@ -183,8 +183,8 @@ export function TicketsPage() {
           }
         />
       ) : (
-        <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
+          <table className="w-full text-sm min-w-[560px]">
             <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
               <tr>
                 <th className="px-4 py-2">Repo</th>

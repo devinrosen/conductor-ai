@@ -144,7 +144,7 @@ export function SettingsPage() {
 
       {/* Work Targets Section */}
       <section>
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-3">
           <div>
             <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
               Work Targets
@@ -156,7 +156,7 @@ export function SettingsPage() {
           </div>
           <button
             onClick={() => setShowAdd(true)}
-            className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
+            className="px-3 py-2 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 sm:shrink-0"
           >
             Add Target
           </button>
@@ -173,8 +173,8 @@ export function SettingsPage() {
         ) : !targets || targets.length === 0 ? (
           <EmptyState message="No work targets configured" />
         ) : (
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
+            <table className="w-full text-sm min-w-[480px]">
               <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
                 <tr>
                   <th className="px-4 py-2">Name</th>

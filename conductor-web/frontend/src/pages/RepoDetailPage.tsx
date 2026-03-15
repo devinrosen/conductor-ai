@@ -197,16 +197,16 @@ export function RepoDetailPage() {
     <div className="space-y-8">
       {/* Header */}
       <div>
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <h2 className="text-xl font-bold text-gray-900">{repo.slug}</h2>
           <button
             onClick={() => setUnregisterRepoConfirm(true)}
-            className="px-3 py-1.5 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
+            className="sm:self-auto px-3 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
           >
             Delete Repo
           </button>
         </div>
-        <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-gray-600">
+        <dl className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm text-gray-600">
           <dt className="font-medium text-gray-500">Remote</dt>
           <dd className="truncate">{repo.remote_url}</dd>
           <dt className="font-medium text-gray-500">Local Path</dt>
@@ -272,14 +272,14 @@ export function RepoDetailPage() {
 
       {/* Worktrees */}
       <section>
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
             Worktrees
           </h3>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <button
               onClick={() => setShowCompletedWorktrees((v) => !v)}
-              className={`px-3 py-1.5 text-sm rounded-md border ${
+              className={`px-3 py-2 text-sm rounded-md border ${
                 showCompletedWorktrees
                   ? "border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
                   : "border-gray-300 text-gray-600 hover:bg-gray-50"
@@ -295,8 +295,8 @@ export function RepoDetailPage() {
         ) : !worktrees || worktrees.length === 0 ? (
           <EmptyState message="No worktrees yet" />
         ) : (
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
+            <table className="w-full text-sm min-w-[520px]">
               <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
                 <tr>
                   <th className="px-4 py-2">Branch</th>
@@ -358,8 +358,8 @@ export function RepoDetailPage() {
         ) : !tickets || tickets.length === 0 ? (
           <EmptyState message="No tickets synced yet" />
         ) : (
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
+            <table className="w-full text-sm min-w-[480px]">
               <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
                 <tr>
                   <th className="px-4 py-2">#</th>
