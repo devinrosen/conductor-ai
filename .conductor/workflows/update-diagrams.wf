@@ -16,6 +16,14 @@ workflow update-diagrams {
   if read-ticket.is_refined {
     call identify-affected-diagrams
     call update-diagram-files
+
+    gate human_review {
+      prompt     = "Review the diagram diff above. Approve to commit and open a PR, or provide feedback to revise."
+      timeout    = "48h"
+      on_timeout = fail
+    }
+
+    call commit-diagrams
     call push-and-pr
   }
 
