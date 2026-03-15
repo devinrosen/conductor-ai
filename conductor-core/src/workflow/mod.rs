@@ -2570,6 +2570,47 @@ And here is my actual output:
     }
 
     // -----------------------------------------------------------------------
+    // Regression tests: fallback-to-repo-root when worktree path missing (#816)
+    // -----------------------------------------------------------------------
+
+    /// setup_db() creates worktree `w1` with path `/tmp/ws/feat-test` which does not
+    /// exist on disk. Prior to #816 this would propagate a path-not-found error; after
+    /// the fix the engine must silently fall back to the repo root and succeed.
+    #[test]
+    fn test_execute_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
+        let conn = setup_db();
+        let config = Config::default();
+        let exec_config = WorkflowExecConfig::default();
+        let workflow = make_empty_workflow();
+
+        let input = WorkflowExecInput {
+            conn: &conn,
+            config: &config,
+            workflow: &workflow,
+            worktree_id: Some("w1"), // path /tmp/ws/feat-test — does not exist on disk
+            working_dir: "/tmp/repo",
+            repo_path: "/tmp/repo",
+            ticket_id: None,
+            repo_id: None,
+            model: None,
+            exec_config: &exec_config,
+            inputs: HashMap::new(),
+            depth: 0,
+            parent_workflow_run_id: None,
+            target_label: None,
+            default_bot_name: None,
+            run_id_notify: None,
+        };
+
+        let result = execute_workflow(&input)
+            .expect("execute_workflow must succeed when worktree path is missing (fallback to repo root)");
+        assert!(
+            result.all_succeeded,
+            "empty workflow should complete with all_succeeded=true"
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // execute_do tests (plain do {} block)
     // -----------------------------------------------------------------------
 
@@ -3706,6 +3747,52 @@ And here is my actual output:
         assert!(
             err.to_string().contains("not found in workflow run"),
             "Expected step-not-found error, got: {err}"
+        );
+    }
+
+    /// Regression test for #816: resume_workflow must fall back to the repo root when
+    /// the worktree path recorded in the DB no longer exists on disk.
+    /// setup_db() creates worktree `w1` with path `/tmp/ws/feat-test` — absent on disk.
+    #[test]
+    fn test_resume_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
+        let conn = setup_db();
+        let config = make_resume_config();
+        let agent_mgr = AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "workflow", None, None)
+            .unwrap();
+        let wf_mgr = WorkflowManager::new(&conn);
+
+        // Serialize a valid empty WorkflowDef as the snapshot so resume can deserialize it.
+        let snapshot = serde_json::to_string(&make_empty_workflow()).unwrap();
+        let run = wf_mgr
+            .create_workflow_run(
+                "test-wf",
+                Some("w1"),
+                &parent.id,
+                false,
+                "manual",
+                Some(&snapshot),
+            )
+            .unwrap();
+        wf_mgr
+            .update_workflow_status(&run.id, WorkflowRunStatus::Failed, Some("prior error"))
+            .unwrap();
+
+        let input = WorkflowResumeInput {
+            conn: &conn,
+            config,
+            workflow_run_id: &run.id,
+            model: None,
+            from_step: None,
+            restart: false,
+        };
+
+        let result = resume_workflow(&input)
+            .expect("resume_workflow must succeed when worktree path is missing (fallback to repo root)");
+        assert!(
+            result.all_succeeded,
+            "empty resumed workflow should complete with all_succeeded=true"
         );
     }
 
