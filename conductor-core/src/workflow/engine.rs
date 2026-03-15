@@ -551,7 +551,11 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
                     worktree.path,
                     repo.local_path
                 );
-                (repo.local_path.clone(), String::new(), repo.local_path.clone())
+                (
+                    repo.local_path.clone(),
+                    String::new(),
+                    repo.local_path.clone(),
+                )
             }
         } else {
             // Resolve repo_id from the run or via the linked ticket.
