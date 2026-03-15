@@ -481,6 +481,7 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                     status,
                     position,
                     depth,
+                    role,
                     ..
                 } => {
                     let base_indent = if global_mode { "    " } else { "" };
@@ -498,7 +499,36 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         ),
                         Span::styled(status_symbol, Style::default().fg(status_color)),
                         Span::raw("  "),
+                        Span::styled(
+                            format!("[{:<8}]", display_role(role)),
+                            Style::default().fg(role_color(role, &state.theme)),
+                        ),
+                        Span::raw("  "),
                         Span::raw(step_name.clone()),
+                    ]))
+                }
+                WorkflowRunRow::ParallelGroup {
+                    status,
+                    count,
+                    depth,
+                    ..
+                } => {
+                    let base_indent = if global_mode { "    " } else { "" };
+                    let level_indent = "  ".repeat(*depth as usize);
+                    let (status_symbol, status_color) = status_display(status, &state.theme);
+                    ListItem::new(Line::from(vec![
+                        Span::raw(format!("{base_indent}{level_indent}")),
+                        Span::styled(
+                            "\u{2570} ",
+                            Style::default().fg(state.theme.label_secondary),
+                        ),
+                        Span::styled(status_symbol, Style::default().fg(status_color)),
+                        Span::raw("  "),
+                        Span::styled(
+                            "[parallel]",
+                            Style::default().fg(state.theme.status_waiting),
+                        ),
+                        Span::raw(format!("  ({count} steps)")),
                     ]))
                 }
                 // Header arms already handled above; this branch is unreachable.
@@ -988,6 +1018,23 @@ fn event_kind_style(kind: &str, theme: &Theme) -> Style {
         "prompt" => Style::default().fg(theme.label_keyword),
         "result" => Style::default().fg(theme.label_accent),
         _ => Style::default().fg(theme.label_primary),
+    }
+}
+
+fn display_role(role: &str) -> &str {
+    match role {
+        "actor" => "agent",
+        other => other,
+    }
+}
+
+fn role_color(role: &str, theme: &Theme) -> Color {
+    match role {
+        "actor" | "agent" => theme.label_accent,
+        "gate" => theme.label_warning,
+        "reviewer" => theme.label_info,
+        "parallel" => theme.status_waiting,
+        _ => theme.label_secondary,
     }
 }
 

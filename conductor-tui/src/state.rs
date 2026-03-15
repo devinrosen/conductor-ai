@@ -157,6 +157,21 @@ pub enum WorkflowRunRow {
         position: i64,
         /// Indentation level = owning run depth + 1.
         depth: u8,
+        /// Role of the step (e.g. "actor", "gate", "reviewer").
+        role: String,
+        /// Parallel group this step belongs to, if any.
+        #[allow(dead_code)]
+        parallel_group_id: Option<String>,
+    },
+    /// A synthetic header row grouping parallel steps sharing the same `parallel_group_id`.
+    ParallelGroup {
+        #[allow(dead_code)]
+        group_id: String,
+        /// Derived from member statuses: running > waiting > failed > completed > skipped > pending.
+        status: String,
+        /// Number of steps in this group.
+        count: usize,
+        depth: u8,
     },
 }
 
@@ -168,7 +183,8 @@ impl WorkflowRunRow {
             WorkflowRunRow::Child { run_id, .. } => Some(run_id),
             WorkflowRunRow::RepoHeader { .. }
             | WorkflowRunRow::TargetHeader { .. }
-            | WorkflowRunRow::Step { .. } => None,
+            | WorkflowRunRow::Step { .. }
+            | WorkflowRunRow::ParallelGroup { .. } => None,
         }
     }
 }
@@ -953,17 +969,74 @@ fn push_steps_for_run(
     if let Some(steps) = workflow_run_steps.get(run_id) {
         let mut ordered: Vec<_> = steps.iter().collect();
         ordered.sort_by_key(|s| s.position);
-        for step in ordered {
-            rows.push(WorkflowRunRow::Step {
-                run_id: run_id.to_string(),
-                step_id: step.id.clone(),
-                step_name: step.step_name.clone(),
-                status: step.status.to_string(),
-                position: step.position,
-                depth,
-            });
+        let mut seen_groups: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for step in &ordered {
+            match &step.parallel_group_id {
+                None => {
+                    rows.push(WorkflowRunRow::Step {
+                        run_id: run_id.to_string(),
+                        step_id: step.id.clone(),
+                        step_name: step.step_name.clone(),
+                        status: step.status.to_string(),
+                        position: step.position,
+                        depth,
+                        role: step.role.clone(),
+                        parallel_group_id: None,
+                    });
+                }
+                Some(gid) => {
+                    if seen_groups.contains(gid) {
+                        // Already emitted this group's header and members.
+                        continue;
+                    }
+                    seen_groups.insert(gid.clone());
+                    // Collect all members of this group.
+                    let members: Vec<_> = ordered
+                        .iter()
+                        .filter(|s| s.parallel_group_id.as_deref() == Some(gid))
+                        .collect();
+                    let group_status = derive_parallel_group_status(&members);
+                    rows.push(WorkflowRunRow::ParallelGroup {
+                        group_id: gid.clone(),
+                        status: group_status,
+                        count: members.len(),
+                        depth,
+                    });
+                    for member in members {
+                        rows.push(WorkflowRunRow::Step {
+                            run_id: run_id.to_string(),
+                            step_id: member.id.clone(),
+                            step_name: member.step_name.clone(),
+                            status: member.status.to_string(),
+                            position: member.position,
+                            depth: depth + 1,
+                            role: member.role.clone(),
+                            parallel_group_id: member.parallel_group_id.clone(),
+                        });
+                    }
+                }
+            }
         }
     }
+}
+
+/// Derive a single aggregate status for a parallel group from its members.
+/// Priority: running > waiting > failed > completed > skipped > pending.
+fn derive_parallel_group_status(members: &[&&conductor_core::workflow::WorkflowRunStep]) -> String {
+    let statuses: Vec<String> = members.iter().map(|s| s.status.to_string()).collect();
+    for s in &[
+        "running",
+        "waiting",
+        "failed",
+        "completed",
+        "skipped",
+        "pending",
+    ] {
+        if statuses.iter().any(|st| st == s) {
+            return s.to_string();
+        }
+    }
+    "pending".to_string()
 }
 
 /// Recursively append `Child` rows for `parent_id` into `rows`.
@@ -2473,6 +2546,49 @@ mod tests {
         let rows = state.visible_workflow_run_rows();
         assert_eq!(rows.len(), 1);
         assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
+    }
+
+    #[test]
+    fn visible_workflow_run_rows_parallel_group_header_and_members() {
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        state.show_completed_workflow_runs = true;
+        state.data.workflow_runs = vec![make_wf_run_full("p1", WorkflowRunStatus::Completed, None)];
+
+        // Two parallel steps sharing group id "g1", plus one sequential step.
+        let mut lint = make_wf_step("s1", "p1", "lint", 0);
+        lint.parallel_group_id = Some("g1".into());
+        let mut test = make_wf_step("s2", "p1", "test", 1);
+        test.parallel_group_id = Some("g1".into());
+        let deploy = make_wf_step("s3", "p1", "deploy", 2);
+
+        state
+            .data
+            .workflow_run_steps
+            .insert("p1".into(), vec![lint, test, deploy]);
+        state.expanded_step_run_ids.insert("p1".into());
+
+        let rows = state.visible_workflow_run_rows();
+        // Parent + ParallelGroup header + 2 member Steps + 1 sequential Step = 5
+        assert_eq!(rows.len(), 5);
+        assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
+        assert!(matches!(
+            &rows[1],
+            WorkflowRunRow::ParallelGroup {
+                count: 2,
+                depth: 1,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&rows[2], WorkflowRunRow::Step { step_name, depth: 2, .. } if step_name == "lint")
+        );
+        assert!(
+            matches!(&rows[3], WorkflowRunRow::Step { step_name, depth: 2, .. } if step_name == "test")
+        );
+        assert!(
+            matches!(&rows[4], WorkflowRunRow::Step { step_name, depth: 1, .. } if step_name == "deploy")
+        );
     }
 
     // --- ColumnFocus navigation tests ---
