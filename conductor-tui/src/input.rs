@@ -1070,10 +1070,6 @@ mod tests {
 
     // --- Workflow column focus keybindings ---
 
-    fn ctrl(code: KeyCode) -> KeyEvent {
-        KeyEvent::new(code, KeyModifiers::CONTROL)
-    }
-
     #[test]
     fn backslash_maps_to_toggle_workflow_column() {
         let state = AppState::new();
