@@ -1604,6 +1604,9 @@ impl AppState {
             if self.collapse_initialized.contains(&run.id) {
                 continue;
             }
+            let is_leaf = !parent_ids.contains(run.id.as_str());
+
+            // Root-run only: collapse terminal runs so the list stays tidy
             if run.parent_workflow_run_id.is_none() {
                 let is_terminal = matches!(
                     run.status,
@@ -1611,13 +1614,16 @@ impl AppState {
                         | WorkflowRunStatus::Failed
                         | WorkflowRunStatus::Cancelled
                 );
-                let is_leaf = !parent_ids.contains(run.id.as_str());
                 if is_terminal {
                     self.collapsed_workflow_run_ids.insert(run.id.clone());
-                } else if matches!(run.status, WorkflowRunStatus::Running) && is_leaf {
-                    self.expanded_step_run_ids.insert(run.id.clone());
                 }
             }
+
+            // All depths: auto-expand running leaf runs to show their steps
+            if matches!(run.status, WorkflowRunStatus::Running) && is_leaf {
+                self.expanded_step_run_ids.insert(run.id.clone());
+            }
+
             self.collapse_initialized.insert(run.id.clone());
         }
     }
