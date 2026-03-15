@@ -1,12 +1,11 @@
 ---
 source: conductor-tui/tests/tui_snapshots.rs
-assertion_line: 171
 expression: render_to_string(&state)
 ---
-"┌ Repos ──────────────────────┐┌ Worktrees (0 active) ───────────────────────┐┌ All Workflow Definitions ──────────────┐"
-"│                             ││                                             ││                                        │"
-"│                             ││                                             ││                                        │"
-"│                             ││                                             ││                                        │"
+"┌ Repos & Worktrees (0 active) ──────────────────────────────────────────────┐┌ All Workflow Definitions ──────────────┐"
+"│                                                                            ││                                        │"
+"│                                                                            ││                                        │"
+"│                                                                            ││                                        │"
 "│                       ┌ Help ────────────────────────────────────────────────────────────────┐                       │"
 "│                       │Keybindings                                                           │                       │"
 "│                       │                                                                      │                       │"
@@ -24,6 +23,8 @@ expression: render_to_string(&state)
 "│                       │  3                   Workflows view                                  │                       │"
 "│                       │  ?                   Toggle this help                                │                       │"
 "│                       │  q                   Quit                                            │                       │"
+"│                       │  [ / ]               Focus content / workflow column                 │                       │"
+"│                       │  \                   Toggle workflow column                          │                       │"
 "│                       │                                                                      │                       │"
 "│                       │Global Actions                                                        │                       │"
 "│                       │                                                                      │                       │"
@@ -36,10 +37,8 @@ expression: render_to_string(&state)
 "│                       │  A                   Toggle closed tickets                           │                       │"
 "│                       │  w                   Run workflow on current item                    │                       │"
 "│                       │  !                   Toggle status bar expansion                     │                       │"
-"│                       │  /                   Filter/search                                   │                       │"
-"│                       │                                                                      │                       │"
 "│                       └──────────────────────────────────────────────────────────────────────┘                       │"
-"│                             ││                                             ││                                        │"
-"│                             ││                                             ││                                        │"
-"└─────────────────────────────┘└─────────────────────────────────────────────┘└────────────────────────────────────────┘"
-"[Dashboard]  Tab:panel  Ctrl+h/l:column  \:workflows  q:quit                                                            "
+"│                                                                            ││                                        │"
+"│                                                                            ││                                        │"
+"└────────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────┘"
+"[Dashboard]  Tab:panel  [/]:column  \:workflows  q:quit                                                                 "

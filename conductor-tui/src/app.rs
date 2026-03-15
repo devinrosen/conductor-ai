@@ -22,7 +22,7 @@ use crate::background;
 use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
 use crate::state::{
-    info_row, repo_info_row, AppState, ConfirmAction, DashboardFocus, FormAction, FormField,
+    info_row, repo_info_row, AppState, ConfirmAction, DashboardRow, FormAction, FormField,
     InputAction, Modal, PostCreateChoice, RepoDetailFocus, View, WorkflowRunDetailFocus,
     WorkflowsFocus, WorktreeDetailFocus,
 };
@@ -1150,14 +1150,9 @@ impl App {
     }
 
     fn clamp_indices(&mut self) {
-        let repos_len = self.state.data.repos.len();
-        if repos_len > 0 && self.state.repo_index >= repos_len {
-            self.state.repo_index = repos_len - 1;
-        }
-
-        let wt_len = self.state.data.worktrees.len();
-        if wt_len > 0 && self.state.worktree_index >= wt_len {
-            self.state.worktree_index = wt_len - 1;
+        let dashboard_len = self.state.dashboard_rows().len();
+        if dashboard_len > 0 && self.state.dashboard_index >= dashboard_len {
+            self.state.dashboard_index = dashboard_len - 1;
         }
 
         let t_len = self.state.filtered_tickets.len();
@@ -1207,9 +1202,7 @@ impl App {
                 self.state.workflows_focus = self.state.workflows_focus.toggle();
             }
             ColumnFocus::Content => match self.state.view {
-                View::Dashboard => {
-                    self.state.dashboard_focus = self.state.dashboard_focus.next();
-                }
+                View::Dashboard => {} // single panel — Tab is a no-op
                 View::RepoDetail => {
                     self.state.repo_detail_focus = self.state.repo_detail_focus.next();
                 }
@@ -1230,9 +1223,7 @@ impl App {
                 self.state.workflows_focus = self.state.workflows_focus.toggle();
             }
             ColumnFocus::Content => match self.state.view {
-                View::Dashboard => {
-                    self.state.dashboard_focus = self.state.dashboard_focus.prev();
-                }
+                View::Dashboard => {} // single panel — Tab is a no-op
                 View::RepoDetail => {
                     self.state.repo_detail_focus = self.state.repo_detail_focus.prev();
                 }
@@ -1388,14 +1379,9 @@ impl App {
             return;
         }
         match self.state.view {
-            View::Dashboard => match self.state.dashboard_focus {
-                DashboardFocus::Repos => {
-                    self.state.repo_index = self.state.repo_index.saturating_sub(1);
-                }
-                DashboardFocus::Worktrees => {
-                    self.state.worktree_index = self.state.worktree_index.saturating_sub(1);
-                }
-            },
+            View::Dashboard => {
+                self.state.dashboard_index = self.state.dashboard_index.saturating_sub(1);
+            }
             View::RepoDetail => match self.state.repo_detail_focus {
                 RepoDetailFocus::Info => {
                     self.state.repo_detail_info_row =
@@ -1509,17 +1495,10 @@ impl App {
             return;
         }
         match self.state.view {
-            View::Dashboard => match self.state.dashboard_focus {
-                DashboardFocus::Repos => {
-                    clamp_increment(&mut self.state.repo_index, self.state.data.repos.len());
-                }
-                DashboardFocus::Worktrees => {
-                    clamp_increment(
-                        &mut self.state.worktree_index,
-                        self.state.data.worktrees.len(),
-                    );
-                }
-            },
+            View::Dashboard => {
+                let len = self.state.dashboard_rows().len();
+                clamp_increment(&mut self.state.dashboard_index, len);
+            }
             View::RepoDetail => match self.state.repo_detail_focus {
                 RepoDetailFocus::Info => {
                     clamp_increment(&mut self.state.repo_detail_info_row, repo_info_row::COUNT);
@@ -1578,57 +1557,59 @@ impl App {
             return;
         }
         match self.state.view {
-            View::Dashboard => match self.state.dashboard_focus {
-                DashboardFocus::Repos => {
-                    if let Some(repo) = self.state.selected_repo() {
-                        let repo_id = repo.id.clone();
-                        let remote_url = repo.remote_url.clone();
-                        self.state.selected_repo_id = Some(repo_id.clone());
-                        self.state.detail_worktrees = self
-                            .state
-                            .data
-                            .worktrees
-                            .iter()
-                            .filter(|wt| wt.repo_id == repo_id)
-                            .cloned()
-                            .collect();
-                        self.state.detail_tickets = self
-                            .state
-                            .data
-                            .tickets
-                            .iter()
-                            .filter(|t| t.repo_id == repo_id)
-                            .cloned()
-                            .collect();
-                        self.state.detail_wt_index = 0;
-                        self.state.detail_ticket_index = 0;
-                        // Clear stale PR data and kick off a fresh fetch.
-                        self.state.detail_prs = Vec::new();
-                        self.state.detail_pr_index = 0;
-                        self.state.pr_last_fetched_at = None;
-                        if let Some(ref tx) = self.bg_tx {
-                            background::spawn_pr_fetch_once(
-                                tx.clone(),
-                                remote_url,
-                                repo_id.clone(),
-                            );
+            View::Dashboard => {
+                let rows = self.state.dashboard_rows();
+                match rows.get(self.state.dashboard_index) {
+                    Some(&DashboardRow::Repo(repo_idx)) => {
+                        if let Some(repo) = self.state.data.repos.get(repo_idx).cloned() {
+                            let repo_id = repo.id.clone();
+                            let remote_url = repo.remote_url.clone();
+                            self.state.selected_repo_id = Some(repo_id.clone());
+                            self.state.detail_worktrees = self
+                                .state
+                                .data
+                                .worktrees
+                                .iter()
+                                .filter(|wt| wt.repo_id == repo_id)
+                                .cloned()
+                                .collect();
+                            self.state.detail_tickets = self
+                                .state
+                                .data
+                                .tickets
+                                .iter()
+                                .filter(|t| t.repo_id == repo_id)
+                                .cloned()
+                                .collect();
+                            self.state.detail_wt_index = 0;
+                            self.state.detail_ticket_index = 0;
+                            self.state.detail_prs = Vec::new();
+                            self.state.detail_pr_index = 0;
+                            self.state.pr_last_fetched_at = None;
+                            if let Some(ref tx) = self.bg_tx {
+                                background::spawn_pr_fetch_once(
+                                    tx.clone(),
+                                    remote_url,
+                                    repo_id.clone(),
+                                );
+                            }
+                            self.state.rebuild_filtered_tickets();
+                            self.state.repo_detail_focus = RepoDetailFocus::Worktrees;
+                            self.state.view = View::RepoDetail;
                         }
-                        self.state.rebuild_filtered_tickets();
-                        self.state.repo_detail_focus = RepoDetailFocus::Worktrees;
-                        self.state.view = View::RepoDetail;
                     }
-                }
-                DashboardFocus::Worktrees => {
-                    if let Some(wt) = self.state.selected_worktree() {
-                        let wt_id = wt.id.clone();
-                        self.state.selected_worktree_id = Some(wt_id);
-                        self.state.selected_repo_id = None;
-                        self.state.view = View::WorktreeDetail;
-                        *self.state.agent_list_state.borrow_mut() = ListState::default();
-                        self.reload_agent_events();
+                    Some(&DashboardRow::Worktree(wt_idx)) => {
+                        if let Some(wt) = self.state.data.worktrees.get(wt_idx).cloned() {
+                            self.state.selected_worktree_id = Some(wt.id.clone());
+                            self.state.selected_repo_id = None;
+                            self.state.view = View::WorktreeDetail;
+                            *self.state.agent_list_state.borrow_mut() = ListState::default();
+                            self.reload_agent_events();
+                        }
                     }
+                    None => {}
                 }
-            },
+            }
             View::RepoDetail => match self.state.repo_detail_focus {
                 RepoDetailFocus::Info => {
                     // Delegate to info open handler
@@ -2546,15 +2527,6 @@ impl App {
         // Fallback: repo-only path (no ticket context)
         match self.state.view {
             View::Dashboard | View::RepoDetail => {
-                // Creating a worktree from the Worktrees tab is ambiguous — no repo is selected
-                if self.state.view == View::Dashboard
-                    && self.state.dashboard_focus == DashboardFocus::Worktrees
-                {
-                    self.state.status_message =
-                        Some("Switch to the Repos tab to create a worktree".to_string());
-                    return;
-                }
-
                 let repo_slug = self
                     .state
                     .selected_repo_id
@@ -2573,10 +2545,8 @@ impl App {
                             ticket_id: None,
                         },
                     };
-                } else if self.state.view == View::Dashboard
-                    && self.state.dashboard_focus == DashboardFocus::Repos
-                {
-                    // No repo selected on repos panel — open register repo form instead
+                } else if self.state.view == View::Dashboard && self.state.data.repos.is_empty() {
+                    // No repos registered yet — open register repo form instead
                     self.handle_register_repo();
                 } else {
                     self.state.status_message = Some("Select a repo first".to_string());
@@ -3525,16 +3495,10 @@ impl App {
 
         match self.state.view {
             View::Dashboard => {
-                use crate::state::DashboardFocus;
-                match self.state.dashboard_focus {
-                    DashboardFocus::Worktrees => {
-                        let Some(wt) = self
-                            .state
-                            .data
-                            .worktrees
-                            .get(self.state.worktree_index)
-                            .cloned()
-                        else {
+                let rows = self.state.dashboard_rows();
+                match rows.get(self.state.dashboard_index) {
+                    Some(&DashboardRow::Worktree(wt_idx)) => {
+                        let Some(wt) = self.state.data.worktrees.get(wt_idx).cloned() else {
                             return;
                         };
                         let repo_slug = self
@@ -3562,9 +3526,8 @@ impl App {
                             },
                         };
                     }
-                    DashboardFocus::Repos => {
-                        let Some(repo) = self.state.data.repos.get(self.state.repo_index).cloned()
-                        else {
+                    Some(&DashboardRow::Repo(repo_idx)) => {
+                        let Some(repo) = self.state.data.repos.get(repo_idx).cloned() else {
                             return;
                         };
                         let (effective, source) = if let Some(ref m) = repo.model {
@@ -3589,6 +3552,7 @@ impl App {
                             },
                         };
                     }
+                    None => return,
                 }
             }
             View::WorktreeDetail => {
@@ -5053,34 +5017,38 @@ impl App {
                     return;
                 }
             }
-        } else if self.state.view == View::Dashboard
-            && self.state.dashboard_focus == crate::state::DashboardFocus::Repos
-        {
-            // Dashboard Repos pane: target is the highlighted repo (cursor position)
-            let repo = match self.state.selected_repo() {
-                Some(r) => r.clone(),
-                None => {
-                    self.state.status_message = Some("No repo selected".to_string());
-                    return;
+        } else if self.state.view == View::Dashboard {
+            let rows = self.state.dashboard_rows();
+            match rows.get(self.state.dashboard_index) {
+                Some(&DashboardRow::Repo(repo_idx)) => {
+                    let repo = match self.state.data.repos.get(repo_idx) {
+                        Some(r) => r.clone(),
+                        None => {
+                            self.state.status_message = Some("No repo selected".to_string());
+                            return;
+                        }
+                    };
+                    self.repo_picker_target(&repo)
                 }
-            };
-            self.repo_picker_target(&repo)
-        } else if self.state.view == View::Dashboard
-            && self.state.dashboard_focus == crate::state::DashboardFocus::Worktrees
-        {
-            // Dashboard Worktrees pane: target is the highlighted worktree (cursor position)
-            let wt = match self.state.selected_worktree() {
-                Some(w) => w.clone(),
-                None => {
-                    self.state.status_message = Some("No worktree selected".to_string());
-                    return;
+                Some(&DashboardRow::Worktree(wt_idx)) => {
+                    let wt = match self.state.data.worktrees.get(wt_idx) {
+                        Some(w) => w.clone(),
+                        None => {
+                            self.state.status_message = Some("No worktree selected".to_string());
+                            return;
+                        }
+                    };
+                    match self.worktree_picker_target(&wt) {
+                        Some(t) => t,
+                        None => {
+                            self.state.status_message =
+                                Some("Repo not found for this worktree".to_string());
+                            return;
+                        }
+                    }
                 }
-            };
-            match self.worktree_picker_target(&wt) {
-                Some(t) => t,
                 None => {
-                    self.state.status_message =
-                        Some("Repo not found for this worktree".to_string());
+                    self.state.status_message = Some("No item selected".to_string());
                     return;
                 }
             }

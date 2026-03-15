@@ -89,7 +89,7 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
             View::WorktreeDetail => "Worktree Detail",
             View::WorkflowRunDetail => "Workflow Run",
         };
-        format!("[{view_name}]  Tab:panel  Ctrl+h/l:column  \\:workflows  q:quit")
+        format!("[{view_name}]  Tab:panel  [/]:column  \\:workflows  q:quit")
     };
 
     let bar = Paragraph::new(Line::from(Span::styled(
@@ -146,8 +146,92 @@ pub fn worktree_list_item_with_prefix(
         ));
     }
 
-    // In repo-detail context (show_branch=true): show branch as primary identifier.
-    // In dashboard context (show_branch=false): show slug as before.
+    // Ticket state icon + number — moved to front so it's visible before the slug.
+    // ○ = open, ● = closed, ◉ = in_progress
+    if let Some(ticket) = wt
+        .ticket_id
+        .as_ref()
+        .and_then(|tid| state.data.ticket_map.get(tid))
+    {
+        let (icon, ticket_state_color) = match ticket.state.as_str() {
+            "open" => ("○", state.theme.status_completed),
+            "closed" => ("●", state.theme.label_secondary),
+            "in_progress" => ("◉", state.theme.status_running),
+            _ => ("·", state.theme.label_primary),
+        };
+        spans.push(Span::styled(
+            format!("{} #{}  ", icon, ticket.source_id),
+            Style::default().fg(ticket_state_color),
+        ));
+    }
+
+    // Non-active status badge — also surfaced before the slug.
+    if !is_active {
+        spans.push(Span::styled(
+            format!("[{}]  ", wt.status),
+            Style::default().fg(status_color),
+        ));
+    }
+
+    // Combined status symbol + workflow name/step — surfaced before the slug.
+    // Agent takes symbol precedence over workflow; workflow name provides the label text.
+    use conductor_core::agent::AgentRunStatus;
+    use conductor_core::workflow::WorkflowRunStatus;
+    let agent_run = state.data.latest_agent_runs.get(&wt.id);
+    let wf_run = state.data.latest_workflow_runs_by_worktree.get(&wt.id);
+
+    // Symbol and color: agent wins if present, otherwise fall back to workflow.
+    let status_symbol: Option<(&'static str, ratatui::style::Color)> = if let Some(run) = agent_run
+    {
+        Some(match run.status {
+            AgentRunStatus::Running => ("⚙", state.theme.status_running),
+            AgentRunStatus::WaitingForFeedback => ("⏸", state.theme.status_waiting),
+            AgentRunStatus::Completed => ("✓", state.theme.status_completed),
+            AgentRunStatus::Failed => ("✗", state.theme.status_failed),
+            AgentRunStatus::Cancelled => ("⊘", state.theme.status_cancelled),
+        })
+    } else {
+        wf_run.and_then(|wf| match wf.status {
+            WorkflowRunStatus::Running => Some(("⚙", state.theme.label_accent)),
+            WorkflowRunStatus::Waiting => Some(("⏸", state.theme.status_waiting)),
+            WorkflowRunStatus::Completed => Some(("✓", state.theme.label_secondary)),
+            WorkflowRunStatus::Failed => Some(("✗", state.theme.status_failed)),
+            _ => None,
+        })
+    };
+
+    // Workflow label text (no symbol): "name › step" when active, "name" otherwise.
+    let wf_label: Option<String> = wf_run.and_then(|wf| match wf.status {
+        WorkflowRunStatus::Pending | WorkflowRunStatus::Cancelled => None,
+        _ => {
+            let is_active = matches!(
+                wf.status,
+                WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
+            );
+            Some(if is_active {
+                state
+                    .data
+                    .workflow_step_summaries
+                    .get(&wf.id)
+                    .map(|s| format!("{} › {}", wf.workflow_name, s.step_name))
+                    .unwrap_or_else(|| wf.workflow_name.clone())
+            } else {
+                wf.workflow_name.clone()
+            })
+        }
+    });
+
+    if let Some((symbol, color)) = status_symbol {
+        let text = match &wf_label {
+            Some(label) => format!("{symbol} {label}  "),
+            None => format!("{symbol}  "),
+        };
+        spans.push(Span::styled(text, Style::default().fg(color)));
+    }
+
+    // Slug or branch — trailing identifier.
+    // In repo-detail context (show_branch=true): show branch name.
+    // In dashboard context (show_branch=false): show slug.
     if show_branch {
         spans.push(Span::styled(
             wt.branch.clone(),
@@ -168,107 +252,7 @@ pub fn worktree_list_item_with_prefix(
         ));
     }
 
-    // Only show status badge for non-active worktrees ([active] is never informative).
-    if !is_active {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            format!("[{}]", wt.status),
-            Style::default().fg(status_color),
-        ));
-    }
-
-    if let Some(ticket) = wt
-        .ticket_id
-        .as_ref()
-        .and_then(|tid| state.data.ticket_map.get(tid))
-    {
-        let ticket_state_color = match ticket.state.as_str() {
-            "open" => state.theme.status_completed,
-            "closed" => state.theme.label_secondary,
-            "in_progress" => state.theme.status_running,
-            _ => state.theme.label_primary,
-        };
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            format!("#{} {}", ticket.source_id, ticket.state),
-            Style::default().fg(ticket_state_color),
-        ));
-    }
-
-    use conductor_core::agent::AgentRunStatus;
-    let agent_run = state.data.latest_agent_runs.get(&wt.id);
-
-    if let Some(run) = agent_run {
-        let (symbol, color) = match run.status {
-            AgentRunStatus::Running => ("● running", state.theme.status_running),
-            AgentRunStatus::WaitingForFeedback => {
-                ("⏸ waiting for feedback", state.theme.status_waiting)
-            }
-            AgentRunStatus::Completed => ("✓ completed", state.theme.status_completed),
-            AgentRunStatus::Failed => ("✗ failed", state.theme.status_failed),
-            AgentRunStatus::Cancelled => ("○ cancelled", state.theme.status_cancelled),
-        };
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(symbol, Style::default().fg(color)));
-    }
-
-    let has_active_agent = agent_run.is_some_and(|r| {
-        matches!(
-            r.status,
-            AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback
-        )
-    });
-
-    if let Some(wf_run) = state.data.latest_workflow_runs_by_worktree.get(&wt.id) {
-        use conductor_core::workflow::WorkflowRunStatus;
-        let (symbol, color) = match wf_run.status {
-            WorkflowRunStatus::Running => ("⚙ running", state.theme.label_accent),
-            WorkflowRunStatus::Waiting => ("⏸ waiting", state.theme.status_waiting),
-            WorkflowRunStatus::Completed => ("✓", state.theme.label_secondary),
-            WorkflowRunStatus::Failed => ("✗ failed", state.theme.status_failed),
-            WorkflowRunStatus::Pending | WorkflowRunStatus::Cancelled => {
-                ("", state.theme.label_secondary)
-            }
-        };
-        if !symbol.is_empty() {
-            let is_wf_active = matches!(
-                wf_run.status,
-                WorkflowRunStatus::Running | WorkflowRunStatus::Waiting
-            );
-            // When both an agent and workflow are active, suppress the ⚙ symbol —
-            // the agent's ● already covers status. Build a compact "name › step" label.
-            let label = if is_wf_active && has_active_agent {
-                state
-                    .data
-                    .workflow_step_summaries
-                    .get(&wf_run.id)
-                    .map(|s| format!("{} › {}", wf_run.workflow_name, s.step_name))
-                    .unwrap_or_else(|| wf_run.workflow_name.clone())
-            } else if is_wf_active {
-                state
-                    .data
-                    .workflow_step_summaries
-                    .get(&wf_run.id)
-                    .map(|s| {
-                        build_workflow_breadcrumb(
-                            &wf_run.workflow_name,
-                            &s.workflow_chain,
-                            Some(&s.step_name),
-                            s.iteration,
-                            0,
-                            symbol,
-                        )
-                    })
-                    .unwrap_or_else(|| format!("{symbol} {}", wf_run.workflow_name))
-            } else {
-                format!("{symbol} {}", wf_run.workflow_name)
-            };
-            spans.push(Span::raw("  "));
-            spans.push(Span::styled(label, Style::default().fg(color)));
-        }
-    }
-
-    // Append token counts at end for active agent runs.
+    // Token counts at end for active agent runs.
     if let Some(run) = agent_run {
         if matches!(
             run.status,

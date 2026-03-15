@@ -57,26 +57,13 @@ pub enum View {
     WorkflowRunDetail,
 }
 
+/// A row in the unified dashboard list — either a repo header or a worktree entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DashboardFocus {
-    Repos,
-    Worktrees,
-}
-
-impl DashboardFocus {
-    pub fn next(self) -> Self {
-        match self {
-            Self::Repos => Self::Worktrees,
-            Self::Worktrees => Self::Repos,
-        }
-    }
-
-    pub fn prev(self) -> Self {
-        match self {
-            Self::Repos => Self::Worktrees,
-            Self::Worktrees => Self::Repos,
-        }
-    }
+pub enum DashboardRow {
+    /// Index into `AppState::data.repos`.
+    Repo(usize),
+    /// Index into `AppState::data.worktrees`.
+    Worktree(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -844,14 +831,12 @@ impl DataCache {
 
 pub struct AppState {
     pub view: View,
-    pub dashboard_focus: DashboardFocus,
     pub repo_detail_focus: RepoDetailFocus,
     pub modal: Modal,
     pub data: DataCache,
 
     // Selection indices
-    pub repo_index: usize,
-    pub worktree_index: usize,
+    pub dashboard_index: usize,
     pub ticket_index: usize,
     // Detail view context
     pub selected_repo_id: Option<String>,
@@ -1029,12 +1014,10 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             view: View::Dashboard,
-            dashboard_focus: DashboardFocus::Repos,
             repo_detail_focus: RepoDetailFocus::Worktrees,
             modal: Modal::None,
             data: DataCache::default(),
-            repo_index: 0,
-            worktree_index: 0,
+            dashboard_index: 0,
             ticket_index: 0,
             selected_repo_id: None,
             selected_worktree_id: None,
@@ -1171,10 +1154,7 @@ impl AppState {
             };
         }
         match self.view {
-            View::Dashboard => match self.dashboard_focus {
-                DashboardFocus::Repos => (self.repo_index, self.data.repos.len()),
-                DashboardFocus::Worktrees => (self.worktree_index, self.data.worktrees.len()),
-            },
+            View::Dashboard => (self.dashboard_index, self.dashboard_rows().len()),
             View::RepoDetail => match self.repo_detail_focus {
                 RepoDetailFocus::Info => (self.repo_detail_info_row, repo_info_row::COUNT),
                 RepoDetailFocus::Worktrees => (self.detail_wt_index, self.detail_worktrees.len()),
@@ -1210,10 +1190,7 @@ impl AppState {
             return;
         }
         match self.view {
-            View::Dashboard => match self.dashboard_focus {
-                DashboardFocus::Repos => self.repo_index = index,
-                DashboardFocus::Worktrees => self.worktree_index = index,
-            },
+            View::Dashboard => self.dashboard_index = index,
             View::RepoDetail => match self.repo_detail_focus {
                 RepoDetailFocus::Info => self.repo_detail_info_row = index,
                 RepoDetailFocus::Worktrees => self.detail_wt_index = index,
@@ -1469,14 +1446,40 @@ impl AppState {
         }
     }
 
+    /// Ordered list of rows for the unified dashboard panel.
+    /// Each repo appears first, followed immediately by its worktrees.
+    pub fn dashboard_rows(&self) -> Vec<DashboardRow> {
+        let mut rows = Vec::new();
+        for (repo_idx, repo) in self.data.repos.iter().enumerate() {
+            rows.push(DashboardRow::Repo(repo_idx));
+            for (wt_idx, wt) in self.data.worktrees.iter().enumerate() {
+                if wt.repo_id == repo.id {
+                    rows.push(DashboardRow::Worktree(wt_idx));
+                }
+            }
+        }
+        rows
+    }
+
     /// Get the currently selected repo, if any.
+    /// When the cursor is on a worktree row, returns that worktree's owning repo.
     pub fn selected_repo(&self) -> Option<&Repo> {
-        self.data.repos.get(self.repo_index)
+        match self.dashboard_rows().get(self.dashboard_index)? {
+            DashboardRow::Repo(idx) => self.data.repos.get(*idx),
+            DashboardRow::Worktree(idx) => {
+                let wt = self.data.worktrees.get(*idx)?;
+                self.data.repos.iter().find(|r| r.id == wt.repo_id)
+            }
+        }
     }
 
     /// Get the currently selected worktree from the dashboard list.
+    /// Returns `None` when the cursor is on a repo row.
     pub fn selected_worktree(&self) -> Option<&Worktree> {
-        self.data.worktrees.get(self.worktree_index)
+        match self.dashboard_rows().get(self.dashboard_index)? {
+            DashboardRow::Worktree(idx) => self.data.worktrees.get(*idx),
+            DashboardRow::Repo(_) => None,
+        }
     }
 
     /// Get the currently selected ticket from the dashboard list.
@@ -2407,8 +2410,8 @@ mod tests {
         state.column_focus = ColumnFocus::Content;
         state.workflows_focus = WorkflowsFocus::Defs;
         state.workflow_def_index = 5;
-        state.set_focused_index(2); // targets repo_index (Dashboard default)
+        state.set_focused_index(2); // targets dashboard_index (Dashboard default)
         assert_eq!(state.workflow_def_index, 5); // unchanged
-        assert_eq!(state.repo_index, 2);
+        assert_eq!(state.dashboard_index, 2);
     }
 }

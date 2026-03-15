@@ -35,6 +35,8 @@ pub fn render(frame: &mut Frame, area: Rect) {
         help_line("3", "Workflows view"),
         help_line("?", "Toggle this help"),
         help_line("q", "Quit"),
+        help_line("[ / ]", "Focus content / workflow column"),
+        help_line("\\", "Toggle workflow column"),
         Line::from(""),
         Line::from(Span::styled(
             "Global Actions",

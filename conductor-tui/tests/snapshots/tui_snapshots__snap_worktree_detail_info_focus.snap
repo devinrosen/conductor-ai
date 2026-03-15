@@ -1,6 +1,5 @@
 ---
 source: conductor-tui/tests/tui_snapshots.rs
-assertion_line: 269
 expression: render_to_string(&state)
 ---
 "┌ Worktree Detail ───────────────────────────────────────────────────────────┐┌ Workflow Definitions ──────────────────┐"
@@ -42,4 +41,4 @@ expression: render_to_string(&state)
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
 "└────────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────┘"
-"[Worktree Detail]  Tab:panel  Ctrl+h/l:column  \:workflows  q:quit                                                      "
+"[Worktree Detail]  Tab:panel  [/]:column  \:workflows  q:quit                                                           "

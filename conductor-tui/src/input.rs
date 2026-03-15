@@ -300,23 +300,14 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
         }
     }
 
-    // View-specific keybindings (Dashboard Repos pane)
-    if state.view == View::Dashboard && state.dashboard_focus == crate::state::DashboardFocus::Repos
-    {
+    // View-specific keybindings (Dashboard)
+    if state.view == View::Dashboard {
         match key.code {
             KeyCode::Char('o') => return Action::OpenRepoUrl,
             KeyCode::Char('y') => return Action::CopyRepoUrl,
             KeyCode::Char('w') => return Action::PickWorkflow,
             _ => {}
         }
-    }
-
-    // View-specific keybindings (Dashboard Worktrees pane)
-    if state.view == View::Dashboard
-        && state.dashboard_focus == crate::state::DashboardFocus::Worktrees
-        && key.code == KeyCode::Char('w')
-    {
-        return Action::PickWorkflow;
     }
 
     // View-specific keybindings (WorktreeDetail agent controls)
@@ -453,6 +444,10 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         // Toggle workflow column visibility
         KeyCode::Char('\\') => Action::ToggleWorkflowColumn,
+
+        // Navigate between columns
+        KeyCode::Char('[') => Action::FocusContentColumn,
+        KeyCode::Char(']') => Action::FocusWorkflowColumn,
 
         // Open the in-TUI theme picker
         KeyCode::Char('T') => Action::ShowThemePicker,
@@ -860,21 +855,9 @@ mod tests {
     }
 
     #[test]
-    fn w_maps_to_pick_workflow_in_dashboard_repos() {
+    fn w_maps_to_pick_workflow_in_dashboard() {
         let mut state = AppState::new();
         state.view = View::Dashboard;
-        state.dashboard_focus = crate::state::DashboardFocus::Repos;
-        assert!(matches!(
-            map_key(key(KeyCode::Char('w')), &state),
-            Action::PickWorkflow
-        ));
-    }
-
-    #[test]
-    fn w_maps_to_pick_workflow_in_dashboard_worktrees() {
-        let mut state = AppState::new();
-        state.view = View::Dashboard;
-        state.dashboard_focus = crate::state::DashboardFocus::Worktrees;
         assert!(matches!(
             map_key(key(KeyCode::Char('w')), &state),
             Action::PickWorkflow
@@ -1074,6 +1057,24 @@ mod tests {
         assert!(matches!(
             map_key(key(KeyCode::Char('\\')), &state),
             Action::ToggleWorkflowColumn
+        ));
+    }
+
+    #[test]
+    fn left_bracket_maps_to_focus_content_column() {
+        let state = AppState::new();
+        assert!(matches!(
+            map_key(key(KeyCode::Char('[')), &state),
+            Action::FocusContentColumn
+        ));
+    }
+
+    #[test]
+    fn right_bracket_maps_to_focus_workflow_column() {
+        let state = AppState::new();
+        assert!(matches!(
+            map_key(key(KeyCode::Char(']')), &state),
+            Action::FocusWorkflowColumn
         ));
     }
 }
