@@ -1,6 +1,6 @@
 # RFC 004: Conductor as a Native Claude Code Experience
 
-**Status:** Draft / Exploring
+**Status:** Implemented
 **Created:** 2026-03-12
 
 ---
