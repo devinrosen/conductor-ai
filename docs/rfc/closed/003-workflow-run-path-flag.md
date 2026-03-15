@@ -1,6 +1,6 @@
 # RFC 003: `--path` Flag for `conductor workflow run`
 
-**Status:** Draft / Exploring
+**Status:** Implemented
 **Created:** 2026-03-11
 
 ## Background

@@ -1,6 +1,6 @@
 # RFC 002: Workflow Targets Beyond Worktrees
 
-**Status:** Draft / Exploring
+**Status:** Implemented
 **Created:** 2026-03-10
 
 ## Background
