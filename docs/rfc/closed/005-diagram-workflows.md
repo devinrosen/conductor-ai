@@ -1,6 +1,6 @@
 # RFC 005: Codebase Diagram Workflows
 
-**Status:** Draft / Exploring
+**Status:** Implemented
 **Created:** 2026-03-13
 
 ---
@@ -196,15 +196,3 @@ The workflow uses this file verbatim — the team's descriptions directly shape 
 A post-commit/merge hook could detect which source files changed, map them to relevant diagram types, and queue a background `generate-diagrams` run automatically. The developer sees updated diagrams appear in their next PR without ever invoking a workflow manually.
 
 This is intentionally deferred. The mapping from source changes to diagram types is non-trivial and warrants its own design work. The three workflows above provide the manual foundation that the automation would build on.
-
----
-
-## Open questions
-
-1. **Figma API access** — should the workflow fetch Figma file contents via the Figma API (requires token config), or just note the link as context for the agent to reason about? API access gives richer data; link-as-context is simpler to set up.
-
-2. **PR targeting** — for `update-diagrams`, should the PR target the feature's worktree branch (keeping diagram changes co-located with code changes in one PR) or always open a separate diagrams PR against `main`?
-
-3. **Conflict resolution in `generate-diagrams`** — if a diagram already exists and the team has made manual edits, should the workflow always overwrite, or should it attempt a merge? First implementation: always overwrite (consistent with Option A). Manual edits should go through `update-diagrams` instead.
-
-4. **`state-machines.mmd`** — "only generated if relevant ones are detected" needs a concrete heuristic. Proposal: generate if the codebase contains state machine patterns, auth flows, multi-step onboarding, or wizard-style UI components.
