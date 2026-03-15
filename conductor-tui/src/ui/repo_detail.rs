@@ -41,12 +41,16 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     };
 
+    // Worktrees pane: sized to content, capped at 1/3 of available height.
+    let wt_height = (state.detail_worktrees.len() as u16 + 2)
+        .max(3)
+        .min(area.height / 3);
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(9),
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
+            Constraint::Length(wt_height),
+            Constraint::Min(0),
         ])
         .split(area);
 
@@ -182,10 +186,11 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
     }
     frame.render_stateful_widget(wt_list, layout[1], &mut wt_state);
 
-    // Bottom row: horizontal 50/50 split — Tickets (left) | PRs (right)
+    // Bottom row: Tickets (left, fills space) | PRs (right, narrower when empty).
+    let pr_width_pct = if state.detail_prs.is_empty() { 25 } else { 40 };
     let bottom = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([Constraint::Min(0), Constraint::Percentage(pr_width_pct)])
         .split(layout[2]);
 
     // Scoped tickets
