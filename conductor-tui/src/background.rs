@@ -336,6 +336,13 @@ fn poll_workflow_data(
                 wt_defs.retain(|d| seen.insert(d.name.clone()));
                 all_defs.extend(wt_defs);
             }
+            // Fallback: no active worktrees → load from repo root
+            if all_defs.is_empty() && !rp.is_empty() {
+                let (repo_defs, warnings) =
+                    WorkflowManager::list_defs(&rp, &rp).unwrap_or_default();
+                all_warnings.extend(warnings);
+                all_defs.extend(repo_defs);
+            }
         }
         // def_slugs empty: all defs belong to the same repo, no slug labels needed.
         (Some(all_defs), Some(Vec::new()), all_warnings)
@@ -370,6 +377,22 @@ fn poll_workflow_data(
                 wt_defs.retain(|d| seen.insert((wt.repo_id.clone(), d.name.clone())));
                 for d in wt_defs {
                     tagged.push((wt.repo_id.clone(), repo_slug.to_string(), d));
+                }
+            }
+            // Fallback per repo: if no worktree-sourced defs were seen, load from repo root
+            for (repo_id, (repo_slug, repo_path)) in &repos {
+                if seen.iter().any(|(rid, _)| rid == repo_id) {
+                    continue; // at least one def was found from a worktree
+                }
+                if repo_path.is_empty() {
+                    continue;
+                }
+                let (mut repo_defs, warnings) =
+                    WorkflowManager::list_defs(repo_path, repo_path).unwrap_or_default();
+                all_warnings.extend(warnings);
+                repo_defs.retain(|d| seen.insert((repo_id.clone(), d.name.clone())));
+                for d in repo_defs {
+                    tagged.push((repo_id.clone(), repo_slug.clone(), d));
                 }
             }
             // Sort by repo_id so defs are contiguous per repo for grouping in the renderer.
