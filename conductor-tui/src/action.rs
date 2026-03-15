@@ -295,6 +295,8 @@ pub enum Action {
     ViewWorkflowDef,
     /// Open the selected workflow definition's source file in $EDITOR.
     EditWorkflowDef,
+    /// Enter or exit the step tree pane for the selected workflow definition.
+    ToggleDefStepTree,
     GateInputChar(char),
     GateInputBackspace,
     WorkflowDataRefreshed(Box<WorkflowDataPayload>),

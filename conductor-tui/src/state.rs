@@ -246,15 +246,6 @@ pub enum WorkflowDefFocus {
     Steps,
 }
 
-impl WorkflowDefFocus {
-    pub fn toggle(self) -> Self {
-        match self {
-            Self::List => Self::Steps,
-            Self::Steps => Self::List,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WorktreeDetailFocus {
     #[default]
