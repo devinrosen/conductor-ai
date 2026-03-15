@@ -175,9 +175,16 @@ impl Default for DefaultsConfig {
 /// The result is cached after the first call so that repeated invocations
 /// (e.g. inside loops that call `agent_log_path`) avoid redundant OS-level
 /// `home_dir()` lookups.
+///
+/// The `CONDUCTOR_HOME` environment variable overrides the default location.
+/// This is used by CLI integration tests to point each subprocess at an
+/// isolated temp directory without touching the developer's real data.
 pub fn conductor_dir() -> &'static PathBuf {
     static CONDUCTOR_DIR: OnceLock<PathBuf> = OnceLock::new();
     CONDUCTOR_DIR.get_or_init(|| {
+        if let Ok(home) = std::env::var("CONDUCTOR_HOME") {
+            return PathBuf::from(home);
+        }
         dirs::home_dir()
             .expect("could not determine home directory")
             .join(".conductor")

@@ -272,7 +272,7 @@ impl App {
     ///
     /// This thin wrapper delegates to `handle_action` and updates
     /// `status_message_at` whenever the status message presence changes.
-    fn update(&mut self, action: Action) -> bool {
+    pub(crate) fn update(&mut self, action: Action) -> bool {
         let had_message = self.state.status_message.is_some();
         let dirty = self.handle_action(action);
         self.state.track_status_message_change(had_message);
@@ -6509,5 +6509,140 @@ mod tests {
             state.column_focus = crate::state::ColumnFocus::Workflow;
         }
         assert_eq!(state.column_focus, crate::state::ColumnFocus::Workflow);
+    }
+}
+
+#[cfg(test)]
+mod action_handler_tests {
+    use super::*;
+
+    fn make_app() -> App {
+        let conn = conductor_core::db::open_database(std::path::Path::new(":memory:")).unwrap();
+        App::new(conn, Config::default(), Theme::default())
+    }
+
+    // Action::Quit with an open modal immediately sets should_quit = true
+    // (bypasses the confirm dialog which only shows when modal is None).
+    #[test]
+    fn quit_sets_should_quit() {
+        let mut app = make_app();
+        app.state.modal = Modal::Help;
+        app.update(Action::Quit);
+        assert!(app.state.should_quit);
+    }
+
+    #[test]
+    fn help_modal_opens_and_dismisses() {
+        let mut app = make_app();
+        assert!(matches!(app.state.modal, Modal::None));
+
+        app.update(Action::ShowHelp);
+        assert!(matches!(app.state.modal, Modal::Help));
+
+        app.update(Action::DismissModal);
+        assert!(matches!(app.state.modal, Modal::None));
+    }
+
+    #[test]
+    fn filter_state_lifecycle() {
+        let mut app = make_app();
+
+        // Enter filter mode
+        app.update(Action::EnterFilter);
+        assert!(app.state.filter.active);
+        assert!(app.state.filter.text.is_empty());
+
+        // Type two chars
+        app.update(Action::FilterChar('f'));
+        app.update(Action::FilterChar('o'));
+        assert_eq!(app.state.filter.text, "fo");
+
+        // Backspace removes one char
+        app.update(Action::FilterBackspace);
+        assert_eq!(app.state.filter.text, "f");
+
+        // Exit clears active flag (text is preserved until next Enter)
+        app.update(Action::ExitFilter);
+        assert!(!app.state.filter.active);
+    }
+
+    #[test]
+    fn worktree_created_action_updates_status() {
+        let mut app = make_app();
+        app.update(Action::WorktreeCreated {
+            wt_id: "01TEST".to_string(),
+            wt_path: "/tmp/my-wt".to_string(),
+            wt_slug: "my-wt".to_string(),
+            wt_repo_id: "01REPO".to_string(),
+            warnings: vec![],
+            ticket_id: None,
+        });
+        assert!(matches!(app.state.modal, Modal::None));
+        assert!(app.state.status_message.is_some());
+        let msg = app.state.status_message.as_deref().unwrap();
+        assert!(msg.contains("my-wt"), "expected wt slug in message: {msg}");
+    }
+
+    #[test]
+    fn data_refreshed_updates_repos() {
+        let mut app = make_app();
+        assert!(app.state.data.repos.is_empty());
+
+        let repos = vec![
+            conductor_core::repo::Repo {
+                id: "01AAA".to_string(),
+                slug: "repo-a".to_string(),
+                local_path: "/tmp/repo-a".to_string(),
+                remote_url: "https://github.com/x/a".to_string(),
+                default_branch: "main".to_string(),
+                workspace_dir: "/tmp".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                model: None,
+                allow_agent_issue_creation: false,
+            },
+            conductor_core::repo::Repo {
+                id: "01BBB".to_string(),
+                slug: "repo-b".to_string(),
+                local_path: "/tmp/repo-b".to_string(),
+                remote_url: "https://github.com/x/b".to_string(),
+                default_branch: "main".to_string(),
+                workspace_dir: "/tmp".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                model: None,
+                allow_agent_issue_creation: false,
+            },
+        ];
+
+        app.update(Action::DataRefreshed(Box::new(
+            crate::action::DataRefreshedPayload {
+                repos,
+                worktrees: vec![],
+                tickets: vec![],
+                ticket_labels: std::collections::HashMap::new(),
+                latest_agent_runs: std::collections::HashMap::new(),
+                ticket_agent_totals: std::collections::HashMap::new(),
+                latest_workflow_runs_by_worktree: std::collections::HashMap::new(),
+                workflow_step_summaries: std::collections::HashMap::new(),
+                active_non_worktree_workflow_runs: vec![],
+            },
+        )));
+
+        assert_eq!(app.state.data.repos.len(), 2);
+    }
+
+    #[test]
+    fn confirm_no_clears_modal_without_side_effect() {
+        let mut app = make_app();
+        app.state.modal = Modal::Confirm {
+            title: "Delete?".to_string(),
+            message: "Are you sure?".to_string(),
+            on_confirm: crate::state::ConfirmAction::Quit,
+        };
+        app.update(Action::ConfirmNo);
+        assert!(matches!(app.state.modal, Modal::None));
+        assert!(
+            !app.state.should_quit,
+            "ConfirmNo must not trigger the action"
+        );
     }
 }
