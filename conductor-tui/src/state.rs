@@ -1497,7 +1497,15 @@ impl AppState {
 
     /// Call this after updating `self.data.workflow_runs`.
     /// Terminal runs (completed/failed/cancelled) are collapsed on first appearance.
+    /// Running leaf runs (no children) are auto-expanded to show steps.
     pub fn init_collapse_state(&mut self) {
+        let parent_ids: std::collections::HashSet<&str> = self
+            .data
+            .workflow_runs
+            .iter()
+            .filter_map(|r| r.parent_workflow_run_id.as_deref())
+            .collect();
+
         for run in &self.data.workflow_runs {
             if self.collapse_initialized.contains(&run.id) {
                 continue;
@@ -1509,8 +1517,11 @@ impl AppState {
                         | WorkflowRunStatus::Failed
                         | WorkflowRunStatus::Cancelled
                 );
+                let is_leaf = !parent_ids.contains(run.id.as_str());
                 if is_terminal {
                     self.collapsed_workflow_run_ids.insert(run.id.clone());
+                } else if matches!(run.status, WorkflowRunStatus::Running) && is_leaf {
+                    self.expanded_step_run_ids.insert(run.id.clone());
                 }
             }
             self.collapse_initialized.insert(run.id.clone());
@@ -2196,6 +2207,34 @@ mod tests {
         )];
         state.init_collapse_state();
         assert!(!state.collapsed_workflow_run_ids.contains("c1"));
+    }
+
+    #[test]
+    fn init_collapse_state_running_leaf_auto_expanded() {
+        let mut state = AppState::new();
+        // A running root run with no children is a leaf — it should land in expanded_step_run_ids
+        state.data.workflow_runs = vec![make_wf_run_full("p1", WorkflowRunStatus::Running, None)];
+        state.init_collapse_state();
+        assert!(
+            state.expanded_step_run_ids.contains("p1"),
+            "running leaf run must be auto-expanded into expanded_step_run_ids"
+        );
+        assert!(!state.collapsed_workflow_run_ids.contains("p1"));
+    }
+
+    #[test]
+    fn init_collapse_state_running_non_leaf_not_auto_expanded() {
+        let mut state = AppState::new();
+        // p1 has a child c1, so p1 is NOT a leaf — it must not land in expanded_step_run_ids
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Running, None),
+            make_wf_run_full("c1", WorkflowRunStatus::Running, Some("p1")),
+        ];
+        state.init_collapse_state();
+        assert!(
+            !state.expanded_step_run_ids.contains("p1"),
+            "running non-leaf run must NOT be auto-expanded into expanded_step_run_ids"
+        );
     }
 
     // --- multi-level expand/collapse tests ---
