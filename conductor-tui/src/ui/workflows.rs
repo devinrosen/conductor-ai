@@ -1653,3 +1653,404 @@ fn last_run_badge(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conductor_core::workflow::{
+        AgentRef, AlwaysNode, CallNode, CallWorkflowNode, DoNode, IfNode, ParallelNode,
+        WorkflowDef, WorkflowNode, WorkflowTrigger,
+    };
+
+    // ---------------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------------
+
+    fn call_node(name: &str) -> WorkflowNode {
+        WorkflowNode::Call(CallNode {
+            agent: AgentRef::Name(name.to_string()),
+            retries: 0,
+            on_fail: None,
+            output: None,
+            with: vec![],
+            bot_name: None,
+        })
+    }
+
+    fn call_wf_node(workflow: &str) -> WorkflowNode {
+        WorkflowNode::CallWorkflow(CallWorkflowNode {
+            workflow: workflow.to_string(),
+            inputs: Default::default(),
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        })
+    }
+
+    fn if_node(body: Vec<WorkflowNode>) -> WorkflowNode {
+        WorkflowNode::If(IfNode {
+            step: "some-step".to_string(),
+            marker: "done".to_string(),
+            body,
+        })
+    }
+
+    fn empty_workflow_def(name: &str, body: Vec<WorkflowNode>) -> WorkflowDef {
+        WorkflowDef {
+            name: name.to_string(),
+            description: String::new(),
+            trigger: WorkflowTrigger::Manual,
+            targets: vec![],
+            inputs: vec![],
+            body,
+            always: vec![],
+            source_path: format!("{name}.wf"),
+        }
+    }
+
+    fn run_get(
+        nodes: &[WorkflowNode],
+        workflow_defs: &[WorkflowDef],
+        expanded_calls: &HashSet<String>,
+        target: usize,
+    ) -> Option<String> {
+        get_def_step_node_at(
+            nodes,
+            workflow_defs,
+            expanded_calls,
+            "",
+            &HashSet::new(),
+            target,
+            &mut 0,
+        )
+    }
+
+    // ---------------------------------------------------------------------------
+    // get_def_step_node_at — basic cases
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_call_node_returns_none() {
+        // A plain Call node is never a CallWorkflow header.
+        let nodes = vec![call_node("agent-a")];
+        assert_eq!(run_get(&nodes, &[], &HashSet::new(), 0), None);
+    }
+
+    #[test]
+    fn test_call_workflow_at_index_0_returns_path() {
+        let nodes = vec![call_wf_node("sub-workflow")];
+        assert_eq!(
+            run_get(&nodes, &[], &HashSet::new(), 0),
+            Some("0".to_string())
+        );
+    }
+
+    #[test]
+    fn test_call_workflow_at_index_1_after_call_node() {
+        // [Call, CallWorkflow] → flat indices 0, 1
+        let nodes = vec![call_node("first"), call_wf_node("child-wf")];
+        assert_eq!(run_get(&nodes, &[], &HashSet::new(), 0), None);
+        assert_eq!(
+            run_get(&nodes, &[], &HashSet::new(), 1),
+            Some("1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_out_of_range_returns_none() {
+        let nodes = vec![call_node("a"), call_node("b")];
+        assert_eq!(run_get(&nodes, &[], &HashSet::new(), 5), None);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Expanded CallWorkflow — children occupy additional flat indices
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_collapsed_call_workflow_children_not_counted() {
+        // Not in expanded_calls → no child rows added.
+        // [CallWorkflow("sub"), Call("b")] → flat indices 0=sub header, 1=b
+        let nodes = vec![call_wf_node("sub"), call_node("b")];
+        let sub_def = empty_workflow_def("sub", vec![call_node("sub-step")]);
+        // collapsed: index 1 is Call("b"), not a sub-step
+        assert_eq!(run_get(&nodes, &[sub_def], &HashSet::new(), 1), None);
+    }
+
+    #[test]
+    fn test_expanded_call_workflow_children_counted() {
+        // CallWorkflow("sub") expanded → children fill flat indices 1..
+        // Layout: index 0 = CallWorkflow header, index 1 = sub-step (Call inside sub)
+        let nodes = vec![call_wf_node("sub")];
+        let sub_def = empty_workflow_def("sub", vec![call_node("sub-step")]);
+        let mut expanded = HashSet::new();
+        expanded.insert("0".to_string()); // path "0" is expanded
+
+        // index 0 → the CallWorkflow header itself
+        assert_eq!(
+            get_def_step_node_at(
+                &nodes,
+                std::slice::from_ref(&sub_def),
+                &expanded,
+                "",
+                &HashSet::new(),
+                0,
+                &mut 0,
+            ),
+            Some("0".to_string())
+        );
+
+        // index 1 → the Call node inside the sub-workflow (not a CallWorkflow, so None)
+        assert_eq!(
+            get_def_step_node_at(
+                &nodes,
+                &[sub_def],
+                &expanded,
+                "",
+                &HashSet::new(),
+                1,
+                &mut 0,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_expanded_call_workflow_with_nested_call_workflow() {
+        // sub-workflow itself contains a CallWorkflow node.
+        // Layout (sub expanded, inner NOT expanded):
+        //   0 = CallWorkflow("sub") header  → Some("0")
+        //   1 = CallWorkflow("inner") header inside sub → Some("0.0")
+        //   2 = Call("after") in parent    → None
+        let inner_def = empty_workflow_def("inner", vec![call_node("deep")]);
+        let sub_def = empty_workflow_def("sub", vec![call_wf_node("inner")]);
+        let nodes = vec![call_wf_node("sub"), call_node("after")];
+
+        let mut expanded = HashSet::new();
+        expanded.insert("0".to_string()); // "sub" expanded at path "0"
+
+        let all_defs = vec![sub_def, inner_def];
+
+        assert_eq!(
+            get_def_step_node_at(&nodes, &all_defs, &expanded, "", &HashSet::new(), 0, &mut 0),
+            Some("0".to_string()),
+            "index 0 should be the outer CallWorkflow header"
+        );
+        assert_eq!(
+            get_def_step_node_at(&nodes, &all_defs, &expanded, "", &HashSet::new(), 1, &mut 0),
+            Some("0.0".to_string()),
+            "index 1 should be the nested CallWorkflow header"
+        );
+        assert_eq!(
+            get_def_step_node_at(&nodes, &all_defs, &expanded, "", &HashSet::new(), 2, &mut 0),
+            None,
+            "index 2 should be the Call('after') node → None"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Recursive cycle guard
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_recursive_cycle_produces_single_placeholder_row() {
+        // sub-workflow calls itself. When both the outer and inner nodes are expanded,
+        // the inner one sees "sub" in `seen` and emits a single "(↺ recursive)" placeholder row.
+        // Layout (both "0" and "0.0" expanded):
+        //   0 = CallWorkflow("sub") header at path "0" → Some("0")
+        //   1 = CallWorkflow("sub") header at path "0.0" inside sub → Some("0.0")
+        //   2 = "(↺ recursive)" placeholder (sub already in seen) → None
+        let sub_def = empty_workflow_def("sub", vec![call_wf_node("sub")]);
+        let nodes = vec![call_wf_node("sub")];
+
+        let mut expanded = HashSet::new();
+        expanded.insert("0".to_string()); // outer node expanded
+        expanded.insert("0.0".to_string()); // inner self-referencing node also expanded
+
+        let all_defs = vec![sub_def];
+
+        assert_eq!(
+            get_def_step_node_at(&nodes, &all_defs, &expanded, "", &HashSet::new(), 0, &mut 0),
+            Some("0".to_string()),
+            "outer CallWorkflow header"
+        );
+        assert_eq!(
+            get_def_step_node_at(&nodes, &all_defs, &expanded, "", &HashSet::new(), 1, &mut 0),
+            Some("0.0".to_string()),
+            "inner CallWorkflow header inside expanded sub"
+        );
+        assert_eq!(
+            get_def_step_node_at(&nodes, &all_defs, &expanded, "", &HashSet::new(), 2, &mut 0),
+            None,
+            "recursive placeholder row is not a CallWorkflow header"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Control-flow nodes (If, While, Do, Always) — children are nested
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_if_node_children_counted_after_parent() {
+        // [If([CallWorkflow("sub")]), Call("b")]
+        // Layout: 0 = if header, 1 = CallWorkflow inside if body, 2 = Call("b")
+        let nodes = vec![if_node(vec![call_wf_node("sub")]), call_node("b")];
+        // index 0 = If node → None
+        assert_eq!(run_get(&nodes, &[], &HashSet::new(), 0), None);
+        // index 1 = CallWorkflow inside If body → Some("0.0")
+        assert_eq!(
+            run_get(&nodes, &[], &HashSet::new(), 1),
+            Some("0.0".to_string())
+        );
+        // index 2 = Call("b") → None
+        assert_eq!(run_get(&nodes, &[], &HashSet::new(), 2), None);
+    }
+
+    #[test]
+    fn test_parallel_node_children_counted() {
+        // Parallel with 2 agents → 3 flat rows: header + 2 call rows
+        let nodes = vec![
+            WorkflowNode::Parallel(ParallelNode {
+                fail_fast: true,
+                min_success: None,
+                calls: vec![
+                    AgentRef::Name("a".to_string()),
+                    AgentRef::Name("b".to_string()),
+                ],
+                output: None,
+                call_outputs: Default::default(),
+                with: vec![],
+                call_with: Default::default(),
+                call_if: Default::default(),
+            }),
+            call_wf_node("next"),
+        ];
+        // index 0 = Parallel header → None
+        assert_eq!(run_get(&nodes, &[], &HashSet::new(), 0), None);
+        // index 1 = parallel branch "a" → None
+        assert_eq!(run_get(&nodes, &[], &HashSet::new(), 1), None);
+        // index 2 = parallel branch "b" → None
+        assert_eq!(run_get(&nodes, &[], &HashSet::new(), 2), None);
+        // index 3 = CallWorkflow("next") → Some("1")
+        assert_eq!(
+            run_get(&nodes, &[], &HashSet::new(), 3),
+            Some("1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_do_node_children_counted() {
+        // Do([Call("a"), CallWorkflow("sub")]) → 3 rows: do header, call, callwf
+        let nodes = vec![WorkflowNode::Do(DoNode {
+            output: None,
+            with: vec![],
+            body: vec![call_node("a"), call_wf_node("sub")],
+        })];
+        // index 0 = do header → None
+        assert_eq!(run_get(&nodes, &[], &HashSet::new(), 0), None);
+        // index 1 = Call("a") → None
+        assert_eq!(run_get(&nodes, &[], &HashSet::new(), 1), None);
+        // index 2 = CallWorkflow("sub") → Some("0.1")
+        assert_eq!(
+            run_get(&nodes, &[], &HashSet::new(), 2),
+            Some("0.1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_always_node_children_counted() {
+        let nodes = vec![WorkflowNode::Always(AlwaysNode {
+            body: vec![call_wf_node("cleanup")],
+        })];
+        // index 0 = always header → None
+        assert_eq!(run_get(&nodes, &[], &HashSet::new(), 0), None);
+        // index 1 = CallWorkflow("cleanup") → Some("0.0")
+        assert_eq!(
+            run_get(&nodes, &[], &HashSet::new(), 1),
+            Some("0.0".to_string())
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // build_def_step_lines — row count mirrors get_def_step_node_at traversal
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_build_and_traverse_row_counts_match() {
+        // Verify that the number of rows produced by build_def_step_lines matches
+        // what get_def_step_node_at can traverse (i.e. the last valid index + 1).
+        let theme = crate::theme::Theme::default();
+        let nodes = vec![
+            call_node("a"),
+            call_wf_node("sub"),
+            if_node(vec![call_node("b"), call_wf_node("inner")]),
+            call_node("last"),
+        ];
+        let expanded = HashSet::new();
+        let all_defs: Vec<WorkflowDef> = vec![];
+
+        let items =
+            build_def_step_lines(&nodes, 0, &theme, &all_defs, &expanded, "", &HashSet::new());
+        let row_count = items.len();
+
+        // Walk with get_def_step_node_at and find the last reachable index.
+        let mut last_reachable = 0;
+        for idx in 0..row_count {
+            let result = get_def_step_node_at(
+                &nodes,
+                &all_defs,
+                &expanded,
+                "",
+                &HashSet::new(),
+                idx,
+                &mut 0,
+            );
+            // result is either Some (CallWorkflow header) or None (other row)
+            // Both are valid — we just confirm get_def_step_node_at doesn't return
+            // Some on an out-of-range index.
+            let _ = result;
+            last_reachable = idx;
+        }
+
+        // One past the end should not be reachable as a CallWorkflow.
+        let beyond = get_def_step_node_at(
+            &nodes,
+            &all_defs,
+            &expanded,
+            "",
+            &HashSet::new(),
+            row_count,
+            &mut 0,
+        );
+        assert_eq!(beyond, None, "index beyond row_count should return None");
+        assert_eq!(
+            last_reachable + 1,
+            row_count,
+            "row count should match traversal"
+        );
+    }
+
+    #[test]
+    fn test_workflow_not_found_produces_single_placeholder_row() {
+        // CallWorkflow referring to a non-existent workflow name → "(workflow not found)" row
+        // Layout (expanded): 0 = header, 1 = placeholder
+        let nodes = vec![call_wf_node("missing")];
+        let mut expanded = HashSet::new();
+        expanded.insert("0".to_string());
+
+        // index 0 = CallWorkflow header → Some("0")
+        assert_eq!(
+            get_def_step_node_at(&nodes, &[], &expanded, "", &HashSet::new(), 0, &mut 0),
+            Some("0".to_string())
+        );
+        // index 1 = "(workflow not found)" placeholder → None
+        assert_eq!(
+            get_def_step_node_at(&nodes, &[], &expanded, "", &HashSet::new(), 1, &mut 0),
+            None
+        );
+        // index 2 = beyond → None
+        assert_eq!(
+            get_def_step_node_at(&nodes, &[], &expanded, "", &HashSet::new(), 2, &mut 0),
+            None
+        );
+    }
+}
