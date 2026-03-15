@@ -884,6 +884,61 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         Style::default().fg(state.theme.label_secondary),
                     )]));
                 }
+                WorkflowRunRow::Step {
+                    step_name,
+                    status,
+                    position,
+                    depth,
+                    role,
+                    ..
+                } => {
+                    let base_indent = if global_mode { "    " } else { "" };
+                    let level_indent = "  ".repeat(*depth as usize);
+                    let (status_symbol, status_color) = status_display(status, &state.theme);
+                    return ListItem::new(Line::from(vec![
+                        Span::raw(format!("{base_indent}{level_indent}")),
+                        Span::styled(
+                            "\u{2570} ",
+                            Style::default().fg(state.theme.label_secondary),
+                        ),
+                        Span::styled(
+                            format!("{position}. "),
+                            Style::default().fg(state.theme.label_secondary),
+                        ),
+                        Span::styled(status_symbol, Style::default().fg(status_color)),
+                        Span::raw("  "),
+                        Span::styled(
+                            format!("[{:<8}]", display_role(role)),
+                            Style::default().fg(role_color(role, &state.theme)),
+                        ),
+                        Span::raw("  "),
+                        Span::raw(step_name.clone()),
+                    ]));
+                }
+                WorkflowRunRow::ParallelGroup {
+                    status,
+                    count,
+                    depth,
+                    ..
+                } => {
+                    let base_indent = if global_mode { "    " } else { "" };
+                    let level_indent = "  ".repeat(*depth as usize);
+                    let (status_symbol, status_color) = status_display(status, &state.theme);
+                    return ListItem::new(Line::from(vec![
+                        Span::raw(format!("{base_indent}{level_indent}")),
+                        Span::styled(
+                            "\u{2570} ",
+                            Style::default().fg(state.theme.label_secondary),
+                        ),
+                        Span::styled(status_symbol, Style::default().fg(status_color)),
+                        Span::raw("  "),
+                        Span::styled(
+                            "[parallel]",
+                            Style::default().fg(state.theme.status_waiting),
+                        ),
+                        Span::raw(format!("  ({count} steps)")),
+                    ]));
+                }
                 _ => {}
             }
 
@@ -1029,65 +1084,8 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
 
                     ListItem::new(Line::from(spans))
                 }
-                WorkflowRunRow::Step {
-                    step_name,
-                    status,
-                    position,
-                    depth,
-                    role,
-                    ..
-                } => {
-                    let base_indent = if global_mode { "    " } else { "" };
-                    let level_indent = "  ".repeat(*depth as usize);
-                    let (status_symbol, status_color) = status_display(status, &state.theme);
-                    ListItem::new(Line::from(vec![
-                        Span::raw(format!("{base_indent}{level_indent}")),
-                        Span::styled(
-                            "\u{2570} ",
-                            Style::default().fg(state.theme.label_secondary),
-                        ),
-                        Span::styled(
-                            format!("{position}. "),
-                            Style::default().fg(state.theme.label_secondary),
-                        ),
-                        Span::styled(status_symbol, Style::default().fg(status_color)),
-                        Span::raw("  "),
-                        Span::styled(
-                            format!("[{:<8}]", display_role(role)),
-                            Style::default().fg(role_color(role, &state.theme)),
-                        ),
-                        Span::raw("  "),
-                        Span::raw(step_name.clone()),
-                    ]))
-                }
-                WorkflowRunRow::ParallelGroup {
-                    status,
-                    count,
-                    depth,
-                    ..
-                } => {
-                    let base_indent = if global_mode { "    " } else { "" };
-                    let level_indent = "  ".repeat(*depth as usize);
-                    let (status_symbol, status_color) = status_display(status, &state.theme);
-                    ListItem::new(Line::from(vec![
-                        Span::raw(format!("{base_indent}{level_indent}")),
-                        Span::styled(
-                            "\u{2570} ",
-                            Style::default().fg(state.theme.label_secondary),
-                        ),
-                        Span::styled(status_symbol, Style::default().fg(status_color)),
-                        Span::raw("  "),
-                        Span::styled(
-                            "[parallel]",
-                            Style::default().fg(state.theme.status_waiting),
-                        ),
-                        Span::raw(format!("  ({count} steps)")),
-                    ]))
-                }
-                // Header arms already handled above; this branch is unreachable.
-                WorkflowRunRow::RepoHeader { .. } | WorkflowRunRow::TargetHeader { .. } => {
-                    ListItem::new(Line::from(vec![Span::raw("")]))
-                }
+                // Step, ParallelGroup, RepoHeader, and TargetHeader are handled above.
+                _ => ListItem::new(Line::from(vec![Span::raw("")])),
             }
         })
         .collect();
