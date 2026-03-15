@@ -1,6 +1,6 @@
 ---
 role: actor
-can_commit: true
+can_commit: false
 ---
 
 You are a diagram updater. Your job is to apply ticket-driven changes to the affected Mermaid `.mmd` files under `docs/diagrams/`.
@@ -20,11 +20,11 @@ Prior step context (ticket summary + affected diagrams): {{prior_context}}
 
 4. Validate that the updated Mermaid syntax is correct by checking for balanced brackets and valid diagram type declarations.
 
-5. Commit all changes:
+5. Stage the changes and capture the diff (do **not** commit):
    ```
    git add docs/diagrams/
-   git commit -m "docs: update diagrams for ticket {{ticket}}"
+   git diff --cached docs/diagrams/
    ```
 
 6. Emit `<<<CONDUCTOR_OUTPUT>>>` with:
-   - `context`: list of files updated and a one-sentence description of what changed in each
+   - `context`: list of files updated, a one-sentence description of what changed in each, and the full `git diff --cached` output so the reviewer can inspect the exact changes
