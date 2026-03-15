@@ -17,6 +17,7 @@ workflow iterate-pr {
 
     if review-pr.has_blocking_findings {
       call address-reviews
+      call fmt-fix
       call workflow lint-fix
     }
   } while review-pr.has_blocking_findings

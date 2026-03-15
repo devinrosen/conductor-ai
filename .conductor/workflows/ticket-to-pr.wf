@@ -17,6 +17,8 @@ workflow ticket-to-pr {
 
   call workflow lint-fix
 
+  call fmt-fix
+
   call push-and-pr
 
   call workflow iterate-pr
