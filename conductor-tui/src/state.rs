@@ -246,7 +246,6 @@ pub enum WorkflowDefFocus {
     Steps,
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WorktreeDetailFocus {
     #[default]
