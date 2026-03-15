@@ -1,8 +1,14 @@
 import { test as base } from "@playwright/test";
 import { execSync } from "child_process";
+import * as crypto from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+
+/** Collision-resistant ID safe for git slugs and URL paths. */
+function uniqueId(): string {
+  return `${Date.now()}-${crypto.randomBytes(3).toString("hex")}`;
+}
 
 export interface TestRepo {
   id: string;
@@ -52,7 +58,7 @@ export const test = base.extend<{
       // Tests that need a real worktree will fail — which is the correct signal.
     }
 
-    const slug = `e2e-repo-${Date.now()}`;
+    const slug = `e2e-repo-${uniqueId()}`;
     const response = await request.post("/api/repos", {
       data: {
         remote_url: `file://${tmpDir}`,
@@ -71,7 +77,7 @@ export const test = base.extend<{
   },
 
   testWorktree: async ({ request, testRepo }, use) => {
-    const name = `e2e-wt-${Date.now()}`;
+    const name = `e2e-wt-${uniqueId()}`;
     const response = await request.post(`/api/repos/${testRepo.id}/worktrees`, {
       data: { name },
     });

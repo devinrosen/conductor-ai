@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import type { APIRequestContext } from "@playwright/test";
+import type { APIRequestContext, Page } from "@playwright/test";
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
@@ -36,6 +36,38 @@ function seedTestWorkflow(worktreePath: string): void {
   fs.writeFileSync(path.join(workflowsDir, "test-workflow.wf"), wfContent);
 }
 
+/** Seed the test workflow, start a run, and return the run ID. */
+async function startTestWorkflowRun(
+  request: APIRequestContext,
+  worktreePath: string,
+  worktreeId: string,
+): Promise<string> {
+  seedTestWorkflow(worktreePath);
+
+  const runResp = await request.post(
+    `/api/worktrees/${worktreeId}/workflows/run`,
+    { data: { name: "test-workflow" } },
+  );
+  expect(runResp.ok()).toBeTruthy();
+
+  const runsResp = await request.get(
+    `/api/worktrees/${worktreeId}/workflows/runs`,
+  );
+  const runs = await runsResp.json();
+  expect(runs.length).toBeGreaterThan(0);
+  return runs[0].id as string;
+}
+
+/** Navigate to the worktree detail page and open the Workflows tab. */
+async function openWorkflowsTab(
+  page: Page,
+  repoId: string,
+  worktreeId: string,
+): Promise<void> {
+  await page.goto(`/repos/${repoId}/worktrees/${worktreeId}`);
+  await page.getByRole("button", { name: "Workflows" }).click();
+}
+
 test.describe("Workflow status smoke", () => {
   test("step tree expands when clicking a run row", async ({
     page,
@@ -43,25 +75,8 @@ test.describe("Workflow status smoke", () => {
     testRepo,
     testWorktree,
   }) => {
-    seedTestWorkflow(testWorktree.path);
-
-    // Start the workflow run via the REST API.
-    const runResp = await request.post(
-      `/api/worktrees/${testWorktree.id}/workflows/run`,
-      { data: { name: "test-workflow" } },
-    );
-    expect(runResp.ok()).toBeTruthy();
-
-    // Retrieve the run ID.
-    const runsResp = await request.get(
-      `/api/worktrees/${testWorktree.id}/workflows/runs`,
-    );
-    const runs = await runsResp.json();
-    expect(runs.length).toBeGreaterThan(0);
-
-    // Navigate to the worktree detail page and switch to the Workflows tab.
-    await page.goto(`/repos/${testRepo.id}/worktrees/${testWorktree.id}`);
-    await page.getByRole("button", { name: "Workflows" }).click();
+    await startTestWorkflowRun(request, testWorktree.path, testWorktree.id);
+    await openWorkflowsTab(page, testRepo.id, testWorktree.id);
 
     // Click the run row to expand the step tree.
     await page.getByText("test-workflow").first().click();
@@ -78,30 +93,19 @@ test.describe("Workflow status smoke", () => {
     testRepo,
     testWorktree,
   }) => {
-    seedTestWorkflow(testWorktree.path);
-
-    // Start the workflow run.
-    const runResp = await request.post(
-      `/api/worktrees/${testWorktree.id}/workflows/run`,
-      { data: { name: "test-workflow" } },
+    const runId = await startTestWorkflowRun(
+      request,
+      testWorktree.path,
+      testWorktree.id,
     );
-    expect(runResp.ok()).toBeTruthy();
-
-    // Get the run ID.
-    const runsResp = await request.get(
-      `/api/worktrees/${testWorktree.id}/workflows/runs`,
-    );
-    const runs = await runsResp.json();
-    const runId: string = runs[0].id;
 
     // Poll via the API until the run reaches "waiting" — the gate step
     // pauses execution immediately since it is the first and only node.
     const reached = await waitForRunStatus(request, runId, "waiting");
     expect(reached, "run should reach 'waiting' before timeout").toBeTruthy();
 
-    // Navigate to the worktree detail page.
-    await page.goto(`/repos/${testRepo.id}/worktrees/${testWorktree.id}`);
-    await page.getByRole("button", { name: "Workflows" }).click();
+    // Navigate to the worktree detail page and open the Workflows tab.
+    await openWorkflowsTab(page, testRepo.id, testWorktree.id);
 
     // Expand the run row to reveal the step list.
     await page.getByText("test-workflow").first().click();
