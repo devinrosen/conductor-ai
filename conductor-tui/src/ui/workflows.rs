@@ -150,6 +150,13 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             }
             let node_count = def.body.len();
             let input_count = def.inputs.len();
+            let (badge_sym, badge_label, badge_color) =
+                last_run_badge(&def.name, &state.data.workflow_runs, &state.theme);
+            let badge_text = if badge_label.is_empty() {
+                format!("  {badge_sym}")
+            } else {
+                format!("  {badge_sym} {badge_label}")
+            };
             let mut spans = vec![
                 Span::raw("  \u{2514} "),
                 Span::styled(
@@ -160,6 +167,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                     format!("  {node_count} steps"),
                     Style::default().fg(state.theme.label_warning),
                 ),
+                Span::styled(badge_text, Style::default().fg(badge_color)),
             ];
             if !def.targets.is_empty() {
                 let badge = format!("  [{}]", def.targets.join(", "));
@@ -214,6 +222,13 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
             .map(|def| {
                 let node_count = def.body.len();
                 let input_count = def.inputs.len();
+                let (badge_sym, badge_label, badge_color) =
+                    last_run_badge(&def.name, &state.data.workflow_runs, &state.theme);
+                let badge_text = if badge_label.is_empty() {
+                    format!("  {badge_sym}")
+                } else {
+                    format!("  {badge_sym} {badge_label}")
+                };
                 let mut spans = vec![
                     Span::styled(
                         format!("{:<20}", def.name),
@@ -227,6 +242,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                         format!("  {node_count} steps"),
                         Style::default().fg(state.theme.label_warning),
                     ),
+                    Span::styled(badge_text, Style::default().fg(badge_color)),
                 ];
                 if !def.targets.is_empty() {
                     let badge = format!("  [{}]", def.targets.join(", "));
@@ -299,6 +315,20 @@ pub(super) fn render_def_steps(frame: &mut Frame, area: Rect, state: &AppState) 
         " Steps  Esc=back ".to_string()
     };
 
+    // Split area vertically when the definition has inputs.
+    let has_inputs = def.map(|d| !d.inputs.is_empty()).unwrap_or(false);
+    let (steps_area, inputs_area_opt) = if has_inputs {
+        let input_count = def.map(|d| d.inputs.len()).unwrap_or(0);
+        let inputs_height = (input_count.min(6) as u16) + 2; // +2 for border
+        let splits = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(inputs_height)])
+            .split(area);
+        (splits[0], Some(splits[1]))
+    } else {
+        (area, None)
+    };
+
     let list = List::new(items)
         .block(
             Block::default()
@@ -319,7 +349,41 @@ pub(super) fn render_def_steps(frame: &mut Frame, area: Rect, state: &AppState) 
             state.workflow_def_step_index.min(total.saturating_sub(1)),
         ));
     }
-    frame.render_stateful_widget(list, area, &mut list_state);
+    frame.render_stateful_widget(list, steps_area, &mut list_state);
+
+    // Render inputs section below the step list when present.
+    if let (Some(inputs_area), Some(d)) = (inputs_area_opt, def) {
+        let input_lines: Vec<ListItem> = d
+            .inputs
+            .iter()
+            .map(|inp| {
+                let mut spans = vec![Span::styled(
+                    format!("  {:<18}", inp.name),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )];
+                if inp.required {
+                    spans.push(Span::styled(
+                        " (required)",
+                        Style::default().fg(state.theme.label_warning),
+                    ));
+                } else if let Some(ref default) = inp.default {
+                    spans.push(Span::styled(
+                        format!(" default: {default}"),
+                        Style::default().fg(state.theme.label_secondary),
+                    ));
+                }
+                ListItem::new(Line::from(spans))
+            })
+            .collect();
+
+        let inputs_list = List::new(input_lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color))
+                .title(" Inputs "),
+        );
+        frame.render_widget(inputs_list, inputs_area);
+    }
 }
 
 /// Recursively build flat `ListItem`s from a `WorkflowNode` slice.
@@ -1254,5 +1318,50 @@ fn format_duration(start: &str, end: &str) -> String {
         format!("{secs}s")
     } else {
         format!("{}m{:02}s", secs / 60, secs % 60)
+    }
+}
+
+/// Returns a human-readable relative time string, e.g. "5m ago", "2h ago", "1d ago".
+fn time_ago(ts: &str) -> String {
+    let Ok(t) = chrono::DateTime::parse_from_rfc3339(ts) else {
+        return "?".to_string();
+    };
+    let secs = chrono::Utc::now()
+        .signed_duration_since(t)
+        .num_seconds()
+        .max(0);
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86400)
+    }
+}
+
+/// Returns `(symbol, label, color)` for the most-recent run of `def_name`.
+fn last_run_badge(
+    def_name: &str,
+    runs: &[WorkflowRun],
+    theme: &Theme,
+) -> (&'static str, String, Color) {
+    let latest = runs
+        .iter()
+        .filter(|r| r.workflow_name == def_name)
+        .max_by(|a, b| a.started_at.cmp(&b.started_at));
+
+    match latest {
+        None => ("—", String::new(), theme.label_secondary),
+        Some(run) => {
+            let label = time_ago(&run.started_at);
+            match run.status {
+                WorkflowRunStatus::Completed => ("✓", label, theme.status_completed),
+                WorkflowRunStatus::Failed => ("✗", label, theme.status_failed),
+                WorkflowRunStatus::Running => ("▶", label, theme.label_accent),
+                _ => ("—", label, theme.label_secondary),
+            }
+        }
     }
 }
