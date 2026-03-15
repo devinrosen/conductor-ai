@@ -132,7 +132,16 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     let wf_mgr = WorkflowManager::new(conn);
     let worktree_slug = if let Some(wt_id) = input.worktree_id {
         let wt_mgr = WorktreeManager::new(conn, config);
-        wt_mgr.get_by_id(wt_id)?.slug
+        let wt = wt_mgr.get_by_id(wt_id)?;
+        if std::path::Path::new(&wt.path).exists() {
+            wt.slug
+        } else {
+            tracing::warn!(
+                "Worktree path '{}' does not exist; falling back to repo root for slug",
+                wt.path
+            );
+            String::new()
+        }
     } else {
         String::new()
     };
@@ -530,11 +539,24 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         if let Some(wt_id) = wf_run.worktree_id.as_deref() {
             let worktree = wt_mgr.get_by_id(wt_id)?;
             let repo = crate::repo::RepoManager::new(conn, config).get_by_id(&worktree.repo_id)?;
-            (
-                worktree.path.clone(),
-                worktree.slug.clone(),
-                repo.local_path.clone(),
-            )
+            if std::path::Path::new(&worktree.path).exists() {
+                (
+                    worktree.path.clone(),
+                    worktree.slug.clone(),
+                    repo.local_path.clone(),
+                )
+            } else {
+                tracing::warn!(
+                    "Worktree path '{}' does not exist; falling back to repo root '{}'",
+                    worktree.path,
+                    repo.local_path
+                );
+                (
+                    repo.local_path.clone(),
+                    String::new(),
+                    repo.local_path.clone(),
+                )
+            }
         } else {
             // Resolve repo_id from the run or via the linked ticket.
             // (The ephemeral guard above ensures at least one FK is set.)
