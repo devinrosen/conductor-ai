@@ -42,7 +42,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
     // Modal overlay on top
     match &state.modal {
         Modal::None => {}
-        Modal::Help => help::render(frame, area),
+        Modal::Help => help::render(frame, area, &state.theme),
         Modal::Confirm { title, message, .. } => {
             modal::render_confirm(frame, area, title, message, &state.theme)
         }

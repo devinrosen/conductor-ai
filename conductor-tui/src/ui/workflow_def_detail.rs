@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Frame;
@@ -61,7 +61,10 @@ fn render_meta(frame: &mut Frame, area: Rect, def: &WorkflowDef, state: &AppStat
     // Trigger
     lines.push(Line::from(vec![
         Span::styled("Trigger     ", Style::default().fg(theme.label_secondary)),
-        Span::styled(def.trigger.to_string(), Style::default().fg(Color::Cyan)),
+        Span::styled(
+            def.trigger.to_string(),
+            Style::default().fg(theme.label_info),
+        ),
     ]));
     lines.push(Line::from(""));
 
@@ -85,7 +88,10 @@ fn render_meta(frame: &mut Frame, area: Rect, def: &WorkflowDef, state: &AppStat
         .unwrap_or(&def.source_path);
     lines.push(Line::from(vec![
         Span::styled("Source      ", Style::default().fg(theme.label_secondary)),
-        Span::styled(short_path.to_string(), Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            short_path.to_string(),
+            Style::default().fg(theme.label_secondary),
+        ),
     ]));
     lines.push(Line::from(""));
 
@@ -110,7 +116,7 @@ fn render_meta(frame: &mut Frame, area: Rect, def: &WorkflowDef, state: &AppStat
             lines.push(Line::from(vec![Span::styled(
                 format!("  {}{}", input.name, required_marker),
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.label_warning)
                     .add_modifier(Modifier::BOLD),
             )]));
             if let Some(ref desc) = input.description {
@@ -118,18 +124,18 @@ fn render_meta(frame: &mut Frame, area: Rect, def: &WorkflowDef, state: &AppStat
                     for word_line in wrap_text(desc, (area.width.saturating_sub(6)) as usize) {
                         lines.push(Line::from(Span::styled(
                             format!("    {word_line}"),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(theme.label_secondary),
                         )));
                     }
                 }
             }
             if let Some(ref default) = input.default {
                 lines.push(Line::from(vec![
-                    Span::styled("    default  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("    default  ", Style::default().fg(theme.label_secondary)),
                     Span::styled(
                         default.clone(),
                         Style::default()
-                            .fg(Color::DarkGray)
+                            .fg(theme.label_secondary)
                             .add_modifier(Modifier::ITALIC),
                     ),
                 ]));
@@ -142,7 +148,7 @@ fn render_meta(frame: &mut Frame, area: Rect, def: &WorkflowDef, state: &AppStat
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "w  run   e  edit   Esc  back",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.label_secondary),
     )));
 
     let para = Paragraph::new(lines)
@@ -164,7 +170,7 @@ fn render_steps(frame: &mut Frame, area: Rect, def: &WorkflowDef, state: &AppSta
     if def.body.is_empty() && def.always.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
             "  (no steps)",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.label_secondary),
         ))));
     } else {
         build_node_lines(&def.body, 0, &mut items, theme);
@@ -173,7 +179,7 @@ fn render_steps(frame: &mut Frame, area: Rect, def: &WorkflowDef, state: &AppSta
             items.push(ListItem::new(Line::from(Span::styled(
                 "always",
                 Style::default()
-                    .fg(Color::Magenta)
+                    .fg(theme.label_keyword)
                     .add_modifier(Modifier::BOLD),
             ))));
             build_node_lines(&def.always, 1, &mut items, theme);
@@ -212,7 +218,7 @@ fn build_node_lines(
     nodes: &[WorkflowNode],
     depth: usize,
     items: &mut Vec<ListItem>,
-    _theme: &crate::theme::Theme,
+    theme: &crate::theme::Theme,
 ) {
     let indent = "  ".repeat(depth);
     for node in nodes {
@@ -221,24 +227,24 @@ fn build_node_lines(
                 let agent = agent_ref_display(&c.agent);
                 let mut spans = vec![
                     Span::raw(indent.clone()),
-                    Span::styled("\u{2192} ", Style::default().fg(Color::Green)),
+                    Span::styled("\u{2192} ", Style::default().fg(theme.status_completed)),
                     Span::styled(
                         agent,
                         Style::default()
-                            .fg(Color::White)
+                            .fg(theme.label_primary)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ];
                 if c.retries > 0 {
                     spans.push(Span::styled(
                         format!("  retries={}", c.retries),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.label_secondary),
                     ));
                 }
                 if let Some(ref fail) = c.on_fail {
                     spans.push(Span::styled(
                         format!("  on_fail={}", agent_ref_display(fail)),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.label_secondary),
                     ));
                 }
                 items.push(ListItem::new(Line::from(spans)));
@@ -246,41 +252,42 @@ fn build_node_lines(
             WorkflowNode::CallWorkflow(c) => {
                 let mut spans = vec![
                     Span::raw(indent.clone()),
-                    Span::styled("\u{21b3} ", Style::default().fg(Color::Cyan)),
+                    Span::styled("\u{21b3} ", Style::default().fg(theme.label_info)),
                     Span::styled(
                         c.workflow.clone(),
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(theme.label_accent)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ];
                 if c.retries > 0 {
                     spans.push(Span::styled(
                         format!("  retries={}", c.retries),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.label_secondary),
                     ));
                 }
                 items.push(ListItem::new(Line::from(spans)));
             }
             WorkflowNode::Gate(g) => {
-                let gate_color = Color::Yellow;
                 items.push(ListItem::new(Line::from(vec![
                     Span::raw(indent.clone()),
-                    Span::styled("\u{2b21} gate  ", Style::default().fg(gate_color)),
+                    Span::styled("\u{2b21} gate  ", Style::default().fg(theme.label_warning)),
                     Span::styled(
                         g.name.clone(),
-                        Style::default().fg(gate_color).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(theme.label_warning)
+                            .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         format!("  [{}]", g.gate_type),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.label_secondary),
                     ),
                 ])));
                 if let Some(ref prompt) = g.prompt {
                     let sub_indent = "  ".repeat(depth + 1);
                     items.push(ListItem::new(Line::from(Span::styled(
                         format!("{sub_indent}\u{2514} {prompt}"),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.label_secondary),
                     ))));
                 }
             }
@@ -290,15 +297,15 @@ fn build_node_lines(
                     Span::styled(
                         "if ",
                         Style::default()
-                            .fg(Color::Magenta)
+                            .fg(theme.label_keyword)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         format!("{}/{}", n.step, n.marker),
-                        Style::default().fg(Color::Magenta),
+                        Style::default().fg(theme.label_keyword),
                     ),
                 ])));
-                build_node_lines(&n.body, depth + 1, items, _theme);
+                build_node_lines(&n.body, depth + 1, items, theme);
             }
             WorkflowNode::Unless(n) => {
                 items.push(ListItem::new(Line::from(vec![
@@ -306,15 +313,15 @@ fn build_node_lines(
                     Span::styled(
                         "unless ",
                         Style::default()
-                            .fg(Color::Magenta)
+                            .fg(theme.label_keyword)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         format!("{}/{}", n.step, n.marker),
-                        Style::default().fg(Color::Magenta),
+                        Style::default().fg(theme.label_keyword),
                     ),
                 ])));
-                build_node_lines(&n.body, depth + 1, items, _theme);
+                build_node_lines(&n.body, depth + 1, items, theme);
             }
             WorkflowNode::While(n) => {
                 items.push(ListItem::new(Line::from(vec![
@@ -322,19 +329,19 @@ fn build_node_lines(
                     Span::styled(
                         "while ",
                         Style::default()
-                            .fg(Color::Magenta)
+                            .fg(theme.label_keyword)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         format!("{}/{}", n.step, n.marker),
-                        Style::default().fg(Color::Magenta),
+                        Style::default().fg(theme.label_keyword),
                     ),
                     Span::styled(
                         format!("  max={}", n.max_iterations),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.label_secondary),
                     ),
                 ])));
-                build_node_lines(&n.body, depth + 1, items, _theme);
+                build_node_lines(&n.body, depth + 1, items, theme);
             }
             WorkflowNode::DoWhile(n) => {
                 items.push(ListItem::new(Line::from(vec![
@@ -342,26 +349,26 @@ fn build_node_lines(
                     Span::styled(
                         "do",
                         Style::default()
-                            .fg(Color::Magenta)
+                            .fg(theme.label_keyword)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ])));
-                build_node_lines(&n.body, depth + 1, items, _theme);
+                build_node_lines(&n.body, depth + 1, items, theme);
                 items.push(ListItem::new(Line::from(vec![
                     Span::raw(indent.clone()),
                     Span::styled(
                         "while ",
                         Style::default()
-                            .fg(Color::Magenta)
+                            .fg(theme.label_keyword)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         format!("{}/{}", n.step, n.marker),
-                        Style::default().fg(Color::Magenta),
+                        Style::default().fg(theme.label_keyword),
                     ),
                     Span::styled(
                         format!("  max={}", n.max_iterations),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.label_secondary),
                     ),
                 ])));
             }
@@ -371,11 +378,11 @@ fn build_node_lines(
                     Span::styled(
                         "do",
                         Style::default()
-                            .fg(Color::Magenta)
+                            .fg(theme.label_keyword)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ])));
-                build_node_lines(&n.body, depth + 1, items, _theme);
+                build_node_lines(&n.body, depth + 1, items, theme);
             }
             WorkflowNode::Parallel(p) => {
                 let modifier = if !p.fail_fast {
@@ -388,10 +395,13 @@ fn build_node_lines(
                     Span::styled(
                         "parallel",
                         Style::default()
-                            .fg(Color::Blue)
+                            .fg(theme.label_info)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(modifier.to_string(), Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        modifier.to_string(),
+                        Style::default().fg(theme.label_secondary),
+                    ),
                 ])));
                 let sub_indent = "  ".repeat(depth + 1);
                 for (i, agent_ref) in p.calls.iter().enumerate() {
@@ -399,18 +409,18 @@ fn build_node_lines(
                     let cond_span = if let Some((step, marker)) = p.call_if.get(&i.to_string()) {
                         Span::styled(
                             format!("  if {step}/{marker}"),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(theme.label_secondary),
                         )
                     } else {
                         Span::raw("")
                     };
                     items.push(ListItem::new(Line::from(vec![
                         Span::raw(sub_indent.clone()),
-                        Span::styled("\u{2295} ", Style::default().fg(Color::Blue)),
+                        Span::styled("\u{2295} ", Style::default().fg(theme.label_info)),
                         Span::styled(
                             agent,
                             Style::default()
-                                .fg(Color::White)
+                                .fg(theme.label_primary)
                                 .add_modifier(Modifier::BOLD),
                         ),
                         cond_span,
@@ -423,11 +433,11 @@ fn build_node_lines(
                     Span::styled(
                         "always",
                         Style::default()
-                            .fg(Color::Magenta)
+                            .fg(theme.label_keyword)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ])));
-                build_node_lines(&a.body, depth + 1, items, _theme);
+                build_node_lines(&a.body, depth + 1, items, theme);
             }
         }
     }

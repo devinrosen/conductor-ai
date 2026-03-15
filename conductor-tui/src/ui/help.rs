@@ -1,10 +1,10 @@
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-pub fn render(frame: &mut Frame, area: Rect) {
+pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
     let popup = centered_rect(60, 80, area);
     frame.render_widget(Clear, popup);
 
@@ -12,128 +12,128 @@ pub fn render(frame: &mut Frame, area: Rect) {
         Line::from(Span::styled(
             "Keybindings",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.label_accent)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
             "Global Navigation",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.label_accent)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        help_line("Tab / Shift+Tab", "Cycle panel focus"),
-        help_line("j / k", "Navigate within panel"),
-        help_line("G / End", "Jump to bottom of list"),
-        help_line("gg / Home", "Jump to top of list"),
-        help_line("Ctrl+d / Ctrl+u", "Half-page down / up"),
-        help_line("Enter", "Drill into selected item"),
-        help_line("Esc", "Back to previous view"),
-        help_line("?", "Toggle this help"),
-        help_line("q", "Quit"),
-        help_line("[ / ]", "Focus content / workflow column"),
-        help_line("\\", "Toggle workflow column"),
-        help_line("H", "Toggle completed/cancelled workflow runs"),
+        help_line("Tab / Shift+Tab", "Cycle panel focus", theme),
+        help_line("j / k", "Navigate within panel", theme),
+        help_line("G / End", "Jump to bottom of list", theme),
+        help_line("gg / Home", "Jump to top of list", theme),
+        help_line("Ctrl+d / Ctrl+u", "Half-page down / up", theme),
+        help_line("Enter", "Drill into selected item", theme),
+        help_line("Esc", "Back to previous view", theme),
+        help_line("?", "Toggle this help", theme),
+        help_line("q", "Quit", theme),
+        help_line("[ / ]", "Focus content / workflow column", theme),
+        help_line("\\", "Toggle workflow column", theme),
+        help_line("H", "Toggle completed/cancelled workflow runs", theme),
         Line::from(""),
         Line::from(Span::styled(
             "Global Actions",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.label_accent)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        help_line("a", "Register repository"),
-        help_line("c", "Create worktree"),
-        help_line("d", "Delete (worktree/repo)"),
-        help_line("s", "Sync tickets"),
-        help_line("W", "Manage work targets"),
-        help_line("S", "Manage issue sources"),
-        help_line("A", "Toggle closed tickets"),
-        help_line("w", "Run workflow on current item"),
-        help_line("!", "Toggle status bar expansion"),
-        help_line("/", "Filter/search"),
+        help_line("a", "Register repository", theme),
+        help_line("c", "Create worktree", theme),
+        help_line("d", "Delete (worktree/repo)", theme),
+        help_line("s", "Sync tickets", theme),
+        help_line("W", "Manage work targets", theme),
+        help_line("S", "Manage issue sources", theme),
+        help_line("A", "Toggle closed tickets", theme),
+        help_line("w", "Run workflow on current item", theme),
+        help_line("!", "Toggle status bar expansion", theme),
+        help_line("/", "Filter/search", theme),
         Line::from(""),
         Line::from(Span::styled(
             "Worktree Detail — Info Panel (Tab to switch)",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.label_accent)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        help_line("j / k", "Navigate rows"),
-        help_line("y", "Copy selected row value"),
-        help_line("o", "Act on selected row (open path/ticket/PR)"),
+        help_line("j / k", "Navigate rows", theme),
+        help_line("y", "Copy selected row value", theme),
+        help_line("o", "Act on selected row (open path/ticket/PR)", theme),
         Line::from(""),
         Line::from(Span::styled(
             "Worktree Detail — Log Panel (Tab to switch)",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.label_accent)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        help_line("j / k", "Scroll activity log"),
-        help_line("Enter", "Expand selected event"),
-        help_line("y", "Copy last code block"),
+        help_line("j / k", "Scroll activity log", theme),
+        help_line("Enter", "Expand selected event", theme),
+        help_line("y", "Copy last code block", theme),
         Line::from(""),
         Line::from(Span::styled(
             "Worktree Detail — Agent Controls",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.label_accent)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        help_line("p", "Prompt Claude agent"),
-        help_line("O", "Orchestrate (multi-step child agents)"),
-        help_line("x", "Stop running agent"),
-        help_line("f", "Submit feedback to agent"),
-        help_line("F", "Dismiss feedback request"),
+        help_line("p", "Prompt Claude agent", theme),
+        help_line("O", "Orchestrate (multi-step child agents)", theme),
+        help_line("x", "Stop running agent", theme),
+        help_line("f", "Submit feedback to agent", theme),
+        help_line("F", "Dismiss feedback request", theme),
         Line::from(""),
         Line::from(Span::styled(
             "Workflow Run Detail",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.label_accent)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        help_line("x", "Cancel workflow run"),
-        help_line("r", "Resume workflow run"),
-        help_line("Enter", "Approve waiting gate step"),
+        help_line("x", "Cancel workflow run", theme),
+        help_line("r", "Resume workflow run", theme),
+        help_line("Enter", "Approve waiting gate step", theme),
         Line::from(""),
         Line::from(Span::styled(
             "Workflow Definition Detail",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.label_accent)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        help_line("j / k", "Scroll steps"),
-        help_line("w", "Run this workflow"),
-        help_line("e", "Edit in $EDITOR"),
-        help_line("Esc", "Back"),
+        help_line("j / k", "Scroll steps", theme),
+        help_line("w", "Run this workflow", theme),
+        help_line("e", "Edit in $EDITOR", theme),
+        help_line("Esc", "Back", theme),
         Line::from(""),
         Line::from(Span::styled(
             "Press Esc or ? to close",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.label_secondary),
         )),
     ];
 
     let help = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
+            .border_style(Style::default().fg(theme.border_focused))
             .title(" Help "),
     );
 
     frame.render_widget(help, popup);
 }
 
-fn help_line<'a>(key: &'a str, desc: &'a str) -> Line<'a> {
+fn help_line<'a>(key: &'a str, desc: &'a str, theme: &crate::theme::Theme) -> Line<'a> {
     Line::from(vec![
         Span::styled(
             format!("  {key:<20}"),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.label_warning)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(desc),

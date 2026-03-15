@@ -232,7 +232,10 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                 .get(&t.id)
                 .map(|v| v.as_slice())
                 .unwrap_or(&[]);
-            spans.extend(super::common::ticket_label_spans_compact(labels));
+            spans.extend(super::common::ticket_label_spans_compact(
+                labels,
+                &state.theme,
+            ));
             spans.extend(super::common::ticket_agent_total_spans(
                 state, &t.id, "  ", false,
             ));

@@ -929,7 +929,7 @@ fn render_step_agent_activity(
     let items: Vec<ListItem> = events
         .iter()
         .map(|ev| {
-            let style = event_kind_style(&ev.kind);
+            let style = event_kind_style(&ev.kind, &state.theme);
             let dur = ev
                 .duration_ms()
                 .map(|ms| format!(" ({:.1}s)", ms as f64 / 1000.0))
@@ -973,28 +973,28 @@ fn render_step_agent_activity(
     }
 }
 
-fn event_kind_style(kind: &str) -> Style {
+fn event_kind_style(kind: &str, theme: &Theme) -> Style {
     match kind {
-        "tool_use" => Style::default().fg(Color::Blue),
-        "tool_result" => Style::default().fg(Color::Green),
-        "api_request" => Style::default().fg(Color::Yellow),
-        "error" => Style::default().fg(Color::Red),
-        "prompt" => Style::default().fg(Color::Magenta),
-        "result" => Style::default().fg(Color::Cyan),
-        _ => Style::default().fg(Color::White),
+        "tool_use" => Style::default().fg(theme.label_info),
+        "tool_result" => Style::default().fg(theme.status_completed),
+        "api_request" => Style::default().fg(theme.label_warning),
+        "error" => Style::default().fg(theme.status_failed),
+        "prompt" => Style::default().fg(theme.label_keyword),
+        "result" => Style::default().fg(theme.label_accent),
+        _ => Style::default().fg(theme.label_primary),
     }
 }
 
 fn status_display(status: &str, theme: &Theme) -> (&'static str, Color) {
     match status {
-        "pending" => ("○", Color::DarkGray),
+        "pending" => ("○", theme.label_secondary),
         "running" => ("⚙", theme.label_accent),
         "completed" => ("✓", theme.status_completed),
         "failed" => ("✗", theme.status_failed),
         "cancelled" => ("⊘", theme.status_cancelled),
         "waiting" => ("⏸", theme.status_waiting),
-        "skipped" => ("⊘", Color::DarkGray),
-        _ => ("?", Color::White),
+        "skipped" => ("⊘", theme.label_secondary),
+        _ => ("?", theme.label_primary),
     }
 }
 

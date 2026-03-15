@@ -51,7 +51,10 @@ pub fn label_fg(bg: Color) -> Color {
 }
 
 /// Build compact fg-only label spans for a ticket row (up to 3 labels + `+N` overflow).
-pub fn ticket_label_spans_compact(labels: &[TicketLabel]) -> Vec<Span<'static>> {
+pub fn ticket_label_spans_compact(
+    labels: &[TicketLabel],
+    theme: &crate::theme::Theme,
+) -> Vec<Span<'static>> {
     if labels.is_empty() {
         return Vec::new();
     }
@@ -62,7 +65,7 @@ pub fn ticket_label_spans_compact(labels: &[TicketLabel]) -> Vec<Span<'static>> 
             .color
             .as_deref()
             .map(hex_to_color)
-            .unwrap_or(Color::DarkGray);
+            .unwrap_or(theme.label_secondary);
         spans.push(Span::raw("  "));
         spans.push(Span::styled(lbl.label.clone(), Style::default().fg(color)));
         shown += 1;
@@ -71,7 +74,7 @@ pub fn ticket_label_spans_compact(labels: &[TicketLabel]) -> Vec<Span<'static>> 
     if remaining > 0 {
         spans.push(Span::styled(
             format!(" +{remaining}"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.label_secondary),
         ));
     }
     spans
@@ -125,7 +128,7 @@ pub fn worktree_list_item_with_prefix(
     let is_active = wt.is_active();
     let status_color = match wt.status {
         WorktreeStatus::Active => state.theme.status_completed,
-        WorktreeStatus::Merged => Color::Blue,
+        WorktreeStatus::Merged => state.theme.label_info,
         WorktreeStatus::Abandoned => state.theme.status_failed,
     };
     let text_style = if is_active {

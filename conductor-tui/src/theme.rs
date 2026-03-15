@@ -19,8 +19,9 @@ pub struct Theme {
     pub label_error: Color,      // Red       — failures, error snippets
     pub label_info: Color,       // Cyan      — tool_use events, agent activity
     pub label_url: Color,        // Blue      — hyperlinks (ticket URLs, etc.)
-    pub highlight_bg: Color,     // DarkGray  — selected row background
-    pub group_header: Color,     // Yellow    — repo/section group headers
+    pub label_keyword: Color, // Magenta   — control-flow keywords (if/while/parallel/always/gate)
+    pub highlight_bg: Color,  // DarkGray  — selected row background
+    pub group_header: Color,  // Yellow    — repo/section group headers
 }
 
 /// All built-in named themes: `(internal_name, display_label)`.
@@ -94,6 +95,7 @@ impl Theme {
             label_error: Color::Red,
             label_info: Color::Cyan,
             label_url: Color::Blue,
+            label_keyword: Color::Magenta,
             highlight_bg: Color::DarkGray,
             group_header: Color::Yellow,
         }
@@ -116,6 +118,7 @@ impl Theme {
             label_error: Color::Rgb(0xBF, 0x61, 0x6A),    // nord11 — red
             label_info: Color::Rgb(0x8F, 0xBC, 0xBB),     // nord7  — teal
             label_url: Color::Rgb(0x81, 0xA1, 0xC1),      // nord9  — blue
+            label_keyword: Color::Rgb(0xB4, 0x8E, 0xAD),  // nord15 — purple
             highlight_bg: Color::Rgb(0x3B, 0x42, 0x52),   // nord1  — slightly lighter bg
             group_header: Color::Rgb(0x81, 0xA1, 0xC1),   // nord9  — blue
         }
@@ -138,6 +141,7 @@ impl Theme {
             label_error: Color::Rgb(0xFB, 0x49, 0x34),    // bright red
             label_info: Color::Rgb(0x83, 0xA5, 0x98),     // bright blue
             label_url: Color::Rgb(0x45, 0x85, 0x88),      // blue
+            label_keyword: Color::Rgb(0xD3, 0x86, 0x9B),  // bright purple
             highlight_bg: Color::Rgb(0x50, 0x49, 0x45),   // bg2
             group_header: Color::Rgb(0xD7, 0x99, 0x21),   // yellow
         }
@@ -244,6 +248,7 @@ impl Theme {
             label_error: Color::Rgb(0xF3, 0x8B, 0xA8),      // Red
             label_info: Color::Rgb(0x89, 0xDC, 0xEB),       // Sky
             label_url: Color::Rgb(0x74, 0xC7, 0xEC),        // Sapphire
+            label_keyword: Color::Rgb(0xCB, 0xA6, 0xF7),    // Mauve
             highlight_bg: Color::Rgb(0x31, 0x32, 0x44),     // Surface0
             group_header: Color::Rgb(0xB4, 0xBE, 0xFE),     // Lavender
         }
@@ -374,6 +379,7 @@ fn build_theme_from_base16(get: impl Fn(&str) -> Result<Color, String>) -> Resul
         label_info: base0d,
         label_url: base0d,
         status_waiting: base0e,
+        label_keyword: base0e,
     })
 }
 

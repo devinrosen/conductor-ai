@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
@@ -68,7 +68,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let status_color = match wt.status {
         WorktreeStatus::Active => state.theme.status_completed,
-        WorktreeStatus::Merged => Color::Blue,
+        WorktreeStatus::Merged => state.theme.label_info,
         WorktreeStatus::Abandoned => state.theme.status_failed,
     };
 
@@ -192,9 +192,11 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                             .fg(state.theme.status_completed)
                             .add_modifier(Modifier::DIM),
                     ),
-                    StepStatus::InProgress => {
-                        ("[>]", Color::Blue, Style::default().fg(Color::Blue))
-                    }
+                    StepStatus::InProgress => (
+                        "[>]",
+                        state.theme.label_info,
+                        Style::default().fg(state.theme.label_info),
+                    ),
                     StepStatus::Failed => (
                         "[!]",
                         state.theme.status_failed,
@@ -362,7 +364,7 @@ fn render_agent_activity(frame: &mut Frame, area: Rect, state: &AppState) {
                 ))));
             }
             VisualRow::Event(ev) => {
-                let style = event_style(&ev.kind);
+                let style = event_style(&ev.kind, &state.theme);
                 let (display_text, effective_style) = if ev.kind == "prompt" {
                     let step_label = extract_step_label(&ev.summary);
                     let is_step = step_label.is_some();
@@ -443,14 +445,14 @@ fn extract_step_label(prompt: &str) -> Option<String> {
     Some(format!("STEP {step_num}/{total}"))
 }
 
-fn event_style(kind: &str) -> Style {
+fn event_style(kind: &str, theme: &crate::theme::Theme) -> Style {
     match kind {
-        "text" => Style::default().fg(Color::White),
-        "tool" => Style::default().fg(Color::Yellow),
-        "result" => Style::default().fg(Color::Green),
-        "system" => Style::default().fg(Color::DarkGray),
-        "error" => Style::default().fg(Color::Red),
-        "prompt" => Style::default().fg(Color::Cyan),
+        "text" => Style::default().fg(theme.label_primary),
+        "tool" => Style::default().fg(theme.label_warning),
+        "result" => Style::default().fg(theme.status_completed),
+        "system" => Style::default().fg(theme.label_secondary),
+        "error" => Style::default().fg(theme.status_failed),
+        "prompt" => Style::default().fg(theme.label_info),
         _ => Style::default(),
     }
 }
