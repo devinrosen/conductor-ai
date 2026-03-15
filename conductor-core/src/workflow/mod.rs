@@ -2602,8 +2602,9 @@ And here is my actual output:
             run_id_notify: None,
         };
 
-        let result = execute_workflow(&input)
-            .expect("execute_workflow must succeed when worktree path is missing (fallback to repo root)");
+        let result = execute_workflow(&input).expect(
+            "execute_workflow must succeed when worktree path is missing (fallback to repo root)",
+        );
         assert!(
             result.all_succeeded,
             "empty workflow should complete with all_succeeded=true"
@@ -3788,8 +3789,9 @@ And here is my actual output:
             restart: false,
         };
 
-        let result = resume_workflow(&input)
-            .expect("resume_workflow must succeed when worktree path is missing (fallback to repo root)");
+        let result = resume_workflow(&input).expect(
+            "resume_workflow must succeed when worktree path is missing (fallback to repo root)",
+        );
         assert!(
             result.all_succeeded,
             "empty resumed workflow should complete with all_succeeded=true"
