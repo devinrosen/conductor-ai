@@ -13,4 +13,6 @@ Steps:
    gh pr create --fill
    ```
 3. If the PR already exists, push only and skip creation.
-4. Output the PR URL so the next step can reference it.
+4. Capture the PR URL (from the `gh pr create` output or `gh pr view --json url -q .url`).
+5. Emit `<<<CONDUCTOR_OUTPUT>>>` with:
+   - `context`: the PR URL and a one-sentence description of what was merged
