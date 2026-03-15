@@ -1,5 +1,6 @@
 ---
 source: conductor-tui/tests/tui_snapshots.rs
+assertion_line: 164
 expression: render_to_string(&state)
 ---
 "┌ Repos & Worktrees (0 active) ──────────────────────────────────────────────┐┌ All Workflow Definitions ──────────────┐"

@@ -273,6 +273,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
     // bindings so that workflow column keys win when the column is active.
     if state.column_focus == ColumnFocus::Workflow {
         match key.code {
+            KeyCode::Char('H') => return Action::ToggleCompletedRuns,
             KeyCode::Char('r') | KeyCode::Char('w') => return Action::RunWorkflow,
             KeyCode::Char('v') if state.workflows_focus == crate::state::WorkflowsFocus::Defs => {
                 return Action::ViewWorkflowDef;

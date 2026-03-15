@@ -137,6 +137,9 @@ pub enum Action {
     // Toggle visibility of closed tickets in all ticket views
     ToggleClosedTickets,
 
+    // Toggle visibility of completed/cancelled workflow runs in the workflow column
+    ToggleCompletedRuns,
+
     // Agent triggers (tmux-based)
     LaunchAgent,
     OrchestrateAgent,

@@ -18,7 +18,7 @@ expression: render_to_string(&state)
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
 "│                                                                            │└────────────────────────────────────────┘"
-"│                                                                            │┌ All Workflow Runs (Space=expand/collaps┐"
+"│                                                                            │┌ All Workflow Runs (H: show history) ───┐"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"

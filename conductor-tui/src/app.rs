@@ -569,6 +569,12 @@ impl App {
                 self.state.detail_ticket_index = 0;
             }
 
+            // Workflow completed/cancelled visibility toggle
+            Action::ToggleCompletedRuns => {
+                self.state.show_completed_workflow_runs = !self.state.show_completed_workflow_runs;
+                self.clamp_workflow_indices();
+            }
+
             // WorktreeDetail panel actions
             Action::WorktreeDetailCopy => self.handle_worktree_detail_copy(),
             Action::WorktreeDetailOpen => self.handle_worktree_detail_open(),

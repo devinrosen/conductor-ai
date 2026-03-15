@@ -909,6 +909,9 @@ pub struct AppState {
     /// When false (default), closed tickets are hidden in all ticket views.
     pub show_closed_tickets: bool,
 
+    /// When false (default), completed and cancelled workflow runs are hidden in the workflow column.
+    pub show_completed_workflow_runs: bool,
+
     /// Semantic colour theme — centralises all Color constants used by the UI.
     pub theme: Theme,
 
@@ -1058,6 +1061,7 @@ impl AppState {
             expanded_step_run_ids: HashSet::new(),
             should_quit: false,
             show_closed_tickets: false,
+            show_completed_workflow_runs: false,
             ticket_sync_in_progress: false,
             column_focus: ColumnFocus::Content,
             workflow_column_visible: true,
@@ -1248,10 +1252,18 @@ impl AppState {
         let global_mode = self.selected_worktree_id.is_none() && self.selected_repo_id.is_none();
 
         if !global_mode {
-            // Non-global mode: existing flat list unchanged.
+            // Non-global mode: flat list, optionally hiding completed/cancelled root runs.
             let mut result = Vec::new();
             for run in runs {
                 if child_ids.contains(run.id.as_str()) {
+                    continue;
+                }
+                if !self.show_completed_workflow_runs
+                    && matches!(
+                        run.status,
+                        WorkflowRunStatus::Completed | WorkflowRunStatus::Cancelled
+                    )
+                {
                     continue;
                 }
                 let child_count = children_map.get(run.id.as_str()).map_or(0, |v| v.len());
@@ -1299,6 +1311,14 @@ impl AppState {
         let mut groups: Vec<(String, String, TargetType, &WorkflowRun)> = Vec::new();
         for run in runs {
             if child_ids.contains(run.id.as_str()) {
+                continue;
+            }
+            if !self.show_completed_workflow_runs
+                && matches!(
+                    run.status,
+                    WorkflowRunStatus::Completed | WorkflowRunStatus::Cancelled
+                )
+            {
                 continue;
             }
             let (mut repo_slug, target_key, target_type) = run
@@ -1429,6 +1449,37 @@ impl AppState {
     }
 
     /// Auto-initialize collapse state for newly-seen terminal-status parent runs.
+    /// Count root-level workflow runs that are hidden because `show_completed_workflow_runs` is false.
+    pub fn hidden_workflow_run_count(&self) -> usize {
+        if self.show_completed_workflow_runs {
+            return 0;
+        }
+        let known_ids: HashSet<&str> = self
+            .data
+            .workflow_runs
+            .iter()
+            .map(|r| r.id.as_str())
+            .collect();
+        let child_ids: HashSet<&str> = self
+            .data
+            .workflow_runs
+            .iter()
+            .filter_map(|r| r.parent_workflow_run_id.as_deref())
+            .filter(|pid| known_ids.contains(pid))
+            .collect();
+        self.data
+            .workflow_runs
+            .iter()
+            .filter(|r| !child_ids.contains(r.id.as_str()))
+            .filter(|r| {
+                matches!(
+                    r.status,
+                    WorkflowRunStatus::Completed | WorkflowRunStatus::Cancelled
+                )
+            })
+            .count()
+    }
+
     /// Call this after updating `self.data.workflow_runs`.
     /// Terminal runs (completed/failed/cancelled) are collapsed on first appearance.
     pub fn init_collapse_state(&mut self) {
@@ -2255,6 +2306,7 @@ mod tests {
     fn visible_workflow_run_rows_step_rows_appear_when_expanded() {
         let mut state = AppState::new();
         set_worktree_mode(&mut state);
+        state.show_completed_workflow_runs = true;
         state.data.workflow_runs = vec![make_wf_run_full("p1", WorkflowRunStatus::Completed, None)];
         state.data.workflow_run_steps.insert(
             "p1".into(),
@@ -2281,6 +2333,7 @@ mod tests {
     fn visible_workflow_run_rows_steps_sorted_by_position() {
         let mut state = AppState::new();
         set_worktree_mode(&mut state);
+        state.show_completed_workflow_runs = true;
         state.data.workflow_runs = vec![make_wf_run_full("p1", WorkflowRunStatus::Completed, None)];
         // Insert steps out-of-order by position.
         state.data.workflow_run_steps.insert(
@@ -2309,6 +2362,7 @@ mod tests {
     fn visible_workflow_run_rows_steps_for_leaf_child_run() {
         let mut state = AppState::new();
         set_worktree_mode(&mut state);
+        state.show_completed_workflow_runs = true;
         // p1 → c1 (leaf). Steps should appear under c1 when expanded.
         state.data.workflow_runs = vec![
             make_wf_run_full("p1", WorkflowRunStatus::Completed, None),
@@ -2330,11 +2384,36 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn visible_workflow_run_rows_filters_completed_by_default() {
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        state.data.workflow_runs = vec![
+            make_wf_run_full("r1", WorkflowRunStatus::Completed, None),
+            make_wf_run_full("r2", WorkflowRunStatus::Cancelled, None),
+            make_wf_run_full("r3", WorkflowRunStatus::Failed, None),
+            make_wf_run_full("r4", WorkflowRunStatus::Running, None),
+        ];
+        // Default: completed + cancelled hidden, failed + running shown.
+        let rows = state.visible_workflow_run_rows();
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "r3"));
+        assert!(matches!(&rows[1], WorkflowRunRow::Parent { run_id, .. } if run_id == "r4"));
+        assert_eq!(state.hidden_workflow_run_count(), 2);
+
+        // Toggle on: all four shown.
+        state.show_completed_workflow_runs = true;
+        let rows = state.visible_workflow_run_rows();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(state.hidden_workflow_run_count(), 0);
+    }
+
     fn visible_workflow_run_rows_no_steps_without_data() {
         // Even if a run is in expanded_step_run_ids, if there are no steps in
         // workflow_run_steps for that run, no Step rows should appear.
         let mut state = AppState::new();
         set_worktree_mode(&mut state);
+        state.show_completed_workflow_runs = true;
         state.data.workflow_runs = vec![make_wf_run_full("p1", WorkflowRunStatus::Completed, None)];
         state.expanded_step_run_ids.insert("p1".into());
         let rows = state.visible_workflow_run_rows();

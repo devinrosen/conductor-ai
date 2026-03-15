@@ -501,16 +501,20 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
         })
         .collect();
 
-    let runs_title_owned;
+    let hidden = state.hidden_workflow_run_count();
+    let hidden_suffix = if hidden > 0 {
+        format!(" +{hidden} hidden (H to show)")
+    } else if !state.show_completed_workflow_runs {
+        " (H: show history)".to_string()
+    } else {
+        String::new()
+    };
     let runs_title = if global_mode {
-        " All Workflow Runs (Space=expand/collapse) "
+        format!(" All Workflow Runs{hidden_suffix} ")
     } else {
         match &context {
-            Some(label) => {
-                runs_title_owned = format!(" Workflow Runs ({label}) (Space=expand/collapse) ");
-                &runs_title_owned
-            }
-            None => " Workflow Runs (Space=expand/collapse) ",
+            Some(label) => format!(" Workflow Runs ({label}){hidden_suffix} "),
+            None => format!(" Workflow Runs{hidden_suffix} "),
         }
     };
 

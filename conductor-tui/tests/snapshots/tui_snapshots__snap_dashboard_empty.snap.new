@@ -1,5 +1,6 @@
 ---
 source: conductor-tui/tests/tui_snapshots.rs
+assertion_line: 195
 expression: render_to_string(&state)
 ---
 "┌ Repos & Worktrees (0 active) ──────────────────────────────────────────────┐┌ All Workflow Definitions ──────────────┐"
@@ -16,18 +17,18 @@ expression: render_to_string(&state)
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
-"│                             ┌ Delete worktree ─────────────────────────────────────────┐                             │"
-"│                             │                                                          │─────────────────────────────┘"
-"│                             │Are you sure you want to delete feat-123-add-login?       │ow Runs (H: show history) ───┐"
-"│                             │                                                          │                             │"
-"│                             │  y/Enter = confirm    n = cancel                         │                             │"
-"│                             │                                                          │                             │"
-"│                             │                                                          │                             │"
-"│                             │                                                          │                             │"
-"│                             │                                                          │                             │"
-"│                             │                                                          │                             │"
-"│                             │                                                          │                             │"
-"│                             └──────────────────────────────────────────────────────────┘                             │"
+"│                                                                            ││                                        │"
+"│                                                                            │└────────────────────────────────────────┘"
+"│                                                                            │┌ All Workflow Runs (H: show history) ───┐"
+"│                                                                            ││                                        │"
+"│                                                                            ││                                        │"
+"│                                                                            ││                                        │"
+"│                                                                            ││                                        │"
+"│                                                                            ││                                        │"
+"│                                                                            ││                                        │"
+"│                                                                            ││                                        │"
+"│                                                                            ││                                        │"
+"│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
