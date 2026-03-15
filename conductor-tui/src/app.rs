@@ -6162,7 +6162,12 @@ impl App {
             .find(|r| r.id == wt.repo_id)
             .map(|r| r.local_path.clone())
             .unwrap_or_default();
-        Some((wt.path.clone(), repo_path))
+        let effective_path = if std::path::Path::new(&wt.path).exists() {
+            wt.path.clone()
+        } else {
+            repo_path.clone()
+        };
+        Some((effective_path, repo_path))
     }
 
     /// Return the currently selected workflow definition, if any.
