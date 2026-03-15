@@ -274,7 +274,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
     if state.column_focus == ColumnFocus::Workflow {
         match key.code {
             KeyCode::Char('H') => return Action::ToggleCompletedRuns,
-            KeyCode::Char('r') | KeyCode::Char('w') => return Action::RunWorkflow,
+            KeyCode::Char('r') => return Action::RunWorkflow,
             KeyCode::Char('v')
                 if state.workflows_focus == crate::state::WorkflowsFocus::Defs
                     && state.workflow_def_focus == crate::state::WorkflowDefFocus::List =>
@@ -898,12 +898,12 @@ mod tests {
     }
 
     #[test]
-    fn w_maps_to_run_workflow_in_workflow_column_focus() {
+    fn w_maps_to_pick_workflow_in_workflow_column_focus() {
         let mut state = AppState::new();
         state.column_focus = crate::state::ColumnFocus::Workflow;
         assert!(matches!(
             map_key(key(KeyCode::Char('w')), &state),
-            Action::RunWorkflow
+            Action::PickWorkflow
         ));
     }
 
