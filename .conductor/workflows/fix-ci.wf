@@ -1,0 +1,14 @@
+workflow fix-ci {
+  meta {
+    description = "Read failing CI logs, fix the code, push, and verify CI goes green"
+    trigger     = "manual"
+    targets     = ["worktree"]
+  }
+
+  do {
+    max_iterations = 3
+    on_max_iter    = fail
+
+    call fix-ci-failures { output = "fix-ci-failures" }
+  } while fix-ci-failures.has_failures
+}

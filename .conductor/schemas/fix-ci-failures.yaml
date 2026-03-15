@@ -1,0 +1,10 @@
+fields:
+  context:
+    type: string
+    desc: "Summary of CI check result (e.g. 'All checks passed' or 'Fixed formatting errors, CI re-running')"
+  markers?:
+    type: array
+    desc: "Active markers emitted by the agent (has_failures when CI checks are still failing)"
+
+markers:
+  has_failures: "markers.length > 0"
