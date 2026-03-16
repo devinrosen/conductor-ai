@@ -309,7 +309,7 @@ mod tests {
         );
     }
 
-    fn assert_file_prompt(args: &[Cow<'static, str>], expected_content: &str) {
+    fn assert_file_prompt(args: &[Cow<'static, str>], expected_content: &str) -> String {
         let file_idx = args
             .iter()
             .position(|a| a == "--prompt-file")
@@ -327,6 +327,7 @@ mod tests {
             !args.iter().any(|a| a == "--prompt"),
             "--prompt should not appear"
         );
+        file_path.to_string()
     }
 
     #[test]
@@ -354,12 +355,10 @@ mod tests {
         let prompt = "x".repeat(513);
         let args = super::build_agent_args(run_id, worktree, &prompt, None, None, None).unwrap();
 
-        assert_file_prompt(&args, &prompt);
+        let file_path = assert_file_prompt(&args, &prompt);
 
         // cleanup
-        let file_idx = args.iter().position(|a| a == "--prompt-file").unwrap();
-        let file_path: &str = args[file_idx + 1].as_ref();
-        let _ = std::fs::remove_file(file_path);
+        let _ = std::fs::remove_file(&file_path);
         let _ = std::fs::remove_dir(&tmp);
     }
 
