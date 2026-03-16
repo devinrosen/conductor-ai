@@ -37,6 +37,7 @@ pub mod github_app;
 pub mod issue_source;
 pub mod jira_acli;
 pub mod models;
+pub mod notify;
 pub mod orchestrator;
 pub mod prompt_config;
 pub mod repo;

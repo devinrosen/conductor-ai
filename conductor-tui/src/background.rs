@@ -17,13 +17,65 @@ use conductor_core::worktree::WorktreeManager;
 use crate::action::{Action, DataRefreshedPayload, WorkflowDataPayload};
 use crate::event::BackgroundSender;
 
+/// Detect workflow runs that have freshly transitioned to a terminal status.
+///
+/// Returns a `Vec` of `(workflow_name, target_label, succeeded)` tuples for
+/// each run that moved from a non-terminal (or unknown) state into
+/// `Completed`/`Failed` since the last call.
+///
+/// `seen` is updated in-place: stale entries (runs no longer present in
+/// `current_ids`) are pruned and new statuses are recorded.
+///
+/// When `initialized` is `false` the function seeds `seen` without returning
+/// any transitions — this prevents spurious notifications on the very first
+/// poll tick when all pre-existing terminal runs would otherwise look new.
+pub(crate) fn detect_new_terminal_transitions<'a>(
+    runs: impl Iterator<Item = &'a conductor_core::workflow::WorkflowRun>,
+    seen: &mut std::collections::HashMap<String, conductor_core::workflow::WorkflowRunStatus>,
+    initialized: &mut bool,
+) -> Vec<(String, Option<String>, bool)> {
+    use conductor_core::workflow::WorkflowRunStatus;
+
+    let runs: Vec<_> = runs.collect();
+    let mut transitions = Vec::new();
+
+    for run in &runs {
+        let now_terminal = matches!(
+            run.status,
+            WorkflowRunStatus::Completed | WorkflowRunStatus::Failed
+        );
+        if *initialized {
+            let prev_terminal = seen
+                .get(&run.id)
+                .map(|s| matches!(s, WorkflowRunStatus::Completed | WorkflowRunStatus::Failed))
+                .unwrap_or(false);
+            if now_terminal && !prev_terminal {
+                transitions.push((
+                    run.workflow_name.clone(),
+                    run.target_label.clone(),
+                    matches!(run.status, WorkflowRunStatus::Completed),
+                ));
+            }
+        }
+        seen.insert(run.id.clone(), run.status.clone());
+    }
+
+    *initialized = true;
+
+    // Prune stale entries to prevent unbounded growth
+    let current_ids: std::collections::HashSet<&str> =
+        runs.iter().map(|r| r.id.as_str()).collect();
+    seen.retain(|id, _| current_ids.contains(id.as_str()));
+
+    transitions
+}
+
 /// Spawn the DB poller thread. Polls every `interval` and sends DataRefreshed events.
 pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
-    use conductor_core::workflow::WorkflowRunStatus;
     use std::collections::HashMap;
 
     thread::spawn(move || {
-        let mut seen: HashMap<String, WorkflowRunStatus> = HashMap::new();
+        let mut seen: HashMap<String, conductor_core::workflow::WorkflowRunStatus> = HashMap::new();
         // On the first poll `seen` is empty, so every pre-existing terminal run would
         // look like a fresh transition. Skip notifications until the map is seeded.
         let mut initialized = false;
@@ -35,41 +87,16 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                         .latest_workflow_runs_by_worktree
                         .values()
                         .chain(payload.active_non_worktree_workflow_runs.iter());
-                    for run in all_runs {
-                        let now_terminal = matches!(
-                            run.status,
-                            WorkflowRunStatus::Completed | WorkflowRunStatus::Failed
+                    let transitions =
+                        detect_new_terminal_transitions(all_runs, &mut seen, &mut initialized);
+                    for (workflow_name, target_label, succeeded) in transitions {
+                        crate::notify::fire_workflow_notification(
+                            &config.notifications,
+                            &workflow_name,
+                            target_label.as_deref(),
+                            succeeded,
                         );
-                        if initialized {
-                            let prev_terminal = seen
-                                .get(&run.id)
-                                .map(|s| {
-                                    matches!(
-                                        s,
-                                        WorkflowRunStatus::Completed | WorkflowRunStatus::Failed
-                                    )
-                                })
-                                .unwrap_or(false);
-                            if now_terminal && !prev_terminal {
-                                crate::notify::fire_workflow_notification(
-                                    &config.notifications,
-                                    &run.workflow_name,
-                                    run.target_label.as_deref(),
-                                    matches!(run.status, WorkflowRunStatus::Completed),
-                                );
-                            }
-                        }
-                        seen.insert(run.id.clone(), run.status.clone());
                     }
-                    initialized = true;
-                    // Prune stale entries to prevent unbounded growth
-                    let current_ids: std::collections::HashSet<&str> = payload
-                        .latest_workflow_runs_by_worktree
-                        .values()
-                        .chain(payload.active_non_worktree_workflow_runs.iter())
-                        .map(|r| r.id.as_str())
-                        .collect();
-                    seen.retain(|id, _| current_ids.contains(id.as_str()));
                 }
                 if !tx.send(action) {
                     break;
@@ -609,4 +636,147 @@ pub fn spawn_blocking(tx: BackgroundSender, f: impl FnOnce() -> Action + Send + 
         let action = f();
         let _ = tx.send(action);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detect_new_terminal_transitions;
+    use conductor_core::workflow::{WorkflowRun, WorkflowRunStatus};
+    use std::collections::HashMap;
+
+    fn make_run(id: &str, name: &str, status: WorkflowRunStatus) -> WorkflowRun {
+        WorkflowRun {
+            id: id.to_string(),
+            workflow_name: name.to_string(),
+            status,
+            worktree_id: None,
+            parent_run_id: String::new(),
+            dry_run: false,
+            trigger: "manual".to_string(),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            ended_at: None,
+            result_summary: None,
+            definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
+            ticket_id: None,
+            repo_id: None,
+            parent_workflow_run_id: None,
+            target_label: None,
+            default_bot_name: None,
+        }
+    }
+
+    /// On the first tick (`initialized = false`) no transitions are reported even
+    /// if runs are already terminal — this prevents startup false-positives.
+    #[test]
+    fn test_no_notifications_before_initialized() {
+        let runs = [
+            make_run("r1", "deploy", WorkflowRunStatus::Completed),
+            make_run("r2", "test", WorkflowRunStatus::Failed),
+        ];
+        let mut seen = HashMap::new();
+        let mut initialized = false;
+
+        let transitions =
+            detect_new_terminal_transitions(runs.iter(), &mut seen, &mut initialized);
+
+        assert!(transitions.is_empty(), "expected no transitions on first tick");
+        assert!(initialized, "initialized should be set to true after first tick");
+        assert_eq!(seen.len(), 2);
+    }
+
+    /// After initialization, a run that moves from Running → Completed must
+    /// produce exactly one transition entry.
+    #[test]
+    fn test_running_to_completed_fires_notification() {
+        let mut seen = HashMap::new();
+        let mut initialized = false;
+
+        // Tick 1: seed with a running run
+        let tick1 = [make_run("r1", "deploy", WorkflowRunStatus::Running)];
+        let t1 = detect_new_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
+        assert!(t1.is_empty());
+
+        // Tick 2: same run is now Completed
+        let tick2 = [make_run("r1", "deploy", WorkflowRunStatus::Completed)];
+        let t2 = detect_new_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
+        assert_eq!(t2.len(), 1);
+        assert_eq!(t2[0].0, "deploy");
+        assert!(t2[0].2, "should be succeeded=true for Completed");
+    }
+
+    /// A run that transitions from Running → Failed must report succeeded=false.
+    #[test]
+    fn test_running_to_failed_fires_notification() {
+        let mut seen = HashMap::new();
+        let mut initialized = false;
+
+        let tick1 = [make_run("r1", "build", WorkflowRunStatus::Running)];
+        detect_new_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
+
+        let tick2 = [make_run("r1", "build", WorkflowRunStatus::Failed)];
+        let t2 = detect_new_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
+        assert_eq!(t2.len(), 1);
+        assert!(!t2[0].2, "should be succeeded=false for Failed");
+    }
+
+    /// A run that was already terminal on tick 1 must NOT fire again on tick 2
+    /// (already-terminal → terminal is not a new transition).
+    #[test]
+    fn test_already_terminal_does_not_refire() {
+        let mut seen = HashMap::new();
+        let mut initialized = false;
+
+        // Seed the map: run is Completed on first tick (suppressed)
+        let tick1 = [make_run("r1", "deploy", WorkflowRunStatus::Completed)];
+        detect_new_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
+
+        // Second tick: still Completed — should not produce a transition
+        let tick2 = [make_run("r1", "deploy", WorkflowRunStatus::Completed)];
+        let t2 = detect_new_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
+        assert!(t2.is_empty(), "completed→completed should not re-fire");
+    }
+
+    /// Runs that disappear from the poll results must be pruned from `seen` to
+    /// prevent unbounded memory growth.
+    #[test]
+    fn test_stale_entries_are_pruned() {
+        let mut seen = HashMap::new();
+        let mut initialized = false;
+
+        let tick1 = [
+            make_run("r1", "deploy", WorkflowRunStatus::Running),
+            make_run("r2", "test", WorkflowRunStatus::Running),
+        ];
+        detect_new_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
+        assert_eq!(seen.len(), 2);
+
+        // r2 disappears from the next poll
+        let tick2 = [make_run("r1", "deploy", WorkflowRunStatus::Completed)];
+        detect_new_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
+        assert_eq!(seen.len(), 1);
+        assert!(seen.contains_key("r1"));
+        assert!(!seen.contains_key("r2"), "r2 should have been pruned");
+    }
+
+    /// A brand-new run that appears already-terminal on the second tick (e.g.
+    /// very fast completion) must trigger a notification.
+    #[test]
+    fn test_new_run_appearing_terminal_fires_notification() {
+        let mut seen = HashMap::new();
+        let mut initialized = false;
+
+        // Tick 1: some unrelated run to seed initialized=true
+        let tick1 = [make_run("r1", "deploy", WorkflowRunStatus::Running)];
+        detect_new_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
+
+        // Tick 2: a new run "r2" appears already in Completed state
+        let tick2 = [
+            make_run("r1", "deploy", WorkflowRunStatus::Running),
+            make_run("r2", "fast-job", WorkflowRunStatus::Completed),
+        ];
+        let t2 = detect_new_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
+        assert_eq!(t2.len(), 1);
+        assert_eq!(t2[0].0, "fast-job");
+    }
 }

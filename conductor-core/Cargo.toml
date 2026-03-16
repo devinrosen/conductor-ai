@@ -19,6 +19,7 @@ jsonwebtoken = "9"
 ureq = { version = "2", features = ["json"] }
 serde_yml = "0.0"
 notify = "6"
+notify-rust = "4"
 tracing = "0.1"
 tempfile = "3"
 
