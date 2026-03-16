@@ -309,12 +309,13 @@ mod tests {
         );
     }
 
-    fn assert_file_prompt(args: &[Cow<'static, str>], expected_content: &str) -> String {
+    fn assert_file_prompt(args: &[Cow<'static, str>], expected_content: &str, expected_path: &str) {
         let file_idx = args
             .iter()
             .position(|a| a == "--prompt-file")
             .expect("--prompt-file flag missing");
         let file_path: &str = args[file_idx + 1].as_ref();
+        assert_eq!(file_path, expected_path, "prompt file path mismatch");
         assert!(
             std::path::Path::new(file_path).exists(),
             "prompt file should have been written"
@@ -327,7 +328,6 @@ mod tests {
             !args.iter().any(|a| a == "--prompt"),
             "--prompt should not appear"
         );
-        file_path.to_string()
     }
 
     #[test]
@@ -355,10 +355,11 @@ mod tests {
         let prompt = "x".repeat(513);
         let args = super::build_agent_args(run_id, worktree, &prompt, None, None, None).unwrap();
 
-        let file_path = assert_file_prompt(&args, &prompt);
+        let expected_path = format!("{worktree}/.conductor-prompt-{run_id}.txt");
+        assert_file_prompt(&args, &prompt, &expected_path);
 
         // cleanup
-        let _ = std::fs::remove_file(&file_path);
+        let _ = std::fs::remove_file(&expected_path);
         let _ = std::fs::remove_dir(&tmp);
     }
 
