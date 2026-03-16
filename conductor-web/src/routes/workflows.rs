@@ -650,4 +650,88 @@ mod tests {
         let (status, _) = get_response("/api/workflows/runs?status=%20,%20", empty_state()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
+
+    #[tokio::test]
+    async fn active_steps_attached_filters_to_running_and_waiting() {
+        let state = empty_state();
+        {
+            let db = state.db.lock().await;
+
+            // Seed the minimum fixtures required by the FK chain:
+            // workflow_runs.parent_run_id → agent_runs.id → worktrees.id → repos.id
+            db.execute_batch(
+                "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+                 VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z');
+                 INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+                 VALUES ('w1', 'r1', 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z');
+                 INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at) \
+                 VALUES ('ar1', 'w1', 'test', 'running', '2024-01-01T00:00:00Z');",
+            )
+            .unwrap();
+
+            let mgr = WorkflowManager::new(&db);
+            // worktree_id = None so the run is visible without an active worktree join
+            let run = mgr
+                .create_workflow_run("test-wf", None, "ar1", false, "manual", None)
+                .unwrap();
+            mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+                .unwrap();
+
+            // Insert 4 steps with mixed statuses
+            let id_a = mgr
+                .insert_step(&run.id, "step-running", "actor", false, 0, 0)
+                .unwrap();
+            mgr.update_step_status(&id_a, WorkflowStepStatus::Running, None, None, None, None, None)
+                .unwrap();
+            let id_b = mgr
+                .insert_step(&run.id, "step-waiting", "actor", false, 1, 0)
+                .unwrap();
+            mgr.update_step_status(&id_b, WorkflowStepStatus::Waiting, None, None, None, None, None)
+                .unwrap();
+            let id_c = mgr
+                .insert_step(&run.id, "step-completed", "actor", false, 2, 0)
+                .unwrap();
+            mgr.update_step_status(
+                &id_c,
+                WorkflowStepStatus::Completed,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let id_d = mgr
+                .insert_step(&run.id, "step-failed", "actor", false, 3, 0)
+                .unwrap();
+            mgr.update_step_status(&id_d, WorkflowStepStatus::Failed, None, None, None, None, None)
+                .unwrap();
+        }
+
+        let (status, body) = get_response("/api/workflows/runs", state).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let runs = body.as_array().unwrap();
+        assert_eq!(runs.len(), 1);
+
+        let active_steps = runs[0]["active_steps"].as_array().unwrap();
+        assert_eq!(
+            active_steps.len(),
+            2,
+            "only running and waiting steps should be attached"
+        );
+
+        let step_names: Vec<&str> = active_steps
+            .iter()
+            .map(|s| s["step_name"].as_str().unwrap())
+            .collect();
+        assert!(
+            step_names.contains(&"step-running"),
+            "running step should be included"
+        );
+        assert!(
+            step_names.contains(&"step-waiting"),
+            "waiting step should be included"
+        );
+    }
 }
