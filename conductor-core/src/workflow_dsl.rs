@@ -4950,4 +4950,67 @@ workflow w {
             "error should name the nested step"
         );
     }
+
+    #[test]
+    fn test_validate_script_steps_in_always_block() {
+        use std::collections::HashMap;
+
+        let def = WorkflowDef {
+            name: "test-wf".to_string(),
+            description: String::new(),
+            trigger: WorkflowTrigger::Manual,
+            targets: vec![],
+            inputs: vec![],
+            body: vec![],
+            always: vec![WorkflowNode::Script(ScriptNode {
+                name: "always-step".to_string(),
+                run: "always-step.sh".to_string(),
+                env: HashMap::new(),
+                timeout: None,
+                retries: 0,
+                on_fail: None,
+                bot_name: None,
+            })],
+            source_path: "test.wf".to_string(),
+        };
+        let errors = validate_script_steps(&def, "/tmp/wt", "/tmp/repo");
+        assert_eq!(errors.len(), 1, "expected one error for always-block script, got: {:?}", errors);
+        let msg = &errors[0].message;
+        assert!(
+            msg.contains("always-step.sh"),
+            "error should mention the script path, got: {msg}"
+        );
+        assert!(
+            msg.contains("not found"),
+            "error should say 'not found', got: {msg}"
+        );
+        assert!(
+            msg.contains("/tmp/wt"),
+            "error should list working_dir search path for relative paths, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_validate_script_steps_absolute_path_not_found() {
+        let def = make_script_def("/nonexistent/absolute/path.sh");
+        let errors = validate_script_steps(&def, "/tmp/wt", "/tmp/repo");
+        assert_eq!(errors.len(), 1, "expected one error for absolute path, got: {:?}", errors);
+        let msg = &errors[0].message;
+        assert!(
+            msg.contains("/nonexistent/absolute/path.sh"),
+            "error should mention the absolute path, got: {msg}"
+        );
+        assert!(
+            msg.contains("not found"),
+            "error should say 'not found', got: {msg}"
+        );
+        assert!(
+            !msg.contains("/tmp/wt"),
+            "error should not list working_dir for absolute paths, got: {msg}"
+        );
+        assert!(
+            !msg.contains("/tmp/repo"),
+            "error should not list repo_path for absolute paths, got: {msg}"
+        );
+    }
 }
