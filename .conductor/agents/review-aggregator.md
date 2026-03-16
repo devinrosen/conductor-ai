@@ -17,9 +17,10 @@ Steps:
 ## Phase 1 — Parse all reviewer outputs
 
 1. Parse all reviewer outputs from prior_contexts:
-   - Classify the overall result:
-     - **Clean**: All reviewers found no blocking issues (no critical or warning findings).
-     - **Blocking**: One or more reviewers found critical or warning issues that must be addressed.
+   - Each entry in `prior_contexts` has `step`, `iteration`, `context` (string), and `markers` (array of strings).
+   - Classify the overall result using **markers first** (authoritative), then context strings as fallback:
+     - **Blocking**: Any entry whose `markers` array contains `"has_review_issues"` → that reviewer requested changes.
+     - **Clean**: No entry has `"has_review_issues"` in markers AND no context string clearly signals blocking issues.
    - For each reviewer entry, attempt to parse the context string as JSON and extract the `off_diff_findings` array (if present).
    - Collect all off-diff findings across all reviewers into a single deduplicated list (deduplicate by `(file, line)`, keeping highest severity: `critical > warning > suggestion`).
 

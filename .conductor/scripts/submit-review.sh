@@ -4,10 +4,14 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# 1. Guard: exit gracefully if no PR_NUMBER
+# 1. Resolve PR_NUMBER (fall back to gh pr view if not injected)
 # ---------------------------------------------------------------------------
-if [ -z "${PR_NUMBER:-}" ]; then
-  echo "PR_NUMBER is unset — skipping review submission (not running on a PR worktree)."
+if [ -z "${PR_NUMBER:-}" ] || [[ "${PR_NUMBER}" == *"{{"* ]]; then
+  PR_NUMBER=$(gh pr view --json number -q .number 2>/dev/null || true)
+fi
+
+if [ -z "${PR_NUMBER}" ]; then
+  echo "PR_NUMBER is unset and no open PR found — skipping review submission."
   exit 0
 fi
 

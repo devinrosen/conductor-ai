@@ -1203,6 +1203,7 @@ pub(super) fn execute_parallel(
                                 step: child.agent_name.clone(),
                                 iteration,
                                 context: context.clone(),
+                                markers: markers.clone(),
                             });
                             WorkflowStepStatus::Completed
                         } else {

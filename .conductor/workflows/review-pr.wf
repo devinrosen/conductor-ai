@@ -23,7 +23,7 @@ workflow review-pr {
 
   call review-aggregator { output = "review-aggregator" retries = 1 as = "reviewer" }
   script submit-review {
-    run = "scripts/submit-review.sh"
+    run = ".conductor/scripts/submit-review.sh"
     env = { PRIOR_OUTPUT = "{{prior_output}}" PR_NUMBER = "{{pr_number}}" DRY_RUN = "{{dry_run}}" }
   }
 }
