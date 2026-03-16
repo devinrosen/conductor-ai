@@ -504,12 +504,9 @@ impl<'a> WorkflowManager<'a> {
         let sql = format!(
             "SELECT {STEP_COLUMNS} FROM workflow_run_steps WHERE workflow_run_id IN ({placeholders}) ORDER BY workflow_run_id, position"
         );
-        let run_id_strings: Vec<String> = run_ids.iter().map(|s| s.to_string()).collect();
-        let params: Vec<&dyn rusqlite::ToSql> = run_id_strings
-            .iter()
-            .map(|s| s as &dyn rusqlite::ToSql)
-            .collect();
-        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> =
+            run_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
         let steps = stmt
             .query_map(params.as_slice(), row_to_workflow_step)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -538,12 +535,9 @@ impl<'a> WorkflowManager<'a> {
                AND status IN ('running', 'waiting') \
              ORDER BY workflow_run_id, position"
         );
-        let run_id_strings: Vec<String> = run_ids.iter().map(|s| s.to_string()).collect();
-        let params: Vec<&dyn rusqlite::ToSql> = run_id_strings
-            .iter()
-            .map(|s| s as &dyn rusqlite::ToSql)
-            .collect();
-        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> =
+            run_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
         let steps = stmt
             .query_map(params.as_slice(), row_to_workflow_step)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
