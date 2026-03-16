@@ -1873,11 +1873,5 @@ mod tests {
             .join(", ");
 
         assert_eq!(*WORKTREE_COLUMNS_W, expected);
-
-        // Also assert the column count matches so adding a column to
-        // WORKTREE_COLUMNS without updating WORKTREE_COLUMNS_W is caught.
-        let base_count = WORKTREE_COLUMNS.split(',').count();
-        let prefixed_count = WORKTREE_COLUMNS_W.split(',').count();
-        assert_eq!(base_count, prefixed_count);
     }
 }
