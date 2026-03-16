@@ -63,8 +63,7 @@ pub(crate) fn detect_new_terminal_transitions<'a>(
     *initialized = true;
 
     // Prune stale entries to prevent unbounded growth
-    let current_ids: std::collections::HashSet<&str> =
-        runs.iter().map(|r| r.id.as_str()).collect();
+    let current_ids: std::collections::HashSet<&str> = runs.iter().map(|r| r.id.as_str()).collect();
     seen.retain(|id, _| current_ids.contains(id.as_str()));
 
     transitions
@@ -677,11 +676,16 @@ mod tests {
         let mut seen = HashMap::new();
         let mut initialized = false;
 
-        let transitions =
-            detect_new_terminal_transitions(runs.iter(), &mut seen, &mut initialized);
+        let transitions = detect_new_terminal_transitions(runs.iter(), &mut seen, &mut initialized);
 
-        assert!(transitions.is_empty(), "expected no transitions on first tick");
-        assert!(initialized, "initialized should be set to true after first tick");
+        assert!(
+            transitions.is_empty(),
+            "expected no transitions on first tick"
+        );
+        assert!(
+            initialized,
+            "initialized should be set to true after first tick"
+        );
         assert_eq!(seen.len(), 2);
     }
 
