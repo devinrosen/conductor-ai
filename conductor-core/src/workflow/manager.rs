@@ -1887,4 +1887,282 @@ mod tests {
         let result = mgr.get_steps_for_runs(&[]).unwrap();
         assert!(result.is_empty(), "empty run_ids must yield an empty map");
     }
+
+    // ── list_workflow_runs_filtered ──────────────────────────────────────────
+
+    #[test]
+    fn test_list_workflow_runs_filtered_with_status() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let pending_run = create_worktree_run(&conn, "w1");
+        let running_run = create_worktree_run(&conn, "w1");
+        mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        let runs = mgr
+            .list_workflow_runs_filtered("w1", Some(WorkflowRunStatus::Running))
+            .unwrap();
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&running_run.id.as_str()),
+            "running run must appear"
+        );
+        assert!(
+            !ids.contains(&pending_run.id.as_str()),
+            "pending run must not appear"
+        );
+    }
+
+    #[test]
+    fn test_list_workflow_runs_filtered_none_returns_all() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let pending_run = create_worktree_run(&conn, "w1");
+        let running_run = create_worktree_run(&conn, "w1");
+        mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        let runs = mgr.list_workflow_runs_filtered("w1", None).unwrap();
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&pending_run.id.as_str()),
+            "pending run must appear"
+        );
+        assert!(
+            ids.contains(&running_run.id.as_str()),
+            "running run must appear"
+        );
+    }
+
+    // ── list_workflow_runs_by_repo_id_filtered ───────────────────────────────
+
+    #[test]
+    fn test_list_workflow_runs_by_repo_id_filtered_with_status() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        // Use repo-targeted runs so workflow_runs.repo_id is set.
+        let pending_run = create_repo_run(&conn, "r1");
+        let running_run = create_repo_run(&conn, "r1");
+        mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        let runs = mgr
+            .list_workflow_runs_by_repo_id_filtered("r1", 50, 0, Some(WorkflowRunStatus::Running))
+            .unwrap();
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&running_run.id.as_str()),
+            "running run must appear"
+        );
+        assert!(
+            !ids.contains(&pending_run.id.as_str()),
+            "pending run must not appear"
+        );
+    }
+
+    #[test]
+    fn test_list_workflow_runs_by_repo_id_filtered_none_returns_all() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let pending_run = create_repo_run(&conn, "r1");
+        let running_run = create_repo_run(&conn, "r1");
+        mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        let runs = mgr
+            .list_workflow_runs_by_repo_id_filtered("r1", 50, 0, None)
+            .unwrap();
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&pending_run.id.as_str()),
+            "pending run must appear"
+        );
+        assert!(
+            ids.contains(&running_run.id.as_str()),
+            "running run must appear"
+        );
+    }
+
+    // ── list_workflow_runs_filtered_paginated ────────────────────────────────
+
+    #[test]
+    fn test_list_workflow_runs_filtered_paginated_with_status() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        // Two pending runs plus one running run for the same worktree.
+        let _pending1 = create_worktree_run(&conn, "w1");
+        let _pending2 = create_worktree_run(&conn, "w1");
+        let running = create_worktree_run(&conn, "w1");
+        mgr.update_workflow_status(&running.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        // First page: limit=1, offset=0 — exactly one pending run.
+        let page1 = mgr
+            .list_workflow_runs_filtered_paginated("w1", Some(WorkflowRunStatus::Pending), 1, 0)
+            .unwrap();
+        assert_eq!(
+            page1.len(),
+            1,
+            "first page must have exactly one pending run"
+        );
+
+        // Second page: limit=1, offset=1 — the other pending run.
+        let page2 = mgr
+            .list_workflow_runs_filtered_paginated("w1", Some(WorkflowRunStatus::Pending), 1, 1)
+            .unwrap();
+        assert_eq!(
+            page2.len(),
+            1,
+            "second page must have exactly one pending run"
+        );
+
+        assert_ne!(page1[0].id, page2[0].id, "pages must return different runs");
+        assert!(
+            page1[0].id != running.id && page2[0].id != running.id,
+            "running run must not appear in pending-filtered results"
+        );
+    }
+
+    #[test]
+    fn test_list_workflow_runs_filtered_paginated_none_delegates() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        for _ in 0..3 {
+            create_worktree_run(&conn, "w1");
+        }
+
+        // None — no status filter, pagination alone controls results.
+        let page1 = mgr
+            .list_workflow_runs_filtered_paginated("w1", None, 2, 0)
+            .unwrap();
+        assert_eq!(page1.len(), 2, "limit=2 must return exactly 2 runs");
+
+        let page2 = mgr
+            .list_workflow_runs_filtered_paginated("w1", None, 2, 2)
+            .unwrap();
+        assert_eq!(
+            page2.len(),
+            1,
+            "offset=2 with limit=2 must return the remaining run"
+        );
+    }
+
+    // ── list_all_workflow_runs_filtered_paginated ────────────────────────────
+
+    #[test]
+    fn test_list_all_workflow_runs_filtered_paginated_with_status() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let pending_run = create_worktree_run(&conn, "w1");
+        let running_run = create_worktree_run(&conn, "w1");
+        mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        let runs = mgr
+            .list_all_workflow_runs_filtered_paginated(Some(WorkflowRunStatus::Running), 50, 0)
+            .unwrap();
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&running_run.id.as_str()),
+            "running run must appear"
+        );
+        assert!(
+            !ids.contains(&pending_run.id.as_str()),
+            "pending run must not appear"
+        );
+    }
+
+    #[test]
+    fn test_list_all_workflow_runs_filtered_paginated_none() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let run1 = create_worktree_run(&conn, "w1");
+        let run2 = create_worktree_run(&conn, "w2");
+        mgr.update_workflow_status(&run2.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        let runs = mgr
+            .list_all_workflow_runs_filtered_paginated(None, 50, 0)
+            .unwrap();
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+        assert!(ids.contains(&run1.id.as_str()), "run1 must appear");
+        assert!(ids.contains(&run2.id.as_str()), "run2 must appear");
+    }
+
+    #[test]
+    fn test_list_all_workflow_runs_filtered_paginated_excludes_inactive_worktrees() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let active_run = create_worktree_run(&conn, "w1");
+        let inactive_run = create_worktree_run(&conn, "w2");
+        conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w2'", [])
+            .unwrap();
+
+        let runs = mgr
+            .list_all_workflow_runs_filtered_paginated(None, 50, 0)
+            .unwrap();
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&active_run.id.as_str()),
+            "active worktree run must appear"
+        );
+        assert!(
+            !ids.contains(&inactive_run.id.as_str()),
+            "merged worktree run must not appear"
+        );
+    }
+
+    // ── list_all_workflow_runs ───────────────────────────────────────────────
+
+    #[test]
+    fn test_list_all_workflow_runs_respects_limit() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        for _ in 0..5 {
+            create_worktree_run(&conn, "w1");
+        }
+
+        let runs = mgr.list_all_workflow_runs(3).unwrap();
+        assert_eq!(runs.len(), 3, "limit=3 must return exactly 3 runs");
+    }
+
+    #[test]
+    fn test_list_all_workflow_runs_excludes_inactive_worktrees() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let active_run = create_worktree_run(&conn, "w1");
+        let inactive_run = create_worktree_run(&conn, "w2");
+        conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w2'", [])
+            .unwrap();
+
+        let runs = mgr.list_all_workflow_runs(50).unwrap();
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&active_run.id.as_str()),
+            "active worktree run must appear"
+        );
+        assert!(
+            !ids.contains(&inactive_run.id.as_str()),
+            "merged worktree run must not appear"
+        );
+    }
 }
