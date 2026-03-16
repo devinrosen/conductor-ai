@@ -50,5 +50,10 @@ pub(crate) mod workflow_dsl;
 pub mod workflow_ephemeral;
 pub mod worktree;
 
+/// Generate a new ULID-based unique ID string.
+pub fn new_id() -> String {
+    ulid::Ulid::new().to_string()
+}
+
 #[cfg(test)]
 pub mod test_helpers;

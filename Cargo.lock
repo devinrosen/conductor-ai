@@ -556,7 +556,6 @@ dependencies = [
  "toml",
  "tracing",
  "tui-textarea",
- "ulid",
 ]
 
 [[package]]
@@ -579,7 +578,6 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
- "ulid",
 ]
 
 [[package]]
