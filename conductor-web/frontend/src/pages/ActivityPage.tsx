@@ -65,7 +65,7 @@ export function ActivityPage() {
           ),
         ),
         api.latestRunsByWorktree(),
-        api.listAllWorkflowRuns().catch(() => [] as WorkflowRun[]),
+        api.listAllWorkflowRuns(),
       ]);
 
       const ctxMap = new Map<string, WorktreeContext>();
