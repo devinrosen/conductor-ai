@@ -600,6 +600,7 @@ mod tests {
 
     fn setup_test_db() -> Arc<Mutex<rusqlite::Connection>> {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         conductor_core::db::migrations::run(&conn).unwrap();
         Arc::new(Mutex::new(conn))
     }
