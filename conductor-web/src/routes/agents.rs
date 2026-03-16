@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::process::Command;
 
@@ -133,25 +134,25 @@ pub async fn start_agent(
     };
 
     // Build conductor agent run command
-    let mut args = vec![
-        "agent".to_string(),
-        "run".to_string(),
-        "--run-id".to_string(),
-        run.id.clone(),
-        "--worktree-path".to_string(),
-        wt.path.clone(),
-        "--prompt".to_string(),
-        body.prompt,
+    let mut args: Vec<Cow<'static, str>> = vec![
+        Cow::Borrowed("agent"),
+        Cow::Borrowed("run"),
+        Cow::Borrowed("--run-id"),
+        Cow::Owned(run.id.clone()),
+        Cow::Borrowed("--worktree-path"),
+        Cow::Owned(wt.path.clone()),
+        Cow::Borrowed("--prompt"),
+        Cow::Owned(body.prompt),
     ];
 
     if let Some(ref session_id) = body.resume_session_id {
-        args.push("--resume".to_string());
-        args.push(session_id.clone());
+        args.push(Cow::Borrowed("--resume"));
+        args.push(Cow::Owned(session_id.clone()));
     }
 
     if let Some(ref m) = model {
-        args.push("--model".to_string());
-        args.push(m.clone());
+        args.push(Cow::Borrowed("--model"));
+        args.push(Cow::Owned(m.clone()));
     }
 
     match conductor_core::agent_runtime::spawn_tmux_window(&args, &wt.slug) {
@@ -522,26 +523,26 @@ pub async fn orchestrate_agent(
     )?;
 
     // Build conductor agent orchestrate command
-    let mut args = vec![
-        "agent".to_string(),
-        "orchestrate".to_string(),
-        "--run-id".to_string(),
-        run.id.clone(),
-        "--worktree-path".to_string(),
-        wt.path.clone(),
+    let mut args: Vec<Cow<'static, str>> = vec![
+        Cow::Borrowed("agent"),
+        Cow::Borrowed("orchestrate"),
+        Cow::Borrowed("--run-id"),
+        Cow::Owned(run.id.clone()),
+        Cow::Borrowed("--worktree-path"),
+        Cow::Owned(wt.path.clone()),
     ];
 
     if let Some(ref m) = model {
-        args.push("--model".to_string());
-        args.push(m.clone());
+        args.push(Cow::Borrowed("--model"));
+        args.push(Cow::Owned(m.clone()));
     }
 
     if body.fail_fast {
-        args.push("--fail-fast".to_string());
+        args.push(Cow::Borrowed("--fail-fast"));
     }
 
-    args.push("--child-timeout-secs".to_string());
-    args.push(body.child_timeout_secs.to_string());
+    args.push(Cow::Borrowed("--child-timeout-secs"));
+    args.push(Cow::Owned(body.child_timeout_secs.to_string()));
 
     match conductor_core::agent_runtime::spawn_tmux_window(&args, &wt.slug) {
         Ok(()) => {

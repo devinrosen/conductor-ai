@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -4060,18 +4061,18 @@ impl App {
         };
 
         // Build the conductor agent orchestrate command
-        let mut args = vec![
-            "agent".to_string(),
-            "orchestrate".to_string(),
-            "--run-id".to_string(),
-            run.id.clone(),
-            "--worktree-path".to_string(),
-            worktree_path,
+        let mut args: Vec<Cow<'static, str>> = vec![
+            Cow::Borrowed("agent"),
+            Cow::Borrowed("orchestrate"),
+            Cow::Borrowed("--run-id"),
+            Cow::Owned(run.id.clone()),
+            Cow::Borrowed("--worktree-path"),
+            Cow::Owned(worktree_path),
         ];
 
         if let Some(ref m) = model {
-            args.push("--model".to_string());
-            args.push(m.clone());
+            args.push(Cow::Borrowed("--model"));
+            args.push(Cow::Owned(m.clone()));
         }
 
         match conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug) {
@@ -4321,25 +4322,25 @@ impl App {
         };
 
         // Build the conductor agent run command
-        let mut args = vec![
-            "agent".to_string(),
-            "run".to_string(),
-            "--run-id".to_string(),
-            run.id.clone(),
-            "--worktree-path".to_string(),
-            worktree_path,
-            "--prompt".to_string(),
-            prompt,
+        let mut args: Vec<Cow<'static, str>> = vec![
+            Cow::Borrowed("agent"),
+            Cow::Borrowed("run"),
+            Cow::Borrowed("--run-id"),
+            Cow::Owned(run.id.clone()),
+            Cow::Borrowed("--worktree-path"),
+            Cow::Owned(worktree_path),
+            Cow::Borrowed("--prompt"),
+            Cow::Owned(prompt),
         ];
 
         if let Some(ref session_id) = resume_session_id {
-            args.push("--resume".to_string());
-            args.push(session_id.clone());
+            args.push(Cow::Borrowed("--resume"));
+            args.push(Cow::Owned(session_id.clone()));
         }
 
         if let Some(ref m) = model {
-            args.push("--model".to_string());
-            args.push(m.clone());
+            args.push(Cow::Borrowed("--model"));
+            args.push(Cow::Owned(m.clone()));
         }
 
         match conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug) {

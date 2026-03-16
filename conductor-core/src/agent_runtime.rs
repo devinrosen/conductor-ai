@@ -3,6 +3,7 @@
 //! Used by both `orchestrator.rs` (plan-step orchestration) and
 //! `workflow.rs` (workflow engine execution).
 
+use std::borrow::Cow;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -35,21 +36,24 @@ fn resolve_conductor_bin() -> String {
 ///
 /// If no tmux server is running, a detached session named `conductor` is
 /// created automatically so agents can run without a pre-existing tmux session.
-pub fn spawn_tmux_window(args: &[String], window_name: &str) -> std::result::Result<(), String> {
+pub fn spawn_tmux_window(
+    args: &[Cow<'static, str>],
+    window_name: &str,
+) -> std::result::Result<(), String> {
     let conductor_bin = resolve_conductor_bin();
 
-    let mut tmux_args = vec![
-        "new-window".to_string(),
-        "-d".to_string(),
-        "-n".to_string(),
-        window_name.to_string(),
-        "--".to_string(),
-        conductor_bin.clone(),
+    let mut tmux_args: Vec<Cow<'static, str>> = vec![
+        Cow::Borrowed("new-window"),
+        Cow::Borrowed("-d"),
+        Cow::Borrowed("-n"),
+        Cow::Owned(window_name.to_string()),
+        Cow::Borrowed("--"),
+        Cow::Owned(conductor_bin.clone()),
     ];
     tmux_args.extend_from_slice(args);
 
     let result = Command::new("tmux")
-        .args(&tmux_args)
+        .args(tmux_args.iter().map(|a| a.as_ref()))
         .output()
         .map_err(|e| format!("Failed to spawn tmux: {e}"))?;
 
@@ -61,20 +65,20 @@ pub fn spawn_tmux_window(args: &[String], window_name: &str) -> std::result::Res
     // tmux error messages for a missing server vary across versions and platforms
     // ("no server running on …", "error connecting to …", "No such file or directory"),
     // so we attempt the session fallback on any new-window failure.
-    let mut session_args = vec![
-        "new-session".to_string(),
-        "-d".to_string(),
-        "-s".to_string(),
-        "conductor".to_string(),
-        "-n".to_string(),
-        window_name.to_string(),
-        "--".to_string(),
-        conductor_bin,
+    let mut session_args: Vec<Cow<'static, str>> = vec![
+        Cow::Borrowed("new-session"),
+        Cow::Borrowed("-d"),
+        Cow::Borrowed("-s"),
+        Cow::Borrowed("conductor"),
+        Cow::Borrowed("-n"),
+        Cow::Owned(window_name.to_string()),
+        Cow::Borrowed("--"),
+        Cow::Owned(conductor_bin),
     ];
     session_args.extend_from_slice(args);
 
     let retry = Command::new("tmux")
-        .args(&session_args)
+        .args(session_args.iter().map(|a| a.as_ref()))
         .output()
         .map_err(|e| format!("Failed to start tmux session: {e}"))?;
 
@@ -190,7 +194,7 @@ pub(crate) fn build_agent_args(
     prompt: &str,
     model: Option<&str>,
     bot_name: Option<&str>,
-) -> std::result::Result<Vec<String>, String> {
+) -> std::result::Result<Vec<Cow<'static, str>>, String> {
     // tmux has a hard limit on command-line length (~2 KB depending on version).
     // For prompts that exceed a safe threshold, write to a file and pass
     // --prompt-file instead so we never hit that limit.
@@ -205,30 +209,30 @@ pub(crate) fn build_agent_args(
         None
     };
 
-    let mut args = Vec::with_capacity(AGENT_ARGS_CAPACITY);
-    args.push("agent".to_string());
-    args.push("run".to_string());
-    args.push("--run-id".to_string());
-    args.push(run_id.to_string());
-    args.push("--worktree-path".to_string());
-    args.push(worktree_path.to_string());
+    let mut args: Vec<Cow<'static, str>> = Vec::with_capacity(AGENT_ARGS_CAPACITY);
+    args.push(Cow::Borrowed("agent"));
+    args.push(Cow::Borrowed("run"));
+    args.push(Cow::Borrowed("--run-id"));
+    args.push(Cow::Owned(run_id.to_string()));
+    args.push(Cow::Borrowed("--worktree-path"));
+    args.push(Cow::Owned(worktree_path.to_string()));
 
     if let Some(path) = prompt_file_path {
-        args.push("--prompt-file".to_string());
-        args.push(path);
+        args.push(Cow::Borrowed("--prompt-file"));
+        args.push(Cow::Owned(path));
     } else {
-        args.push("--prompt".to_string());
-        args.push(prompt.to_string());
+        args.push(Cow::Borrowed("--prompt"));
+        args.push(Cow::Owned(prompt.to_string()));
     }
 
     if let Some(m) = model {
-        args.push("--model".to_string());
-        args.push(m.to_string());
+        args.push(Cow::Borrowed("--model"));
+        args.push(Cow::Owned(m.to_string()));
     }
 
     if let Some(b) = bot_name {
-        args.push("--bot-name".to_string());
-        args.push(b.to_string());
+        args.push(Cow::Borrowed("--bot-name"));
+        args.push(Cow::Owned(b.to_string()));
     }
 
     Ok(args)
@@ -249,7 +253,9 @@ pub fn spawn_child_tmux(
 
 #[cfg(test)]
 mod tests {
-    fn assert_inline_prompt(args: &[String], prompt: &str) {
+    use std::borrow::Cow;
+
+    fn assert_inline_prompt(args: &[Cow<'static, str>], prompt: &str) {
         let prompt_idx = args
             .iter()
             .position(|a| a == "--prompt")
@@ -261,12 +267,12 @@ mod tests {
         );
     }
 
-    fn assert_file_prompt(args: &[String], expected_content: &str) {
+    fn assert_file_prompt(args: &[Cow<'static, str>], expected_content: &str) {
         let file_idx = args
             .iter()
             .position(|a| a == "--prompt-file")
             .expect("--prompt-file flag missing");
-        let file_path = &args[file_idx + 1];
+        let file_path: &str = args[file_idx + 1].as_ref();
         assert!(
             std::path::Path::new(file_path).exists(),
             "prompt file should have been written"
@@ -310,7 +316,7 @@ mod tests {
 
         // cleanup
         let file_idx = args.iter().position(|a| a == "--prompt-file").unwrap();
-        let file_path = &args[file_idx + 1];
+        let file_path: &str = args[file_idx + 1].as_ref();
         let _ = std::fs::remove_file(file_path);
         let _ = std::fs::remove_dir(&tmp);
     }
