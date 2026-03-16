@@ -2775,4 +2775,12 @@ mod tests {
         );
         let _ = std::fs::remove_file(&path);
     }
+
+    #[test]
+    fn nonexistent_file_returns_error() {
+        let result = read_and_maybe_cleanup_prompt_file(
+            "/tmp/conductor-nonexistent-file-that-does-not-exist.txt",
+        );
+        assert!(result.is_err(), "expected Err for nonexistent file, got Ok");
+    }
 }
