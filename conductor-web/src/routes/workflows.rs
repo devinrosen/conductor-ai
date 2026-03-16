@@ -19,26 +19,24 @@ use crate::events::ConductorEvent;
 use crate::notify::fire_workflow_notification;
 use crate::state::AppState;
 
-/// Open a throwaway DB connection and fire a workflow completion notification.
-/// Logs a warning and returns if the DB cannot be opened.
+/// Use the shared DB connection and fire a workflow completion notification.
 fn notify_workflow(
+    db: std::sync::Arc<tokio::sync::Mutex<rusqlite::Connection>>,
     notifications: &conductor_core::config::NotificationConfig,
     run_id: &str,
     workflow_name: &str,
     label: Option<&str>,
     succeeded: bool,
 ) {
-    match conductor_core::db::open_database(&conductor_core::config::db_path()) {
-        Ok(conn) => fire_workflow_notification(
-            &conn,
-            notifications,
-            run_id,
-            workflow_name,
-            label,
-            succeeded,
-        ),
-        Err(e) => tracing::warn!("notification skipped — DB open failed: {e}"),
-    }
+    let conn = db.blocking_lock();
+    fire_workflow_notification(
+        &conn,
+        notifications,
+        run_id,
+        workflow_name,
+        label,
+        succeeded,
+    );
 }
 
 // ── Response types ────────────────────────────────────────────────────
@@ -226,6 +224,7 @@ pub async fn run_workflow(
         // Fire desktop notification off the async executor.
         // Use the cached config from AppState to avoid a redundant disk read.
         let notifications = state_clone.config.read().await.notifications.clone();
+        let db_for_notify = state_clone.db.clone();
 
         match result {
             Ok(res) => {
@@ -237,6 +236,7 @@ pub async fn run_workflow(
                 let notify_run_id = res.workflow_run_id.clone();
                 tokio::task::spawn_blocking(move || {
                     notify_workflow(
+                        db_for_notify,
                         &notifications,
                         &notify_run_id,
                         &wf_name,
@@ -268,7 +268,14 @@ pub async fn run_workflow(
                         .as_secs()
                         / 60;
                     let error_run_id = format!("wf-err:{wf_name}:{label}:{bucket}");
-                    notify_workflow(&notifications, &error_run_id, &wf_name, Some(&label), false);
+                    notify_workflow(
+                        db_for_notify,
+                        &notifications,
+                        &error_run_id,
+                        &wf_name,
+                        Some(&label),
+                        false,
+                    );
                 });
             }
         }
@@ -450,6 +457,7 @@ pub async fn resume_workflow_endpoint(
                 let status = if succeeded { "completed" } else { "failed" };
 
                 notify_workflow(
+                    state_clone.db.clone(),
                     &notifications,
                     &res.workflow_run_id,
                     &workflow_name,
@@ -468,6 +476,7 @@ pub async fn resume_workflow_endpoint(
             Err(e) => {
                 tracing::error!("Workflow resume failed: {e}");
                 notify_workflow(
+                    state_clone.db.clone(),
                     &notifications,
                     &params.workflow_run_id,
                     &workflow_name,
