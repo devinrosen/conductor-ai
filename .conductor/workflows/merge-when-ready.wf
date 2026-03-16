@@ -6,7 +6,8 @@ workflow merge-when-ready {
   }
 
   inputs {
-    pr_url required
+    pr_url    required
+    ticket_id
   }
 
   gate pr_checks {
