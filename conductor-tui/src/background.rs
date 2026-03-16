@@ -89,7 +89,12 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
         let mut notified_gate_ids: HashSet<String> = HashSet::new();
         loop {
             thread::sleep(interval);
-            if let Some(PollResult { action, config, conn }) = poll_data() {
+            if let Some(PollResult {
+                action,
+                config,
+                conn,
+            }) = poll_data()
+            {
                 if let Action::DataRefreshed(ref payload) = action {
                     // Reuse the connection returned by poll_data() — no need to open a
                     // second connection just for notification claims.
@@ -283,7 +288,11 @@ pub fn poll_data() -> Option<PollResult> {
         pending_feedback_requests,
         waiting_gate_steps,
     }));
-    Some(PollResult { action, config, conn })
+    Some(PollResult {
+        action,
+        config,
+        conn,
+    })
 }
 
 /// Spawn the ticket sync timer. Syncs all repos every `interval`.
