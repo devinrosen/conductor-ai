@@ -1443,7 +1443,7 @@ fn main() -> Result<()> {
                             worktree_id: Some(&wt.id),
                             working_dir: &wt.path,
                             repo_path: &r.local_path,
-                            ticket_id: None,
+                            ticket_id: wt.ticket_id.as_deref(),
                             repo_id: None,
                             model: model.as_deref(),
                             exec_config: &exec_config,

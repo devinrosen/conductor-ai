@@ -3418,7 +3418,7 @@ impl App {
             }
             PostCreateChoice::RunWorkflow { def, .. } => {
                 let mut inputs = std::collections::HashMap::new();
-                inputs.insert("ticket_id".to_string(), ticket_id);
+                inputs.insert("ticket_id".to_string(), ticket_id.clone());
                 let post_create_target_label = self
                     .state
                     .data
@@ -3439,6 +3439,7 @@ impl App {
                     worktree_id,
                     worktree_path,
                     repo_path,
+                    Some(ticket_id),
                     inputs,
                     post_create_target_label,
                 );
@@ -5407,7 +5408,7 @@ impl App {
                     }
                 }
 
-                let wt_target_label = self
+                let (wt_target_label, wt_ticket_id) = self
                     .state
                     .data
                     .worktrees
@@ -5419,7 +5420,7 @@ impl App {
                             .repos
                             .iter()
                             .find(|r| r.id == w.repo_id)
-                            .map(|r| format!("{}/{}", r.slug, w.slug))
+                            .map(|r| (format!("{}/{}", r.slug, w.slug), w.ticket_id.clone()))
                     })
                     .unwrap_or_default();
                 self.spawn_workflow_in_background(
@@ -5427,6 +5428,7 @@ impl App {
                     worktree_id,
                     worktree_path,
                     repo_path,
+                    wt_ticket_id,
                     std::collections::HashMap::new(),
                     wt_target_label,
                 );
@@ -5507,6 +5509,7 @@ impl App {
                         wt_id,
                         working_dir,
                         repo_path,
+                        None,
                         inputs,
                         workflow_run_id,
                     );
@@ -5585,18 +5588,21 @@ impl App {
             wt.id,
             wt.path,
             repo_path,
+            wt.ticket_id,
             std::collections::HashMap::new(),
             wt_target_label,
         );
     }
 
     /// Spawn a workflow execution in a background thread, reporting result via bg_tx.
+    #[allow(clippy::too_many_arguments)]
     fn spawn_workflow_in_background(
         &mut self,
         def: conductor_core::workflow::WorkflowDef,
         worktree_id: String,
         worktree_path: String,
         repo_path: String,
+        ticket_id: Option<String>,
         inputs: std::collections::HashMap<String, String>,
         target_label: String,
     ) {
@@ -5616,7 +5622,7 @@ impl App {
                 worktree_id: Some(worktree_id),
                 working_dir: worktree_path,
                 repo_path,
-                ticket_id: None,
+                ticket_id,
                 repo_id: None,
                 model: None,
                 exec_config: WorkflowExecConfig {
