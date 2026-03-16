@@ -39,3 +39,34 @@ markers: array of string signals consumed by the workflow engine
 context: one or two sentence summary of what you did or found,
          passed to the next step as {{prior_context}}
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_step_columns_with_prefix_derivation() {
+        let expected: String = STEP_COLUMNS
+            .split(',')
+            .map(|col| format!("s.{}", col.trim()))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        assert_eq!(*STEP_COLUMNS_WITH_PREFIX, expected);
+
+        // Verify column count parity.
+        let base_count = STEP_COLUMNS.split(',').count();
+        let prefixed_count = STEP_COLUMNS_WITH_PREFIX.split(", ").count();
+        assert_eq!(base_count, prefixed_count);
+
+        // Spot-check every entry is prefixed with "s.".
+        for col in STEP_COLUMNS_WITH_PREFIX.split(", ") {
+            assert!(col.starts_with("s."), "column {col:?} missing 's.' prefix");
+        }
+
+        // Spot-check first and last known columns.
+        let cols: Vec<&str> = STEP_COLUMNS_WITH_PREFIX.split(", ").collect();
+        assert_eq!(cols.first().copied(), Some("s.id"));
+        assert_eq!(cols.last().copied(), Some("s.output_file"));
+    }
+}
