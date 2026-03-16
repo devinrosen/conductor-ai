@@ -838,23 +838,7 @@ fn main() -> Result<()> {
                 } => {
                     let resolved_prompt = match (prompt, prompt_file) {
                         (Some(p), _) => p,
-                        (None, Some(path)) => {
-                            let content = std::fs::read_to_string(&path)
-                                .with_context(|| format!("Failed to read prompt file: {path}"))?;
-                            // Only clean up internal temp files written by spawn_child_tmux;
-                            // user-provided files via --prompt-file should not be deleted.
-                            if let Some(filename) = std::path::Path::new(&path)
-                                .file_name()
-                                .and_then(|f| f.to_str())
-                            {
-                                if filename.starts_with(".conductor-prompt-")
-                                    && filename.ends_with(".txt")
-                                {
-                                    let _ = std::fs::remove_file(&path);
-                                }
-                            }
-                            content
-                        }
+                        (None, Some(path)) => read_and_maybe_cleanup_prompt_file(&path)?,
                         (None, None) => {
                             anyhow::bail!("Either --prompt or --prompt-file is required")
                         }
@@ -2740,5 +2724,49 @@ fn sync_repo(
         Err(e) => {
             eprintln!("  {} — sync failed: {e}", repo_slug);
         }
+    }
+}
+
+/// Read `path` and, if it is an internal conductor temp file
+/// (`.conductor-prompt-*.txt`), delete it afterwards.
+///
+/// User-supplied files passed via `--prompt-file` are left untouched.
+fn read_and_maybe_cleanup_prompt_file(path: &str) -> anyhow::Result<String> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read prompt file: {path}"))?;
+    if let Some(filename) = std::path::Path::new(path)
+        .file_name()
+        .and_then(|f| f.to_str())
+    {
+        if filename.starts_with(".conductor-prompt-") && filename.ends_with(".txt") {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    Ok(content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_and_maybe_cleanup_prompt_file;
+
+    #[test]
+    fn internal_temp_file_is_deleted_after_read() {
+        let tmp = std::env::temp_dir();
+        let path = tmp.join(".conductor-prompt-run-abc123.txt");
+        std::fs::write(&path, "hello").unwrap();
+        let content = read_and_maybe_cleanup_prompt_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(content, "hello");
+        assert!(!path.exists(), "internal temp file should have been deleted");
+    }
+
+    #[test]
+    fn user_prompt_file_is_not_deleted_after_read() {
+        let tmp = std::env::temp_dir();
+        let path = tmp.join("my-custom-prompt.txt");
+        std::fs::write(&path, "custom prompt").unwrap();
+        let content = read_and_maybe_cleanup_prompt_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(content, "custom prompt");
+        assert!(path.exists(), "user-provided prompt file should not be deleted");
+        let _ = std::fs::remove_file(&path);
     }
 }
