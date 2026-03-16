@@ -284,13 +284,7 @@ pub async fn list_all_workflow_runs_handler(
             .collect::<Result<Vec<_>, _>>()?
     };
 
-    if params
-        .status
-        .as_deref()
-        .map(|s| !s.is_empty())
-        .unwrap_or(false)
-        && statuses.is_empty()
-    {
+    if !raw.is_empty() && statuses.is_empty() {
         return Err(ApiError(ConductorError::InvalidInput(
             "status filter yielded no valid values — did you pass only commas?".into(),
         )));
