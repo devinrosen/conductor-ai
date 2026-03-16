@@ -310,4 +310,22 @@ mod tests {
             "unexpected error message: {msg}"
         );
     }
+
+    #[test]
+    fn build_agent_args_exact_boundary_prompt_uses_inline() {
+        // A prompt of exactly PROMPT_FILE_THRESHOLD bytes must still use --prompt,
+        // because the condition is strictly `>`, not `>=`.
+        let prompt = "x".repeat(512);
+        assert_eq!(prompt.len(), 512);
+        let args = super::build_agent_args("run-boundary", "/tmp/wt", &prompt, None, None).unwrap();
+        let prompt_idx = args
+            .iter()
+            .position(|a| a == "--prompt")
+            .expect("--prompt flag missing for exactly-512-byte prompt");
+        assert_eq!(args[prompt_idx + 1], prompt);
+        assert!(
+            !args.iter().any(|a| a == "--prompt-file"),
+            "--prompt-file should not appear for exactly-512-byte prompt"
+        );
+    }
 }
