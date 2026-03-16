@@ -138,6 +138,7 @@ impl<'a> WorkflowManager<'a> {
             parent_workflow_run_id: parent_workflow_run_id.map(String::from),
             target_label: target_label.map(String::from),
             default_bot_name: None,
+            active_steps: Vec::new(),
         })
     }
 
@@ -503,12 +504,40 @@ impl<'a> WorkflowManager<'a> {
         let sql = format!(
             "SELECT {STEP_COLUMNS} FROM workflow_run_steps WHERE workflow_run_id IN ({placeholders}) ORDER BY workflow_run_id, position"
         );
-        let run_id_strings: Vec<String> = run_ids.iter().map(|s| s.to_string()).collect();
-        let params: Vec<&dyn rusqlite::ToSql> = run_id_strings
-            .iter()
-            .map(|s| s as &dyn rusqlite::ToSql)
-            .collect();
-        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> =
+            run_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let steps = stmt
+            .query_map(params.as_slice(), row_to_workflow_step)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut map: HashMap<String, Vec<WorkflowRunStep>> = HashMap::new();
+        for step in steps {
+            map.entry(step.workflow_run_id.clone())
+                .or_default()
+                .push(step);
+        }
+        Ok(map)
+    }
+
+    /// Batch-fetch only running/waiting steps for multiple runs in a single query.
+    /// Returns a map of run_id → active steps (sorted by position).
+    pub fn get_active_steps_for_runs(
+        &self,
+        run_ids: &[&str],
+    ) -> Result<HashMap<String, Vec<WorkflowRunStep>>> {
+        if run_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = sql_placeholders(run_ids.len());
+        let sql = format!(
+            "SELECT {STEP_COLUMNS} FROM workflow_run_steps \
+             WHERE workflow_run_id IN ({placeholders}) \
+               AND status IN ('running', 'waiting') \
+             ORDER BY workflow_run_id, position"
+        );
+        let params: Vec<&dyn rusqlite::ToSql> =
+            run_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let mut stmt = self.conn.prepare(&sql)?;
         let steps = stmt
             .query_map(params.as_slice(), row_to_workflow_step)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1393,6 +1422,7 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
         parent_workflow_run_id,
         target_label,
         default_bot_name,
+        active_steps: Vec::new(),
     })
 }
 
@@ -1729,5 +1759,75 @@ mod tests {
         assert_eq!(sql_placeholders(0), "");
         assert_eq!(sql_placeholders(1), "?1");
         assert_eq!(sql_placeholders(3), "?1, ?2, ?3");
+    }
+
+    #[test]
+    fn test_get_active_steps_for_runs_groups_by_run_id() {
+        // Seed two runs, each with one running step (and one completed step that
+        // should be excluded).  Verify that get_active_steps_for_runs returns
+        // only the running steps and groups them under the correct run_id.
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let run1 = create_worktree_run(&conn, "w1");
+        let run2 = create_worktree_run(&conn, "w2");
+
+        // run1: one running step, one completed step
+        let step1_active = mgr
+            .insert_step(&run1.id, "step-a", "actor", false, 0, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step1_active,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let step1_done = mgr
+            .insert_step(&run1.id, "step-b", "actor", false, 1, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step1_done,
+            WorkflowStepStatus::Completed,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // run2: one running step only
+        let step2_active = mgr
+            .insert_step(&run2.id, "step-c", "actor", false, 0, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step2_active,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let result = mgr
+            .get_active_steps_for_runs(&[run1.id.as_str(), run2.id.as_str()])
+            .unwrap();
+
+        // Each run should be present with exactly its active step.
+        assert_eq!(result.len(), 2, "expected entries for both runs");
+
+        let run1_steps = result.get(&run1.id).expect("run1 missing from result");
+        assert_eq!(run1_steps.len(), 1, "run1 should have 1 active step");
+        assert_eq!(run1_steps[0].id, step1_active);
+
+        let run2_steps = result.get(&run2.id).expect("run2 missing from result");
+        assert_eq!(run2_steps.len(), 1, "run2 should have 1 active step");
+        assert_eq!(run2_steps[0].id, step2_active);
     }
 }

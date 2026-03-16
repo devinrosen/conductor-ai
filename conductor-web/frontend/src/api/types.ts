@@ -226,6 +226,7 @@ export interface WorkflowRun {
   repo_id: string | null;
   parent_workflow_run_id: string | null;
   target_label: string | null;
+  active_steps?: WorkflowRunStep[];
 }
 
 export interface WorkflowRunStep {
@@ -235,6 +236,7 @@ export interface WorkflowRunStep {
   role: string;
   can_commit: boolean;
   status: "pending" | "running" | "completed" | "failed" | "skipped" | "waiting";
+  child_run_id: string | null;
   position: number;
   iteration: number;
   started_at: string | null;

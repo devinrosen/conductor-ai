@@ -1,6 +1,6 @@
 import { memo, useCallback, useMemo, useState } from "react";
 import { Link } from "react-router";
-import type { WorkflowRun, Repo } from "../../api/types";
+import type { WorkflowRun, WorkflowRunStep, Repo } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
 import { StatusPulseBadge, PULSE_STATUSES } from "../shared/StatusPulseBadge";
 import { TimeAgo } from "../shared/TimeAgo";
@@ -39,6 +39,32 @@ function parseTargetLabel(label: string): ParsedTarget {
     };
   }
   return { repoSlug: "unknown", targetKey: label, type: "worktree" };
+}
+
+const MAX_STEP_NAMES = 3;
+
+function StepLeaves({ steps }: { steps: WorkflowRunStep[] }) {
+  if (steps.length === 0) return null;
+
+  const label =
+    steps.length > MAX_STEP_NAMES
+      ? `${steps.length} steps running`
+      : steps.map((s) => s.step_name).join(", ");
+
+  const isWaiting = steps.every((s) => s.status === "waiting");
+
+  return (
+    <div className="ml-4 mb-1 flex items-center gap-2 px-3 py-1.5 rounded border border-gray-100 bg-gray-50">
+      <span className="shrink-0">
+        {isWaiting ? (
+          <span className="inline-block w-2 h-2 rounded-full bg-amber-400" />
+        ) : (
+          <span className="inline-block w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+        )}
+      </span>
+      <span className="text-xs text-gray-500 truncate">{label}</span>
+    </div>
+  );
 }
 
 const RunRow = memo(function RunRow({
@@ -197,13 +223,20 @@ export function WorkflowRunTree({ runs, repos, ctxMap }: WorkflowRunTreeProps) {
                       targetRuns.map((run) => (
                         <div key={run.id} className="ml-4">
                           <RunRow run={run} ctxMap={ctxMap} indent={false} />
+                          {(run.active_steps ?? []).length > 0 && (
+                            <StepLeaves steps={run.active_steps!} />
+                          )}
                           {childrenMap.get(run.id)?.map((child) => (
-                            <RunRow
-                              key={child.id}
-                              run={child}
-                              ctxMap={ctxMap}
-                              indent={true}
-                            />
+                            <div key={child.id}>
+                              <RunRow
+                                run={child}
+                                ctxMap={ctxMap}
+                                indent={true}
+                              />
+                              {(child.active_steps ?? []).length > 0 && (
+                                <StepLeaves steps={child.active_steps!} />
+                              )}
+                            </div>
                           ))}
                         </div>
                       ))}
