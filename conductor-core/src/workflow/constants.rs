@@ -40,8 +40,14 @@ mod tests {
 
     #[test]
     fn test_step_columns_with_prefix_derivation() {
-        let expected = crate::db::prefix_columns(STEP_COLUMNS, "s.");
-        assert_eq!(*STEP_COLUMNS_WITH_PREFIX, expected);
+        assert_eq!(
+            STEP_COLUMNS_WITH_PREFIX.as_str(),
+            "s.id, s.workflow_run_id, s.step_name, s.role, s.can_commit, s.condition_expr, s.status, \
+             s.child_run_id, s.position, s.started_at, s.ended_at, s.result_text, s.condition_met, \
+             s.iteration, s.parallel_group_id, s.context_out, s.markers_out, s.retry_count, \
+             s.gate_type, s.gate_prompt, s.gate_timeout, s.gate_approved_by, s.gate_approved_at, \
+             s.gate_feedback, s.structured_output, s.output_file"
+        );
 
         let cols: Vec<&str> = STEP_COLUMNS_WITH_PREFIX.split(", ").collect();
 
