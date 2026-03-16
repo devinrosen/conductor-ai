@@ -664,14 +664,16 @@ impl<'a> WorkflowManager<'a> {
         &self,
         statuses: &[WorkflowRunStatus],
     ) -> Result<Vec<WorkflowRun>> {
-        let effective: Vec<WorkflowRunStatus> = if statuses.is_empty() {
-            vec![
+        let default_statuses;
+        let effective: &[WorkflowRunStatus] = if statuses.is_empty() {
+            default_statuses = [
                 WorkflowRunStatus::Running,
                 WorkflowRunStatus::Waiting,
                 WorkflowRunStatus::Pending,
-            ]
+            ];
+            &default_statuses
         } else {
-            statuses.to_vec()
+            statuses
         };
 
         let placeholders = effective
