@@ -1822,6 +1822,37 @@ fn poll_script_child(
     }
 }
 
+/// Returns the ordered list of candidate paths for a script name.
+/// For absolute paths, returns a single-element vec with the path as-is.
+/// For relative paths, returns candidates in search order:
+/// `working_dir/<run>`, `repo_path/<run>`, `~/.claude/skills/<run>`.
+pub(crate) fn script_search_paths(
+    run: &str,
+    working_dir: &str,
+    repo_path: &str,
+) -> Vec<std::path::PathBuf> {
+    let p = std::path::Path::new(run);
+    if p.is_absolute() {
+        return vec![p.to_path_buf()];
+    }
+
+    let mut paths = vec![
+        std::path::Path::new(working_dir).join(run),
+        std::path::Path::new(repo_path).join(run),
+    ];
+
+    if let Some(home) = std::env::var_os("HOME") {
+        paths.push(
+            std::path::Path::new(&home)
+                .join(".claude")
+                .join("skills")
+                .join(run),
+        );
+    }
+
+    paths
+}
+
 /// Resolve a script path using the standard search order:
 /// 1. Absolute paths are used as-is.
 /// 2. Relative paths are tried against `working_dir`, then `repo_path`,
@@ -1831,38 +1862,9 @@ pub(crate) fn resolve_script_path(
     working_dir: &str,
     repo_path: &str,
 ) -> Option<std::path::PathBuf> {
-    let p = std::path::Path::new(run);
-    if p.is_absolute() {
-        if p.exists() {
-            return Some(p.to_path_buf());
-        }
-        return None;
-    }
-
-    // Worktree dir
-    let candidate = std::path::Path::new(working_dir).join(run);
-    if candidate.exists() {
-        return Some(candidate);
-    }
-
-    // Repo dir
-    let candidate = std::path::Path::new(repo_path).join(run);
-    if candidate.exists() {
-        return Some(candidate);
-    }
-
-    // ~/.claude/skills/
-    if let Some(home) = std::env::var_os("HOME") {
-        let candidate = std::path::Path::new(&home)
-            .join(".claude")
-            .join("skills")
-            .join(run);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-
-    None
+    script_search_paths(run, working_dir, repo_path)
+        .into_iter()
+        .find(|p| p.exists())
 }
 
 pub(super) fn execute_script(

@@ -2008,22 +2008,12 @@ pub fn validate_script_steps(
 
         match crate::workflow::executors::resolve_script_path(run, working_dir, repo_path) {
             None => {
-                let p = std::path::Path::new(run);
-                let searched = if p.is_absolute() {
-                    run.to_string()
-                } else {
-                    let skills_path = std::env::var_os("HOME")
-                        .map(|h| {
-                            std::path::Path::new(&h)
-                                .join(".claude")
-                                .join("skills")
-                                .join(run)
-                                .display()
-                                .to_string()
-                        })
-                        .unwrap_or_else(|| format!("~/.claude/skills/{run}"));
-                    format!("{}/{run}, {}/{run}, {skills_path}", working_dir, repo_path)
-                };
+                let searched =
+                    crate::workflow::executors::script_search_paths(run, working_dir, repo_path)
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
                 errors.push(ValidationError {
                     message: format!(
                         "Script step '{}': '{}' not found. Searched: {}",
