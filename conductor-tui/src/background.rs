@@ -512,7 +512,7 @@ fn poll_workflow_data(
     let all_run_steps = match wf_mgr.get_steps_for_runs(&leaf_run_ids) {
         Ok(steps) => steps,
         Err(e) => {
-            tracing::warn!("get_steps_for_runs failed: {e}");
+            tracing::warn!("get_steps_for_runs failed for runs {:?}: {e}", leaf_run_ids);
             Default::default()
         }
     };
