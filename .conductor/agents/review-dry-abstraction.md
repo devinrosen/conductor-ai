@@ -13,6 +13,3 @@ Focus exclusively on:
 - Missing helper functions that would reduce repetition
 - Repeated error mapping patterns that could be extracted
 - Copy-pasted DB query boilerplate that could be shared
-
-Do NOT flag:
-- Shell scripts (.sh files) — standalone scripts are intentionally self-contained; shared structural patterns (git diff loop, JSON output) are appropriate repetition at that scale
