@@ -681,13 +681,29 @@ mod tests {
             let id_a = mgr
                 .insert_step(&run.id, "step-running", "actor", false, 0, 0)
                 .unwrap();
-            mgr.update_step_status(&id_a, WorkflowStepStatus::Running, None, None, None, None, None)
-                .unwrap();
+            mgr.update_step_status(
+                &id_a,
+                WorkflowStepStatus::Running,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
             let id_b = mgr
                 .insert_step(&run.id, "step-waiting", "actor", false, 1, 0)
                 .unwrap();
-            mgr.update_step_status(&id_b, WorkflowStepStatus::Waiting, None, None, None, None, None)
-                .unwrap();
+            mgr.update_step_status(
+                &id_b,
+                WorkflowStepStatus::Waiting,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
             let id_c = mgr
                 .insert_step(&run.id, "step-completed", "actor", false, 2, 0)
                 .unwrap();
@@ -704,8 +720,16 @@ mod tests {
             let id_d = mgr
                 .insert_step(&run.id, "step-failed", "actor", false, 3, 0)
                 .unwrap();
-            mgr.update_step_status(&id_d, WorkflowStepStatus::Failed, None, None, None, None, None)
-                .unwrap();
+            mgr.update_step_status(
+                &id_d,
+                WorkflowStepStatus::Failed,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
         }
 
         let (status, body) = get_response("/api/workflows/runs", state).await;
