@@ -509,7 +509,13 @@ fn poll_workflow_data(
         .filter(|r| !runs_with_children.contains(r.id.as_str()))
         .map(|r| r.id.as_str())
         .collect();
-    let all_run_steps = wf_mgr.get_steps_for_runs(&leaf_run_ids).unwrap_or_default();
+    let all_run_steps = match wf_mgr.get_steps_for_runs(&leaf_run_ids) {
+        Ok(steps) => steps,
+        Err(e) => {
+            tracing::warn!("get_steps_for_runs failed: {e}");
+            std::collections::HashMap::new()
+        }
+    };
 
     // Load agent events for the selected step's child run
     let agent_mgr = AgentManager::new(&conn);
