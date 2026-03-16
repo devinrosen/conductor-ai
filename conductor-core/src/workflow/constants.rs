@@ -6,6 +6,15 @@ pub(super) const STEP_COLUMNS: &str =
      gate_type, gate_prompt, gate_timeout, gate_approved_by, gate_approved_at, gate_feedback, \
      structured_output, output_file";
 
+/// Table-prefixed variant of `STEP_COLUMNS` for JOIN queries where `s` aliases `workflow_run_steps`.
+/// Use this when selecting step columns alongside columns from other tables to avoid ambiguity.
+pub(super) const STEP_COLUMNS_WITH_PREFIX: &str =
+    "s.id, s.workflow_run_id, s.step_name, s.role, s.can_commit, s.condition_expr, s.status, \
+     s.child_run_id, s.position, s.started_at, s.ended_at, s.result_text, s.condition_met, \
+     s.iteration, s.parallel_group_id, s.context_out, s.markers_out, s.retry_count, \
+     s.gate_type, s.gate_prompt, s.gate_timeout, s.gate_approved_by, s.gate_approved_at, \
+     s.gate_feedback, s.structured_output";
+
 /// Column list for `workflow_runs` SELECT queries (used by `row_to_workflow_run`).
 pub(super) const RUN_COLUMNS: &str =
     "id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, \

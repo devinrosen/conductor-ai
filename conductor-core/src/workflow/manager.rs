@@ -10,7 +10,7 @@ use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl;
 
-use super::constants::{RUN_COLUMNS, STEP_COLUMNS};
+use super::constants::{RUN_COLUMNS, STEP_COLUMNS, STEP_COLUMNS_WITH_PREFIX};
 use super::status::{WorkflowRunStatus, WorkflowStepStatus};
 use super::types::{
     ActiveWorkflowCounts, StepKey, WorkflowRun, WorkflowRunContext, WorkflowRunStep,
@@ -1148,17 +1148,13 @@ impl<'a> WorkflowManager<'a> {
     pub fn list_all_waiting_gate_steps(&self) -> Result<Vec<(WorkflowRunStep, String)>> {
         crate::db::query_collect(
             self.conn,
-            "SELECT s.id, s.workflow_run_id, s.step_name, s.role, s.can_commit, \
-                    s.condition_expr, s.status, s.child_run_id, s.position, s.started_at, \
-                    s.ended_at, s.result_text, s.condition_met, s.iteration, \
-                    s.parallel_group_id, s.context_out, s.markers_out, s.retry_count, \
-                    s.gate_type, s.gate_prompt, s.gate_timeout, s.gate_approved_by, \
-                    s.gate_approved_at, s.gate_feedback, s.structured_output, \
-                    r.workflow_name \
-             FROM workflow_run_steps s \
-             JOIN workflow_runs r ON r.id = s.workflow_run_id \
-             WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
-             ORDER BY s.started_at",
+            &format!(
+                "SELECT {STEP_COLUMNS_WITH_PREFIX}, r.workflow_name \
+                 FROM workflow_run_steps s \
+                 JOIN workflow_runs r ON r.id = s.workflow_run_id \
+                 WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
+                 ORDER BY s.started_at"
+            ),
             [],
             |row| {
                 let step = row_to_workflow_step(row)?;
@@ -1454,35 +1450,35 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
 }
 
 pub(super) fn row_to_workflow_step(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRunStep> {
-    let can_commit_int: i64 = row.get(4)?;
-    let condition_met_int: Option<i64> = row.get(12)?;
+    let can_commit_int: i64 = row.get("can_commit")?;
+    let condition_met_int: Option<i64> = row.get("condition_met")?;
     Ok(WorkflowRunStep {
-        id: row.get(0)?,
-        workflow_run_id: row.get(1)?,
-        step_name: row.get(2)?,
-        role: row.get(3)?,
+        id: row.get("id")?,
+        workflow_run_id: row.get("workflow_run_id")?,
+        step_name: row.get("step_name")?,
+        role: row.get("role")?,
         can_commit: can_commit_int != 0,
-        condition_expr: row.get(5)?,
-        status: row.get(6)?,
-        child_run_id: row.get(7)?,
-        position: row.get(8)?,
-        started_at: row.get(9)?,
-        ended_at: row.get(10)?,
-        result_text: row.get(11)?,
+        condition_expr: row.get("condition_expr")?,
+        status: row.get("status")?,
+        child_run_id: row.get("child_run_id")?,
+        position: row.get("position")?,
+        started_at: row.get("started_at")?,
+        ended_at: row.get("ended_at")?,
+        result_text: row.get("result_text")?,
         condition_met: condition_met_int.map(|v| v != 0),
-        iteration: row.get(13)?,
-        parallel_group_id: row.get(14)?,
-        context_out: row.get(15)?,
-        markers_out: row.get(16)?,
-        retry_count: row.get(17)?,
-        gate_type: row.get(18)?,
-        gate_prompt: row.get(19)?,
-        gate_timeout: row.get(20)?,
-        gate_approved_by: row.get(21)?,
-        gate_approved_at: row.get(22)?,
-        gate_feedback: row.get(23)?,
-        structured_output: row.get(24)?,
-        output_file: row.get(25)?,
+        iteration: row.get("iteration")?,
+        parallel_group_id: row.get("parallel_group_id")?,
+        context_out: row.get("context_out")?,
+        markers_out: row.get("markers_out")?,
+        retry_count: row.get("retry_count")?,
+        gate_type: row.get("gate_type")?,
+        gate_prompt: row.get("gate_prompt")?,
+        gate_timeout: row.get("gate_timeout")?,
+        gate_approved_by: row.get("gate_approved_by")?,
+        gate_approved_at: row.get("gate_approved_at")?,
+        gate_feedback: row.get("gate_feedback")?,
+        structured_output: row.get("structured_output")?,
+        output_file: row.get("output_file")?,
     })
 }
 
