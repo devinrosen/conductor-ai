@@ -513,7 +513,7 @@ fn poll_workflow_data(
         Ok(steps) => steps,
         Err(e) => {
             tracing::warn!("get_steps_for_runs failed: {e}");
-            std::collections::HashMap::new()
+            Default::default()
         }
     };
 
