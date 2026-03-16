@@ -39,5 +39,3 @@ else
 <<<END_CONDUCTOR_OUTPUT>>>
 EOF
 fi
-
-exit 0
