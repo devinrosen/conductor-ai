@@ -17,6 +17,12 @@ use conductor_core::worktree::WorktreeManager;
 use crate::action::{Action, DataRefreshedPayload, WorkflowDataPayload};
 use crate::event::BackgroundSender;
 
+pub(crate) struct PollResult {
+    pub action: Action,
+    pub config: conductor_core::config::Config,
+    pub conn: rusqlite::Connection,
+}
+
 /// Detect workflow runs that have freshly transitioned to a terminal status.
 ///
 /// Returns a `Vec` of `(run_id, workflow_name, target_label, succeeded)` tuples
@@ -83,7 +89,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
         let mut notified_gate_ids: HashSet<String> = HashSet::new();
         loop {
             thread::sleep(interval);
-            if let Some((action, config, conn)) = poll_data() {
+            if let Some(PollResult { action, config, conn }) = poll_data() {
                 if let Action::DataRefreshed(ref payload) = action {
                     // Reuse the connection returned by poll_data() — no need to open a
                     // second connection just for notification claims.
@@ -153,7 +159,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
 /// Poll all data from the database. Returns a DataRefreshed action, the loaded config, and the
 /// open DB connection so the caller can reuse it (e.g. for notification claims) without opening
 /// a second connection on the same tick.
-pub fn poll_data() -> Option<(Action, conductor_core::config::Config, rusqlite::Connection)> {
+pub fn poll_data() -> Option<PollResult> {
     let db = db_path();
     let conn = open_database(&db).ok()?;
     let config = load_config().unwrap_or_else(|e| {
@@ -277,7 +283,7 @@ pub fn poll_data() -> Option<(Action, conductor_core::config::Config, rusqlite::
         pending_feedback_requests,
         waiting_gate_steps,
     }));
-    Some((action, config, conn))
+    Some(PollResult { action, config, conn })
 }
 
 /// Spawn the ticket sync timer. Syncs all repos every `interval`.
