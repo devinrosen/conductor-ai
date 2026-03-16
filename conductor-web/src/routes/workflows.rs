@@ -266,7 +266,7 @@ pub async fn list_all_workflow_runs_handler(
 ) -> Result<Json<Vec<WorkflowRun>>, ApiError> {
     use std::str::FromStr;
 
-    let raw = params.status.as_deref().unwrap_or("").trim();
+    let raw = params.status.as_deref().unwrap_or("");
     let statuses: Vec<WorkflowRunStatus> = if raw.is_empty() {
         vec![]
     } else {
@@ -622,7 +622,7 @@ mod tests {
             body["error"]
                 .as_str()
                 .unwrap_or("")
-                .contains("status filter yielded no valid values"),
+                .contains("empty status token in list"),
             "unexpected error body: {body}"
         );
     }
