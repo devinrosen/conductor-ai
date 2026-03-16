@@ -15,7 +15,9 @@ workflow rebase-worktree {
     }
 
     unless sync-with-main.is_up_to_date {
-      call push
+      script push {
+        run = ".conductor/scripts/push.sh"
+      }
     }
   }
 }
