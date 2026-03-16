@@ -271,7 +271,10 @@ mod tests {
             std::path::Path::new(file_path).exists(),
             "prompt file should have been written"
         );
-        assert_eq!(std::fs::read_to_string(file_path).unwrap(), expected_content);
+        assert_eq!(
+            std::fs::read_to_string(file_path).unwrap(),
+            expected_content
+        );
         assert!(
             !args.iter().any(|a| a == "--prompt"),
             "--prompt should not appear"
