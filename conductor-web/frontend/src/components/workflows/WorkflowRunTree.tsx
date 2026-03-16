@@ -150,6 +150,7 @@ export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTr
         targetGroups.set(targetKey, []);
       }
       targetGroups.get(targetKey)!.push(run);
+    }
 
     return { repoSlugs, repoGroups };
   }, [runs, repos, childIds]);
