@@ -499,10 +499,7 @@ impl<'a> WorkflowManager<'a> {
         if run_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let placeholders = (1..=run_ids.len())
-            .map(|i| format!("?{i}"))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let placeholders = sql_placeholders(run_ids.len());
         let sql = format!(
             "SELECT {STEP_COLUMNS} FROM workflow_run_steps WHERE workflow_run_id IN ({placeholders}) ORDER BY workflow_run_id, position"
         );
@@ -674,12 +671,7 @@ impl<'a> WorkflowManager<'a> {
             statuses.to_vec()
         };
 
-        let placeholders = effective
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", i + 1))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let placeholders = sql_placeholders(effective.len());
 
         let sql = format!(
             "SELECT workflow_runs.* \
@@ -899,12 +891,7 @@ impl<'a> WorkflowManager<'a> {
         if agent_run_ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
-        let placeholders = agent_run_ids
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", i + 1))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let placeholders = sql_placeholders(agent_run_ids.len());
         let sql = format!(
             "SELECT child_run_id, workflow_run_id \
              FROM workflow_run_steps \
@@ -1257,10 +1244,7 @@ impl<'a> WorkflowManager<'a> {
         }
 
         // Fetch workflow names for the root runs.
-        let placeholders = (1..=run_ids.len())
-            .map(|i| format!("?{i}"))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let placeholders = sql_placeholders(run_ids.len());
         let name_sql =
             format!("SELECT id, workflow_name FROM workflow_runs WHERE id IN ({placeholders})");
         let run_id_strings: Vec<String> = run_ids.iter().map(|s| s.to_string()).collect();
@@ -1337,14 +1321,17 @@ impl<'a> WorkflowManager<'a> {
 
 /// Build the WHERE clause and owned parameter list for purge / purge_count queries.
 ///
+/// Returns a comma-separated list of numbered SQLite positional placeholders:
+/// `?1, ?2, …, ?n`.  Returns an empty string when `n == 0`.
+fn sql_placeholders(n: usize) -> String {
+    (1..=n).map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ")
+}
+
 /// Returns `(where_clause, params)` where `params` is a `Vec<String>` whose
 /// elements bind to the positional placeholders in the clause.
 fn purge_where_clause(statuses: &[&str], repo_id: Option<&str>) -> (String, Vec<String>) {
     let n = statuses.len();
-    let placeholders = (1..=n)
-        .map(|i| format!("?{i}"))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let placeholders = sql_placeholders(n);
     let where_clause = if repo_id.is_some() {
         format!(
             "status IN ({placeholders}) AND worktree_id IN \
