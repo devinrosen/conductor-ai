@@ -266,17 +266,23 @@ pub async fn list_all_workflow_runs_handler(
 ) -> Result<Json<Vec<WorkflowRun>>, ApiError> {
     use std::str::FromStr;
 
-    let statuses: Vec<WorkflowRunStatus> = params
-        .status
-        .as_deref()
-        .unwrap_or("")
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            WorkflowRunStatus::from_str(s.trim())
-                .map_err(|e| ApiError(ConductorError::InvalidInput(e)))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let raw = params.status.as_deref().unwrap_or("").trim();
+    let statuses: Vec<WorkflowRunStatus> = if raw.is_empty() {
+        vec![]
+    } else {
+        raw.split(',')
+            .map(|token| {
+                let trimmed = token.trim();
+                if trimmed.is_empty() {
+                    return Err(ApiError(ConductorError::InvalidInput(
+                        "empty status token in list".to_string(),
+                    )));
+                }
+                WorkflowRunStatus::from_str(trimmed)
+                    .map_err(|e| ApiError(ConductorError::InvalidInput(e)))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    };
 
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
@@ -568,5 +574,24 @@ mod tests {
     async fn status_absent_returns_200() {
         let (status, _) = get_response("/api/workflows/runs", empty_state()).await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn status_trailing_comma_returns_400() {
+        let (status, _) = get_response("/api/workflows/runs?status=running,", empty_state()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn status_leading_comma_returns_400() {
+        let (status, _) = get_response("/api/workflows/runs?status=,running", empty_state()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn status_double_comma_returns_400() {
+        let (status, _) =
+            get_response("/api/workflows/runs?status=running,,waiting", empty_state()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }
