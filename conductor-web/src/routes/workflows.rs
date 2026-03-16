@@ -596,10 +596,6 @@ mod tests {
         }
     }
 
-    fn setup_test_db() -> Arc<Mutex<rusqlite::Connection>> {
-        Arc::new(Mutex::new(conductor_core::test_helpers::create_test_conn()))
-    }
-
     async fn get_response(uri: &str, state: AppState) -> (StatusCode, serde_json::Value) {
         let app = api_router().with_state(state);
         let response = app
@@ -813,7 +809,7 @@ mod tests {
 
     #[tokio::test]
     async fn notify_workflow_completes_without_panic() {
-        let db = setup_test_db();
+        let db = empty_state().db;
         let notifications = conductor_core::config::NotificationConfig::default(); // enabled=false
 
         tokio::task::spawn_blocking(move || {
@@ -825,7 +821,7 @@ mod tests {
 
     #[tokio::test]
     async fn notify_workflow_with_notifications_enabled_claims_log_row() {
-        let db = setup_test_db();
+        let db = empty_state().db;
 
         let notifications = conductor_core::config::NotificationConfig {
             enabled: true,
