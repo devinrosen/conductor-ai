@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use conductor_core::config::Config;
-use conductor_core::db::migrations;
 use rusqlite::Connection;
 use tokio::sync::{Mutex, RwLock};
 
@@ -16,9 +15,7 @@ async fn spawn_test_server() -> String {
 
 /// Spawn a test server with a DB setup callback invoked after migrations.
 async fn spawn_test_server_with_setup(setup: impl Fn(&Connection)) -> String {
-    let conn = Connection::open_in_memory().unwrap();
-    conn.pragma_update(None, "foreign_keys", "on").unwrap();
-    migrations::run(&conn).unwrap();
+    let conn = conductor_core::test_helpers::create_test_conn();
     setup(&conn);
 
     let state = AppState {

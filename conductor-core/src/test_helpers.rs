@@ -2,6 +2,14 @@ use rusqlite::Connection;
 
 use crate::db;
 
+/// Opens an in-memory SQLite database with migrations applied. No seed data is inserted.
+pub fn create_test_conn() -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    db::migrations::run(&conn).unwrap();
+    conn
+}
+
 /// Opens an in-memory SQLite database with migrations applied and a test repo + worktree inserted.
 ///
 /// Provides:

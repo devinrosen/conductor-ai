@@ -6359,8 +6359,7 @@ mod tests {
     }
 
     fn make_test_app() -> App {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conductor_core::db::migrations::run(&conn).unwrap();
+        let conn = conductor_core::test_helpers::create_test_conn();
         App::new(
             conn,
             conductor_core::config::Config::default(),
