@@ -113,6 +113,7 @@ pub fn fire_gate_notification(
     step_id: &str,
     step_name: &str,
     workflow_name: &str,
+    target_label: Option<&str>,
 ) {
     if !config.enabled {
         return;
@@ -122,7 +123,10 @@ pub fn fire_gate_notification(
         return;
     }
 
-    let body = format!("{workflow_name}: {step_name}");
+    let body = match target_label {
+        Some(label) => format!("{workflow_name} on {label}: {step_name}"),
+        None => format!("{workflow_name}: {step_name}"),
+    };
     show_desktop_notification("Conductor \u{2014} Approval Required", &body);
 }
 
@@ -171,8 +175,16 @@ impl NotificationDb {
         step_id: &str,
         step_name: &str,
         workflow_name: &str,
+        target_label: Option<&str>,
     ) {
-        fire_gate_notification(&self.conn, config, step_id, step_name, workflow_name);
+        fire_gate_notification(
+            &self.conn,
+            config,
+            step_id,
+            step_name,
+            workflow_name,
+            target_label,
+        );
     }
 }
 
@@ -461,7 +473,7 @@ mod tests {
     fn fire_gate_notification_disabled_does_not_claim() {
         let conn = in_memory_db();
         let cfg = config(false, true, true);
-        fire_gate_notification(&conn, &cfg, "step-1", "Deploy to prod", "release");
+        fire_gate_notification(&conn, &cfg, "step-1", "Deploy to prod", "release", None);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'step-1'",
@@ -476,8 +488,8 @@ mod tests {
     fn fire_gate_notification_enabled_claims_once() {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
-        fire_gate_notification(&conn, &cfg, "step-2", "Deploy to prod", "release");
-        fire_gate_notification(&conn, &cfg, "step-2", "Deploy to prod", "release");
+        fire_gate_notification(&conn, &cfg, "step-2", "Deploy to prod", "release", None);
+        fire_gate_notification(&conn, &cfg, "step-2", "Deploy to prod", "release", None);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'step-2' AND event_type = 'gate_waiting'",

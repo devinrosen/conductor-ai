@@ -1145,11 +1145,13 @@ impl<'a> WorkflowManager<'a> {
     ///
     /// Returns `(step, workflow_name)` pairs. Used by the TUI background poller to
     /// fire cross-process gate-waiting notifications.
-    pub fn list_all_waiting_gate_steps(&self) -> Result<Vec<(WorkflowRunStep, String)>> {
+    pub fn list_all_waiting_gate_steps(
+        &self,
+    ) -> Result<Vec<(WorkflowRunStep, String, Option<String>)>> {
         crate::db::query_collect(
             self.conn,
             &format!(
-                "SELECT {}, r.workflow_name \
+                "SELECT {}, r.workflow_name, r.target_label \
                  FROM workflow_run_steps s \
                  JOIN workflow_runs r ON r.id = s.workflow_run_id \
                  WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
@@ -1160,7 +1162,8 @@ impl<'a> WorkflowManager<'a> {
             |row| {
                 let step = row_to_workflow_step(row)?;
                 let workflow_name: String = row.get("workflow_name")?;
-                Ok((step, workflow_name))
+                let target_label: Option<String> = row.get("target_label")?;
+                Ok((step, workflow_name, target_label))
             },
         )
     }
@@ -1787,7 +1790,7 @@ mod tests {
 
         let steps = mgr.list_all_waiting_gate_steps().unwrap();
         assert_eq!(steps.len(), 1, "one waiting gate step should be returned");
-        let (step, workflow_name) = &steps[0];
+        let (step, workflow_name, _target_label) = &steps[0];
         assert_eq!(step.id, step_id);
         assert_eq!(step.step_name, "approval-gate");
         assert_eq!(workflow_name, "wf");
