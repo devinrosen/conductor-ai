@@ -4974,7 +4974,12 @@ workflow w {
             source_path: "test.wf".to_string(),
         };
         let errors = validate_script_steps(&def, "/tmp/wt", "/tmp/repo");
-        assert_eq!(errors.len(), 1, "expected one error for always-block script, got: {:?}", errors);
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected one error for always-block script, got: {:?}",
+            errors
+        );
         let msg = &errors[0].message;
         assert!(
             msg.contains("always-step.sh"),
@@ -4994,7 +4999,12 @@ workflow w {
     fn test_validate_script_steps_absolute_path_not_found() {
         let def = make_script_def("/nonexistent/absolute/path.sh");
         let errors = validate_script_steps(&def, "/tmp/wt", "/tmp/repo");
-        assert_eq!(errors.len(), 1, "expected one error for absolute path, got: {:?}", errors);
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected one error for absolute path, got: {:?}",
+            errors
+        );
         let msg = &errors[0].message;
         assert!(
             msg.contains("/nonexistent/absolute/path.sh"),
