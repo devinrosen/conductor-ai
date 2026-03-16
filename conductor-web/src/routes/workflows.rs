@@ -563,4 +563,10 @@ mod tests {
         let (status, _) = get_response("/api/workflows/runs?status=", empty_state()).await;
         assert_eq!(status, StatusCode::OK);
     }
+
+    #[tokio::test]
+    async fn status_absent_returns_200() {
+        let (status, _) = get_response("/api/workflows/runs", empty_state()).await;
+        assert_eq!(status, StatusCode::OK);
+    }
 }
