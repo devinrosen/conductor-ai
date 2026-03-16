@@ -615,7 +615,7 @@ mod tests {
             body["error"]
                 .as_str()
                 .unwrap_or("")
-                .contains("status filter yielded no valid values"),
+                .contains("empty status token in list"),
             "unexpected error body: {body}"
         );
     }
