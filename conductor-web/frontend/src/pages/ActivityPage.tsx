@@ -165,16 +165,6 @@ export function ActivityPage() {
     }
   };
 
-  const handleCancelWorkflow = async (runId: string) => {
-    try {
-      await api.cancelWorkflow(runId);
-      setActionError(null);
-      refresh();
-    } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : "Failed to cancel workflow");
-    }
-  };
-
   if (reposLoading || loading) return <LoadingSpinner />;
 
   const isEmpty =
@@ -284,7 +274,6 @@ export function ActivityPage() {
             runs={activity.activeWorkflowRuns}
             repos={repos}
             ctxMap={ctxMap}
-            onCancel={handleCancelWorkflow}
           />
         </section>
 

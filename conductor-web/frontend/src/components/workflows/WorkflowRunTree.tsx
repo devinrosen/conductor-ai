@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useState } from "react";
 import { Link } from "react-router";
 import type { WorkflowRun, Repo } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
+import { StatusPulseBadge } from "../shared/StatusPulseBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 
 interface WorktreeCtx {
@@ -15,7 +16,6 @@ interface WorkflowRunTreeProps {
   runs: WorkflowRun[];
   repos: Repo[];
   ctxMap: Map<string, WorktreeCtx>;
-  onCancel: (runId: string) => void;
 }
 
 type TargetType = "worktree" | "pr";
@@ -44,12 +44,10 @@ function parseTargetLabel(label: string): ParsedTarget {
 const RunRow = memo(function RunRow({
   run,
   ctxMap,
-  onCancel,
   indent,
 }: {
   run: WorkflowRun;
   ctxMap: Map<string, WorktreeCtx>;
-  onCancel: (runId: string) => void;
   indent: boolean;
 }) {
   const ctx = run.worktree_id ? ctxMap.get(run.worktree_id) : undefined;
@@ -69,24 +67,20 @@ const RunRow = memo(function RunRow({
     <div className={`rounded border border-gray-100 bg-white p-3 mb-1 flex items-center justify-between gap-2${indent ? " ml-6 border-l-2 border-l-gray-200" : ""}`}>
       <div className="min-w-0 flex-1">{nameEl}</div>
       <div className="flex items-center gap-2 shrink-0">
-        <StatusBadge status={run.status} />
-        <span className="text-xs text-gray-400">
-          <TimeAgo date={run.started_at} />
-        </span>
-        {(run.status === "running" || run.status === "waiting") && (
-          <button
-            onClick={() => onCancel(run.id)}
-            className="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
-          >
-            Cancel
-          </button>
+        {(run.status === "running" || run.status === "waiting") ? (
+          <StatusPulseBadge status={run.status} />
+        ) : (
+          <StatusBadge status={run.status} />
         )}
+        <span className="text-xs text-gray-400">
+          <TimeAgo date={run.started_at} short />
+        </span>
       </div>
     </div>
   );
 });
 
-export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTreeProps) {
+export function WorkflowRunTree({ runs, repos, ctxMap }: WorkflowRunTreeProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const toggle = useCallback((key: string) => {
@@ -201,13 +195,12 @@ export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTr
                     {!isTargetCollapsed &&
                       targetRuns.map((run) => (
                         <div key={run.id} className="ml-4">
-                          <RunRow run={run} ctxMap={ctxMap} onCancel={onCancel} indent={false} />
+                          <RunRow run={run} ctxMap={ctxMap} indent={false} />
                           {childrenMap.get(run.id)?.map((child) => (
                             <RunRow
                               key={child.id}
                               run={child}
                               ctxMap={ctxMap}
-                              onCancel={onCancel}
                               indent={true}
                             />
                           ))}

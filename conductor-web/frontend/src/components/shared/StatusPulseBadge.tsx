@@ -1,12 +1,13 @@
-const pulseColors: Partial<Record<string, string>> = {
-  running: "bg-yellow-400",
-  waiting_for_feedback: "bg-purple-400",
+const pulseColors: Partial<Record<string, { color: string; pulse: boolean }>> = {
+  running: { color: "bg-yellow-400", pulse: true },
+  waiting_for_feedback: { color: "bg-purple-400", pulse: true },
+  waiting: { color: "bg-gray-300", pulse: false },
 };
 
 export function StatusPulseBadge({ status }: { status: string }) {
-  const color = pulseColors[status];
-  if (!color) return null;
+  const cfg = pulseColors[status];
+  if (!cfg) return null;
   return (
-    <span className={`inline-block w-2 h-2 rounded-full ${color} animate-pulse`} />
+    <span className={`inline-block w-2 h-2 rounded-full ${cfg.color}${cfg.pulse ? " animate-pulse" : ""}`} />
   );
 }

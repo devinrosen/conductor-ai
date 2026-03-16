@@ -7,8 +7,30 @@ const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
 
 const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
 
-export function TimeAgo({ date }: { date: string }) {
+const SHORT_UNITS: [number, string][] = [
+  [86400000, "d"],
+  [3600000, "h"],
+  [60000, "m"],
+  [1000, "s"],
+];
+
+export function TimeAgo({ date, short }: { date: string; short?: boolean }) {
   const diff = new Date(date).getTime() - Date.now();
+
+  if (short) {
+    const abs = Math.abs(diff);
+    for (const [ms, suffix] of SHORT_UNITS) {
+      if (abs >= ms || suffix === "s") {
+        return (
+          <time dateTime={date} title={date}>
+            {Math.round(abs / ms)}{suffix}
+          </time>
+        );
+      }
+    }
+    return <time dateTime={date}>0s</time>;
+  }
+
   for (const [unit, ms] of UNITS) {
     if (Math.abs(diff) >= ms || unit === "second") {
       return (
