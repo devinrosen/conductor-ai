@@ -1860,14 +1860,15 @@ mod tests {
             .insert_step(&run.id, "step-b", "actor", false, 1, 0)
             .unwrap();
 
-        let result = mgr
-            .get_active_steps_for_runs(&[run.id.as_str()])
-            .unwrap();
+        let result = mgr.get_active_steps_for_runs(&[run.id.as_str()]).unwrap();
 
         // Only the Waiting step should appear.
         assert_eq!(result.len(), 1, "expected one run entry");
         let steps = result.get(&run.id).expect("run missing from result");
         assert_eq!(steps.len(), 1, "expected exactly one active step");
-        assert_eq!(steps[0].id, waiting_step, "active step should be the Waiting one");
+        assert_eq!(
+            steps[0].id, waiting_step,
+            "active step should be the Waiting one"
+        );
     }
 }
