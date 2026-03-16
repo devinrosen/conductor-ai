@@ -174,15 +174,33 @@ pub fn poll_child_completion(
     }
 }
 
-/// Spawn a child agent in a new tmux window.
-pub fn spawn_child_tmux(
+/// Build the `conductor agent run` argument list for a child agent.
+///
+/// If the prompt exceeds the safe tmux command-length threshold, it is written
+/// to a temp file (`<worktree_path>/.conductor-prompt-<run_id>.txt`) and
+/// `--prompt-file` is used instead of `--prompt`.  Returns the argument list
+/// ready to pass to [`spawn_tmux_window`].
+pub(crate) fn build_agent_args(
     run_id: &str,
     worktree_path: &str,
     prompt: &str,
     model: Option<&str>,
-    window_name: &str,
     bot_name: Option<&str>,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<Vec<String>, String> {
+    // tmux has a hard limit on command-line length (~2 KB depending on version).
+    // For prompts that exceed a safe threshold, write to a file and pass
+    // --prompt-file instead so we never hit that limit.
+    const PROMPT_FILE_THRESHOLD: usize = 512;
+
+    let prompt_file_path: Option<String> = if prompt.len() > PROMPT_FILE_THRESHOLD {
+        let path = format!("{worktree_path}/.conductor-prompt-{run_id}.txt");
+        std::fs::write(&path, prompt)
+            .map_err(|e| format!("Failed to write prompt file '{path}': {e}"))?;
+        Some(path)
+    } else {
+        None
+    };
+
     let mut args = vec![
         "agent".to_string(),
         "run".to_string(),
@@ -190,9 +208,15 @@ pub fn spawn_child_tmux(
         run_id.to_string(),
         "--worktree-path".to_string(),
         worktree_path.to_string(),
-        "--prompt".to_string(),
-        prompt.to_string(),
     ];
+
+    if let Some(path) = prompt_file_path {
+        args.push("--prompt-file".to_string());
+        args.push(path);
+    } else {
+        args.push("--prompt".to_string());
+        args.push(prompt.to_string());
+    }
 
     if let Some(m) = model {
         args.push("--model".to_string());
@@ -204,6 +228,19 @@ pub fn spawn_child_tmux(
         args.push(b.to_string());
     }
 
+    Ok(args)
+}
+
+/// Spawn a child agent in a new tmux window.
+pub fn spawn_child_tmux(
+    run_id: &str,
+    worktree_path: &str,
+    prompt: &str,
+    model: Option<&str>,
+    window_name: &str,
+    bot_name: Option<&str>,
+) -> std::result::Result<(), String> {
+    let args = build_agent_args(run_id, worktree_path, prompt, model, bot_name)?;
     spawn_tmux_window(&args, window_name)
 }
 
@@ -214,5 +251,51 @@ mod tests {
         // Whether or not tmux is running, a bogus window name should fail.
         let result = super::verify_tmux_window("conductor-test-nonexistent-xyz-99999");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_agent_args_short_prompt_uses_inline() {
+        let prompt = "short prompt";
+        assert!(prompt.len() <= 512);
+        let args = super::build_agent_args("run-1", "/tmp/wt", prompt, None, None).unwrap();
+        let prompt_idx = args
+            .iter()
+            .position(|a| a == "--prompt")
+            .expect("--prompt flag missing");
+        assert_eq!(args[prompt_idx + 1], prompt);
+        assert!(
+            !args.iter().any(|a| a == "--prompt-file"),
+            "--prompt-file should not appear"
+        );
+    }
+
+    #[test]
+    fn build_agent_args_long_prompt_uses_file() {
+        let tmp = std::env::temp_dir().join(format!("conductor-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let worktree = tmp.to_str().unwrap();
+        let run_id = "run-long-99";
+
+        let prompt = "x".repeat(513);
+        let args = super::build_agent_args(run_id, worktree, &prompt, None, None).unwrap();
+
+        let file_idx = args
+            .iter()
+            .position(|a| a == "--prompt-file")
+            .expect("--prompt-file flag missing");
+        let file_path = &args[file_idx + 1];
+        assert!(
+            std::path::Path::new(file_path).exists(),
+            "prompt file should have been written"
+        );
+        assert_eq!(std::fs::read_to_string(file_path).unwrap(), prompt);
+        assert!(
+            !args.iter().any(|a| a == "--prompt"),
+            "--prompt should not appear"
+        );
+
+        // cleanup
+        let _ = std::fs::remove_file(file_path);
+        let _ = std::fs::remove_dir(&tmp);
     }
 }
