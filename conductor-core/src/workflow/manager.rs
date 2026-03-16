@@ -1143,13 +1143,15 @@ impl<'a> WorkflowManager<'a> {
 
     /// List all gate steps currently in `waiting` status across all workflow runs.
     ///
-    /// Returns `(step, workflow_name)` pairs. Used by the TUI background poller to
+    /// Returns `(step, workflow_name, target_label)` tuples. Used by the TUI background poller to
     /// fire cross-process gate-waiting notifications.
-    pub fn list_all_waiting_gate_steps(&self) -> Result<Vec<(WorkflowRunStep, String)>> {
+    pub fn list_all_waiting_gate_steps(
+        &self,
+    ) -> Result<Vec<(WorkflowRunStep, String, Option<String>)>> {
         crate::db::query_collect(
             self.conn,
             &format!(
-                "SELECT {}, r.workflow_name \
+                "SELECT {}, r.workflow_name, r.target_label \
                  FROM workflow_run_steps s \
                  JOIN workflow_runs r ON r.id = s.workflow_run_id \
                  WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
@@ -1160,7 +1162,8 @@ impl<'a> WorkflowManager<'a> {
             |row| {
                 let step = row_to_workflow_step(row)?;
                 let workflow_name: String = row.get("workflow_name")?;
-                Ok((step, workflow_name))
+                let target_label: Option<String> = row.get("target_label")?;
+                Ok((step, workflow_name, target_label))
             },
         )
     }
@@ -1787,10 +1790,11 @@ mod tests {
 
         let steps = mgr.list_all_waiting_gate_steps().unwrap();
         assert_eq!(steps.len(), 1, "one waiting gate step should be returned");
-        let (step, workflow_name) = &steps[0];
+        let (step, workflow_name, target_label) = &steps[0];
         assert_eq!(step.id, step_id);
         assert_eq!(step.step_name, "approval-gate");
         assert_eq!(workflow_name, "wf");
+        assert!(target_label.is_none(), "no target_label set on this run");
     }
 
     #[test]
@@ -2233,6 +2237,45 @@ mod tests {
         assert!(
             steps.is_empty(),
             "approved (completed) gate steps must not be returned"
+        );
+    }
+
+    #[test]
+    fn test_list_all_waiting_gate_steps_includes_target_label() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let parent_id = make_parent_id(&conn, "w1");
+        let run = mgr
+            .create_workflow_run_with_targets(
+                "deploy",
+                Some("w1"),
+                None,
+                None,
+                &parent_id,
+                false,
+                "manual",
+                None,
+                None,
+                Some("conductor-ai/feat-123"),
+            )
+            .unwrap();
+
+        let step_id = mgr
+            .insert_step(&run.id, "approve-deploy", "gate", false, 0, 0)
+            .unwrap();
+        mgr.set_step_gate_info(&step_id, "human", None, "1h")
+            .unwrap();
+        set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
+
+        let steps = mgr.list_all_waiting_gate_steps().unwrap();
+        assert_eq!(steps.len(), 1);
+        let (step, workflow_name, target_label) = &steps[0];
+        assert_eq!(step.id, step_id);
+        assert_eq!(workflow_name, "deploy");
+        assert_eq!(
+            target_label.as_deref(),
+            Some("conductor-ai/feat-123"),
+            "target_label must be propagated from workflow_runs"
         );
     }
 }

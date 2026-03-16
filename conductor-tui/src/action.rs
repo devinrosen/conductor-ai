@@ -56,8 +56,8 @@ pub struct DataRefreshedPayload {
     pub active_non_worktree_workflow_runs: Vec<WorkflowRun>,
     /// All pending agent feedback requests (for cross-process notifications).
     pub pending_feedback_requests: Vec<FeedbackRequest>,
-    /// All waiting gate steps with their workflow name (for cross-process notifications).
-    pub waiting_gate_steps: Vec<(WorkflowRunStep, String)>,
+    /// All waiting gate steps with their workflow name and optional target label (for cross-process notifications).
+    pub waiting_gate_steps: Vec<(WorkflowRunStep, String, Option<String>)>,
 }
 
 /// Every user intent or background result flows through this enum.
