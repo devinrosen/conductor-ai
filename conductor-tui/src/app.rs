@@ -6614,6 +6614,8 @@ mod action_handler_tests {
                 latest_workflow_runs_by_worktree: std::collections::HashMap::new(),
                 workflow_step_summaries: std::collections::HashMap::new(),
                 active_non_worktree_workflow_runs: vec![],
+                pending_feedback_requests: vec![],
+                waiting_gate_steps: vec![],
             },
         )));
 

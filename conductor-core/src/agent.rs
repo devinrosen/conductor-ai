@@ -1812,6 +1812,17 @@ impl<'a> AgentManager<'a> {
         optional_row(result)
     }
 
+    /// List all pending feedback requests across all agent runs, newest first.
+    /// Used by the TUI background poller to fire cross-process notifications.
+    pub fn list_all_pending_feedback_requests(&self) -> Result<Vec<FeedbackRequest>> {
+        query_collect(
+            self.conn,
+            &format!("{FEEDBACK_SELECT} WHERE status = 'pending' ORDER BY created_at DESC"),
+            [],
+            row_to_feedback_request,
+        )
+    }
+
     /// Returns counts of active agent runs (running / waiting_for_feedback) per repo_id.
     /// Repos with no active runs are absent from the map.
     pub fn active_run_counts_by_repo(&self) -> Result<HashMap<String, ActiveAgentCounts>> {

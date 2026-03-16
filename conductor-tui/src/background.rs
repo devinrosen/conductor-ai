@@ -19,8 +19,8 @@ use crate::event::BackgroundSender;
 
 /// Detect workflow runs that have freshly transitioned to a terminal status.
 ///
-/// Returns a `Vec` of `(workflow_name, target_label, succeeded)` tuples for
-/// each run that moved from a non-terminal (or unknown) state into
+/// Returns a `Vec` of `(run_id, workflow_name, target_label, succeeded)` tuples
+/// for each run that moved from a non-terminal (or unknown) state into
 /// `Completed`/`Failed` since the last call.
 ///
 /// `seen` is updated in-place: stale entries (runs no longer present in
@@ -33,7 +33,7 @@ pub(crate) fn detect_new_terminal_transitions<'a>(
     runs: impl Iterator<Item = &'a conductor_core::workflow::WorkflowRun>,
     seen: &mut std::collections::HashMap<String, conductor_core::workflow::WorkflowRunStatus>,
     initialized: &mut bool,
-) -> Vec<(String, Option<String>, bool)> {
+) -> Vec<(String, String, Option<String>, bool)> {
     use conductor_core::workflow::WorkflowRunStatus;
 
     let runs: Vec<_> = runs.collect();
@@ -49,6 +49,7 @@ pub(crate) fn detect_new_terminal_transitions<'a>(
             let status_changed = prev_status.map(|s| s != &run.status).unwrap_or(true);
             if now_terminal && status_changed {
                 transitions.push((
+                    run.id.clone(),
                     run.workflow_name.clone(),
                     run.target_label.clone(),
                     matches!(run.status, WorkflowRunStatus::Completed),
@@ -80,19 +81,52 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
             thread::sleep(interval);
             if let Some((action, config)) = poll_data() {
                 if let Action::DataRefreshed(ref payload) = action {
+                    // Open a dedicated connection for notification claims on each tick.
+                    // SQLite WAL allows concurrent readers; this connection is lightweight.
+                    let claim_conn = open_database(&db_path()).ok();
+
                     let all_runs = payload
                         .latest_workflow_runs_by_worktree
                         .values()
                         .chain(payload.active_non_worktree_workflow_runs.iter());
                     let transitions =
                         detect_new_terminal_transitions(all_runs, &mut seen, &mut initialized);
-                    for (workflow_name, target_label, succeeded) in transitions {
-                        crate::notify::fire_workflow_notification(
-                            &config.notifications,
-                            &workflow_name,
-                            target_label.as_deref(),
-                            succeeded,
-                        );
+                    for (run_id, workflow_name, target_label, succeeded) in transitions {
+                        if let Some(ref conn) = claim_conn {
+                            crate::notify::fire_workflow_notification(
+                                conn,
+                                &config.notifications,
+                                &run_id,
+                                &workflow_name,
+                                target_label.as_deref(),
+                                succeeded,
+                            );
+                        }
+                    }
+
+                    // Fire feedback-requested notifications.
+                    if let Some(ref conn) = claim_conn {
+                        for req in &payload.pending_feedback_requests {
+                            crate::notify::fire_feedback_notification(
+                                conn,
+                                &config.notifications,
+                                &req.id,
+                                &req.prompt,
+                            );
+                        }
+                    }
+
+                    // Fire gate-waiting notifications.
+                    if let Some(ref conn) = claim_conn {
+                        for (step, workflow_name) in &payload.waiting_gate_steps {
+                            crate::notify::fire_gate_notification(
+                                conn,
+                                &config.notifications,
+                                &step.id,
+                                &step.step_name,
+                                workflow_name,
+                            );
+                        }
                     }
                 }
                 if !tx.send(action) {
@@ -195,6 +229,11 @@ pub fn poll_data() -> Option<(Action, conductor_core::config::Config)> {
         .get_step_summaries_for_runs(&active_run_id_refs)
         .unwrap_or_default();
 
+    let pending_feedback_requests = agent_mgr
+        .list_all_pending_feedback_requests()
+        .unwrap_or_default();
+    let waiting_gate_steps = wf_mgr.list_all_waiting_gate_steps().unwrap_or_default();
+
     let action = Action::DataRefreshed(Box::new(DataRefreshedPayload {
         repos,
         worktrees,
@@ -205,6 +244,8 @@ pub fn poll_data() -> Option<(Action, conductor_core::config::Config)> {
         latest_workflow_runs_by_worktree,
         workflow_step_summaries,
         active_non_worktree_workflow_runs,
+        pending_feedback_requests,
+        waiting_gate_steps,
     }));
     Some((action, config))
 }
@@ -710,8 +751,9 @@ mod tests {
         let tick2 = [make_run("r1", "deploy", WorkflowRunStatus::Completed)];
         let t2 = detect_new_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
         assert_eq!(t2.len(), 1);
-        assert_eq!(t2[0].0, "deploy");
-        assert!(t2[0].2, "should be succeeded=true for Completed");
+        assert_eq!(t2[0].0, "r1", "run_id should be r1");
+        assert_eq!(t2[0].1, "deploy");
+        assert!(t2[0].3, "should be succeeded=true for Completed");
     }
 
     /// A run that transitions from Running → Failed must report succeeded=false.
@@ -726,7 +768,7 @@ mod tests {
         let tick2 = [make_run("r1", "build", WorkflowRunStatus::Failed)];
         let t2 = detect_new_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
         assert_eq!(t2.len(), 1);
-        assert!(!t2[0].2, "should be succeeded=false for Failed");
+        assert!(!t2[0].3, "should be succeeded=false for Failed");
     }
 
     /// A run that was already terminal on tick 1 must NOT fire again on tick 2
@@ -810,6 +852,7 @@ mod tests {
         ];
         let t2 = detect_new_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
         assert_eq!(t2.len(), 1);
-        assert_eq!(t2[0].0, "fast-job");
+        assert_eq!(t2[0].0, "r2", "run_id should be r2");
+        assert_eq!(t2[0].1, "fast-job");
     }
 }

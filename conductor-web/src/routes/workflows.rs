@@ -211,13 +211,20 @@ pub async fn run_workflow(
 
                 let wf_name = workflow_name.clone();
                 let label = wt_target_label.clone();
+                let notify_run_id = res.workflow_run_id.clone();
                 tokio::task::spawn_blocking(move || {
-                    crate::notify::fire_workflow_notification(
-                        &notifications,
-                        &wf_name,
-                        Some(&label),
-                        succeeded,
-                    );
+                    if let Ok(conn) =
+                        conductor_core::db::open_database(&conductor_core::config::db_path())
+                    {
+                        crate::notify::fire_workflow_notification(
+                            &conn,
+                            &notifications,
+                            &notify_run_id,
+                            &wf_name,
+                            Some(&label),
+                            succeeded,
+                        );
+                    }
                 });
 
                 state_clone
@@ -419,12 +426,18 @@ pub async fn resume_workflow_endpoint(
                 let succeeded = res.all_succeeded;
                 let status = if succeeded { "completed" } else { "failed" };
 
-                crate::notify::fire_workflow_notification(
-                    &notifications,
-                    &workflow_name,
-                    target_label.as_deref(),
-                    succeeded,
-                );
+                if let Ok(conn) =
+                    conductor_core::db::open_database(&conductor_core::config::db_path())
+                {
+                    crate::notify::fire_workflow_notification(
+                        &conn,
+                        &notifications,
+                        &res.workflow_run_id,
+                        &workflow_name,
+                        target_label.as_deref(),
+                        succeeded,
+                    );
+                }
 
                 state_clone
                     .events

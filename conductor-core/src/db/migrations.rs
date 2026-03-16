@@ -668,6 +668,12 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 37)?;
     }
 
+    // Migration 038: notification_log table for cross-process dedup.
+    if version < 38 {
+        conn.execute_batch(include_str!("migrations/038_notification_log.sql"))?;
+        bump_version(conn, 38)?;
+    }
+
     Ok(())
 }
 

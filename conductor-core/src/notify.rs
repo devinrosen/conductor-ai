@@ -25,18 +25,49 @@ pub fn notification_body(workflow_name: &str, target_label: Option<&str>) -> Str
     }
 }
 
+/// Attempt to claim a notification slot for `(entity_id, event_type)`.
+///
+/// Inserts a row into `notification_log` with `INSERT OR IGNORE`. Returns `true`
+/// if this call won the claim (1 row inserted), `false` if another process already
+/// fired this notification (row already existed).
+pub fn try_claim_notification(
+    conn: &rusqlite::Connection,
+    entity_id: &str,
+    event_type: &str,
+) -> bool {
+    let now = chrono::Utc::now().to_rfc3339();
+    match conn.execute(
+        "INSERT OR IGNORE INTO notification_log (entity_id, event_type, fired_at) VALUES (?1, ?2, ?3)",
+        rusqlite::params![entity_id, event_type, now],
+    ) {
+        Ok(rows) => rows == 1,
+        Err(e) => {
+            tracing::warn!("try_claim_notification DB error: {e}");
+            false
+        }
+    }
+}
+
 /// Fire a desktop notification for a workflow completion, respecting user config.
 ///
 /// Filters are applied in order: master `enabled` flag, then per-event
-/// `on_success`/`on_failure` guards.  A `notify_rust` error is silently
-/// discarded — notification delivery is best-effort.
+/// `on_success`/`on_failure` guards. A cross-process dedup check via
+/// `notification_log` prevents duplicate notifications when multiple TUI/web
+/// instances run concurrently. A `notify_rust` error is logged as a warning.
 pub fn fire_workflow_notification(
+    conn: &rusqlite::Connection,
     config: &NotificationConfig,
+    run_id: &str,
     workflow_name: &str,
     target_label: Option<&str>,
     succeeded: bool,
 ) {
     if !should_notify(config, succeeded) {
+        return;
+    }
+
+    let event_type = if succeeded { "completed" } else { "failed" };
+    if !try_claim_notification(conn, run_id, event_type) {
         return;
     }
 
@@ -46,16 +77,76 @@ pub fn fire_workflow_notification(
         "Conductor \u{2014} Workflow Failed"
     };
     let body = notification_body(workflow_name, target_label);
-    let _ = notify_rust::Notification::new()
+    if let Err(e) = notify_rust::Notification::new()
         .summary(title)
         .body(&body)
-        .show();
+        .show()
+    {
+        tracing::warn!("desktop notification failed: {e}");
+    }
+}
+
+/// Fire a desktop notification for an agent feedback request.
+///
+/// Gated on `config.enabled`. Uses `(request_id, "feedback_requested")` as the
+/// dedup key so each feedback request fires at most one notification across all
+/// processes.
+pub fn fire_feedback_notification(
+    conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    request_id: &str,
+    prompt_preview: &str,
+) {
+    if !config.enabled {
+        return;
+    }
+
+    if !try_claim_notification(conn, request_id, "feedback_requested") {
+        return;
+    }
+
+    if let Err(e) = notify_rust::Notification::new()
+        .summary("Conductor \u{2014} Agent Needs Input")
+        .body(prompt_preview)
+        .show()
+    {
+        tracing::warn!("desktop notification failed: {e}");
+    }
+}
+
+/// Fire a desktop notification for a workflow human gate waiting for approval.
+///
+/// Gated on `config.enabled`. Uses `(step_id, "gate_waiting")` as the dedup key.
+pub fn fire_gate_notification(
+    conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    step_id: &str,
+    step_name: &str,
+    workflow_name: &str,
+) {
+    if !config.enabled {
+        return;
+    }
+
+    if !try_claim_notification(conn, step_id, "gate_waiting") {
+        return;
+    }
+
+    let body = format!("{workflow_name}: {step_name}");
+    if let Err(e) = notify_rust::Notification::new()
+        .summary("Conductor \u{2014} Approval Required")
+        .body(&body)
+        .show()
+    {
+        tracing::warn!("desktop notification failed: {e}");
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{NotificationConfig, WorkflowNotificationConfig};
+    use rusqlite::Connection;
 
     fn config(enabled: bool, on_success: bool, on_failure: bool) -> NotificationConfig {
         NotificationConfig {
@@ -65,6 +156,20 @@ mod tests {
                 on_failure,
             },
         }
+    }
+
+    fn in_memory_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE notification_log (
+                entity_id  TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                fired_at   TEXT NOT NULL,
+                PRIMARY KEY (entity_id, event_type)
+            );",
+        )
+        .unwrap();
+        conn
     }
 
     // --- should_notify: master enabled guard ---
@@ -120,5 +225,107 @@ mod tests {
     #[test]
     fn notification_body_without_label() {
         assert_eq!(notification_body("my-workflow", None), "my-workflow");
+    }
+
+    // --- try_claim_notification ---
+
+    #[test]
+    fn try_claim_notification_first_call_wins() {
+        let conn = in_memory_db();
+        assert!(
+            try_claim_notification(&conn, "entity-1", "completed"),
+            "first claim must succeed"
+        );
+    }
+
+    #[test]
+    fn try_claim_notification_duplicate_returns_false() {
+        let conn = in_memory_db();
+        assert!(try_claim_notification(&conn, "entity-1", "completed"));
+        assert!(
+            !try_claim_notification(&conn, "entity-1", "completed"),
+            "duplicate claim must return false"
+        );
+    }
+
+    #[test]
+    fn try_claim_notification_different_event_types_independent() {
+        let conn = in_memory_db();
+        assert!(try_claim_notification(&conn, "entity-1", "completed"));
+        assert!(
+            try_claim_notification(&conn, "entity-1", "failed"),
+            "different event_type for same entity_id must be independent"
+        );
+    }
+
+    // --- fire_feedback_notification smoke test ---
+
+    #[test]
+    fn fire_feedback_notification_disabled_does_not_claim() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true);
+        fire_feedback_notification(&conn, &cfg, "req-1", "Is this correct?");
+        // Notification was gated — no claim should have been recorded.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'req-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "disabled config must not write to notification_log"
+        );
+    }
+
+    #[test]
+    fn fire_feedback_notification_enabled_claims_once() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        // Fire twice — second call must be a no-op (claim already taken).
+        fire_feedback_notification(&conn, &cfg, "req-2", "preview");
+        fire_feedback_notification(&conn, &cfg, "req-2", "preview");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'req-2' AND event_type = 'feedback_requested'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "notification_log must contain exactly one row");
+    }
+
+    // --- fire_gate_notification smoke test ---
+
+    #[test]
+    fn fire_gate_notification_disabled_does_not_claim() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true);
+        fire_gate_notification(&conn, &cfg, "step-1", "Deploy to prod", "release");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'step-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn fire_gate_notification_enabled_claims_once() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        fire_gate_notification(&conn, &cfg, "step-2", "Deploy to prod", "release");
+        fire_gate_notification(&conn, &cfg, "step-2", "Deploy to prod", "release");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'step-2' AND event_type = 'gate_waiting'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "notification_log must contain exactly one row");
     }
 }

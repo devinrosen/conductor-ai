@@ -1141,6 +1141,33 @@ impl<'a> WorkflowManager<'a> {
         }
     }
 
+    /// List all gate steps currently in `waiting` status across all workflow runs.
+    ///
+    /// Returns `(step, workflow_name)` pairs. Used by the TUI background poller to
+    /// fire cross-process gate-waiting notifications.
+    pub fn list_all_waiting_gate_steps(&self) -> Result<Vec<(WorkflowRunStep, String)>> {
+        crate::db::query_collect(
+            self.conn,
+            "SELECT s.id, s.workflow_run_id, s.step_name, s.role, s.can_commit, \
+                    s.condition_expr, s.status, s.child_run_id, s.position, s.started_at, \
+                    s.ended_at, s.result_text, s.condition_met, s.iteration, \
+                    s.parallel_group_id, s.context_out, s.markers_out, s.retry_count, \
+                    s.gate_type, s.gate_prompt, s.gate_timeout, s.gate_approved_by, \
+                    s.gate_approved_at, s.gate_feedback, s.structured_output, \
+                    r.workflow_name \
+             FROM workflow_run_steps s \
+             JOIN workflow_runs r ON r.id = s.workflow_run_id \
+             WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
+             ORDER BY s.started_at",
+            [],
+            |row| {
+                let step = row_to_workflow_step(row)?;
+                let workflow_name: String = row.get(25)?;
+                Ok((step, workflow_name))
+            },
+        )
+    }
+
     /// Load workflow definitions from the filesystem for a worktree.
     ///
     /// Wraps `workflow_dsl::load_workflow_defs` so consumers don't need to
