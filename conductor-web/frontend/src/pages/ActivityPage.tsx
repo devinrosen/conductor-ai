@@ -13,6 +13,14 @@ import {
   type ConductorEventData,
 } from "../hooks/useConductorEvents";
 
+function ErrorBanner({ message }: { message: string }) {
+  return (
+    <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+      {message}
+    </div>
+  );
+}
+
 interface WorktreeContext {
   repoId: string;
   repoSlug: string;
@@ -34,6 +42,8 @@ export function ActivityPage() {
     activeWorkflowRuns: [],
   });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [feedbackText, setFeedbackText] = useState<Record<string, string>>({});
 
@@ -46,11 +56,16 @@ export function ActivityPage() {
     }
 
     const fetchAll = async () => {
-      const repoWorktrees = await Promise.all(
-        repos.map((r) =>
-          api.listWorktrees(r.id).then((wts) => ({ repo: r, wts })),
+      // Start latestRunsByWorktree in parallel with the per-repo worktree listings
+      // to avoid a sequential waterfall round.
+      const [repoWorktrees, latestRuns] = await Promise.all([
+        Promise.all(
+          repos.map((r) =>
+            api.listWorktrees(r.id).then((wts) => ({ repo: r, wts })),
+          ),
         ),
-      );
+        api.latestRunsByWorktree(),
+      ]);
 
       const ctxMap = new Map<string, WorktreeContext>();
       for (const { repo, wts } of repoWorktrees) {
@@ -68,12 +83,12 @@ export function ActivityPage() {
 
       const activeWorktreeIds = Array.from(ctxMap.keys());
 
-      const [latestRuns, ...workflowRunsArrays] = await Promise.all([
-        api.latestRunsByWorktree(),
-        ...activeWorktreeIds.map((wtId) =>
+      // Fetch workflow runs for all active worktrees in parallel
+      const workflowRunsArrays = await Promise.all(
+        activeWorktreeIds.map((wtId) =>
           api.listWorkflowRuns(wtId).catch(() => [] as WorkflowRun[]),
         ),
-      ]);
+      );
 
       const activeAgentRuns: { run: AgentRun; ctx: WorktreeContext }[] = [];
       const feedbackWorktreeIds: string[] = [];
@@ -82,11 +97,7 @@ export function ActivityPage() {
         const run = (latestRuns as Record<string, AgentRun>)[wtId];
         if (!run) continue;
         const ctx = ctxMap.get(wtId)!;
-        if (
-          run.status === "running" ||
-          run.status === "waiting_for_feedback" ||
-          run.status === "cancelled"
-        ) {
+        if (run.status === "running" || run.status === "waiting_for_feedback") {
           activeAgentRuns.push({ run, ctx });
         }
         if (run.status === "waiting_for_feedback") {
@@ -121,10 +132,14 @@ export function ActivityPage() {
       }
 
       setActivity({ pendingFeedback, activeAgentRuns, activeWorkflowRuns });
+      setError(null);
       setLoading(false);
     };
 
-    fetchAll().catch(() => setLoading(false));
+    fetchAll().catch((err: unknown) => {
+      setError(err instanceof Error ? err.message : "Failed to load activity");
+      setLoading(false);
+    });
   }, [repos, tick]);
 
   // 5-second polling
@@ -150,27 +165,30 @@ export function ActivityPage() {
     const text = feedbackText[feedbackId] ?? "";
     try {
       await api.submitFeedback(ctx.worktreeId, feedbackId, text);
+      setActionError(null);
       refresh();
-    } catch {
-      // ignore
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : "Failed to submit feedback");
     }
   };
 
   const handleDismissFeedback = async (ctx: WorktreeContext, feedbackId: string) => {
     try {
       await api.dismissFeedback(ctx.worktreeId, feedbackId);
+      setActionError(null);
       refresh();
-    } catch {
-      // ignore
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : "Failed to dismiss feedback");
     }
   };
 
   const handleCancelWorkflow = async (runId: string) => {
     try {
       await api.cancelWorkflow(runId);
+      setActionError(null);
       refresh();
-    } catch {
-      // ignore
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : "Failed to cancel workflow");
     }
   };
 
@@ -184,6 +202,9 @@ export function ActivityPage() {
   return (
     <div className="space-y-6">
       <h2 className="text-xl font-bold text-gray-900">Activity</h2>
+
+      {error && <ErrorBanner message={error} />}
+      {actionError && <ErrorBanner message={actionError} />}
 
       {/* Pending Feedback */}
       {activity.pendingFeedback.length > 0 && (
@@ -315,7 +336,7 @@ export function ActivityPage() {
       )}
 
       {/* Empty state */}
-      {isEmpty && (
+      {isEmpty && !error && (
         <div className="text-center py-16 text-gray-400">
           <p className="text-lg font-medium">No active runs</p>
           <p className="text-sm mt-1">Start an agent or workflow to see activity here.</p>

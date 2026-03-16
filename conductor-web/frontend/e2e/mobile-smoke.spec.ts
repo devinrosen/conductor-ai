@@ -81,3 +81,60 @@ test.describe("Mobile smoke: workflows tab", () => {
     await expect(workflowPanel).toBeVisible({ timeout: 10_000 });
   });
 });
+
+test.describe("Mobile smoke: bottom tab bar navigation", () => {
+  test("Activity tab navigates to ActivityPage and shows heading", async ({ page }) => {
+    // Start at the repos page then navigate via the bottom tab bar.
+    await page.goto("/repos");
+
+    // The bottom tab bar is visible on mobile (md:hidden).
+    const activityTab = page.getByRole("link", { name: "Activity" });
+    await expect(activityTab).toBeVisible({ timeout: 5_000 });
+    await activityTab.click();
+
+    // ActivityPage renders an "Activity" heading.
+    await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible({
+      timeout: 10_000,
+    });
+    // URL should be root.
+    await expect(page).toHaveURL("/");
+  });
+
+  test("Repos tab navigates to repos list", async ({ page }) => {
+    // Start at the activity (root) page.
+    await page.goto("/");
+
+    const reposTab = page.getByRole("link", { name: "Repos" });
+    await expect(reposTab).toBeVisible({ timeout: 5_000 });
+    await reposTab.click();
+
+    // URL should change to /repos.
+    await expect(page).toHaveURL("/repos");
+  });
+
+  test("Workflows tab navigates to WorkflowsPage and shows heading", async ({ page }) => {
+    await page.goto("/");
+
+    const workflowsTab = page.getByRole("link", { name: "Workflows" });
+    await expect(workflowsTab).toBeVisible({ timeout: 5_000 });
+    await workflowsTab.click();
+
+    // WorkflowsPage renders a "Workflows" heading.
+    await expect(page.getByRole("heading", { name: "Workflows" })).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(page).toHaveURL("/workflows");
+  });
+
+  test("active tab is highlighted when on matching route", async ({ page }) => {
+    await page.goto("/workflows");
+
+    // The active NavLink receives text-indigo-600 — check by colour via CSS class presence.
+    const workflowsTab = page.getByRole("link", { name: "Workflows" });
+    await expect(workflowsTab).toHaveClass(/text-indigo-600/, { timeout: 5_000 });
+
+    // Other tabs should not be active.
+    const activityTab = page.getByRole("link", { name: "Activity" });
+    await expect(activityTab).not.toHaveClass(/text-indigo-600/);
+  });
+});

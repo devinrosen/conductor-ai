@@ -8,6 +8,14 @@ import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { RunWorkflowModal } from "../components/workflows/RunWorkflowModal";
 
+function ErrorBanner({ message }: { message: string }) {
+  return (
+    <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+      {message}
+    </div>
+  );
+}
+
 interface WorktreeContext {
   repoId: string;
   repoSlug: string;
@@ -21,6 +29,8 @@ export function WorkflowsPage() {
   const { repos, loading: reposLoading } = useRepos();
   const [runs, setRuns] = useState<{ run: WorkflowRun; ctx: WorktreeContext }[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
 
   // Picker state
@@ -82,10 +92,14 @@ export function WorkflowsPage() {
       );
 
       setRuns(allRuns);
+      setError(null);
       setLoading(false);
     };
 
-    fetchAll().catch(() => setLoading(false));
+    fetchAll().catch((err: unknown) => {
+      setError(err instanceof Error ? err.message : "Failed to load workflows");
+      setLoading(false);
+    });
   }, [repos, tick]);
 
   // 5-second polling
@@ -97,26 +111,37 @@ export function WorkflowsPage() {
   const handleCancelWorkflow = async (runId: string) => {
     try {
       await api.cancelWorkflow(runId);
+      setActionError(null);
       refresh();
-    } catch {
-      // ignore
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : "Failed to cancel workflow");
     }
   };
 
   // Picker: select repo → load worktrees
   const handleSelectRepo = async (repo: Repo) => {
-    setPickerRepo(repo);
-    const wts = await api.listWorktrees(repo.id);
-    setPickerWorktrees(wts.filter((wt) => wt.status === "active"));
-    setPickerStep("worktree");
+    try {
+      setPickerRepo(repo);
+      const wts = await api.listWorktrees(repo.id);
+      setPickerWorktrees(wts.filter((wt) => wt.status === "active"));
+      setPickerStep("worktree");
+      setActionError(null);
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : "Failed to load worktrees");
+    }
   };
 
   // Picker: select worktree → load defs
   const handleSelectWorktree = async (wt: Worktree) => {
-    setPickerWorktree(wt);
-    const defs = await api.listWorkflowDefs(wt.id);
-    setPickerDefs(defs);
-    setPickerStep("def");
+    try {
+      setPickerWorktree(wt);
+      const defs = await api.listWorkflowDefs(wt.id);
+      setPickerDefs(defs);
+      setPickerStep("def");
+      setActionError(null);
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : "Failed to load workflow definitions");
+    }
   };
 
   // Picker: select def → confirm
@@ -149,6 +174,9 @@ export function WorkflowsPage() {
           </button>
         )}
       </div>
+
+      {error && <ErrorBanner message={error} />}
+      {actionError && <ErrorBanner message={actionError} />}
 
       {/* Start Workflow Picker */}
       {pickerStep && (
