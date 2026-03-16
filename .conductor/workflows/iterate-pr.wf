@@ -17,7 +17,9 @@ workflow iterate-pr {
 
     if review-aggregator.has_blocking_findings {
       call address-reviews
-      call fmt-fix
+      script fmt-fix {
+        run = ".conductor/scripts/fmt-fix.sh"
+      }
       call workflow lint-fix
     }
   } while review-aggregator.has_blocking_findings
