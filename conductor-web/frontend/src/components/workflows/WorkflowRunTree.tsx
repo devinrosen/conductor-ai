@@ -141,11 +141,13 @@ export function WorkflowRunTree({ runs, repos, ctxMap }: WorkflowRunTreeProps) {
     return { childIds, childrenMap };
   }, [runs]);
 
+  // Pre-index repos by ID so the grouping loop doesn't rebuild this on every runs change
+  const repoById = useMemo(() => new Map(repos.map((r) => [r.id, r])), [repos]);
+
   // Group root runs into (repoSlug → targetKey → runs[]) preserving first-seen order
   const { repoSlugs, repoGroups } = useMemo(() => {
     const repoSlugs: string[] = [];
     const repoGroups = new Map<string, Map<string, WorkflowRun[]>>();
-    const repoById = new Map(repos.map((r) => [r.id, r]));
 
     for (const run of runs) {
       if (childIds.has(run.id)) continue;
@@ -176,7 +178,7 @@ export function WorkflowRunTree({ runs, repos, ctxMap }: WorkflowRunTreeProps) {
     }
 
     return { repoSlugs, repoGroups };
-  }, [runs, repos, childIds]);
+  }, [runs, repoById, childIds]);
 
   if (runs.length === 0) {
     return (
