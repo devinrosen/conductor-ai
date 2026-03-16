@@ -16,7 +16,7 @@ impl IntoResponse for ApiError {
             | ConductorError::TicketAlreadyLinked
             | ConductorError::WorkflowRunAlreadyActive { .. } => StatusCode::CONFLICT,
             ConductorError::TicketSync(_) => StatusCode::BAD_GATEWAY,
-            ConductorError::Agent(_) => StatusCode::BAD_REQUEST,
+            ConductorError::Agent(_) | ConductorError::InvalidInput(_) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         let body = serde_json::json!({ "error": self.0.to_string() });

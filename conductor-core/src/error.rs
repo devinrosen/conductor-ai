@@ -55,6 +55,9 @@ pub enum ConductorError {
 
     #[error("worktree already has an active workflow run (\"{name}\") — wait for it to finish or cancel it before starting another")]
     WorkflowRunAlreadyActive { name: String },
+
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
 }
 
 pub type Result<T> = std::result::Result<T, ConductorError>;

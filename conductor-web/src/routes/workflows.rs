@@ -272,8 +272,11 @@ pub async fn list_all_workflow_runs_handler(
         .unwrap_or("")
         .split(',')
         .filter(|s| !s.is_empty())
-        .filter_map(|s| WorkflowRunStatus::from_str(s.trim()).ok())
-        .collect();
+        .map(|s| {
+            WorkflowRunStatus::from_str(s.trim())
+                .map_err(|e| ApiError(ConductorError::InvalidInput(e)))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
@@ -488,4 +491,76 @@ pub async fn reject_gate(
         "status": "rejected",
         "step_id": step.id,
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use conductor_core::config::Config;
+    use tokio::sync::{Mutex, RwLock};
+    use tower::ServiceExt;
+
+    use crate::events::EventBus;
+    use crate::routes::api_router;
+
+    fn empty_state() -> AppState {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        conductor_core::db::migrations::run(&conn).unwrap();
+        AppState {
+            db: Arc::new(Mutex::new(conn)),
+            config: Arc::new(RwLock::new(Config::default())),
+            events: EventBus::new(1),
+        }
+    }
+
+    async fn get_response(uri: &str, state: AppState) -> (StatusCode, serde_json::Value) {
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn status_valid_returns_200() {
+        let (status, _) = get_response("/api/workflows/runs?status=running", empty_state()).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn status_bogus_returns_400() {
+        let (status, body) = get_response("/api/workflows/runs?status=bogus", empty_state()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("unknown WorkflowRunStatus: bogus"),
+            "unexpected error body: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_mixed_valid_and_bogus_returns_400() {
+        let (status, _) =
+            get_response("/api/workflows/runs?status=running,bogus", empty_state()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn status_empty_param_returns_200() {
+        let (status, _) = get_response("/api/workflows/runs?status=", empty_state()).await;
+        assert_eq!(status, StatusCode::OK);
+    }
 }
