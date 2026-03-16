@@ -169,7 +169,12 @@ impl<'a> WorktreeManager<'a> {
                 .map(|b| b.to_string())
                 .unwrap_or_else(|| resolve_base_branch(&repo.local_path, &repo.default_branch));
             let warnings = ensure_base_up_to_date(&repo.local_path, &base)?;
-            check_output(git_in(&repo.local_path).args(["branch", "--", &branch, &base]))?;
+            check_output(git_in(&repo.local_path).args([
+                "branch",
+                "--",
+                &branch,
+                &format!("refs/heads/{base}"),
+            ]))?;
             (branch, Some(base), warnings)
         };
 
