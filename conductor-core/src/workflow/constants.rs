@@ -13,7 +13,7 @@ pub(super) const STEP_COLUMNS_WITH_PREFIX: &str =
      s.child_run_id, s.position, s.started_at, s.ended_at, s.result_text, s.condition_met, \
      s.iteration, s.parallel_group_id, s.context_out, s.markers_out, s.retry_count, \
      s.gate_type, s.gate_prompt, s.gate_timeout, s.gate_approved_by, s.gate_approved_at, \
-     s.gate_feedback, s.structured_output";
+     s.gate_feedback, s.structured_output, s.output_file";
 
 /// Column list for `workflow_runs` SELECT queries (used by `row_to_workflow_run`).
 pub(super) const RUN_COLUMNS: &str =

@@ -854,7 +854,8 @@ mod tests {
             1,
             "Failed→Completed must fire exactly one notification"
         );
-        assert_eq!(t2[0].0, "ci");
+        assert_eq!(t2[0].0, "r1", "run_id should be r1");
+        assert_eq!(t2[0].1, "ci", "workflow_name should be ci");
         assert!(t2[0].3, "should be succeeded=true for Completed");
     }
 
