@@ -1861,10 +1861,37 @@ pub(crate) fn resolve_script_path(
     run: &str,
     working_dir: &str,
     repo_path: &str,
+    skills_dir: Option<&std::path::Path>,
 ) -> Option<std::path::PathBuf> {
-    script_search_paths(run, working_dir, repo_path)
-        .into_iter()
-        .find(|p| p.exists())
+    let p = std::path::Path::new(run);
+    if p.is_absolute() {
+        if p.exists() {
+            return Some(p.to_path_buf());
+        }
+        return None;
+    }
+
+    // Worktree dir
+    let candidate = std::path::Path::new(working_dir).join(run);
+    if candidate.exists() {
+        return Some(candidate);
+    }
+
+    // Repo dir
+    let candidate = std::path::Path::new(repo_path).join(run);
+    if candidate.exists() {
+        return Some(candidate);
+    }
+
+    // ~/.claude/skills/
+    if let Some(skills) = skills_dir {
+        let candidate = skills.join(run);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
 }
 
 pub(super) fn execute_script(
@@ -1894,13 +1921,16 @@ pub(super) fn execute_script(
 
     // Resolve script path (substitute variables in run path first)
     let run_path_raw = substitute_variables(&node.run, &vars);
-    let resolved_path = resolve_script_path(&run_path_raw, &state.working_dir, &state.repo_path)
-        .ok_or_else(|| {
-            ConductorError::Workflow(format!(
-                "Script step '{}': script '{}' not found in worktree, repo, or ~/.claude/skills/",
-                step_label, run_path_raw
-            ))
-        })?;
+    let skills_dir =
+        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(&h).join(".claude/skills"));
+    let resolved_path =
+        resolve_script_path(&run_path_raw, &state.working_dir, &state.repo_path, skills_dir.as_deref())
+            .ok_or_else(|| {
+                ConductorError::Workflow(format!(
+                    "Script step '{}': script '{}' not found in worktree, repo, or ~/.claude/skills/",
+                    step_label, run_path_raw
+                ))
+            })?;
 
     // Resolve env var values
     let resolved_env: std::collections::HashMap<String, String> = node
@@ -2212,14 +2242,14 @@ mod tests {
     fn test_resolve_script_path_absolute_exists() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
-        let result = resolve_script_path(&path, "/nonexistent", "/nonexistent");
+        let result = resolve_script_path(&path, "/nonexistent", "/nonexistent", None);
         assert!(result.is_some());
         assert_eq!(result.unwrap(), tmp.path());
     }
 
     #[test]
     fn test_resolve_script_path_absolute_missing() {
-        let result = resolve_script_path("/nonexistent/path/script.sh", "/wd", "/repo");
+        let result = resolve_script_path("/nonexistent/path/script.sh", "/wd", "/repo", None);
         assert!(result.is_none());
     }
 
@@ -2229,7 +2259,7 @@ mod tests {
         let script = dir.path().join("run.sh");
         std::fs::write(&script, "#!/bin/sh\necho hi").unwrap();
         let working_dir = dir.path().to_str().unwrap();
-        let result = resolve_script_path("run.sh", working_dir, "/nonexistent");
+        let result = resolve_script_path("run.sh", working_dir, "/nonexistent", None);
         assert!(result.is_some());
         assert_eq!(result.unwrap(), script);
     }
@@ -2240,15 +2270,26 @@ mod tests {
         let script = dir.path().join("ci.sh");
         std::fs::write(&script, "#!/bin/sh\necho ci").unwrap();
         let repo_path = dir.path().to_str().unwrap();
-        let result = resolve_script_path("ci.sh", "/nonexistent", repo_path);
+        let result = resolve_script_path("ci.sh", "/nonexistent", repo_path, None);
         assert!(result.is_some());
         assert_eq!(result.unwrap(), script);
     }
 
     #[test]
     fn test_resolve_script_path_not_found() {
-        let result = resolve_script_path("totally-missing.sh", "/nonexistent", "/nonexistent");
+        let result = resolve_script_path("totally-missing.sh", "/nonexistent", "/nonexistent", None);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_script_path_in_skills_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("my-skill.sh");
+        std::fs::write(&script, "#!/bin/sh\necho skill").unwrap();
+        let result =
+            resolve_script_path("my-skill.sh", "/nonexistent", "/nonexistent", Some(dir.path()));
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), script);
     }
 
     // -----------------------------------------------------------------------

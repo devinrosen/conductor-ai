@@ -1993,6 +1993,8 @@ pub fn validate_script_steps(
     repo_path: &str,
 ) -> Vec<ValidationError> {
     let mut errors = Vec::new();
+    let skills_dir: Option<std::path::PathBuf> = std::env::var_os("HOME")
+        .map(|h| std::path::Path::new(&h).join(".claude").join("skills"));
     let nodes: Vec<&ScriptNode> = collect_script_nodes(&def.body)
         .into_iter()
         .chain(collect_script_nodes(&def.always))
@@ -2006,14 +2008,23 @@ pub fn validate_script_steps(
             continue;
         }
 
-        match crate::workflow::executors::resolve_script_path(run, working_dir, repo_path) {
+        match crate::workflow::executors::resolve_script_path(
+            run,
+            working_dir,
+            repo_path,
+            skills_dir.as_deref(),
+        ) {
             None => {
-                let searched =
-                    crate::workflow::executors::script_search_paths(run, working_dir, repo_path)
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
+                let p = std::path::Path::new(run);
+                let searched = if p.is_absolute() {
+                    run.to_string()
+                } else {
+                    let skills_path = skills_dir
+                        .as_ref()
+                        .map(|s| s.join(run).display().to_string())
+                        .unwrap_or_else(|| format!("~/.claude/skills/{run}"));
+                    format!("{}/{run}, {}/{run}, {skills_path}", working_dir, repo_path)
+                };
                 errors.push(ValidationError {
                     message: format!(
                         "Script step '{}': '{}' not found. Searched: {}",
