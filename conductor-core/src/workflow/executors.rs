@@ -1947,12 +1947,30 @@ pub(super) fn execute_script(
             resolved_path.display(),
         );
 
-        let spawn_result = Command::new(&resolved_path)
-            .envs(&resolved_env)
+        // Resolve GitHub App token for the bot identity (if `as = "..."` is set).
+        // Inject it as GH_TOKEN so the script's `gh` calls use that bot identity.
+        let effective_bot = node
+            .bot_name
+            .as_deref()
+            .or(state.default_bot_name.as_deref());
+        let mut cmd = Command::new(&resolved_path);
+        cmd.envs(&resolved_env)
             .stdout(output_file)
             .stderr(std::process::Stdio::inherit())
-            .current_dir(&state.working_dir)
-            .spawn();
+            .current_dir(&state.working_dir);
+        match crate::github_app::resolve_named_app_token(state.config, effective_bot, "script") {
+            crate::github_app::TokenResolution::AppToken(token) => {
+                cmd.env("GH_TOKEN", token);
+            }
+            crate::github_app::TokenResolution::Fallback { reason } => {
+                tracing::warn!(
+                    "Script step '{}': GitHub App token failed, using gh user identity: {reason}",
+                    step_label
+                );
+            }
+            crate::github_app::TokenResolution::NotConfigured => {}
+        }
+        let spawn_result = cmd.spawn();
 
         let mut child = match spawn_result {
             Ok(c) => c,
@@ -2304,6 +2322,7 @@ mod tests {
             timeout: Some(10),
             retries: 0,
             on_fail: None,
+            bot_name: None,
         };
 
         let result = execute_script(&mut state, &node, 0);
@@ -2346,6 +2365,7 @@ mod tests {
             timeout: Some(10),
             retries: 0,
             on_fail: None,
+            bot_name: None,
         };
 
         // Should return Ok (not an Err) because fail_fast is false; all_succeeded flips false
@@ -2428,6 +2448,7 @@ mod tests {
             timeout: Some(0), // expires immediately
             retries: 0,
             on_fail: None,
+            bot_name: None,
         };
 
         let result = execute_script(&mut state, &node, 0);
@@ -2484,6 +2505,7 @@ mod tests {
             timeout: None,
             retries: 0,
             on_fail: None,
+            bot_name: None,
         };
 
         let result = execute_script(&mut state, &node, 0);
@@ -2529,6 +2551,7 @@ mod tests {
             timeout: Some(10),
             retries: 2, // 3 attempts total
             on_fail: None,
+            bot_name: None,
         };
 
         let result = execute_script(&mut state, &node, 0);

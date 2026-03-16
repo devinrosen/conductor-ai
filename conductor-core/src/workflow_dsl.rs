@@ -173,6 +173,10 @@ pub struct ScriptNode {
     pub retries: u32,
     /// Agent to invoke if all attempts fail.
     pub on_fail: Option<AgentRef>,
+    /// Named GitHub App bot identity to use for this script (matches `[github.apps.<name>]`).
+    /// When set, the resolved installation token is injected as `GH_TOKEN` so the script
+    /// uses that bot identity for all `gh` CLI calls.
+    pub bot_name: Option<String>,
 }
 
 /// Reference to an agent — either a short name or an explicit file path.
@@ -1392,6 +1396,7 @@ impl Parser {
             .unwrap_or(0);
 
         let on_fail = kvs.remove("on_fail").map(|v| v.into_agent_ref());
+        let bot_name = kvs.remove("as").map(|v| v.into_string());
 
         Ok(ScriptNode {
             name,
@@ -1400,6 +1405,7 @@ impl Parser {
             timeout,
             retries,
             on_fail,
+            bot_name,
         })
     }
 }
@@ -1722,7 +1728,12 @@ pub fn collect_bot_names(nodes: &[WorkflowNode]) -> Vec<String> {
             WorkflowNode::While(n) => names.extend(collect_bot_names(&n.body)),
             WorkflowNode::DoWhile(n) => names.extend(collect_bot_names(&n.body)),
             WorkflowNode::Do(n) => names.extend(collect_bot_names(&n.body)),
-            WorkflowNode::Parallel(_) | WorkflowNode::Script(_) => {}
+            WorkflowNode::Parallel(_) => {}
+            WorkflowNode::Script(n) => {
+                if let Some(ref b) = n.bot_name {
+                    names.push(b.clone());
+                }
+            }
             WorkflowNode::Always(n) => names.extend(collect_bot_names(&n.body)),
         }
     }
