@@ -1871,4 +1871,20 @@ mod tests {
             "active step should be the Waiting one"
         );
     }
+
+    #[test]
+    fn test_get_active_steps_for_runs_empty_slice_returns_empty_map() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let result = mgr.get_active_steps_for_runs(&[]).unwrap();
+        assert!(result.is_empty(), "empty run_ids must yield an empty map");
+    }
+
+    #[test]
+    fn test_get_steps_for_runs_empty_slice_returns_empty_map() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let result = mgr.get_steps_for_runs(&[]).unwrap();
+        assert!(result.is_empty(), "empty run_ids must yield an empty map");
+    }
 }
