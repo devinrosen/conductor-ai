@@ -1670,6 +1670,7 @@ And here is my actual output:
             step: "step-a".to_string(),
             iteration: 0,
             context: "previous output".to_string(),
+            markers: vec![],
         });
 
         let vars = build_variable_map(&state);
@@ -1689,11 +1690,13 @@ And here is my actual output:
             step: "reviewer-a".to_string(),
             iteration: 0,
             context: "LGTM from reviewer A".to_string(),
+            markers: vec![],
         });
         state.contexts.push(ContextEntry {
             step: "reviewer-b".to_string(),
             iteration: 0,
             context: "Needs changes from reviewer B".to_string(),
+            markers: vec!["has_review_issues".to_string()],
         });
 
         let vars = build_variable_map(&state);

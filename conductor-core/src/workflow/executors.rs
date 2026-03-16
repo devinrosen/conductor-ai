@@ -1203,6 +1203,7 @@ pub(super) fn execute_parallel(
                                 step: child.agent_name.clone(),
                                 iteration,
                                 context: context.clone(),
+                                markers: markers.clone(),
                             });
                             WorkflowStepStatus::Completed
                         } else {
@@ -1946,12 +1947,30 @@ pub(super) fn execute_script(
             resolved_path.display(),
         );
 
-        let spawn_result = Command::new(&resolved_path)
-            .envs(&resolved_env)
+        // Resolve GitHub App token for the bot identity (if `as = "..."` is set).
+        // Inject it as GH_TOKEN so the script's `gh` calls use that bot identity.
+        let effective_bot = node
+            .bot_name
+            .as_deref()
+            .or(state.default_bot_name.as_deref());
+        let mut cmd = Command::new(&resolved_path);
+        cmd.envs(&resolved_env)
             .stdout(output_file)
             .stderr(std::process::Stdio::inherit())
-            .current_dir(&state.working_dir)
-            .spawn();
+            .current_dir(&state.working_dir);
+        match crate::github_app::resolve_named_app_token(state.config, effective_bot, "script") {
+            crate::github_app::TokenResolution::AppToken(token) => {
+                cmd.env("GH_TOKEN", token);
+            }
+            crate::github_app::TokenResolution::Fallback { reason } => {
+                tracing::warn!(
+                    "Script step '{}': GitHub App token failed, using gh user identity: {reason}",
+                    step_label
+                );
+            }
+            crate::github_app::TokenResolution::NotConfigured => {}
+        }
+        let spawn_result = cmd.spawn();
 
         let mut child = match spawn_result {
             Ok(c) => c,
@@ -2303,6 +2322,7 @@ mod tests {
             timeout: Some(10),
             retries: 0,
             on_fail: None,
+            bot_name: None,
         };
 
         let result = execute_script(&mut state, &node, 0);
@@ -2345,6 +2365,7 @@ mod tests {
             timeout: Some(10),
             retries: 0,
             on_fail: None,
+            bot_name: None,
         };
 
         // Should return Ok (not an Err) because fail_fast is false; all_succeeded flips false
@@ -2399,6 +2420,92 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // execute_script — bot_name / GH_TOKEN injection path
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_execute_script_with_bot_name_not_configured() {
+        // When bot_name is set but no GitHub App is configured, the script
+        // should still run successfully (NotConfigured path — no GH_TOKEN injected).
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = write_script(
+            &dir.path().join("bot.sh"),
+            "#!/bin/sh\necho '<<<CONDUCTOR_OUTPUT>>>\n{\"context\": \"bot ran\"}\n<<<END_CONDUCTOR_OUTPUT>>>'",
+        );
+
+        let conn = crate::test_helpers::setup_db();
+        let config = Box::leak(Box::new(crate::config::Config::default()));
+        let dir_str = dir.path().to_str().unwrap().to_string();
+        let mut state = make_test_state(
+            &conn,
+            config,
+            &dir_str,
+            crate::workflow::types::WorkflowExecConfig::default(),
+        );
+
+        let node = crate::workflow_dsl::ScriptNode {
+            name: "bot-step".into(),
+            run: script_path,
+            env: std::collections::HashMap::new(),
+            timeout: Some(10),
+            retries: 0,
+            on_fail: None,
+            bot_name: Some("my-bot".into()),
+        };
+
+        let result = execute_script(&mut state, &node, 0);
+        assert!(
+            result.is_ok(),
+            "execute_script with bot_name should succeed: {result:?}"
+        );
+        assert!(state.all_succeeded);
+        let step_res = state.step_results.get("bot-step").unwrap();
+        assert_eq!(step_res.context, "bot ran");
+    }
+
+    #[test]
+    fn test_execute_script_bot_name_falls_back_to_default() {
+        // When node.bot_name is None but state.default_bot_name is set,
+        // the effective_bot should use the default. With no app configured,
+        // this exercises the fallback logic without crashing.
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = write_script(
+            &dir.path().join("default-bot.sh"),
+            "#!/bin/sh\necho '<<<CONDUCTOR_OUTPUT>>>\n{\"context\": \"default bot ran\"}\n<<<END_CONDUCTOR_OUTPUT>>>'",
+        );
+
+        let conn = crate::test_helpers::setup_db();
+        let config = Box::leak(Box::new(crate::config::Config::default()));
+        let dir_str = dir.path().to_str().unwrap().to_string();
+        let mut state = make_test_state(
+            &conn,
+            config,
+            &dir_str,
+            crate::workflow::types::WorkflowExecConfig::default(),
+        );
+        state.default_bot_name = Some("default-bot".into());
+
+        let node = crate::workflow_dsl::ScriptNode {
+            name: "default-bot-step".into(),
+            run: script_path,
+            env: std::collections::HashMap::new(),
+            timeout: Some(10),
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+
+        let result = execute_script(&mut state, &node, 0);
+        assert!(
+            result.is_ok(),
+            "execute_script with default bot should succeed: {result:?}"
+        );
+        assert!(state.all_succeeded);
+        let step_res = state.step_results.get("default-bot-step").unwrap();
+        assert_eq!(step_res.context, "default bot ran");
+    }
+
+    // -----------------------------------------------------------------------
     // execute_script — timeout path
     // -----------------------------------------------------------------------
 
@@ -2427,6 +2534,7 @@ mod tests {
             timeout: Some(0), // expires immediately
             retries: 0,
             on_fail: None,
+            bot_name: None,
         };
 
         let result = execute_script(&mut state, &node, 0);
@@ -2483,6 +2591,7 @@ mod tests {
             timeout: None,
             retries: 0,
             on_fail: None,
+            bot_name: None,
         };
 
         let result = execute_script(&mut state, &node, 0);
@@ -2528,6 +2637,7 @@ mod tests {
             timeout: Some(10),
             retries: 2, // 3 attempts total
             on_fail: None,
+            bot_name: None,
         };
 
         let result = execute_script(&mut state, &node, 0);

@@ -21,5 +21,10 @@ workflow review-pr {
     call review-db-migrations   { retries = 1  if = "detect-db-migrations.has_db_migrations" }
   }
 
-  call review-aggregator { output = "review-aggregator" retries = 1 as = "reviewer" }
+  call review-aggregator { output = "review-aggregator" retries = 1 }
+  script submit-review {
+    run = ".conductor/scripts/submit-review.sh"
+    as  = "reviewer"
+    env = { PRIOR_OUTPUT = "{{prior_output}}" PR_NUMBER = "{{pr_number}}" DRY_RUN = "{{dry_run}}" }
+  }
 }

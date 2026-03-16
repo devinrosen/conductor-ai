@@ -17,6 +17,16 @@ fields:
   suggestion_count: number
   overall_approved: boolean
   summary: string
+  review_body: string
+  off_diff_findings:
+    type: array
+    items:
+      file: string
+      line: number
+      severity: enum(critical, warning, suggestion)
+      title: string
+      message: string
+      reviewer: string
 
 markers:
   has_review_issues: "overall_approved == false"
