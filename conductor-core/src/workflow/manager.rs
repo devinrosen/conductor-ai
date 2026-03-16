@@ -1149,11 +1149,12 @@ impl<'a> WorkflowManager<'a> {
         crate::db::query_collect(
             self.conn,
             &format!(
-                "SELECT {STEP_COLUMNS_WITH_PREFIX}, r.workflow_name \
+                "SELECT {}, r.workflow_name \
                  FROM workflow_run_steps s \
                  JOIN workflow_runs r ON r.id = s.workflow_run_id \
                  WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
-                 ORDER BY s.started_at"
+                 ORDER BY s.started_at",
+                &*STEP_COLUMNS_WITH_PREFIX
             ),
             [],
             |row| {

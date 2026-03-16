@@ -81,8 +81,13 @@ impl Worktree {
 const WORKTREE_COLUMNS: &str =
     "id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch";
 
-const WORKTREE_COLUMNS_W: &str =
-    "w.id, w.repo_id, w.slug, w.branch, w.path, w.ticket_id, w.status, w.created_at, w.completed_at, w.model, w.base_branch";
+static WORKTREE_COLUMNS_W: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    WORKTREE_COLUMNS
+        .split(',')
+        .map(|col| format!("w.{}", col.trim()))
+        .collect::<Vec<_>>()
+        .join(", ")
+});
 
 pub struct WorktreeManager<'a> {
     conn: &'a Connection,
@@ -334,7 +339,8 @@ impl<'a> WorktreeManager<'a> {
         let query = match repo_slug {
             Some(_) => {
                 format!(
-                    "SELECT {WORKTREE_COLUMNS_W} FROM worktrees w JOIN repos r ON r.id = w.repo_id WHERE r.slug = ?1{} ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
+                    "SELECT {} FROM worktrees w JOIN repos r ON r.id = w.repo_id WHERE r.slug = ?1{} ORDER BY CASE WHEN w.status = 'active' THEN 0 ELSE 1 END, w.created_at",
+                    &*WORKTREE_COLUMNS_W,
                     status_filter
                 )
             }
