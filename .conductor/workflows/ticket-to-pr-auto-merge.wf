@@ -44,7 +44,9 @@ workflow ticket-to-pr-auto-merge {
     on_timeout = fail
   }
 
-  call merge-and-close {
-    as = "merger"
+  script merge-and-close {
+    run = ".conductor/scripts/merge-and-close.sh"
+    as  = "actor"
+    env = { TICKET_NUMBER = "{{ticket_id}}" }
   }
 }

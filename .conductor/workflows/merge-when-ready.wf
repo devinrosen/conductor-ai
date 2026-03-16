@@ -20,5 +20,9 @@ workflow merge-when-ready {
     on_timeout = fail
   }
 
-  call merge-and-close
+  script merge-and-close {
+    run = ".conductor/scripts/merge-and-close.sh"
+    as  = "actor"
+    env = { TICKET_NUMBER = "{{ticket_id}}" }
+  }
 }
