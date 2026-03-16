@@ -2,7 +2,7 @@ import { memo, useCallback, useMemo, useState } from "react";
 import { Link } from "react-router";
 import type { WorkflowRun, Repo } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
-import { StatusPulseBadge } from "../shared/StatusPulseBadge";
+import { StatusPulseBadge, PULSE_STATUSES } from "../shared/StatusPulseBadge";
 import { TimeAgo } from "../shared/TimeAgo";
 
 interface WorktreeCtx {
@@ -67,7 +67,7 @@ const RunRow = memo(function RunRow({
     <div className={`rounded border border-gray-100 bg-white p-3 mb-1 flex items-center justify-between gap-2${indent ? " ml-6 border-l-2 border-l-gray-200" : ""}`}>
       <div className="min-w-0 flex-1">{nameEl}</div>
       <div className="flex items-center gap-2 shrink-0">
-        {(run.status === "running" || run.status === "waiting") ? (
+        {PULSE_STATUSES.has(run.status) ? (
           <StatusPulseBadge status={run.status} />
         ) : (
           <StatusBadge status={run.status} />

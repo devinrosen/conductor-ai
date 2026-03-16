@@ -4,6 +4,8 @@ const pulseColors: Partial<Record<string, { color: string; pulse: boolean }>> = 
   waiting: { color: "bg-gray-300", pulse: false },
 };
 
+export const PULSE_STATUSES = new Set(Object.keys(pulseColors));
+
 export function StatusPulseBadge({ status }: { status: string }) {
   const cfg = pulseColors[status];
   if (!cfg) return null;
