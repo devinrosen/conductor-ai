@@ -1923,14 +1923,18 @@ pub(super) fn execute_script(
     let run_path_raw = substitute_variables(&node.run, &vars);
     let skills_dir =
         std::env::var_os("HOME").map(|h| std::path::PathBuf::from(&h).join(".claude/skills"));
-    let resolved_path =
-        resolve_script_path(&run_path_raw, &state.working_dir, &state.repo_path, skills_dir.as_deref())
-            .ok_or_else(|| {
-                ConductorError::Workflow(format!(
-                    "Script step '{}': script '{}' not found in worktree, repo, or ~/.claude/skills/",
-                    step_label, run_path_raw
-                ))
-            })?;
+    let resolved_path = resolve_script_path(
+        &run_path_raw,
+        &state.working_dir,
+        &state.repo_path,
+        skills_dir.as_deref(),
+    )
+    .ok_or_else(|| {
+        ConductorError::Workflow(format!(
+            "Script step '{}': script '{}' not found in worktree, repo, or ~/.claude/skills/",
+            step_label, run_path_raw
+        ))
+    })?;
 
     // Resolve env var values
     let resolved_env: std::collections::HashMap<String, String> = node
@@ -2277,7 +2281,8 @@ mod tests {
 
     #[test]
     fn test_resolve_script_path_not_found() {
-        let result = resolve_script_path("totally-missing.sh", "/nonexistent", "/nonexistent", None);
+        let result =
+            resolve_script_path("totally-missing.sh", "/nonexistent", "/nonexistent", None);
         assert!(result.is_none());
     }
 
@@ -2286,8 +2291,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("my-skill.sh");
         std::fs::write(&script, "#!/bin/sh\necho skill").unwrap();
-        let result =
-            resolve_script_path("my-skill.sh", "/nonexistent", "/nonexistent", Some(dir.path()));
+        let result = resolve_script_path(
+            "my-skill.sh",
+            "/nonexistent",
+            "/nonexistent",
+            Some(dir.path()),
+        );
         assert!(result.is_some());
         assert_eq!(result.unwrap(), script);
     }

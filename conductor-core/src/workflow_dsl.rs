@@ -1993,8 +1993,8 @@ pub fn validate_script_steps(
     repo_path: &str,
 ) -> Vec<ValidationError> {
     let mut errors = Vec::new();
-    let skills_dir: Option<std::path::PathBuf> = std::env::var_os("HOME")
-        .map(|h| std::path::Path::new(&h).join(".claude").join("skills"));
+    let skills_dir: Option<std::path::PathBuf> =
+        std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".claude").join("skills"));
     let nodes: Vec<&ScriptNode> = collect_script_nodes(&def.body)
         .into_iter()
         .chain(collect_script_nodes(&def.always))
