@@ -930,7 +930,7 @@ pub(super) fn execute_parallel(
     node: &ParallelNode,
     iteration: u32,
 ) -> Result<()> {
-    let group_id = ulid::Ulid::new().to_string();
+    let group_id = crate::new_id();
     let pos_base = state.position;
 
     tracing::info!(

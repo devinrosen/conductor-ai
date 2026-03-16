@@ -51,7 +51,7 @@ impl<'a> RepoManager<'a> {
             });
         }
 
-        let id = ulid::Ulid::new().to_string();
+        let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
         let ws_dir = workspace_dir.map(|s| s.to_string()).unwrap_or_else(|| {
             self.config

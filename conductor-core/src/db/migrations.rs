@@ -209,7 +209,7 @@ pub fn run(conn: &Connection) -> Result<()> {
         for (run_id, plan_json) in &rows {
             if let Ok(steps) = serde_json::from_str::<Vec<LegacyPlanStep>>(plan_json) {
                 for (i, step) in steps.iter().enumerate() {
-                    let step_id = ulid::Ulid::new().to_string();
+                    let step_id = crate::new_id();
                     let status = if step.done { "completed" } else { "pending" };
                     conn.execute(
                         "INSERT INTO agent_run_steps (id, run_id, position, description, status) \

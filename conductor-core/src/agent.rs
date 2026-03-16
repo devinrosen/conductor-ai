@@ -752,7 +752,7 @@ impl<'a> AgentManager<'a> {
         parent_run_id: Option<&str>,
         bot_name: Option<&str>,
     ) -> Result<AgentRun> {
-        let id = ulid::Ulid::new().to_string();
+        let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
 
         let run = AgentRun {
@@ -1026,7 +1026,7 @@ impl<'a> AgentManager<'a> {
         )?;
 
         for (i, step) in steps.iter().enumerate() {
-            let step_id = ulid::Ulid::new().to_string();
+            let step_id = crate::new_id();
             let status = if step.done {
                 StepStatus::Completed
             } else {
@@ -1234,7 +1234,7 @@ impl<'a> AgentManager<'a> {
         started_at: &str,
         metadata: Option<&str>,
     ) -> Result<AgentRunEvent> {
-        let id = ulid::Ulid::new().to_string();
+        let id = crate::new_id();
         let event = AgentRunEvent {
             id: id.clone(),
             run_id: run_id.to_string(),
@@ -1303,7 +1303,7 @@ impl<'a> AgentManager<'a> {
         title: &str,
         url: &str,
     ) -> Result<AgentCreatedIssue> {
-        let id = ulid::Ulid::new().to_string();
+        let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
 
         let issue = AgentCreatedIssue {
@@ -1681,7 +1681,7 @@ impl<'a> AgentManager<'a> {
     /// Transition a run to "waiting_for_feedback" and create a feedback request.
     pub fn request_feedback(&self, run_id: &str, prompt: &str) -> Result<FeedbackRequest> {
         let prompt = truncate_utf8(prompt, FEEDBACK_MAX_LEN);
-        let id = ulid::Ulid::new().to_string();
+        let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
 
         // Update run status

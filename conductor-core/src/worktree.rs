@@ -189,7 +189,7 @@ impl<'a> WorktreeManager<'a> {
         // Detect and install deps
         install_deps(&wt_path);
 
-        let id = ulid::Ulid::new().to_string();
+        let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
 
         let worktree = Worktree {

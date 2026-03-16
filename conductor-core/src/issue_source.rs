@@ -57,7 +57,7 @@ impl<'a> IssueSourceManager<'a> {
             });
         }
 
-        let id = ulid::Ulid::new().to_string();
+        let id = crate::new_id();
         self.conn.execute(
             "INSERT INTO repo_issue_sources (id, repo_id, source_type, config_json) VALUES (?1, ?2, ?3, ?4)",
             params![id, repo_id, source_type, config_json],

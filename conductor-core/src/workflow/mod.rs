@@ -5573,7 +5573,7 @@ And here is my actual output:
         .unwrap();
 
         // Insert a waiting gate step.
-        let step_id = ulid::Ulid::new().to_string();
+        let step_id = crate::new_id();
         let started = step_started_at.unwrap_or("2025-01-01T00:00:00Z");
         conn.execute(
             "INSERT INTO workflow_run_steps \
@@ -5709,7 +5709,7 @@ And here is my actual output:
         )
         .unwrap();
 
-        let step_id = ulid::Ulid::new().to_string();
+        let step_id = crate::new_id();
         conn.execute(
             "INSERT INTO workflow_run_steps \
              (id, workflow_run_id, step_name, role, position, status, iteration, \

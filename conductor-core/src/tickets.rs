@@ -103,7 +103,7 @@ impl<'a> TicketSyncer<'a> {
         let now = Utc::now().to_rfc3339();
 
         for ticket in tickets {
-            let id = ulid::Ulid::new().to_string();
+            let id = crate::new_id();
             tx.execute(
                 "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)

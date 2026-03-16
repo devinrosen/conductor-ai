@@ -95,7 +95,7 @@ impl<'a> WorkflowManager<'a> {
         parent_workflow_run_id: Option<&str>,
         target_label: Option<&str>,
     ) -> Result<WorkflowRun> {
-        let id = ulid::Ulid::new().to_string();
+        let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
 
         self.conn.execute(
@@ -263,7 +263,7 @@ impl<'a> WorkflowManager<'a> {
         position: i64,
         iteration: i64,
     ) -> Result<String> {
-        let id = ulid::Ulid::new().to_string();
+        let id = crate::new_id();
         self.conn.execute(
             "INSERT INTO workflow_run_steps \
              (id, workflow_run_id, step_name, role, can_commit, status, position, iteration) \
