@@ -1162,7 +1162,7 @@ impl<'a> WorkflowManager<'a> {
             [],
             |row| {
                 let step = row_to_workflow_step(row)?;
-                let workflow_name: String = row.get(25)?;
+                let workflow_name: String = row.get("workflow_name")?;
                 Ok((step, workflow_name))
             },
         )
@@ -1757,6 +1757,59 @@ mod tests {
         );
     }
 
+    // --- list_all_waiting_gate_steps ---
+
+    #[test]
+    fn test_list_all_waiting_gate_steps_empty() {
+        let conn = setup_db();
+        let steps = WorkflowManager::new(&conn)
+            .list_all_waiting_gate_steps()
+            .unwrap();
+        assert!(steps.is_empty(), "no gate steps should exist yet");
+    }
+
+    #[test]
+    fn test_list_all_waiting_gate_steps_returns_waiting_gate_steps() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let run = create_worktree_run(&conn, "w1");
+
+        let step_id = mgr.insert_step(&run.id, "approval-gate", "gate", false, 0, 0).unwrap();
+        mgr.set_step_gate_info(&step_id, "human", Some("Please approve"), "1h").unwrap();
+        // Mark step as waiting so it appears in the query.
+        conn.execute(
+            "UPDATE workflow_run_steps SET status = 'waiting' WHERE id = ?1",
+            rusqlite::params![step_id],
+        ).unwrap();
+
+        let steps = mgr.list_all_waiting_gate_steps().unwrap();
+        assert_eq!(steps.len(), 1, "one waiting gate step should be returned");
+        let (step, workflow_name) = &steps[0];
+        assert_eq!(step.id, step_id);
+        assert_eq!(step.step_name, "approval-gate");
+        assert_eq!(workflow_name, "wf");
+    }
+
+    #[test]
+    fn test_list_all_waiting_gate_steps_excludes_non_gate_steps() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let run = create_worktree_run(&conn, "w1");
+
+        // Regular step with no gate_type — must not appear.
+        let step_id = mgr.insert_step(&run.id, "regular-step", "actor", false, 0, 0).unwrap();
+        conn.execute(
+            "UPDATE workflow_run_steps SET status = 'waiting' WHERE id = ?1",
+            rusqlite::params![step_id],
+        ).unwrap();
+
+        let steps = mgr.list_all_waiting_gate_steps().unwrap();
+        assert!(
+            steps.is_empty(),
+            "steps without gate_type must not be returned"
+        );
+    }
+
     #[test]
     fn test_list_active_workflow_runs_multiple_statuses_dynamic_placeholders() {
         // Passing two explicit statuses exercises the dynamic placeholder builder.
@@ -2190,6 +2243,27 @@ mod tests {
         assert!(
             !ids.contains(&inactive_run.id.as_str()),
             "merged worktree run must not appear"
+        );
+    }
+
+    #[test]
+    fn test_list_all_waiting_gate_steps_excludes_approved_gate_steps() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let run = create_worktree_run(&conn, "w1");
+
+        let step_id = mgr.insert_step(&run.id, "gate", "gate", false, 0, 0).unwrap();
+        mgr.set_step_gate_info(&step_id, "human", None, "1h").unwrap();
+        // Mark as completed (approved) — must not appear in waiting list.
+        conn.execute(
+            "UPDATE workflow_run_steps SET status = 'completed', gate_approved_at = '2024-01-01T00:00:00Z' WHERE id = ?1",
+            rusqlite::params![step_id],
+        ).unwrap();
+
+        let steps = mgr.list_all_waiting_gate_steps().unwrap();
+        assert!(
+            steps.is_empty(),
+            "approved (completed) gate steps must not be returned"
         );
     }
 }

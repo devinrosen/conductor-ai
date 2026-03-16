@@ -4468,4 +4468,51 @@ mod tests {
             other => panic!("expected ConductorError::Agent, got: {other:?}"),
         }
     }
+
+    // --- list_all_pending_feedback_requests ---
+
+    #[test]
+    fn list_all_pending_feedback_requests_empty() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let requests = mgr.list_all_pending_feedback_requests().unwrap();
+        assert!(requests.is_empty(), "no feedback requests should exist yet");
+    }
+
+    #[test]
+    fn list_all_pending_feedback_requests_returns_pending_only() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "test prompt", None, None).unwrap();
+
+        // Create two pending requests and one responded request.
+        let req1 = mgr.request_feedback(&run.id, "question 1").unwrap();
+        let req2 = mgr.request_feedback(&run.id, "question 2").unwrap();
+        let req3 = mgr.request_feedback(&run.id, "question 3").unwrap();
+        mgr.submit_feedback(&req3.id, "answered").unwrap();
+
+        let pending = mgr.list_all_pending_feedback_requests().unwrap();
+        assert_eq!(pending.len(), 2, "only pending requests should be returned");
+        let ids: Vec<_> = pending.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&req1.id.as_str()));
+        assert!(ids.contains(&req2.id.as_str()));
+    }
+
+    #[test]
+    fn list_all_pending_feedback_requests_across_runs() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run1 = mgr.create_run(Some("w1"), "run 1", None, None).unwrap();
+        let run2 = mgr.create_run(Some("w2"), "run 2", None, None).unwrap();
+
+        mgr.request_feedback(&run1.id, "from run 1").unwrap();
+        mgr.request_feedback(&run2.id, "from run 2").unwrap();
+
+        let pending = mgr.list_all_pending_feedback_requests().unwrap();
+        assert_eq!(
+            pending.len(),
+            2,
+            "pending requests from all runs should be returned"
+        );
+    }
 }

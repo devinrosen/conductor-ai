@@ -81,9 +81,13 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
             thread::sleep(interval);
             if let Some((action, config)) = poll_data() {
                 if let Action::DataRefreshed(ref payload) = action {
-                    // Open a dedicated connection for notification claims on each tick.
-                    // SQLite WAL allows concurrent readers; this connection is lightweight.
-                    let claim_conn = open_database(&db_path()).ok();
+                    // Only open a claim connection when notifications are actually enabled —
+                    // avoids an unnecessary DB open on every idle tick.
+                    let claim_conn = if config.notifications.enabled {
+                        open_database(&db_path()).ok()
+                    } else {
+                        None
+                    };
 
                     let all_runs = payload
                         .latest_workflow_runs_by_worktree
@@ -229,10 +233,19 @@ pub fn poll_data() -> Option<(Action, conductor_core::config::Config)> {
         .get_step_summaries_for_runs(&active_run_id_refs)
         .unwrap_or_default();
 
-    let pending_feedback_requests = agent_mgr
-        .list_all_pending_feedback_requests()
-        .unwrap_or_default();
-    let waiting_gate_steps = wf_mgr.list_all_waiting_gate_steps().unwrap_or_default();
+    // Only run notification-specific queries when notifications are enabled.
+    let pending_feedback_requests = if config.notifications.enabled {
+        agent_mgr
+            .list_all_pending_feedback_requests()
+            .unwrap_or_default()
+    } else {
+        vec![]
+    };
+    let waiting_gate_steps = if config.notifications.enabled {
+        wf_mgr.list_all_waiting_gate_steps().unwrap_or_default()
+    } else {
+        vec![]
+    };
 
     let action = Action::DataRefreshed(Box::new(DataRefreshedPayload {
         repos,
