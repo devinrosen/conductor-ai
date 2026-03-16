@@ -129,6 +129,10 @@ pub fn api_router() -> Router<AppState> {
             "/api/worktrees/{id}/workflows/runs",
             get(workflows::list_workflow_runs),
         )
+        .route(
+            "/api/workflows/runs",
+            get(workflows::list_all_workflow_runs_handler),
+        )
         .route("/api/workflows/runs/{id}", get(workflows::get_workflow_run))
         .route(
             "/api/workflows/runs/{id}/steps",

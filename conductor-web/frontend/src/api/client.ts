@@ -241,6 +241,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  listAllWorkflowRuns: (statuses?: string[]) => {
+    const params = statuses && statuses.length > 0 ? `?status=${statuses.join(",")}` : "";
+    return request<WorkflowRun[]>(`/workflows/runs${params}`);
+  },
   listWorkflowRuns: (worktreeId: string) =>
     request<WorkflowRun[]>(`/worktrees/${worktreeId}/workflows/runs`),
   getWorkflowRun: (runId: string) =>

@@ -656,6 +656,49 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// List workflow runs across all worktrees filtered by a set of statuses.
+    /// When `statuses` is empty, defaults to `[running, waiting, pending]`.
+    /// Only includes runs whose associated worktree is `active` (or runs with no worktree).
+    /// Ordered by `started_at DESC`.
+    pub fn list_active_workflow_runs(
+        &self,
+        statuses: &[WorkflowRunStatus],
+    ) -> Result<Vec<WorkflowRun>> {
+        let effective: Vec<WorkflowRunStatus> = if statuses.is_empty() {
+            vec![
+                WorkflowRunStatus::Running,
+                WorkflowRunStatus::Waiting,
+                WorkflowRunStatus::Pending,
+            ]
+        } else {
+            statuses.to_vec()
+        };
+
+        let placeholders = effective
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let sql = format!(
+            "SELECT workflow_runs.* \
+             FROM workflow_runs \
+             LEFT JOIN worktrees ON worktrees.id = workflow_runs.worktree_id \
+             WHERE (workflow_runs.worktree_id IS NULL OR worktrees.status = 'active') \
+               AND workflow_runs.status IN ({placeholders}) \
+             ORDER BY workflow_runs.started_at DESC"
+        );
+
+        let status_strings: Vec<String> = effective.iter().map(|s| s.to_string()).collect();
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(status_strings.iter()),
+            row_to_workflow_run,
+        )?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     /// Like `list_all_workflow_runs` but with an optional status filter and pagination offset.
     /// Covers all repos; the active-worktree guard is identical to `list_all_workflow_runs`.
     pub fn list_all_workflow_runs_filtered_paginated(
