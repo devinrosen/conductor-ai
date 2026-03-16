@@ -2756,7 +2756,10 @@ mod tests {
         std::fs::write(&path, "hello").unwrap();
         let content = read_and_maybe_cleanup_prompt_file(path.to_str().unwrap()).unwrap();
         assert_eq!(content, "hello");
-        assert!(!path.exists(), "internal temp file should have been deleted");
+        assert!(
+            !path.exists(),
+            "internal temp file should have been deleted"
+        );
     }
 
     #[test]
@@ -2766,7 +2769,10 @@ mod tests {
         std::fs::write(&path, "custom prompt").unwrap();
         let content = read_and_maybe_cleanup_prompt_file(path.to_str().unwrap()).unwrap();
         assert_eq!(content, "custom prompt");
-        assert!(path.exists(), "user-provided prompt file should not be deleted");
+        assert!(
+            path.exists(),
+            "user-provided prompt file should not be deleted"
+        );
         let _ = std::fs::remove_file(&path);
     }
 }
