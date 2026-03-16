@@ -1524,6 +1524,12 @@ mod tests {
             .unwrap()
     }
 
+    // Helper to set a step's status without touching optional fields.
+    fn set_step_status(mgr: &WorkflowManager, step_id: &str, status: WorkflowStepStatus) {
+        mgr.update_step_status(step_id, status, None, None, None, None, None)
+            .unwrap();
+    }
+
     // Helper to create a run linked directly to a repo (repo_id set, worktree_id null).
     fn create_repo_run(conn: &rusqlite::Connection, repo_id: &str) -> WorkflowRun {
         // Need a valid parent agent run; use w1 as the worktree for the agent run.
@@ -1776,11 +1782,7 @@ mod tests {
         mgr.set_step_gate_info(&step_id, "human", Some("Please approve"), "1h")
             .unwrap();
         // Mark step as waiting so it appears in the query.
-        conn.execute(
-            "UPDATE workflow_run_steps SET status = 'waiting' WHERE id = ?1",
-            rusqlite::params![step_id],
-        )
-        .unwrap();
+        set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
         let steps = mgr.list_all_waiting_gate_steps().unwrap();
         assert_eq!(steps.len(), 1, "one waiting gate step should be returned");
@@ -1800,11 +1802,7 @@ mod tests {
         let step_id = mgr
             .insert_step(&run.id, "regular-step", "actor", false, 0, 0)
             .unwrap();
-        conn.execute(
-            "UPDATE workflow_run_steps SET status = 'waiting' WHERE id = ?1",
-            rusqlite::params![step_id],
-        )
-        .unwrap();
+        set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
         let steps = mgr.list_all_waiting_gate_steps().unwrap();
         assert!(
@@ -1859,44 +1857,17 @@ mod tests {
         let step1_active = mgr
             .insert_step(&run1.id, "step-a", "actor", false, 0, 0)
             .unwrap();
-        mgr.update_step_status(
-            &step1_active,
-            WorkflowStepStatus::Running,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        set_step_status(&mgr, &step1_active, WorkflowStepStatus::Running);
         let step1_done = mgr
             .insert_step(&run1.id, "step-b", "actor", false, 1, 0)
             .unwrap();
-        mgr.update_step_status(
-            &step1_done,
-            WorkflowStepStatus::Completed,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        set_step_status(&mgr, &step1_done, WorkflowStepStatus::Completed);
 
         // run2: one running step only
         let step2_active = mgr
             .insert_step(&run2.id, "step-c", "actor", false, 0, 0)
             .unwrap();
-        mgr.update_step_status(
-            &step2_active,
-            WorkflowStepStatus::Running,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        set_step_status(&mgr, &step2_active, WorkflowStepStatus::Running);
 
         let result = mgr
             .get_active_steps_for_runs(&[run1.id.as_str(), run2.id.as_str()])
@@ -1927,16 +1898,7 @@ mod tests {
         let waiting_step = mgr
             .insert_step(&run.id, "step-a", "actor", false, 0, 0)
             .unwrap();
-        mgr.update_step_status(
-            &waiting_step,
-            WorkflowStepStatus::Waiting,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        set_step_status(&mgr, &waiting_step, WorkflowStepStatus::Waiting);
 
         // Insert a second step and leave it Pending — should be excluded.
         let _pending_step = mgr
