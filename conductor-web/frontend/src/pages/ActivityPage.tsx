@@ -1,0 +1,326 @@
+import { useEffect, useState, useCallback, useMemo } from "react";
+import { Link } from "react-router";
+import { useRepos } from "../components/layout/AppShell";
+import { api } from "../api/client";
+import type { AgentRun, WorkflowRun, FeedbackRequest } from "../api/types";
+import { StatusBadge } from "../components/shared/StatusBadge";
+import { TimeAgo } from "../components/shared/TimeAgo";
+import { LoadingSpinner } from "../components/shared/LoadingSpinner";
+import { agentStatusColor } from "../utils/agentStats";
+import {
+  useConductorEvents,
+  type ConductorEventType,
+  type ConductorEventData,
+} from "../hooks/useConductorEvents";
+
+interface WorktreeContext {
+  repoId: string;
+  repoSlug: string;
+  branch: string;
+  worktreeId: string;
+}
+
+interface ActivityData {
+  pendingFeedback: { feedback: FeedbackRequest; ctx: WorktreeContext }[];
+  activeAgentRuns: { run: AgentRun; ctx: WorktreeContext }[];
+  activeWorkflowRuns: { run: WorkflowRun; ctx: WorktreeContext }[];
+}
+
+export function ActivityPage() {
+  const { repos, loading: reposLoading } = useRepos();
+  const [activity, setActivity] = useState<ActivityData>({
+    pendingFeedback: [],
+    activeAgentRuns: [],
+    activeWorkflowRuns: [],
+  });
+  const [loading, setLoading] = useState(true);
+  const [tick, setTick] = useState(0);
+  const [feedbackText, setFeedbackText] = useState<Record<string, string>>({});
+
+  const refresh = useCallback(() => setTick((n) => n + 1), []);
+
+  useEffect(() => {
+    if (repos.length === 0) {
+      setLoading(false);
+      return;
+    }
+
+    const fetchAll = async () => {
+      const repoWorktrees = await Promise.all(
+        repos.map((r) =>
+          api.listWorktrees(r.id).then((wts) => ({ repo: r, wts })),
+        ),
+      );
+
+      const ctxMap = new Map<string, WorktreeContext>();
+      for (const { repo, wts } of repoWorktrees) {
+        for (const wt of wts) {
+          if (wt.status === "active") {
+            ctxMap.set(wt.id, {
+              repoId: repo.id,
+              repoSlug: repo.slug,
+              branch: wt.branch,
+              worktreeId: wt.id,
+            });
+          }
+        }
+      }
+
+      const activeWorktreeIds = Array.from(ctxMap.keys());
+
+      const [latestRuns, ...workflowRunsArrays] = await Promise.all([
+        api.latestRunsByWorktree(),
+        ...activeWorktreeIds.map((wtId) =>
+          api.listWorkflowRuns(wtId).catch(() => [] as WorkflowRun[]),
+        ),
+      ]);
+
+      const activeAgentRuns: { run: AgentRun; ctx: WorktreeContext }[] = [];
+      const feedbackWorktreeIds: string[] = [];
+
+      for (const wtId of activeWorktreeIds) {
+        const run = (latestRuns as Record<string, AgentRun>)[wtId];
+        if (!run) continue;
+        const ctx = ctxMap.get(wtId)!;
+        if (
+          run.status === "running" ||
+          run.status === "waiting_for_feedback" ||
+          run.status === "cancelled"
+        ) {
+          activeAgentRuns.push({ run, ctx });
+        }
+        if (run.status === "waiting_for_feedback") {
+          feedbackWorktreeIds.push(wtId);
+        }
+      }
+
+      const activeWorkflowRuns: { run: WorkflowRun; ctx: WorktreeContext }[] = [];
+      for (let i = 0; i < activeWorktreeIds.length; i++) {
+        const wtId = activeWorktreeIds[i];
+        const runs = workflowRunsArrays[i] as WorkflowRun[];
+        const ctx = ctxMap.get(wtId)!;
+        for (const run of runs) {
+          if (run.status === "running" || run.status === "waiting" || run.status === "pending") {
+            activeWorkflowRuns.push({ run, ctx });
+          }
+        }
+      }
+
+      const feedbackResults = await Promise.all(
+        feedbackWorktreeIds.map((wtId) =>
+          api.getPendingFeedback(wtId).then((fb) => ({ wtId, fb })).catch(() => null),
+        ),
+      );
+
+      const pendingFeedback: { feedback: FeedbackRequest; ctx: WorktreeContext }[] = [];
+      for (const result of feedbackResults) {
+        if (!result || !result.fb) continue;
+        const ctx = ctxMap.get(result.wtId);
+        if (!ctx) continue;
+        pendingFeedback.push({ feedback: result.fb, ctx });
+      }
+
+      setActivity({ pendingFeedback, activeAgentRuns, activeWorkflowRuns });
+      setLoading(false);
+    };
+
+    fetchAll().catch(() => setLoading(false));
+  }, [repos, tick]);
+
+  // 5-second polling
+  useEffect(() => {
+    const interval = setInterval(refresh, 5000);
+    return () => clearInterval(interval);
+  }, [refresh]);
+
+  const handlers = useMemo(() => {
+    const handleChange = (_data: ConductorEventData) => refresh();
+    const map: Partial<Record<ConductorEventType, (data: ConductorEventData) => void>> = {
+      agent_started: handleChange,
+      agent_stopped: handleChange,
+      worktree_created: handleChange,
+      worktree_deleted: handleChange,
+    };
+    return map;
+  }, [refresh]);
+
+  useConductorEvents(handlers);
+
+  const handleSubmitFeedback = async (ctx: WorktreeContext, feedbackId: string) => {
+    const text = feedbackText[feedbackId] ?? "";
+    try {
+      await api.submitFeedback(ctx.worktreeId, feedbackId, text);
+      refresh();
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleDismissFeedback = async (ctx: WorktreeContext, feedbackId: string) => {
+    try {
+      await api.dismissFeedback(ctx.worktreeId, feedbackId);
+      refresh();
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleCancelWorkflow = async (runId: string) => {
+    try {
+      await api.cancelWorkflow(runId);
+      refresh();
+    } catch {
+      // ignore
+    }
+  };
+
+  if (reposLoading || loading) return <LoadingSpinner />;
+
+  const isEmpty =
+    activity.pendingFeedback.length === 0 &&
+    activity.activeAgentRuns.length === 0 &&
+    activity.activeWorkflowRuns.length === 0;
+
+  return (
+    <div className="space-y-6">
+      <h2 className="text-xl font-bold text-gray-900">Activity</h2>
+
+      {/* Pending Feedback */}
+      {activity.pendingFeedback.length > 0 && (
+        <section>
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+            Pending Feedback
+          </h3>
+          <div className="space-y-3">
+            {activity.pendingFeedback.map(({ feedback, ctx }) => (
+              <div
+                key={feedback.id}
+                className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-500">
+                      {ctx.repoSlug} · {ctx.branch}
+                    </p>
+                    <p className="text-sm text-gray-800 mt-1">{feedback.prompt}</p>
+                  </div>
+                </div>
+                <textarea
+                  value={feedbackText[feedback.id] ?? ""}
+                  onChange={(e) =>
+                    setFeedbackText((prev) => ({ ...prev, [feedback.id]: e.target.value }))
+                  }
+                  placeholder="Your response..."
+                  rows={3}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded resize-none focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => handleDismissFeedback(ctx, feedback.id)}
+                    className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50"
+                  >
+                    Dismiss
+                  </button>
+                  <button
+                    onClick={() => handleSubmitFeedback(ctx, feedback.id)}
+                    className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-500"
+                  >
+                    Submit
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Active Agent Runs */}
+      {activity.activeAgentRuns.length > 0 && (
+        <section>
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+            Active Agent Runs
+          </h3>
+          <div className="space-y-2">
+            {activity.activeAgentRuns.map(({ run, ctx }) => (
+              <div
+                key={run.id}
+                className="rounded-lg border border-gray-200 bg-white p-4"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <Link
+                      to={`/repos/${ctx.repoId}/worktrees/${ctx.worktreeId}`}
+                      className="text-indigo-600 hover:underline text-sm font-medium truncate block"
+                    >
+                      {ctx.branch}
+                    </Link>
+                    <p className="text-xs text-gray-500 mt-0.5">{ctx.repoSlug}</p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span
+                      className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${agentStatusColor(run.status)}`}
+                    >
+                      {run.status}
+                    </span>
+                    <span className="text-xs text-gray-400"><TimeAgo date={run.started_at} /></span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Active Workflow Runs */}
+      {activity.activeWorkflowRuns.length > 0 && (
+        <section>
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+            Active Workflow Runs
+          </h3>
+          <div className="space-y-2">
+            {activity.activeWorkflowRuns.map(({ run, ctx }) => (
+              <div
+                key={run.id}
+                className="rounded-lg border border-gray-200 bg-white p-4"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <Link
+                      to={`/repos/${ctx.repoId}/worktrees/${ctx.worktreeId}/workflows/runs/${run.id}`}
+                      className="text-indigo-600 hover:underline text-sm font-medium truncate block"
+                    >
+                      {run.workflow_name}
+                    </Link>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {ctx.repoSlug} · {ctx.branch}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <StatusBadge status={run.status} />
+                    <span className="text-xs text-gray-400"><TimeAgo date={run.started_at} /></span>
+                    {(run.status === "running" || run.status === "waiting") && (
+                      <button
+                        onClick={() => handleCancelWorkflow(run.id)}
+                        className="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Empty state */}
+      {isEmpty && (
+        <div className="text-center py-16 text-gray-400">
+          <p className="text-lg font-medium">No active runs</p>
+          <p className="text-sm mt-1">Start an agent or workflow to see activity here.</p>
+        </div>
+      )}
+    </div>
+  );
+}

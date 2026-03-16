@@ -1,6 +1,7 @@
 import { createContext, useContext, useMemo, useState, useCallback, useEffect } from "react";
 import { Outlet, useNavigate, useLocation } from "react-router";
 import { Sidebar } from "./Sidebar";
+import { BottomTabBar } from "./BottomTabBar";
 import { useApi } from "../../hooks/useApi";
 import { api } from "../../api/client";
 import type { Repo } from "../../api/types";
@@ -93,10 +94,11 @@ export function AppShell() {
             </button>
             <span className="font-semibold text-gray-900">Conductor</span>
           </div>
-          <div className="p-4 md:p-6">
+          <div className="p-4 md:p-6 pb-20 md:pb-6">
             <Outlet />
           </div>
         </main>
+        <BottomTabBar />
       </div>
       <KeyboardShortcutHelp open={helpOpen} onClose={closeHelp} />
     </ReposContext.Provider>

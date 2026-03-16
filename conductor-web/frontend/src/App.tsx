@@ -1,6 +1,8 @@
 import { createBrowserRouter, RouterProvider } from "react-router";
 import { AppShell } from "./components/layout/AppShell";
-import { DashboardPage } from "./pages/DashboardPage";
+import { ActivityPage } from "./pages/ActivityPage";
+import { ReposPage } from "./pages/ReposPage";
+import { WorkflowsPage } from "./pages/WorkflowsPage";
 import { RepoDetailPage } from "./pages/RepoDetailPage";
 import { WorktreeDetailPage } from "./pages/WorktreeDetailPage";
 import { WorkflowRunDetailPage } from "./pages/WorkflowRunDetailPage";
@@ -12,7 +14,9 @@ const router = createBrowserRouter([
   {
     element: <AppShell />,
     children: [
-      { index: true, element: <DashboardPage /> },
+      { index: true, element: <ActivityPage /> },
+      { path: "repos", element: <ReposPage /> },
+      { path: "workflows", element: <WorkflowsPage /> },
       { path: "tickets", element: <TicketsPage /> },
       { path: "repos/:repoId", element: <RepoDetailPage /> },
       {

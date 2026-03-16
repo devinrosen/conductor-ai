@@ -40,7 +40,13 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
       <nav className="flex-1 overflow-auto p-3 space-y-1">
         <NavLink to="/" end className={linkClass}>
-          Dashboard
+          Activity
+        </NavLink>
+        <NavLink to="/repos" className={linkClass}>
+          Repos
+        </NavLink>
+        <NavLink to="/workflows" className={linkClass}>
+          Workflows
         </NavLink>
         <NavLink to="/tickets" className={linkClass}>
           Tickets
