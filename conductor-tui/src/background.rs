@@ -855,7 +855,7 @@ mod tests {
             "Failed→Completed must fire exactly one notification"
         );
         assert_eq!(t2[0].0, "ci");
-        assert!(t2[0].2, "should be succeeded=true for Completed");
+        assert!(t2[0].3, "should be succeeded=true for Completed");
     }
 
     /// A brand-new run that appears already-terminal on the second tick (e.g.
