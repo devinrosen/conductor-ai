@@ -239,6 +239,9 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
             .entry("ticket_id".to_string())
             .or_insert_with(|| ticket.id.clone());
         merged_inputs
+            .entry("ticket_source_id".to_string())
+            .or_insert_with(|| ticket.source_id.clone());
+        merged_inputs
             .entry("ticket_title".to_string())
             .or_insert_with(|| ticket.title.clone());
         merged_inputs

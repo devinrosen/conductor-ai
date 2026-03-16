@@ -47,6 +47,6 @@ workflow ticket-to-pr-auto-merge {
   script merge-and-close {
     run = ".conductor/scripts/merge-and-close.sh"
     as  = "merger"
-    env = { TICKET_NUMBER = "{{ticket_id}}" }
+    env = { TICKET_NUMBER = "{{ticket_source_id}}" }
   }
 }

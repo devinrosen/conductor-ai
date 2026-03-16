@@ -7,7 +7,7 @@ workflow merge-when-ready {
 
   inputs {
     pr_url    required
-    ticket_id
+    ticket_source_id
   }
 
   gate pr_checks {
@@ -24,6 +24,6 @@ workflow merge-when-ready {
   script merge-and-close {
     run = ".conductor/scripts/merge-and-close.sh"
     as  = "merger"
-    env = { TICKET_NUMBER = "{{ticket_id}}" }
+    env = { TICKET_NUMBER = "{{ticket_source_id}}" }
   }
 }
