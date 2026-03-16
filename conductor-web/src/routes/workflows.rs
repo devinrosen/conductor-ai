@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -250,6 +250,35 @@ pub async fn run_workflow(
             "worktree_id": worktree_id,
         })),
     ))
+}
+
+/// Query params for GET /api/workflows/runs
+#[derive(Deserialize)]
+pub struct ListAllRunsQuery {
+    /// Comma-separated list of statuses. Defaults to "running,waiting,pending".
+    pub status: Option<String>,
+}
+
+/// GET /api/workflows/runs?status=<csv>
+pub async fn list_all_workflow_runs_handler(
+    State(state): State<AppState>,
+    Query(params): Query<ListAllRunsQuery>,
+) -> Result<Json<Vec<WorkflowRun>>, ApiError> {
+    use std::str::FromStr;
+
+    let statuses: Vec<WorkflowRunStatus> = params
+        .status
+        .as_deref()
+        .unwrap_or("running,waiting,pending")
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| WorkflowRunStatus::from_str(s.trim()).ok())
+        .collect();
+
+    let db = state.db.lock().await;
+    let mgr = WorkflowManager::new(&db);
+    let runs = mgr.list_active_workflow_runs(&statuses)?;
+    Ok(Json(runs))
 }
 
 /// GET /api/worktrees/{id}/workflows/runs

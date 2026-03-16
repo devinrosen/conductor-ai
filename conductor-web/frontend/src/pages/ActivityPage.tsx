@@ -3,10 +3,10 @@ import { Link } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { api } from "../api/client";
 import type { AgentRun, WorkflowRun, FeedbackRequest } from "../api/types";
-import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { agentStatusColor } from "../utils/agentStats";
+import { WorkflowRunTree } from "../components/workflows/WorkflowRunTree";
 import {
   useConductorEvents,
   type ConductorEventType,
@@ -31,7 +31,7 @@ interface WorktreeContext {
 interface ActivityData {
   pendingFeedback: { feedback: FeedbackRequest; ctx: WorktreeContext }[];
   activeAgentRuns: { run: AgentRun; ctx: WorktreeContext }[];
-  activeWorkflowRuns: { run: WorkflowRun; ctx: WorktreeContext }[];
+  activeWorkflowRuns: WorkflowRun[];
 }
 
 export function ActivityPage() {
@@ -41,6 +41,7 @@ export function ActivityPage() {
     activeAgentRuns: [],
     activeWorkflowRuns: [],
   });
+  const [ctxMap, setCtxMap] = useState<Map<string, WorktreeContext>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -56,15 +57,15 @@ export function ActivityPage() {
     }
 
     const fetchAll = async () => {
-      // Start latestRunsByWorktree in parallel with the per-repo worktree listings
-      // to avoid a sequential waterfall round.
-      const [repoWorktrees, latestRuns] = await Promise.all([
+      // Fetch worktree listings, latest agent runs, and all active workflow runs in parallel
+      const [repoWorktrees, latestRuns, activeWorkflowRuns] = await Promise.all([
         Promise.all(
           repos.map((r) =>
             api.listWorktrees(r.id).then((wts) => ({ repo: r, wts })),
           ),
         ),
         api.latestRunsByWorktree(),
+        api.listAllWorkflowRuns().catch(() => [] as WorkflowRun[]),
       ]);
 
       const ctxMap = new Map<string, WorktreeContext>();
@@ -83,13 +84,6 @@ export function ActivityPage() {
 
       const activeWorktreeIds = Array.from(ctxMap.keys());
 
-      // Fetch workflow runs for all active worktrees in parallel
-      const workflowRunsArrays = await Promise.all(
-        activeWorktreeIds.map((wtId) =>
-          api.listWorkflowRuns(wtId).catch(() => [] as WorkflowRun[]),
-        ),
-      );
-
       const activeAgentRuns: { run: AgentRun; ctx: WorktreeContext }[] = [];
       const feedbackWorktreeIds: string[] = [];
 
@@ -102,18 +96,6 @@ export function ActivityPage() {
         }
         if (run.status === "waiting_for_feedback") {
           feedbackWorktreeIds.push(wtId);
-        }
-      }
-
-      const activeWorkflowRuns: { run: WorkflowRun; ctx: WorktreeContext }[] = [];
-      for (let i = 0; i < activeWorktreeIds.length; i++) {
-        const wtId = activeWorktreeIds[i];
-        const runs = workflowRunsArrays[i] as WorkflowRun[];
-        const ctx = ctxMap.get(wtId)!;
-        for (const run of runs) {
-          if (run.status === "running" || run.status === "waiting" || run.status === "pending") {
-            activeWorkflowRuns.push({ run, ctx });
-          }
         }
       }
 
@@ -132,6 +114,7 @@ export function ActivityPage() {
       }
 
       setActivity({ pendingFeedback, activeAgentRuns, activeWorkflowRuns });
+      setCtxMap(ctxMap);
       setError(null);
       setLoading(false);
     };
@@ -198,6 +181,15 @@ export function ActivityPage() {
     activity.pendingFeedback.length === 0 &&
     activity.activeAgentRuns.length === 0 &&
     activity.activeWorkflowRuns.length === 0;
+
+  // Build a minimal WorktreeCtx map for WorkflowRunTree (worktree_id → { repoId, worktreeId })
+  const treeCtxMap = useMemo(() => {
+    const m = new Map<string, { repoId: string; worktreeId: string }>();
+    for (const [wtId, ctx] of ctxMap) {
+      m.set(wtId, { repoId: ctx.repoId, worktreeId: ctx.worktreeId });
+    }
+    return m;
+  }, [ctxMap]);
 
   return (
     <div className="space-y-6">
@@ -293,47 +285,17 @@ export function ActivityPage() {
       )}
 
       {/* Active Workflow Runs */}
-      {activity.activeWorkflowRuns.length > 0 && (
-        <section>
+      <section>
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
             Active Workflow Runs
           </h3>
-          <div className="space-y-2">
-            {activity.activeWorkflowRuns.map(({ run, ctx }) => (
-              <div
-                key={run.id}
-                className="rounded-lg border border-gray-200 bg-white p-4"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <Link
-                      to={`/repos/${ctx.repoId}/worktrees/${ctx.worktreeId}/workflows/runs/${run.id}`}
-                      className="text-indigo-600 hover:underline text-sm font-medium truncate block"
-                    >
-                      {run.workflow_name}
-                    </Link>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      {ctx.repoSlug} · {ctx.branch}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <StatusBadge status={run.status} />
-                    <span className="text-xs text-gray-400"><TimeAgo date={run.started_at} /></span>
-                    {(run.status === "running" || run.status === "waiting") && (
-                      <button
-                        onClick={() => handleCancelWorkflow(run.id)}
-                        className="px-2 py-0.5 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+          <WorkflowRunTree
+            runs={activity.activeWorkflowRuns}
+            repos={repos}
+            ctxMap={treeCtxMap}
+            onCancel={handleCancelWorkflow}
+          />
         </section>
-      )}
 
       {/* Empty state */}
       {isEmpty && !error && (

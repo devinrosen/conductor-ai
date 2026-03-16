@@ -215,7 +215,7 @@ export interface WorkflowDefSummary {
 export interface WorkflowRun {
   id: string;
   workflow_name: string;
-  worktree_id: string;
+  worktree_id: string | null;
   parent_run_id: string;
   status: "pending" | "running" | "completed" | "failed" | "cancelled" | "waiting";
   dry_run: boolean;
@@ -223,6 +223,9 @@ export interface WorkflowRun {
   started_at: string;
   ended_at: string | null;
   result_summary: string | null;
+  repo_id: string | null;
+  parent_workflow_run_id: string | null;
+  target_label: string | null;
 }
 
 export interface WorkflowRunStep {
