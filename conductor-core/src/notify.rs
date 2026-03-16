@@ -146,7 +146,14 @@ impl NotificationDb {
         target_label: Option<&str>,
         succeeded: bool,
     ) {
-        fire_workflow_notification(&self.conn, config, run_id, workflow_name, target_label, succeeded);
+        fire_workflow_notification(
+            &self.conn,
+            config,
+            run_id,
+            workflow_name,
+            target_label,
+            succeeded,
+        );
     }
 
     pub fn fire_feedback_notification(
