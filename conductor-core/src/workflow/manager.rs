@@ -1905,8 +1905,14 @@ mod tests {
             .unwrap();
         let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
-        assert!(ids.contains(&running_run.id.as_str()), "running run must appear");
-        assert!(!ids.contains(&pending_run.id.as_str()), "pending run must not appear");
+        assert!(
+            ids.contains(&running_run.id.as_str()),
+            "running run must appear"
+        );
+        assert!(
+            !ids.contains(&pending_run.id.as_str()),
+            "pending run must not appear"
+        );
     }
 
     #[test]
@@ -1922,8 +1928,14 @@ mod tests {
         let runs = mgr.list_workflow_runs_filtered("w1", None).unwrap();
         let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
-        assert!(ids.contains(&pending_run.id.as_str()), "pending run must appear");
-        assert!(ids.contains(&running_run.id.as_str()), "running run must appear");
+        assert!(
+            ids.contains(&pending_run.id.as_str()),
+            "pending run must appear"
+        );
+        assert!(
+            ids.contains(&running_run.id.as_str()),
+            "running run must appear"
+        );
     }
 
     // ── list_workflow_runs_by_repo_id_filtered ───────────────────────────────
@@ -1944,8 +1956,14 @@ mod tests {
             .unwrap();
         let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
-        assert!(ids.contains(&running_run.id.as_str()), "running run must appear");
-        assert!(!ids.contains(&pending_run.id.as_str()), "pending run must not appear");
+        assert!(
+            ids.contains(&running_run.id.as_str()),
+            "running run must appear"
+        );
+        assert!(
+            !ids.contains(&pending_run.id.as_str()),
+            "pending run must not appear"
+        );
     }
 
     #[test]
@@ -1963,8 +1981,14 @@ mod tests {
             .unwrap();
         let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
-        assert!(ids.contains(&pending_run.id.as_str()), "pending run must appear");
-        assert!(ids.contains(&running_run.id.as_str()), "running run must appear");
+        assert!(
+            ids.contains(&pending_run.id.as_str()),
+            "pending run must appear"
+        );
+        assert!(
+            ids.contains(&running_run.id.as_str()),
+            "running run must appear"
+        );
     }
 
     // ── list_workflow_runs_filtered_paginated ────────────────────────────────
@@ -1985,13 +2009,21 @@ mod tests {
         let page1 = mgr
             .list_workflow_runs_filtered_paginated("w1", Some(WorkflowRunStatus::Pending), 1, 0)
             .unwrap();
-        assert_eq!(page1.len(), 1, "first page must have exactly one pending run");
+        assert_eq!(
+            page1.len(),
+            1,
+            "first page must have exactly one pending run"
+        );
 
         // Second page: limit=1, offset=1 — the other pending run.
         let page2 = mgr
             .list_workflow_runs_filtered_paginated("w1", Some(WorkflowRunStatus::Pending), 1, 1)
             .unwrap();
-        assert_eq!(page2.len(), 1, "second page must have exactly one pending run");
+        assert_eq!(
+            page2.len(),
+            1,
+            "second page must have exactly one pending run"
+        );
 
         assert_ne!(page1[0].id, page2[0].id, "pages must return different runs");
         assert!(
@@ -2018,7 +2050,11 @@ mod tests {
         let page2 = mgr
             .list_workflow_runs_filtered_paginated("w1", None, 2, 2)
             .unwrap();
-        assert_eq!(page2.len(), 1, "offset=2 with limit=2 must return the remaining run");
+        assert_eq!(
+            page2.len(),
+            1,
+            "offset=2 with limit=2 must return the remaining run"
+        );
     }
 
     // ── list_all_workflow_runs_filtered_paginated ────────────────────────────
@@ -2038,8 +2074,14 @@ mod tests {
             .unwrap();
         let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
-        assert!(ids.contains(&running_run.id.as_str()), "running run must appear");
-        assert!(!ids.contains(&pending_run.id.as_str()), "pending run must not appear");
+        assert!(
+            ids.contains(&running_run.id.as_str()),
+            "running run must appear"
+        );
+        assert!(
+            !ids.contains(&pending_run.id.as_str()),
+            "pending run must not appear"
+        );
     }
 
     #[test]
@@ -2076,8 +2118,14 @@ mod tests {
             .unwrap();
         let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
-        assert!(ids.contains(&active_run.id.as_str()), "active worktree run must appear");
-        assert!(!ids.contains(&inactive_run.id.as_str()), "merged worktree run must not appear");
+        assert!(
+            ids.contains(&active_run.id.as_str()),
+            "active worktree run must appear"
+        );
+        assert!(
+            !ids.contains(&inactive_run.id.as_str()),
+            "merged worktree run must not appear"
+        );
     }
 
     // ── list_all_workflow_runs ───────────────────────────────────────────────
@@ -2108,7 +2156,13 @@ mod tests {
         let runs = mgr.list_all_workflow_runs(50).unwrap();
         let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
-        assert!(ids.contains(&active_run.id.as_str()), "active worktree run must appear");
-        assert!(!ids.contains(&inactive_run.id.as_str()), "merged worktree run must not appear");
+        assert!(
+            ids.contains(&active_run.id.as_str()),
+            "active worktree run must appear"
+        );
+        assert!(
+            !ids.contains(&inactive_run.id.as_str()),
+            "merged worktree run must not appear"
+        );
     }
 }
