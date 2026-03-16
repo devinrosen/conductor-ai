@@ -40,26 +40,20 @@ mod tests {
 
     #[test]
     fn test_step_columns_with_prefix_derivation() {
-        let expected: String = STEP_COLUMNS
-            .split(',')
-            .map(|col| format!("s.{}", col.trim()))
-            .collect::<Vec<_>>()
-            .join(", ");
-
+        let expected = crate::db::prefix_columns(STEP_COLUMNS, "s.");
         assert_eq!(*STEP_COLUMNS_WITH_PREFIX, expected);
 
+        let cols: Vec<&str> = STEP_COLUMNS_WITH_PREFIX.split(", ").collect();
+
         // Verify column count parity.
-        let base_count = STEP_COLUMNS.split(',').count();
-        let prefixed_count = STEP_COLUMNS_WITH_PREFIX.split(", ").count();
-        assert_eq!(base_count, prefixed_count);
+        assert_eq!(STEP_COLUMNS.split(',').count(), cols.len());
 
         // Spot-check every entry is prefixed with "s.".
-        for col in STEP_COLUMNS_WITH_PREFIX.split(", ") {
+        for col in &cols {
             assert!(col.starts_with("s."), "column {col:?} missing 's.' prefix");
         }
 
         // Spot-check first and last known columns.
-        let cols: Vec<&str> = STEP_COLUMNS_WITH_PREFIX.split(", ").collect();
         assert_eq!(cols.first().copied(), Some("s.id"));
         assert_eq!(cols.last().copied(), Some("s.output_file"));
     }
