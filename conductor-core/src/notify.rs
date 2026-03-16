@@ -127,6 +127,12 @@ pub fn fire_gate_notification(
 }
 
 fn show_desktop_notification(title: &str, body: &str) {
+    #[cfg(test)]
+    {
+        let _ = (title, body);
+        return;
+    }
+    #[cfg(not(test))]
     if let Err(e) = notify_rust::Notification::new()
         .summary(title)
         .body(body)
