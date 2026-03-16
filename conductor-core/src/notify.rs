@@ -127,11 +127,6 @@ pub fn fire_gate_notification(
 }
 
 fn show_desktop_notification(title: &str, body: &str) {
-    #[cfg(test)]
-    {
-        let _ = (title, body);
-        return;
-    }
     #[cfg(not(test))]
     if let Err(e) = notify_rust::Notification::new()
         .summary(title)
@@ -140,6 +135,8 @@ fn show_desktop_notification(title: &str, body: &str) {
     {
         tracing::warn!("desktop notification failed: {e}");
     }
+    #[cfg(test)]
+    let _ = (title, body);
 }
 
 #[cfg(test)]
