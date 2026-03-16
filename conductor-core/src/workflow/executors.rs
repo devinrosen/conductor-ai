@@ -1822,13 +1822,10 @@ fn poll_script_child(
     }
 }
 
-/// Resolve a script path using the standard search order:
-/// 1. Absolute paths are used as-is.
-/// 2. Relative paths are tried against `working_dir`, then `repo_path`,
-///    then `~/.claude/skills/`.
 /// Returns the ordered list of candidate paths for a script name.
+///
 /// For absolute paths: single-element vec with the path as-is.
-/// For relative paths: [working_dir/run, repo_path/run, skills_dir/run].
+/// For relative paths: `[working_dir/run, repo_path/run, skills_dir/run]`.
 pub(crate) fn script_search_paths(
     run: &str,
     working_dir: &str,
@@ -2315,8 +2312,7 @@ mod tests {
     #[test]
     fn test_script_search_paths_no_filesystem_access() {
         // Paths are returned even when files do not exist — pure construction
-        let paths =
-            script_search_paths("nonexistent.sh", "/no/such/dir", "/also/missing", None);
+        let paths = script_search_paths("nonexistent.sh", "/no/such/dir", "/also/missing", None);
         assert_eq!(paths.len(), 2);
         assert!(paths[0].ends_with("nonexistent.sh"));
         assert!(paths[1].ends_with("nonexistent.sh"));
