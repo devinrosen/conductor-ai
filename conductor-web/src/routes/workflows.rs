@@ -199,14 +199,15 @@ pub async fn run_workflow(
             execute_workflow(&input)
         };
 
+        // Fire desktop notification off the async executor.
+        // Use the cached config from AppState to avoid a redundant disk read.
+        let notifications = state_clone.config.read().await.notifications.clone();
+
         match result {
             Ok(res) => {
                 let succeeded = res.all_succeeded;
                 let status = if succeeded { "completed" } else { "failed" };
 
-                // Fire desktop notification off the async executor.
-                // Use the cached config from AppState to avoid a redundant disk read.
-                let notifications = state_clone.config.read().await.notifications.clone();
                 let wf_name = workflow_name.clone();
                 let label = wt_target_label.clone();
                 tokio::task::spawn_blocking(move || {
@@ -228,6 +229,16 @@ pub async fn run_workflow(
             }
             Err(e) => {
                 tracing::error!("Workflow execution failed: {e}");
+                let wf_name = workflow_name.clone();
+                let label = wt_target_label.clone();
+                tokio::task::spawn_blocking(move || {
+                    crate::notify::fire_workflow_notification(
+                        &notifications,
+                        &wf_name,
+                        Some(&label),
+                        false,
+                    );
+                });
             }
         }
     });
@@ -370,6 +381,12 @@ pub async fn resume_workflow_endpoint(
             }
             Err(e) => {
                 tracing::error!("Workflow resume failed: {e}");
+                crate::notify::fire_workflow_notification(
+                    &notifications,
+                    &workflow_name,
+                    target_label.as_deref(),
+                    false,
+                );
             }
         }
     });
