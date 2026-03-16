@@ -84,12 +84,22 @@ export function ActivityPage() {
 
       const activeWorktreeIds = Array.from(ctxMap.keys());
 
+      // Build a set of agent run IDs that are owned by active workflow steps
+      const workflowChildRunIds = new Set<string>();
+      for (const wfRun of activeWorkflowRuns) {
+        for (const step of wfRun.active_steps ?? []) {
+          if (step.child_run_id) workflowChildRunIds.add(step.child_run_id);
+        }
+      }
+
       const activeAgentRuns: { run: AgentRun; ctx: WorktreeContext }[] = [];
       const feedbackWorktreeIds: string[] = [];
 
       for (const wtId of activeWorktreeIds) {
         const run = (latestRuns as Record<string, AgentRun>)[wtId];
         if (!run) continue;
+        // Skip agent runs that are already shown as step leaves under a workflow run
+        if (workflowChildRunIds.has(run.id)) continue;
         const ctx = ctxMap.get(wtId)!;
         if (run.status === "running" || run.status === "waiting_for_feedback") {
           activeAgentRuns.push({ run, ctx });

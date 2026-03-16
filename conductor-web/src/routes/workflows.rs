@@ -10,7 +10,7 @@ use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
     WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowManager, WorkflowResumeStandalone,
-    WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
+    WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -292,7 +292,25 @@ pub async fn list_all_workflow_runs_handler(
 
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
-    let runs = mgr.list_active_workflow_runs(&statuses)?;
+    let mut runs = mgr.list_active_workflow_runs(&statuses)?;
+
+    // Batch-fetch steps for all runs and attach the active (running/waiting) ones
+    let run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+    let mut steps_by_run = mgr.get_steps_for_runs(&run_ids)?;
+    for run in &mut runs {
+        if let Some(steps) = steps_by_run.remove(&run.id) {
+            run.active_steps = steps
+                .into_iter()
+                .filter(|s| {
+                    matches!(
+                        s.status,
+                        WorkflowStepStatus::Running | WorkflowStepStatus::Waiting
+                    )
+                })
+                .collect();
+        }
+    }
+
     Ok(Json(runs))
 }
 

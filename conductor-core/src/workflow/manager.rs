@@ -138,6 +138,7 @@ impl<'a> WorkflowManager<'a> {
             parent_workflow_run_id: parent_workflow_run_id.map(String::from),
             target_label: target_label.map(String::from),
             default_bot_name: None,
+            active_steps: Vec::new(),
         })
     }
 
@@ -1393,6 +1394,7 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
         parent_workflow_run_id,
         target_label,
         default_bot_name,
+        active_steps: Vec::new(),
     })
 }
 

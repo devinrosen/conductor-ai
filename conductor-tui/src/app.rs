@@ -6392,6 +6392,7 @@ mod tests {
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            active_steps: Vec::new(),
         }
     }
 
