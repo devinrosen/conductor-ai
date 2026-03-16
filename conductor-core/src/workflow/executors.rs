@@ -2090,7 +2090,7 @@ pub(super) fn execute_script(
             }
 
             ScriptPollResult::Cancelled => {
-                let msg = "workflow cancelled".to_string();
+                let msg = format!("script step '{step_label}' cancelled: workflow shutdown");
                 state.wf_mgr.update_step_status(
                     &step_id,
                     WorkflowStepStatus::Failed,
@@ -2123,6 +2123,64 @@ pub(super) fn execute_script(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // Shared test helper: build an ExecutionState backed by a real in-memory DB.
+    // -----------------------------------------------------------------------
+
+    /// Build an `ExecutionState` wired to a real in-memory SQLite connection.
+    ///
+    /// The caller owns the `Connection`; the state borrows it.  `working_dir`
+    /// and `repo_path` are both set to `dir`.
+    fn make_test_state<'a>(
+        conn: &'a rusqlite::Connection,
+        config: &'a crate::config::Config,
+        dir: &str,
+        exec_config: crate::workflow::types::WorkflowExecConfig,
+    ) -> ExecutionState<'a> {
+        let agent_mgr = crate::agent::AgentManager::new(conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "test", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(conn);
+        let run = wf_mgr
+            .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+        ExecutionState {
+            conn,
+            config,
+            workflow_run_id: run.id,
+            workflow_name: "test-wf".into(),
+            worktree_id: None,
+            working_dir: dir.to_string(),
+            worktree_slug: String::new(),
+            repo_path: dir.to_string(),
+            ticket_id: None,
+            repo_id: None,
+            model: None,
+            exec_config,
+            inputs: std::collections::HashMap::new(),
+            agent_mgr: crate::agent::AgentManager::new(conn),
+            wf_mgr: crate::workflow::manager::WorkflowManager::new(conn),
+            parent_run_id: String::new(),
+            depth: 0,
+            target_label: None,
+            step_results: std::collections::HashMap::new(),
+            contexts: Vec::new(),
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            last_gate_feedback: None,
+            last_structured_output: None,
+            last_output_file: None,
+            block_output: None,
+            block_with: Vec::new(),
+            resume_ctx: None,
+            default_bot_name: None,
+        }
+    }
 
     // -----------------------------------------------------------------------
     // resolve_script_path tests
@@ -2209,72 +2267,38 @@ mod tests {
     // execute_script integration tests
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn test_execute_script_success() {
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("hello.sh");
-        std::fs::write(
-            &script,
-            "#!/bin/sh\necho '<<<CONDUCTOR_OUTPUT>>>\n{\"markers\": [\"done\"], \"context\": \"ran ok\"}\n<<<END_CONDUCTOR_OUTPUT>>>'",
-        )
-        .unwrap();
+    /// Write a shell script to `path`, make it executable, and return the absolute path string.
+    fn write_script(path: &std::path::Path, body: &str) -> String {
+        std::fs::write(path, body).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
+        path.to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn test_execute_script_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = write_script(
+            &dir.path().join("hello.sh"),
+            "#!/bin/sh\necho '<<<CONDUCTOR_OUTPUT>>>\n{\"markers\": [\"done\"], \"context\": \"ran ok\"}\n<<<END_CONDUCTOR_OUTPUT>>>'",
+        );
 
         let conn = crate::test_helpers::setup_db();
-        let config = crate::config::Config::default();
-        let config: &'static crate::config::Config = Box::leak(Box::new(config));
-
-        let agent_mgr = crate::agent::AgentManager::new(&conn);
-        let parent = agent_mgr
-            .create_run(Some("w1"), "test", None, None)
-            .unwrap();
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
-        let run = wf_mgr
-            .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
-            .unwrap();
-
-        let mut state = ExecutionState {
-            conn: &conn,
+        let config = Box::leak(Box::new(crate::config::Config::default()));
+        let dir_str = dir.path().to_str().unwrap().to_string();
+        let mut state = make_test_state(
+            &conn,
             config,
-            workflow_run_id: run.id,
-            workflow_name: "test-wf".into(),
-            worktree_id: None,
-            working_dir: dir.path().to_str().unwrap().to_string(),
-            worktree_slug: String::new(),
-            repo_path: dir.path().to_str().unwrap().to_string(),
-            ticket_id: None,
-            repo_id: None,
-            model: None,
-            exec_config: crate::workflow::types::WorkflowExecConfig::default(),
-            inputs: std::collections::HashMap::new(),
-            agent_mgr: crate::agent::AgentManager::new(&conn),
-            wf_mgr: crate::workflow::manager::WorkflowManager::new(&conn),
-            parent_run_id: String::new(),
-            depth: 0,
-            target_label: None,
-            step_results: std::collections::HashMap::new(),
-            contexts: Vec::new(),
-            position: 0,
-            all_succeeded: true,
-            total_cost: 0.0,
-            total_turns: 0,
-            total_duration_ms: 0,
-            last_gate_feedback: None,
-            last_structured_output: None,
-            last_output_file: None,
-            block_output: None,
-            block_with: Vec::new(),
-            resume_ctx: None,
-            default_bot_name: None,
-        };
+            &dir_str,
+            crate::workflow::types::WorkflowExecConfig::default(),
+        );
 
         let node = crate::workflow_dsl::ScriptNode {
             name: "hello".into(),
-            run: script.to_str().unwrap().to_string(),
+            run: script_path,
             env: std::collections::HashMap::new(),
             timeout: Some(10),
             retries: 0,
@@ -2296,72 +2320,27 @@ mod tests {
     #[test]
     fn test_execute_script_failure_captures_stdout() {
         let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("fail.sh");
-        std::fs::write(
-            &script,
+        let script_path = write_script(
+            &dir.path().join("fail.sh"),
             "#!/bin/sh\necho 'something before failure'\nexit 1",
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        );
 
         let conn = crate::test_helpers::setup_db();
-        let config = crate::config::Config::default();
-        let config: &'static crate::config::Config = Box::leak(Box::new(config));
-
-        let agent_mgr = crate::agent::AgentManager::new(&conn);
-        let parent = agent_mgr
-            .create_run(Some("w1"), "test", None, None)
-            .unwrap();
-        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
-        let run = wf_mgr
-            .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
-            .unwrap();
-
-        let mut state = ExecutionState {
-            conn: &conn,
+        let config = Box::leak(Box::new(crate::config::Config::default()));
+        let dir_str = dir.path().to_str().unwrap().to_string();
+        let mut state = make_test_state(
+            &conn,
             config,
-            workflow_run_id: run.id,
-            workflow_name: "test-wf".into(),
-            worktree_id: None,
-            working_dir: dir.path().to_str().unwrap().to_string(),
-            worktree_slug: String::new(),
-            repo_path: dir.path().to_str().unwrap().to_string(),
-            ticket_id: None,
-            repo_id: None,
-            model: None,
-            exec_config: crate::workflow::types::WorkflowExecConfig {
+            &dir_str,
+            crate::workflow::types::WorkflowExecConfig {
                 fail_fast: false,
-                ..crate::workflow::types::WorkflowExecConfig::default()
+                ..Default::default()
             },
-            inputs: std::collections::HashMap::new(),
-            agent_mgr: crate::agent::AgentManager::new(&conn),
-            wf_mgr: crate::workflow::manager::WorkflowManager::new(&conn),
-            parent_run_id: String::new(),
-            depth: 0,
-            target_label: None,
-            step_results: std::collections::HashMap::new(),
-            contexts: Vec::new(),
-            position: 0,
-            all_succeeded: true,
-            total_cost: 0.0,
-            total_turns: 0,
-            total_duration_ms: 0,
-            last_gate_feedback: None,
-            last_structured_output: None,
-            last_output_file: None,
-            block_output: None,
-            block_with: Vec::new(),
-            resume_ctx: None,
-            default_bot_name: None,
-        };
+        );
 
         let node = crate::workflow_dsl::ScriptNode {
             name: "fail".into(),
-            run: script.to_str().unwrap().to_string(),
+            run: script_path,
             env: std::collections::HashMap::new(),
             timeout: Some(10),
             retries: 0,
@@ -2379,5 +2358,187 @@ mod tests {
             result_text.contains("something before failure"),
             "stdout should be captured in failure result, got: {result_text}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // poll_script_child unit tests — timeout and cancellation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_poll_script_child_timeout() {
+        // Spawn a long-running process; timeout=0 fires immediately.
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("failed to spawn sleep");
+        let result = poll_script_child(&mut child, Some(0), None);
+        assert!(
+            matches!(result, ScriptPollResult::TimedOut),
+            "expected TimedOut, got other variant"
+        );
+    }
+
+    #[test]
+    fn test_poll_script_child_cancelled() {
+        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        let flag = Arc::new(AtomicBool::new(true)); // already cancelled
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("failed to spawn sleep");
+        let result = poll_script_child(&mut child, None, Some(&flag));
+        assert!(
+            matches!(result, ScriptPollResult::Cancelled),
+            "expected Cancelled, got other variant"
+        );
+        // Verify flag didn't reset
+        assert!(flag.load(Ordering::Relaxed));
+    }
+
+    // -----------------------------------------------------------------------
+    // execute_script — timeout path
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_execute_script_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = write_script(&dir.path().join("slow.sh"), "#!/bin/sh\nsleep 60");
+
+        let conn = crate::test_helpers::setup_db();
+        let config = Box::leak(Box::new(crate::config::Config::default()));
+        let dir_str = dir.path().to_str().unwrap().to_string();
+        let mut state = make_test_state(
+            &conn,
+            config,
+            &dir_str,
+            crate::workflow::types::WorkflowExecConfig {
+                fail_fast: false,
+                ..Default::default()
+            },
+        );
+
+        let node = crate::workflow_dsl::ScriptNode {
+            name: "slow".into(),
+            run: script_path,
+            env: std::collections::HashMap::new(),
+            timeout: Some(0), // expires immediately
+            retries: 0,
+            on_fail: None,
+        };
+
+        let result = execute_script(&mut state, &node, 0);
+        // fail_fast=false → returns Ok, but all_succeeded is false
+        assert!(result.is_ok(), "expected Ok on timeout with fail_fast=false: {result:?}");
+        assert!(!state.all_succeeded, "all_succeeded should be false after timeout");
+
+        // DB step should be marked TimedOut
+        let steps = state
+            .wf_mgr
+            .get_workflow_steps(&state.workflow_run_id)
+            .unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(
+            steps[0].status,
+            super::super::status::WorkflowStepStatus::TimedOut
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // execute_script — cancellation path
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_execute_script_cancelled() {
+        use std::sync::{Arc, atomic::AtomicBool};
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = write_script(&dir.path().join("cancel.sh"), "#!/bin/sh\nsleep 60");
+
+        let shutdown = Arc::new(AtomicBool::new(true)); // pre-cancelled
+        let conn = crate::test_helpers::setup_db();
+        let config = Box::leak(Box::new(crate::config::Config::default()));
+        let dir_str = dir.path().to_str().unwrap().to_string();
+        let mut state = make_test_state(
+            &conn,
+            config,
+            &dir_str,
+            crate::workflow::types::WorkflowExecConfig {
+                shutdown: Some(Arc::clone(&shutdown)),
+                ..Default::default()
+            },
+        );
+
+        let node = crate::workflow_dsl::ScriptNode {
+            name: "cancel".into(),
+            run: script_path,
+            env: std::collections::HashMap::new(),
+            timeout: None,
+            retries: 0,
+            on_fail: None,
+        };
+
+        let result = execute_script(&mut state, &node, 0);
+        assert!(result.is_err(), "expected Err on cancellation");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("cancel") || err_msg.contains("cancelled"),
+            "error message should mention cancellation: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("cancel"), // step name included
+            "error message should include step name 'cancel': {err_msg}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // execute_script — retry path
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_execute_script_retries_exhausted() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = write_script(&dir.path().join("flaky.sh"), "#!/bin/sh\nexit 1");
+
+        let conn = crate::test_helpers::setup_db();
+        let config = Box::leak(Box::new(crate::config::Config::default()));
+        let dir_str = dir.path().to_str().unwrap().to_string();
+        let mut state = make_test_state(
+            &conn,
+            config,
+            &dir_str,
+            crate::workflow::types::WorkflowExecConfig {
+                fail_fast: false, // don't short-circuit on first failure
+                ..Default::default()
+            },
+        );
+        let run_id = state.workflow_run_id.clone();
+
+        let node = crate::workflow_dsl::ScriptNode {
+            name: "flaky".into(),
+            run: script_path,
+            env: std::collections::HashMap::new(),
+            timeout: Some(10),
+            retries: 2, // 3 attempts total
+            on_fail: None,
+        };
+
+        let result = execute_script(&mut state, &node, 0);
+        assert!(result.is_ok(), "fail_fast=false: expected Ok after retries: {result:?}");
+        assert!(!state.all_succeeded, "all_succeeded should be false after exhausting retries");
+
+        // Three step records should exist (one per attempt)
+        let steps = state.wf_mgr.get_workflow_steps(&run_id).unwrap();
+        assert_eq!(
+            steps.len(),
+            3,
+            "expected 3 step DB records (one per attempt), got {}",
+            steps.len()
+        );
+        for step in &steps {
+            assert_eq!(
+                step.status,
+                super::super::status::WorkflowStepStatus::Failed,
+                "each attempt should be marked Failed"
+            );
+        }
     }
 }
