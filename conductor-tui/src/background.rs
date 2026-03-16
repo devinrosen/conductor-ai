@@ -110,8 +110,8 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                         .chain(payload.active_non_worktree_workflow_runs.iter());
                     let transitions =
                         detect_new_terminal_transitions(all_runs, &mut seen, &mut initialized);
-                    for (run_id, workflow_name, target_label, succeeded) in transitions {
-                        if let Some(ref conn) = claim_conn {
+                    if let Some(ref conn) = claim_conn {
+                        for (run_id, workflow_name, target_label, succeeded) in transitions {
                             crate::notify::fire_workflow_notification(
                                 conn,
                                 &config.notifications,
@@ -121,11 +121,9 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                 succeeded,
                             );
                         }
-                    }
 
-                    // Fire feedback-requested notifications, skipping IDs already notified
-                    // this session to avoid a redundant INSERT OR IGNORE on every tick.
-                    if let Some(ref conn) = claim_conn {
+                        // Fire feedback-requested notifications, skipping IDs already notified
+                        // this session to avoid a redundant INSERT OR IGNORE on every tick.
                         for req in &payload.pending_feedback_requests {
                             if notified_feedback_ids.insert(req.id.clone()) {
                                 crate::notify::fire_feedback_notification(
@@ -136,10 +134,8 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                 );
                             }
                         }
-                    }
 
-                    // Fire gate-waiting notifications, skipping already-notified step IDs.
-                    if let Some(ref conn) = claim_conn {
+                        // Fire gate-waiting notifications, skipping already-notified step IDs.
                         for (step, workflow_name) in &payload.waiting_gate_steps {
                             if notified_gate_ids.insert(step.id.clone()) {
                                 crate::notify::fire_gate_notification(
