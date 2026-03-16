@@ -838,8 +838,13 @@ fn main() -> Result<()> {
                 } => {
                     let resolved_prompt = match (prompt, prompt_file) {
                         (Some(p), _) => p,
-                        (None, Some(path)) => std::fs::read_to_string(&path)
-                            .with_context(|| format!("Failed to read prompt file: {path}"))?,
+                        (None, Some(path)) => {
+                            let content = std::fs::read_to_string(&path)
+                                .with_context(|| format!("Failed to read prompt file: {path}"))?;
+                            // Clean up the temp prompt file written by spawn_child_tmux
+                            let _ = std::fs::remove_file(&path);
+                            content
+                        }
                         (None, None) => {
                             anyhow::bail!("Either --prompt or --prompt-file is required")
                         }

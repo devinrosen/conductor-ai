@@ -206,9 +206,9 @@ pub fn spawn_child_tmux(
         worktree_path.to_string(),
     ];
 
-    if let Some(ref path) = prompt_file_path {
+    if let Some(path) = prompt_file_path {
         args.push("--prompt-file".to_string());
-        args.push(path.clone());
+        args.push(path);
     } else {
         args.push("--prompt".to_string());
         args.push(prompt.to_string());
