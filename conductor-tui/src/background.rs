@@ -20,7 +20,7 @@ use crate::event::BackgroundSender;
 pub(crate) struct PollResult {
     pub action: Action,
     pub config: conductor_core::config::Config,
-    pub conn: rusqlite::Connection,
+    pub notifier: conductor_core::notify::NotificationDb,
 }
 
 /// Detect workflow runs that have freshly transitioned to a terminal status.
@@ -92,14 +92,14 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
             if let Some(PollResult {
                 action,
                 config,
-                conn,
+                notifier,
             }) = poll_data()
             {
                 if let Action::DataRefreshed(ref payload) = action {
-                    // Reuse the connection returned by poll_data() — no need to open a
+                    // Reuse the notifier returned by poll_data() — no need to open a
                     // second connection just for notification claims.
-                    let claim_conn = if config.notifications.enabled {
-                        Some(conn)
+                    let claim_notifier = if config.notifications.enabled {
+                        Some(notifier)
                     } else {
                         None
                     };
@@ -110,10 +110,9 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                         .chain(payload.active_non_worktree_workflow_runs.iter());
                     let transitions =
                         detect_new_terminal_transitions(all_runs, &mut seen, &mut initialized);
-                    if let Some(ref conn) = claim_conn {
+                    if let Some(ref notifier) = claim_notifier {
                         for (run_id, workflow_name, target_label, succeeded) in transitions {
-                            crate::notify::fire_workflow_notification(
-                                conn,
+                            notifier.fire_workflow_notification(
                                 &config.notifications,
                                 &run_id,
                                 &workflow_name,
@@ -126,8 +125,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                         // this session to avoid a redundant INSERT OR IGNORE on every tick.
                         for req in &payload.pending_feedback_requests {
                             if notified_feedback_ids.insert(req.id.clone()) {
-                                crate::notify::fire_feedback_notification(
-                                    conn,
+                                notifier.fire_feedback_notification(
                                     &config.notifications,
                                     &req.id,
                                     &req.prompt,
@@ -138,8 +136,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                         // Fire gate-waiting notifications, skipping already-notified step IDs.
                         for (step, workflow_name) in &payload.waiting_gate_steps {
                             if notified_gate_ids.insert(step.id.clone()) {
-                                crate::notify::fire_gate_notification(
-                                    conn,
+                                notifier.fire_gate_notification(
                                     &config.notifications,
                                     &step.id,
                                     &step.step_name,
@@ -308,7 +305,7 @@ pub fn poll_data() -> Option<PollResult> {
     Some(PollResult {
         action,
         config,
-        conn,
+        notifier: conductor_core::notify::NotificationDb::new(conn),
     })
 }
 

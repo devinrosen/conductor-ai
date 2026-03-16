@@ -126,6 +126,49 @@ pub fn fire_gate_notification(
     show_desktop_notification("Conductor \u{2014} Approval Required", &body);
 }
 
+/// A owned handle to a SQLite connection that exposes only the three
+/// notification-firing methods. Hides the `rusqlite::Connection` from callers
+/// (e.g. the TUI crate) that have no other reason to depend on rusqlite.
+pub struct NotificationDb {
+    conn: rusqlite::Connection,
+}
+
+impl NotificationDb {
+    pub fn new(conn: rusqlite::Connection) -> Self {
+        Self { conn }
+    }
+
+    pub fn fire_workflow_notification(
+        &self,
+        config: &NotificationConfig,
+        run_id: &str,
+        workflow_name: &str,
+        target_label: Option<&str>,
+        succeeded: bool,
+    ) {
+        fire_workflow_notification(&self.conn, config, run_id, workflow_name, target_label, succeeded);
+    }
+
+    pub fn fire_feedback_notification(
+        &self,
+        config: &NotificationConfig,
+        request_id: &str,
+        prompt_preview: &str,
+    ) {
+        fire_feedback_notification(&self.conn, config, request_id, prompt_preview);
+    }
+
+    pub fn fire_gate_notification(
+        &self,
+        config: &NotificationConfig,
+        step_id: &str,
+        step_name: &str,
+        workflow_name: &str,
+    ) {
+        fire_gate_notification(&self.conn, config, step_id, step_name, workflow_name);
+    }
+}
+
 fn show_desktop_notification(title: &str, body: &str) {
     #[cfg(not(test))]
     if let Err(e) = notify_rust::Notification::new()
