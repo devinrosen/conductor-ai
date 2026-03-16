@@ -580,7 +580,6 @@ mod tests {
             total_turns: 0,
             total_duration_ms: 0,
             last_gate_feedback: None,
-            last_structured_output: None,
             last_output_file: None,
             block_output: None,
             block_with: Vec::new(),
@@ -1650,7 +1649,6 @@ And here is my actual output:
             total_turns: 0,
             total_duration_ms: 0,
             last_gate_feedback: None,
-            last_structured_output: None,
             last_output_file: None,
             block_output: None,
             block_with: Vec::new(),
@@ -1745,7 +1743,13 @@ And here is my actual output:
         let conn = setup_db();
         let mut state = make_test_state(&conn);
         let json = r#"{"approved":true,"summary":"All clear"}"#.to_string();
-        state.last_structured_output = Some(json.clone());
+        state.contexts.push(crate::workflow::types::ContextEntry {
+            step: "test_step".to_string(),
+            iteration: 0,
+            context: String::new(),
+            markers: Vec::new(),
+            structured_output: Some(json.clone()),
+        });
 
         let vars = build_variable_map(&state);
         assert_eq!(vars.get("prior_output").unwrap(), &json);
@@ -2073,7 +2077,6 @@ And here is my actual output:
             total_turns: 0,
             total_duration_ms: 0,
             last_gate_feedback: None,
-            last_structured_output: None,
             last_output_file: None,
             block_output: None,
             block_with: Vec::new(),
@@ -3425,9 +3428,13 @@ And here is my actual output:
         assert_eq!(state.contexts[0].step, "review");
         assert_eq!(state.contexts[0].context, "reviewed code");
 
-        // Verify structured output updated
+        // Verify structured output is accessible via contexts
         assert_eq!(
-            state.last_structured_output.as_deref(),
+            state
+                .contexts
+                .iter()
+                .rev()
+                .find_map(|c| c.structured_output.as_deref()),
             Some(r#"{"verdict":"approve"}"#)
         );
     }

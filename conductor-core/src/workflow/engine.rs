@@ -64,8 +64,6 @@ pub(super) struct ExecutionState<'a> {
     pub total_turns: i64,
     pub total_duration_ms: i64,
     pub last_gate_feedback: Option<String>,
-    /// Raw JSON from the most recent step's structured output (for `{{prior_output}}`).
-    pub last_structured_output: Option<String>,
     /// Path to the most recent script step's stdout file (for `{{prior_output_file}}`).
     pub last_output_file: Option<String>,
     /// Block-level output schema name inherited from an enclosing `do {}` block.
@@ -295,7 +293,6 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         total_turns: 0,
         total_duration_ms: 0,
         last_gate_feedback: None,
-        last_structured_output: None,
         last_output_file: None,
         block_output: None,
         block_with: Vec::new(),
@@ -686,7 +683,6 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         total_turns: 0,
         total_duration_ms: 0,
         last_gate_feedback: None,
-        last_structured_output: None,
         last_output_file: None,
         block_output: None,
         block_with: Vec::new(),
@@ -793,11 +789,6 @@ pub(super) fn record_step_success(
     }
     if let Some(dur) = duration_ms {
         state.total_duration_ms += dur;
-    }
-
-    // Update last_structured_output for {{prior_output}} substitution
-    if structured_output.is_some() {
-        state.last_structured_output = structured_output.clone();
     }
 
     // Update last_output_file for {{prior_output_file}} substitution
@@ -983,10 +974,6 @@ pub(super) fn restore_completed_step(
     // Restore gate feedback if this was a gate step
     if let Some(ref feedback) = step.gate_feedback {
         state.last_gate_feedback = Some(feedback.clone());
-    }
-
-    if step.structured_output.is_some() {
-        state.last_structured_output = step.structured_output.clone();
     }
 
     if step.output_file.is_some() {

@@ -2192,7 +2192,6 @@ mod tests {
             total_turns: 0,
             total_duration_ms: 0,
             last_gate_feedback: None,
-            last_structured_output: None,
             last_output_file: None,
             block_output: None,
             block_with: Vec::new(),

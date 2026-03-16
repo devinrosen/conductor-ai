@@ -33,7 +33,12 @@ pub(super) fn build_variable_map<'a>(state: &'a ExecutionState<'_>) -> HashMap<&
         vars.insert("gate_feedback", feedback.clone());
     }
     // prior_output: raw JSON from the last step's structured output (if any)
-    if let Some(last_output) = state.last_structured_output.as_ref() {
+    if let Some(last_output) = state
+        .contexts
+        .iter()
+        .rev()
+        .find_map(|c| c.structured_output.as_ref())
+    {
         vars.insert("prior_output", last_output.clone());
     }
     // prior_output_file: path to the last script step's stdout temp file (if any)
