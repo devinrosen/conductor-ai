@@ -125,7 +125,7 @@ echo "${REVIEW_BODY}" > /tmp/conductor_review_body.md
 # ---------------------------------------------------------------------------
 # 6. Submit formal review
 # ---------------------------------------------------------------------------
-OVERALL_APPROVED=$(echo "${PRIOR_OUTPUT}" | jq -r '.overall_approved // true')
+OVERALL_APPROVED=$(echo "${PRIOR_OUTPUT}" | jq -r 'if .overall_approved == false then "false" else "true" end')
 
 if [ "${OVERALL_APPROVED}" = "true" ]; then
   echo "Submitting APPROVE review for PR #${PR_NUMBER}…"
