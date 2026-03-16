@@ -19,7 +19,22 @@ use crate::events::ConductorEvent;
 use crate::notify::fire_workflow_notification;
 use crate::state::AppState;
 
-/// Use the shared DB connection and fire a workflow completion notification.
+/// Acquire the shared DB connection and fire a workflow completion notification.
+///
+/// # Calling context
+///
+/// **Must only be called from a synchronous/blocking context** — i.e. inside
+/// `tokio::task::spawn_blocking` or a plain OS thread. Calling this function
+/// from an async task (including `async fn` or `tokio::task::spawn` closures)
+/// will **panic** because `blocking_lock()` on a `tokio::sync::Mutex` blocks
+/// the current thread, which is forbidden on a tokio executor thread.
+///
+/// Correct usage:
+/// ```ignore
+/// tokio::task::spawn_blocking(move || {
+///     notify_workflow(db, &notifications, &run_id, &workflow_name, label, succeeded);
+/// });
+/// ```
 fn notify_workflow(
     db: std::sync::Arc<tokio::sync::Mutex<rusqlite::Connection>>,
     notifications: &conductor_core::config::NotificationConfig,
