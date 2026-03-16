@@ -24,6 +24,9 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
 
     thread::spawn(move || {
         let mut seen: HashMap<String, WorkflowRunStatus> = HashMap::new();
+        // On the first poll `seen` is empty, so every pre-existing terminal run would
+        // look like a fresh transition. Skip notifications until the map is seeded.
+        let mut initialized = false;
         loop {
             thread::sleep(interval);
             if let Some((action, config)) = poll_data() {
@@ -33,29 +36,32 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                         .values()
                         .chain(payload.active_non_worktree_workflow_runs.iter());
                     for run in all_runs {
-                        let prev_terminal = seen
-                            .get(&run.id)
-                            .map(|s| {
-                                matches!(
-                                    s,
-                                    WorkflowRunStatus::Completed | WorkflowRunStatus::Failed
-                                )
-                            })
-                            .unwrap_or(false);
                         let now_terminal = matches!(
                             run.status,
                             WorkflowRunStatus::Completed | WorkflowRunStatus::Failed
                         );
-                        if now_terminal && !prev_terminal {
-                            crate::notify::fire_workflow_notification(
-                                &config.notifications,
-                                &run.workflow_name,
-                                run.target_label.as_deref(),
-                                matches!(run.status, WorkflowRunStatus::Completed),
-                            );
+                        if initialized {
+                            let prev_terminal = seen
+                                .get(&run.id)
+                                .map(|s| {
+                                    matches!(
+                                        s,
+                                        WorkflowRunStatus::Completed | WorkflowRunStatus::Failed
+                                    )
+                                })
+                                .unwrap_or(false);
+                            if now_terminal && !prev_terminal {
+                                crate::notify::fire_workflow_notification(
+                                    &config.notifications,
+                                    &run.workflow_name,
+                                    run.target_label.as_deref(),
+                                    matches!(run.status, WorkflowRunStatus::Completed),
+                                );
+                            }
                         }
                         seen.insert(run.id.clone(), run.status.clone());
                     }
+                    initialized = true;
                     // Prune stale entries to prevent unbounded growth
                     let current_ids: std::collections::HashSet<&str> = payload
                         .latest_workflow_runs_by_worktree
@@ -77,7 +83,10 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
 pub fn poll_data() -> Option<(Action, conductor_core::config::Config)> {
     let db = db_path();
     let conn = open_database(&db).ok()?;
-    let config = load_config().ok()?;
+    let config = load_config().unwrap_or_else(|e| {
+        tracing::warn!("config parse error (using defaults): {e}");
+        conductor_core::config::Config::default()
+    });
 
     let repo_mgr = RepoManager::new(&conn, &config);
     let wt_mgr = WorktreeManager::new(&conn, &config);
