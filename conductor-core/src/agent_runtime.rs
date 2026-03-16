@@ -421,7 +421,10 @@ mod tests {
         assert!(args.iter().any(|a| a == "--fail-fast"));
         let model_idx = args.iter().position(|a| a == "--model").unwrap();
         assert_eq!(args[model_idx + 1], "claude-3");
-        let timeout_idx = args.iter().position(|a| a == "--child-timeout-secs").unwrap();
+        let timeout_idx = args
+            .iter()
+            .position(|a| a == "--child-timeout-secs")
+            .unwrap();
         assert_eq!(args[timeout_idx + 1], "120");
     }
 }
