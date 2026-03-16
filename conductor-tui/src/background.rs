@@ -70,21 +70,25 @@ pub(crate) fn detect_new_terminal_transitions<'a>(
 
 /// Spawn the DB poller thread. Polls every `interval` and sends DataRefreshed events.
 pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     thread::spawn(move || {
         let mut seen: HashMap<String, conductor_core::workflow::WorkflowRunStatus> = HashMap::new();
         // On the first poll `seen` is empty, so every pre-existing terminal run would
         // look like a fresh transition. Skip notifications until the map is seeded.
         let mut initialized = false;
+        // Track IDs that have already been notified this session so we skip redundant
+        // INSERT OR IGNORE attempts on every subsequent tick.
+        let mut notified_feedback_ids: HashSet<String> = HashSet::new();
+        let mut notified_gate_ids: HashSet<String> = HashSet::new();
         loop {
             thread::sleep(interval);
-            if let Some((action, config)) = poll_data() {
+            if let Some((action, config, conn)) = poll_data() {
                 if let Action::DataRefreshed(ref payload) = action {
-                    // Only open a claim connection when notifications are actually enabled —
-                    // avoids an unnecessary DB open on every idle tick.
+                    // Reuse the connection returned by poll_data() — no need to open a
+                    // second connection just for notification claims.
                     let claim_conn = if config.notifications.enabled {
-                        open_database(&db_path()).ok()
+                        Some(conn)
                     } else {
                         None
                     };
@@ -108,28 +112,33 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                         }
                     }
 
-                    // Fire feedback-requested notifications.
+                    // Fire feedback-requested notifications, skipping IDs already notified
+                    // this session to avoid a redundant INSERT OR IGNORE on every tick.
                     if let Some(ref conn) = claim_conn {
                         for req in &payload.pending_feedback_requests {
-                            crate::notify::fire_feedback_notification(
-                                conn,
-                                &config.notifications,
-                                &req.id,
-                                &req.prompt,
-                            );
+                            if notified_feedback_ids.insert(req.id.clone()) {
+                                crate::notify::fire_feedback_notification(
+                                    conn,
+                                    &config.notifications,
+                                    &req.id,
+                                    &req.prompt,
+                                );
+                            }
                         }
                     }
 
-                    // Fire gate-waiting notifications.
+                    // Fire gate-waiting notifications, skipping already-notified step IDs.
                     if let Some(ref conn) = claim_conn {
                         for (step, workflow_name) in &payload.waiting_gate_steps {
-                            crate::notify::fire_gate_notification(
-                                conn,
-                                &config.notifications,
-                                &step.id,
-                                &step.step_name,
-                                workflow_name,
-                            );
+                            if notified_gate_ids.insert(step.id.clone()) {
+                                crate::notify::fire_gate_notification(
+                                    conn,
+                                    &config.notifications,
+                                    &step.id,
+                                    &step.step_name,
+                                    workflow_name,
+                                );
+                            }
                         }
                     }
                 }
@@ -141,8 +150,10 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
     });
 }
 
-/// Poll all data from the database. Returns a DataRefreshed action and the loaded config if successful.
-pub fn poll_data() -> Option<(Action, conductor_core::config::Config)> {
+/// Poll all data from the database. Returns a DataRefreshed action, the loaded config, and the
+/// open DB connection so the caller can reuse it (e.g. for notification claims) without opening
+/// a second connection on the same tick.
+pub fn poll_data() -> Option<(Action, conductor_core::config::Config, rusqlite::Connection)> {
     let db = db_path();
     let conn = open_database(&db).ok()?;
     let config = load_config().unwrap_or_else(|e| {
@@ -260,7 +271,7 @@ pub fn poll_data() -> Option<(Action, conductor_core::config::Config)> {
         pending_feedback_requests,
         waiting_gate_steps,
     }));
-    Some((action, config))
+    Some((action, config, conn))
 }
 
 /// Spawn the ticket sync timer. Syncs all repos every `interval`.
