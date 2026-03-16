@@ -7,6 +7,8 @@ import { TimeAgo } from "../shared/TimeAgo";
 interface WorktreeCtx {
   repoId: string;
   worktreeId: string;
+  repoSlug: string;
+  branch: string;
 }
 
 interface WorkflowRunTreeProps {

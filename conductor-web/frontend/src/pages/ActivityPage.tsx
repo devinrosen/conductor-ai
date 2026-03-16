@@ -175,16 +175,6 @@ export function ActivityPage() {
     }
   };
 
-  // Build a minimal WorktreeCtx map for WorkflowRunTree (worktree_id → { repoId, worktreeId })
-  // Must be declared before any early return to comply with Rules of Hooks.
-  const treeCtxMap = useMemo(() => {
-    const m = new Map<string, { repoId: string; worktreeId: string }>();
-    for (const [wtId, ctx] of ctxMap) {
-      m.set(wtId, { repoId: ctx.repoId, worktreeId: ctx.worktreeId });
-    }
-    return m;
-  }, [ctxMap]);
-
   if (reposLoading || loading) return <LoadingSpinner />;
 
   const isEmpty =
@@ -293,7 +283,7 @@ export function ActivityPage() {
           <WorkflowRunTree
             runs={activity.activeWorkflowRuns}
             repos={repos}
-            ctxMap={treeCtxMap}
+            ctxMap={ctxMap}
             onCancel={handleCancelWorkflow}
           />
         </section>
