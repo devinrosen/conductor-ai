@@ -15,10 +15,10 @@ workflow iterate-pr {
 
     call workflow review-pr
 
-    if review-pr.has_blocking_findings {
+    if review-aggregator.has_blocking_findings {
       call address-reviews
       call fmt-fix
       call workflow lint-fix
     }
-  } while review-pr.has_blocking_findings
+  } while review-aggregator.has_blocking_findings
 }
