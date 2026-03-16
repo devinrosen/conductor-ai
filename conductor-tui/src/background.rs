@@ -159,7 +159,11 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
 
 /// Run `f` only when `enabled` is true; return an empty `Vec` otherwise.
 fn query_if_enabled<T>(enabled: bool, f: impl FnOnce() -> Vec<T>) -> Vec<T> {
-    if enabled { f() } else { vec![] }
+    if enabled {
+        f()
+    } else {
+        vec![]
+    }
 }
 
 /// Poll all data from the database. Returns a DataRefreshed action, the loaded config, and the
