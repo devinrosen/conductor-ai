@@ -42,7 +42,9 @@ pub fn try_claim_notification(
     ) {
         Ok(rows) => rows == 1,
         Err(e) => {
-            tracing::warn!("try_claim_notification DB error: {e}");
+            tracing::warn!(
+                "try_claim_notification DB error for ({entity_id}, {event_type}): {e}"
+            );
             false
         }
     }
@@ -255,6 +257,83 @@ mod tests {
         assert!(
             try_claim_notification(&conn, "entity-1", "failed"),
             "different event_type for same entity_id must be independent"
+        );
+    }
+
+    // --- fire_workflow_notification smoke test ---
+
+    #[test]
+    fn fire_workflow_notification_disabled_does_not_claim() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true);
+        fire_workflow_notification(&conn, &cfg, "run-1", "my-workflow", None, true);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "disabled config must not write to notification_log"
+        );
+    }
+
+    #[test]
+    fn fire_workflow_notification_on_success_false_does_not_claim_success() {
+        let conn = in_memory_db();
+        let cfg = config(true, false, true);
+        fire_workflow_notification(&conn, &cfg, "run-2", "my-workflow", None, true);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "on_success=false must not claim for success events"
+        );
+    }
+
+    #[test]
+    fn fire_workflow_notification_enabled_claims_once_for_success() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        // Fire twice — second call must be a no-op (claim already taken).
+        fire_workflow_notification(&conn, &cfg, "run-3", "my-workflow", None, true);
+        fire_workflow_notification(&conn, &cfg, "run-3", "my-workflow", None, true);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-3' AND event_type = 'completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "notification_log must contain exactly one row for dedup"
+        );
+    }
+
+    #[test]
+    fn fire_workflow_notification_enabled_claims_once_for_failure() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        fire_workflow_notification(&conn, &cfg, "run-4", "my-workflow", Some("main"), false);
+        fire_workflow_notification(&conn, &cfg, "run-4", "my-workflow", Some("main"), false);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-4' AND event_type = 'failed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "notification_log must contain exactly one row for dedup"
         );
     }
 

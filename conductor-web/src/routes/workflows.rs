@@ -213,17 +213,16 @@ pub async fn run_workflow(
                 let label = wt_target_label.clone();
                 let notify_run_id = res.workflow_run_id.clone();
                 tokio::task::spawn_blocking(move || {
-                    if let Ok(conn) =
-                        conductor_core::db::open_database(&conductor_core::config::db_path())
-                    {
-                        crate::notify::fire_workflow_notification(
+                    match conductor_core::db::open_database(&conductor_core::config::db_path()) {
+                        Ok(conn) => crate::notify::fire_workflow_notification(
                             &conn,
                             &notifications,
                             &notify_run_id,
                             &wf_name,
                             Some(&label),
                             succeeded,
-                        );
+                        ),
+                        Err(e) => tracing::warn!("notification skipped — DB open failed: {e}"),
                     }
                 });
 
@@ -426,17 +425,16 @@ pub async fn resume_workflow_endpoint(
                 let succeeded = res.all_succeeded;
                 let status = if succeeded { "completed" } else { "failed" };
 
-                if let Ok(conn) =
-                    conductor_core::db::open_database(&conductor_core::config::db_path())
-                {
-                    crate::notify::fire_workflow_notification(
+                match conductor_core::db::open_database(&conductor_core::config::db_path()) {
+                    Ok(conn) => crate::notify::fire_workflow_notification(
                         &conn,
                         &notifications,
                         &res.workflow_run_id,
                         &workflow_name,
                         target_label.as_deref(),
                         succeeded,
-                    );
+                    ),
+                    Err(e) => tracing::warn!("notification skipped — DB open failed: {e}"),
                 }
 
                 state_clone
