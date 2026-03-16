@@ -17,11 +17,13 @@ Steps:
 ## Phase 1 — Parse all reviewer outputs
 
 1. Parse all reviewer outputs from prior_contexts:
-   - Each entry in `prior_contexts` has `step`, `iteration`, `context` (string), and `markers` (array of strings).
+   - Each entry in `prior_contexts` has `step`, `iteration`, `context` (string), `markers` (array of strings), and `structured_output` (string or null).
    - Classify the overall result using **markers first** (authoritative), then context strings as fallback:
      - **Blocking**: Any entry whose `markers` array contains `"has_review_issues"` → that reviewer requested changes.
      - **Clean**: No entry has `"has_review_issues"` in markers AND no context string clearly signals blocking issues.
-   - For each reviewer entry, attempt to parse the context string as JSON and extract the `off_diff_findings` array (if present).
+   - For each reviewer entry, extract off-diff findings as follows:
+     - **Primary path**: If `entry.structured_output` is present (non-null), parse it as JSON and read `.off_diff_findings[]` from it. The reviewer schema uses `body` for the finding description — map `body` → `message` in your output.
+     - **Fallback path**: If `entry.structured_output` is null or absent, attempt to parse the `context` string as JSON and extract the `off_diff_findings` array (if present).
    - Collect all off-diff findings across all reviewers into a single deduplicated list (deduplicate by `(file, line)`, keeping highest severity: `critical > warning > suggestion`).
 
 2. Get the PR number:

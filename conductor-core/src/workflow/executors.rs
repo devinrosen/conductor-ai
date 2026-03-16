@@ -1204,6 +1204,7 @@ pub(super) fn execute_parallel(
                                 iteration,
                                 context: context.clone(),
                                 markers: markers.clone(),
+                                structured_output: structured_json.clone(),
                             });
                             WorkflowStepStatus::Completed
                         } else {

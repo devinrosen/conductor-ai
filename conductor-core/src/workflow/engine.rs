@@ -806,6 +806,7 @@ pub(super) fn record_step_success(
     }
 
     let markers_for_ctx = markers.clone();
+    let structured_output_for_ctx = structured_output.clone();
     let step_result = StepResult {
         step_name: step_name.to_string(),
         status: WorkflowStepStatus::Completed,
@@ -826,6 +827,7 @@ pub(super) fn record_step_success(
         iteration,
         context,
         markers: markers_for_ctx,
+        structured_output: structured_output_for_ctx,
     });
 }
 
@@ -1012,6 +1014,7 @@ pub(super) fn restore_completed_step(
         iteration,
         context,
         markers: markers_for_ctx,
+        structured_output: step.structured_output.clone(),
     });
 }
 
