@@ -125,17 +125,15 @@ export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTr
     let repoSlug = "unknown";
     let targetKey = "unknown";
 
+    const repo = run.repo_id ? repos.find((r) => r.id === run.repo_id) : undefined;
+
     if (run.target_label) {
       const parsed = parseTargetLabel(run.target_label);
       repoSlug = parsed.repoSlug;
       targetKey = parsed.targetKey;
-      if (repoSlug === "unknown" && run.repo_id) {
-        const repo = repos.find((r) => r.id === run.repo_id);
-        if (repo) repoSlug = repo.slug;
-      }
-    } else if (run.repo_id) {
-      const repo = repos.find((r) => r.id === run.repo_id);
-      if (repo) repoSlug = repo.slug;
+      if (repoSlug === "unknown" && repo) repoSlug = repo.slug;
+    } else if (repo) {
+      repoSlug = repo.slug;
     }
 
     if (!repoGroups.has(repoSlug)) {
