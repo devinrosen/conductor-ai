@@ -14,3 +14,8 @@ Focus exclusively on:
 - Missing caching opportunities for repeated DB lookups
 - Algorithmic complexity issues (e.g. O(n^2) deduplication when a HashSet would suffice)
 - Unnecessary synchronous subprocess spawns that could be avoided
+
+Do NOT flag:
+- Micro-optimizations with negligible real-world impact (single heap allocations, static string literals, minor clones)
+- Shell script performance
+- Anything you would rate as "negligible" impact

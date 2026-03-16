@@ -51,7 +51,7 @@ Your `CONDUCTOR_OUTPUT` `context` field must be a **JSON object** (not plain tex
 ```
 
 - `findings`: issues in code **added or modified by this PR** — set `approved: false` if any are `critical` or `warning`
-- `off_diff_findings`: issues in **unchanged/removed code** — never affect `approved`, filed as separate GitHub issues
+- `off_diff_findings`: issues in **unchanged/removed code** — never affect `approved`, filed as separate GitHub issues; only include `critical` or `warning` severity (omit `suggestion`-level off-diff findings entirely)
 - Omit `off_diff_findings` entirely if there are none
 
 If you find **critical** or **warning** `findings`, include `has_review_issues` in your CONDUCTOR_OUTPUT markers.
