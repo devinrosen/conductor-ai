@@ -97,6 +97,12 @@ mod tests {
         crate::test_helpers::setup_db()
     }
 
+    /// Set a step's status without touching any optional fields.
+    fn set_step_status(mgr: &WorkflowManager, step_id: &str, status: WorkflowStepStatus) {
+        mgr.update_step_status(step_id, status, None, None, None, None, None)
+            .unwrap();
+    }
+
     #[test]
     fn test_create_workflow_run() {
         let conn = setup_db();
@@ -462,16 +468,7 @@ mod tests {
             .unwrap();
         mgr.set_step_gate_info(&step_id, "human_review", Some("Review?"), "48h")
             .unwrap();
-        mgr.update_step_status(
-            &step_id,
-            WorkflowStepStatus::Waiting,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
         // Find waiting gate
         let waiting = mgr.find_waiting_gate(&run.id).unwrap();
@@ -507,16 +504,7 @@ mod tests {
             .unwrap();
         mgr.set_step_gate_info(&step_id, "human_approval", Some("Approve?"), "24h")
             .unwrap();
-        mgr.update_step_status(
-            &step_id,
-            WorkflowStepStatus::Waiting,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
         mgr.reject_gate(&step_id, "user", None).unwrap();
 
@@ -599,17 +587,7 @@ mod tests {
         let step_id = wf_mgr
             .insert_step(&run_id, "test_gate", "gate", false, 0, 0)
             .unwrap();
-        wf_mgr
-            .update_step_status(
-                &step_id,
-                WorkflowStepStatus::Waiting,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap();
+        set_step_status(&wf_mgr, &step_id, WorkflowStepStatus::Waiting);
 
         let node = make_gate_node(GateType::HumanApproval, OnTimeout::Fail);
         let result = handle_gate_timeout(&mut state, &step_id, &node);
@@ -630,17 +608,7 @@ mod tests {
         let step_id = wf_mgr
             .insert_step(&run_id, "test_gate", "gate", false, 0, 0)
             .unwrap();
-        wf_mgr
-            .update_step_status(
-                &step_id,
-                WorkflowStepStatus::Waiting,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap();
+        set_step_status(&wf_mgr, &step_id, WorkflowStepStatus::Waiting);
 
         let node = make_gate_node(GateType::HumanApproval, OnTimeout::Continue);
         let result = handle_gate_timeout(&mut state, &step_id, &node);
@@ -3080,16 +3048,7 @@ And here is my actual output:
         let s2 = mgr
             .insert_step(&run.id, "step-c", "actor", false, 2, 0)
             .unwrap();
-        mgr.update_step_status(
-            &s2,
-            WorkflowStepStatus::Running,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        set_step_status(&mgr, &s2, WorkflowStepStatus::Running);
 
         (run.id, mgr)
     }
@@ -4405,17 +4364,7 @@ And here is my actual output:
         let step_completed = wf_mgr
             .insert_step(&run.id, "detect-db-migrations", "reviewer", false, 0, 0)
             .unwrap();
-        wf_mgr
-            .update_step_status(
-                &step_completed,
-                WorkflowStepStatus::Completed,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap();
+        set_step_status(&wf_mgr, &step_completed, WorkflowStepStatus::Completed);
 
         let step_skipped = wf_mgr
             .insert_step(&run.id, "review-db-migrations", "reviewer", false, 1, 0)
@@ -5957,16 +5906,7 @@ And here is my actual output:
         let step_id = mgr
             .insert_step(&run.id, "human-gate", "gate", false, 0, 0)
             .unwrap();
-        mgr.update_step_status(
-            &step_id,
-            WorkflowStepStatus::Waiting,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
         mgr.cancel_run(&run.id, "timed out").unwrap();
 
@@ -6004,16 +5944,7 @@ And here is my actual output:
         let active_step = mgr
             .insert_step(&run.id, "in-progress", "actor", false, 1, 0)
             .unwrap();
-        mgr.update_step_status(
-            &active_step,
-            WorkflowStepStatus::Running,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        set_step_status(&mgr, &active_step, WorkflowStepStatus::Running);
 
         mgr.cancel_run(&run.id, "stop").unwrap();
 
