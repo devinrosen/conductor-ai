@@ -1766,4 +1766,74 @@ mod tests {
         assert_eq!(sql_placeholders(1), "?1");
         assert_eq!(sql_placeholders(3), "?1, ?2, ?3");
     }
+
+    #[test]
+    fn test_get_active_steps_for_runs_groups_by_run_id() {
+        // Seed two runs, each with one running step (and one completed step that
+        // should be excluded).  Verify that get_active_steps_for_runs returns
+        // only the running steps and groups them under the correct run_id.
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let run1 = create_worktree_run(&conn, "w1");
+        let run2 = create_worktree_run(&conn, "w2");
+
+        // run1: one running step, one completed step
+        let step1_active = mgr
+            .insert_step(&run1.id, "step-a", "actor", false, 0, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step1_active,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let step1_done = mgr
+            .insert_step(&run1.id, "step-b", "actor", false, 1, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step1_done,
+            WorkflowStepStatus::Completed,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // run2: one running step only
+        let step2_active = mgr
+            .insert_step(&run2.id, "step-c", "actor", false, 0, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &step2_active,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let result = mgr
+            .get_active_steps_for_runs(&[run1.id.as_str(), run2.id.as_str()])
+            .unwrap();
+
+        // Each run should be present with exactly its active step.
+        assert_eq!(result.len(), 2, "expected entries for both runs");
+
+        let run1_steps = result.get(&run1.id).expect("run1 missing from result");
+        assert_eq!(run1_steps.len(), 1, "run1 should have 1 active step");
+        assert_eq!(run1_steps[0].id, step1_active);
+
+        let run2_steps = result.get(&run2.id).expect("run2 missing from result");
+        assert_eq!(run2_steps.len(), 1, "run2 should have 1 active step");
+        assert_eq!(run2_steps[0].id, step2_active);
+    }
 }
