@@ -6,7 +6,9 @@ workflow review-pr {
   }
 
   call detect-db-migrations { output = "db-check" }
-  call detect-file-types    { output = "file-types" }
+  script detect-file-types {
+    run = ".conductor/scripts/detect-file-types.sh"
+  }
 
   parallel {
     output    = "review-findings"
