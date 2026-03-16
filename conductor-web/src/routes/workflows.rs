@@ -317,8 +317,9 @@ pub async fn resume_workflow_endpoint(
     let from_step = req.from_step.clone();
     let restart = req.restart.unwrap_or(false);
 
-    // Validate the run exists and is in a resumable state before spawning
-    {
+    // Validate the run exists and is in a resumable state before spawning.
+    // Also capture the workflow name and target label for the completion notification.
+    let (workflow_name, target_label) = {
         let db = state.db.lock().await;
         let mgr = WorkflowManager::new(&db);
         let run = mgr.get_workflow_run(&id)?.ok_or_else(|| {
@@ -328,11 +329,13 @@ pub async fn resume_workflow_endpoint(
         })?;
         validate_resume_preconditions(&run.status, restart, from_step.as_deref())
             .map_err(ApiError)?;
-    } // DB lock released here
+        (run.workflow_name.clone(), run.target_label.clone())
+    }; // DB lock released here
 
     // Spawn blocking task with its own DB connection (same pattern as run_workflow)
     let state_clone = state.clone();
     let run_id = id.clone();
+    let notifications = config.notifications.clone();
     tokio::task::spawn_blocking(move || {
         let params = WorkflowResumeStandalone {
             config,
@@ -347,11 +350,16 @@ pub async fn resume_workflow_endpoint(
 
         match result {
             Ok(res) => {
-                let status = if res.all_succeeded {
-                    "completed"
-                } else {
-                    "failed"
-                };
+                let succeeded = res.all_succeeded;
+                let status = if succeeded { "completed" } else { "failed" };
+
+                crate::notify::fire_workflow_notification(
+                    &notifications,
+                    &workflow_name,
+                    target_label.as_deref(),
+                    succeeded,
+                );
+
                 state_clone
                     .events
                     .emit(ConductorEvent::WorkflowRunStatusChanged {
