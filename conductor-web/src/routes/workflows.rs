@@ -587,10 +587,15 @@ mod tests {
     use crate::events::EventBus;
     use crate::routes::api_router;
 
-    fn empty_state() -> AppState {
+    fn create_test_conn() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         conductor_core::db::migrations::run(&conn).unwrap();
+        conn
+    }
+
+    fn empty_state() -> AppState {
+        let conn = create_test_conn();
         AppState {
             db: Arc::new(Mutex::new(conn)),
             config: Arc::new(RwLock::new(Config::default())),
@@ -599,10 +604,7 @@ mod tests {
     }
 
     fn setup_test_db() -> Arc<Mutex<rusqlite::Connection>> {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-        conductor_core::db::migrations::run(&conn).unwrap();
-        Arc::new(Mutex::new(conn))
+        Arc::new(Mutex::new(create_test_conn()))
     }
 
     async fn get_response(uri: &str, state: AppState) -> (StatusCode, serde_json::Value) {
