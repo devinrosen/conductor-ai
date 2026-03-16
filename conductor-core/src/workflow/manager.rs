@@ -1620,8 +1620,14 @@ mod tests {
         let runs = mgr.list_active_workflow_runs(&[]).unwrap();
         let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
-        assert!(ids.contains(&pending_run.id.as_str()), "pending run must appear");
-        assert!(ids.contains(&running_run.id.as_str()), "running run must appear");
+        assert!(
+            ids.contains(&pending_run.id.as_str()),
+            "pending run must appear"
+        );
+        assert!(
+            ids.contains(&running_run.id.as_str()),
+            "running run must appear"
+        );
         assert!(
             !ids.contains(&completed_run.id.as_str()),
             "completed run must not appear"
@@ -1645,7 +1651,10 @@ mod tests {
             .unwrap();
         let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
-        assert!(ids.contains(&running_run.id.as_str()), "running run must appear");
+        assert!(
+            ids.contains(&running_run.id.as_str()),
+            "running run must appear"
+        );
         assert!(
             !ids.contains(&pending_run.id.as_str()),
             "pending run must not appear when filter is running-only"
@@ -1660,7 +1669,9 @@ mod tests {
 
         let repo_run = create_repo_run(&conn, "r1"); // worktree_id IS NULL
 
-        let runs = mgr.list_active_workflow_runs(&[WorkflowRunStatus::Pending]).unwrap();
+        let runs = mgr
+            .list_active_workflow_runs(&[WorkflowRunStatus::Pending])
+            .unwrap();
         let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
         assert!(
@@ -1678,13 +1689,12 @@ mod tests {
         let run = create_worktree_run(&conn, "w1");
 
         // Mark w1 as merged so it no longer counts as active.
-        conn.execute(
-            "UPDATE worktrees SET status = 'merged' WHERE id = 'w1'",
-            [],
-        )
-        .unwrap();
+        conn.execute("UPDATE worktrees SET status = 'merged' WHERE id = 'w1'", [])
+            .unwrap();
 
-        let runs = mgr.list_active_workflow_runs(&[WorkflowRunStatus::Pending]).unwrap();
+        let runs = mgr
+            .list_active_workflow_runs(&[WorkflowRunStatus::Pending])
+            .unwrap();
         let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
 
         assert!(
