@@ -581,6 +581,7 @@ mod tests {
             total_duration_ms: 0,
             last_gate_feedback: None,
             last_structured_output: None,
+            last_output_file: None,
             block_output: None,
             block_with: Vec::new(),
             resume_ctx: None,
@@ -1648,6 +1649,7 @@ And here is my actual output:
             total_duration_ms: 0,
             last_gate_feedback: None,
             last_structured_output: None,
+            last_output_file: None,
             block_output: None,
             block_with: Vec::new(),
             resume_ctx: None,
@@ -1875,6 +1877,7 @@ And here is my actual output:
                 context: String::new(),
                 child_run_id: None,
                 structured_output: None,
+                output_file: None,
             },
         );
 
@@ -1907,6 +1910,7 @@ And here is my actual output:
                 context: String::new(),
                 child_run_id: None,
                 structured_output: None,
+                output_file: None,
             },
         );
 
@@ -2018,6 +2022,7 @@ And here is my actual output:
             context: String::new(),
             child_run_id: None,
             structured_output: None,
+            output_file: None,
         }
     }
 
@@ -2061,6 +2066,7 @@ And here is my actual output:
             total_duration_ms: 0,
             last_gate_feedback: None,
             last_structured_output: None,
+            last_output_file: None,
             block_output: None,
             block_with: Vec::new(),
             resume_ctx: None,
@@ -2957,6 +2963,7 @@ And here is my actual output:
                 context: "parent context".to_string(),
                 child_run_id: None,
                 structured_output: None,
+                output_file: None,
             },
         );
 
@@ -4293,6 +4300,7 @@ And here is my actual output:
                 context: "Found 2 migration files".to_string(),
                 child_run_id: None,
                 structured_output: None,
+                output_file: None,
             },
         );
 
@@ -4325,6 +4333,7 @@ And here is my actual output:
                 context: "No migration files in diff".to_string(),
                 child_run_id: None,
                 structured_output: None,
+                output_file: None,
             },
         );
 

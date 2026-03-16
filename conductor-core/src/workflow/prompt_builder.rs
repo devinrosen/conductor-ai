@@ -36,6 +36,10 @@ pub(super) fn build_variable_map<'a>(state: &'a ExecutionState<'_>) -> HashMap<&
     if let Some(last_output) = state.last_structured_output.as_ref() {
         vars.insert("prior_output", last_output.clone());
     }
+    // prior_output_file: path to the last script step's stdout temp file (if any)
+    if let Some(ref path) = state.last_output_file {
+        vars.insert("prior_output_file", path.clone());
+    }
     // dry_run: "true" or "false" — lets non-committing agents skip GitHub side effects
     vars.insert("dry_run", state.exec_config.dry_run.to_string());
     vars

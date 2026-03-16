@@ -472,6 +472,34 @@ fn build_node_lines(
                     ])));
                 }
             }
+            WorkflowNode::Script(s) => {
+                let mut spans = vec![
+                    Span::raw(indent.clone()),
+                    Span::styled(
+                        "script ",
+                        Style::default()
+                            .fg(theme.label_keyword)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        s.name.clone(),
+                        Style::default()
+                            .fg(theme.label_primary)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("  run={}", s.run),
+                        Style::default().fg(theme.label_secondary),
+                    ),
+                ];
+                if s.retries > 0 {
+                    spans.push(Span::styled(
+                        format!("  retries={}", s.retries),
+                        Style::default().fg(theme.label_secondary),
+                    ));
+                }
+                items.push(ListItem::new(Line::from(spans)));
+            }
             WorkflowNode::Always(a) => {
                 items.push(ListItem::new(Line::from(vec![
                     Span::raw(indent.clone()),

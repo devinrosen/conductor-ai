@@ -81,6 +81,7 @@ pub(super) fn collect_leaf_step_keys(node: &WorkflowNode) -> Vec<String> {
         WorkflowNode::Parallel(p) => p.calls.iter().map(|a| a.step_key()).collect(),
         WorkflowNode::Gate(g) => vec![g.name.clone()],
         WorkflowNode::CallWorkflow(cw) => vec![format!("workflow:{}", cw.workflow)],
+        WorkflowNode::Script(s) => vec![s.name.clone()],
         WorkflowNode::If(n) => n.body.iter().flat_map(collect_leaf_step_keys).collect(),
         WorkflowNode::Unless(n) => n.body.iter().flat_map(collect_leaf_step_keys).collect(),
         WorkflowNode::While(n) => n.body.iter().flat_map(collect_leaf_step_keys).collect(),

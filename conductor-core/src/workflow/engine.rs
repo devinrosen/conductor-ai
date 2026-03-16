@@ -66,6 +66,8 @@ pub(super) struct ExecutionState<'a> {
     pub last_gate_feedback: Option<String>,
     /// Raw JSON from the most recent step's structured output (for `{{prior_output}}`).
     pub last_structured_output: Option<String>,
+    /// Path to the most recent script step's stdout file (for `{{prior_output_file}}`).
+    pub last_output_file: Option<String>,
     /// Block-level output schema name inherited from an enclosing `do {}` block.
     pub block_output: Option<String>,
     /// Block-level prompt snippet refs inherited from an enclosing `do {}` block.
@@ -294,6 +296,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         total_duration_ms: 0,
         last_gate_feedback: None,
         last_structured_output: None,
+        last_output_file: None,
         block_output: None,
         block_with: Vec::new(),
         resume_ctx: None,
@@ -684,6 +687,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         total_duration_ms: 0,
         last_gate_feedback: None,
         last_structured_output: None,
+        last_output_file: None,
         block_output: None,
         block_with: Vec::new(),
         resume_ctx,
@@ -711,6 +715,7 @@ pub(super) fn execute_single_node(
         WorkflowNode::Do(n) => super::executors::execute_do(state, n)?,
         WorkflowNode::Parallel(n) => super::executors::execute_parallel(state, n, iteration)?,
         WorkflowNode::Gate(n) => super::executors::execute_gate(state, n, iteration)?,
+        WorkflowNode::Script(n) => super::executors::execute_script(state, n, iteration)?,
         WorkflowNode::Always(n) => {
             // Nested always — just execute body
             execute_nodes(state, &n.body)?;
@@ -749,6 +754,7 @@ pub(super) fn record_step_failure(
         context: String::new(),
         child_run_id: None,
         structured_output: None,
+        output_file: None,
     };
     state.step_results.insert(step_key, step_result);
 
@@ -804,6 +810,7 @@ pub(super) fn record_step_success(
         context: context.clone(),
         child_run_id,
         structured_output,
+        output_file: None,
     };
     state.step_results.insert(step_key, step_result);
 
@@ -983,6 +990,7 @@ pub(super) fn restore_completed_step(
         context: context.clone(),
         child_run_id: step.child_run_id.clone(),
         structured_output: step.structured_output.clone(),
+        output_file: None,
     };
     state.step_results.insert(step_key.to_string(), step_result);
 
@@ -1116,6 +1124,7 @@ pub(super) fn fetch_child_completion_data(
                 context,
                 child_run_id: s.child_run_id.clone(),
                 structured_output: s.structured_output.clone(),
+                output_file: None,
             };
             (s.step_name, result)
         })
@@ -1171,6 +1180,7 @@ pub(super) fn bubble_up_child_step_results(
                 context,
                 child_run_id: s.child_run_id.clone(),
                 structured_output: s.structured_output.clone(),
+                output_file: None,
             };
             (s.step_name, result)
         })

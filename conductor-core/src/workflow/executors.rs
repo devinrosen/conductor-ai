@@ -8,7 +8,7 @@ use crate::agent_config::AgentSpec;
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::{
     ApprovalMode, CallNode, CallWorkflowNode, DoNode, DoWhileNode, GateNode, GateType, IfNode,
-    OnTimeout, ParallelNode, UnlessNode, WhileNode,
+    OnTimeout, ParallelNode, ScriptNode, UnlessNode, WhileNode,
 };
 
 use super::engine::{
@@ -18,7 +18,7 @@ use super::engine::{
 };
 use super::helpers::{find_max_completed_while_iteration, sanitize_tmux_name};
 use super::output::{interpret_agent_output, parse_conductor_output};
-use super::prompt_builder::{build_agent_prompt, build_variable_map};
+use super::prompt_builder::{build_agent_prompt, build_variable_map, substitute_variables};
 use super::status::{WorkflowRunStatus, WorkflowStepStatus};
 use super::types::ContextEntry;
 
@@ -1322,6 +1322,7 @@ pub(super) fn execute_parallel(
         context: String::new(),
         child_run_id: None,
         structured_output: None,
+        output_file: None,
     };
     state
         .step_results
@@ -1725,4 +1726,359 @@ pub(super) fn handle_gate_timeout(
             Ok(())
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Script step executor
+// ---------------------------------------------------------------------------
+
+/// Outcome of polling a spawned script child process.
+enum ScriptPollResult {
+    /// Process exited with success (exit code 0).
+    Succeeded,
+    /// Process exited with failure (non-zero exit code or wait error).
+    Failed(String),
+    /// Script exceeded its timeout; the process has been killed.
+    TimedOut,
+    /// Workflow shutdown signal received; the process has been killed.
+    Cancelled,
+}
+
+/// Poll a child process until it exits, times out, or the shutdown signal fires.
+///
+/// Checks the shutdown flag and elapsed time every 200 ms using `try_wait`.
+fn poll_script_child(
+    child: &mut std::process::Child,
+    timeout_secs: Option<u64>,
+    shutdown: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> ScriptPollResult {
+    let poll_interval = Duration::from_millis(200);
+    let start = std::time::Instant::now();
+
+    loop {
+        // Check shutdown signal
+        if let Some(flag) = shutdown {
+            if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return ScriptPollResult::Cancelled;
+            }
+        }
+
+        // Check per-step timeout
+        if let Some(timeout) = timeout_secs {
+            if start.elapsed().as_secs() >= timeout {
+                let _ = child.kill();
+                let _ = child.wait();
+                return ScriptPollResult::TimedOut;
+            }
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.success() {
+                    return ScriptPollResult::Succeeded;
+                } else {
+                    return ScriptPollResult::Failed(format!(
+                        "script exited with non-zero status: {status}"
+                    ));
+                }
+            }
+            Ok(None) => thread::sleep(poll_interval),
+            Err(e) => {
+                return ScriptPollResult::Failed(format!("wait error: {e}"));
+            }
+        }
+    }
+}
+
+/// Resolve a script path using the standard search order:
+/// 1. Absolute paths are used as-is.
+/// 2. Relative paths are tried against `working_dir`, then `repo_path`,
+///    then `~/.claude/skills/`.
+fn resolve_script_path(
+    run: &str,
+    working_dir: &str,
+    repo_path: &str,
+) -> Option<std::path::PathBuf> {
+    let p = std::path::Path::new(run);
+    if p.is_absolute() {
+        if p.exists() {
+            return Some(p.to_path_buf());
+        }
+        return None;
+    }
+
+    // Worktree dir
+    let candidate = std::path::Path::new(working_dir).join(run);
+    if candidate.exists() {
+        return Some(candidate);
+    }
+
+    // Repo dir
+    let candidate = std::path::Path::new(repo_path).join(run);
+    if candidate.exists() {
+        return Some(candidate);
+    }
+
+    // ~/.claude/skills/
+    if let Some(home) = std::env::var_os("HOME") {
+        let candidate = std::path::Path::new(&home)
+            .join(".claude")
+            .join("skills")
+            .join(run);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+pub(super) fn execute_script(
+    state: &mut ExecutionState<'_>,
+    node: &ScriptNode,
+    iteration: u32,
+) -> Result<()> {
+    let pos = state.position;
+    state.position += 1;
+
+    // Check skip on resume
+    if should_skip(state, &node.name, iteration) {
+        tracing::info!(
+            "Skipping completed script step '{}' (iteration {})",
+            node.name,
+            iteration
+        );
+        restore_step(state, &node.name, iteration);
+        return Ok(());
+    }
+
+    let step_key = node.name.clone();
+    let step_label = node.name.as_str();
+
+    // Build variable map for substitution
+    let vars = build_variable_map(state);
+
+    // Resolve script path (substitute variables in run path first)
+    let run_path_raw = substitute_variables(&node.run, &vars);
+    let resolved_path = resolve_script_path(&run_path_raw, &state.working_dir, &state.repo_path)
+        .ok_or_else(|| {
+            ConductorError::Workflow(format!(
+                "Script step '{}': script '{}' not found in worktree, repo, or ~/.claude/skills/",
+                step_label, run_path_raw
+            ))
+        })?;
+
+    // Resolve env var values
+    let resolved_env: std::collections::HashMap<String, String> = node
+        .env
+        .iter()
+        .map(|(k, v)| (k.clone(), substitute_variables(v, &vars)))
+        .collect();
+
+    // Retry loop
+    let max_attempts = 1 + node.retries;
+    let mut last_error = String::new();
+
+    for attempt in 0..max_attempts {
+        let step_id = state.wf_mgr.insert_step(
+            &state.workflow_run_id,
+            step_label,
+            "script",
+            false,
+            pos,
+            iteration as i64,
+        )?;
+
+        state.wf_mgr.update_step_status(
+            &step_id,
+            WorkflowStepStatus::Running,
+            None,
+            None,
+            None,
+            None,
+            Some(attempt as i64),
+        )?;
+
+        // Create a temp file for the script's stdout
+        let output_path = format!("{}/script-{}.out", state.working_dir, step_id);
+        let output_file = std::fs::File::create(&output_path).map_err(|e| {
+            ConductorError::Workflow(format!(
+                "Script step '{}': failed to create output file: {e}",
+                step_label
+            ))
+        })?;
+
+        tracing::info!(
+            "Script step '{}' (attempt {}/{}): running '{}'",
+            step_label,
+            attempt + 1,
+            max_attempts,
+            resolved_path.display(),
+        );
+
+        let spawn_result = Command::new(&resolved_path)
+            .envs(&resolved_env)
+            .stdout(output_file)
+            .stderr(std::process::Stdio::inherit())
+            .current_dir(&state.working_dir)
+            .spawn();
+
+        let mut child = match spawn_result {
+            Ok(c) => c,
+            Err(e) => {
+                let err = format!(
+                    "Script step '{}': failed to spawn '{}': {e}",
+                    step_label,
+                    resolved_path.display()
+                );
+                tracing::warn!("{err}");
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    None,
+                    Some(&err),
+                    None,
+                    None,
+                    Some(attempt as i64),
+                )?;
+                last_error = err;
+                continue;
+            }
+        };
+
+        match poll_script_child(
+            &mut child,
+            node.timeout,
+            state.exec_config.shutdown.as_ref(),
+        ) {
+            ScriptPollResult::Succeeded => {
+                let stdout = std::fs::read_to_string(&output_path).unwrap_or_default();
+                let parsed = parse_conductor_output(&stdout);
+                let (markers, context) = match parsed {
+                    Some(out) => (out.markers, out.context),
+                    None => {
+                        // Fallback: use truncated stdout as context
+                        let truncated: String = stdout.chars().take(2000).collect();
+                        (Vec::new(), truncated)
+                    }
+                };
+
+                let markers_json = serde_json::to_string(&markers).unwrap_or_default();
+
+                tracing::info!(
+                    "Script step '{}' completed: markers={:?}",
+                    step_label,
+                    markers,
+                );
+
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Completed,
+                    None,
+                    Some(&stdout),
+                    Some(&context),
+                    Some(&markers_json),
+                    Some(attempt as i64),
+                )?;
+
+                record_step_success(
+                    state,
+                    step_key.clone(),
+                    step_label,
+                    Some(stdout),
+                    None,
+                    None,
+                    None,
+                    markers,
+                    context,
+                    None,
+                    iteration,
+                    None,
+                );
+
+                // Update last_output_file for {{prior_output_file}} substitution
+                state.last_output_file = Some(output_path);
+
+                // Update output_file on the inserted StepResult
+                if let Some(result) = state.step_results.get_mut(&step_key) {
+                    result.output_file = state.last_output_file.clone();
+                }
+
+                return Ok(());
+            }
+
+            ScriptPollResult::Failed(err) => {
+                tracing::warn!(
+                    "Script step '{}' failed (attempt {}/{}): {err}",
+                    step_label,
+                    attempt + 1,
+                    max_attempts,
+                );
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    None,
+                    Some(&err),
+                    None,
+                    None,
+                    Some(attempt as i64),
+                )?;
+                last_error = err;
+                // continue to next attempt
+            }
+
+            ScriptPollResult::TimedOut => {
+                let msg = format!(
+                    "script step '{}' timed out after {}s",
+                    step_label,
+                    node.timeout.unwrap_or(0)
+                );
+                tracing::warn!("{msg}");
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::TimedOut,
+                    None,
+                    Some(&msg),
+                    None,
+                    None,
+                    Some(attempt as i64),
+                )?;
+                state.all_succeeded = false;
+                if state.exec_config.fail_fast {
+                    return Err(ConductorError::Workflow(msg));
+                }
+                return Ok(());
+            }
+
+            ScriptPollResult::Cancelled => {
+                let msg = "workflow cancelled".to_string();
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    None,
+                    Some(&msg),
+                    None,
+                    None,
+                    Some(attempt as i64),
+                )?;
+                return Err(ConductorError::Workflow(msg));
+            }
+        }
+    }
+
+    // All retries exhausted — run on_fail agent if specified
+    if let Some(ref on_fail_agent) = node.on_fail {
+        run_on_fail_agent(
+            state,
+            step_label,
+            on_fail_agent,
+            &last_error,
+            node.retries,
+            iteration,
+        );
+    }
+
+    record_step_failure(state, step_key, step_label, last_error, max_attempts)
 }

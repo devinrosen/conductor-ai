@@ -614,6 +614,17 @@ pub(crate) fn build_def_step_lines<'a>(
                     seen,
                 ));
             }
+            WorkflowNode::Script(s) => {
+                items.push(ListItem::new(Line::from(vec![
+                    Span::raw(indent.clone()),
+                    Span::styled("[script]", Style::default().fg(theme.label_accent)),
+                    Span::raw("  "),
+                    Span::styled(
+                        s.name.clone(),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                ])));
+            }
             WorkflowNode::Always(n) => {
                 items.push(ListItem::new(Line::from(vec![
                     Span::raw(indent.clone()),
@@ -793,6 +804,12 @@ pub(crate) fn get_def_step_node_at(
                 ) {
                     return Some(r);
                 }
+            }
+            WorkflowNode::Script(_) => {
+                if *counter == target {
+                    return None;
+                }
+                *counter += 1;
             }
             WorkflowNode::Always(n) => {
                 if *counter == target {

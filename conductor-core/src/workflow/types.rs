@@ -230,6 +230,8 @@ pub struct StepResult {
     pub child_run_id: Option<String>,
     /// Raw JSON string of structured output (when schema was used).
     pub structured_output: Option<String>,
+    /// Path to the script stdout temp file (script steps only).
+    pub output_file: Option<String>,
 }
 
 /// An entry in the accumulated context history.

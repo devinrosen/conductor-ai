@@ -151,6 +151,28 @@ pub enum WorkflowNode {
     Parallel(ParallelNode),
     Gate(GateNode),
     Always(AlwaysNode),
+    Script(ScriptNode),
+}
+
+/// A script step node — runs a shell script directly (no agent/LLM).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptNode {
+    /// Step name used as the step key in step_results and resume skip sets.
+    pub name: String,
+    /// Path to the script to run (supports `{{variable}}` substitution).
+    /// Resolved in order: worktree dir → repo dir → `~/.claude/skills/`.
+    pub run: String,
+    /// Environment variable overrides (values support `{{variable}}` substitution).
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// Optional timeout in seconds. If the script does not complete within this
+    /// duration it is killed and the step is marked `TimedOut`.
+    pub timeout: Option<u64>,
+    /// Number of retry attempts after the first failure (0 = no retries).
+    #[serde(default)]
+    pub retries: u32,
+    /// Agent to invoke if all attempts fail.
+    pub on_fail: Option<AgentRef>,
 }
 
 /// Reference to an agent — either a short name or an explicit file path.
@@ -383,6 +405,7 @@ enum Token {
     Parallel,
     Gate,
     Always,
+    Script,
     Required,
     Default,
     Description,
@@ -556,6 +579,7 @@ impl Lexer {
             "parallel" => Token::Parallel,
             "gate" => Token::Gate,
             "always" => Token::Always,
+            "script" => Token::Script,
             "required" => Token::Required,
             "default" => Token::Default,
             "description" => Token::Description,
@@ -582,6 +606,8 @@ enum KvValue {
     Bare(String),
     /// Came from a bracket-delimited array: `["a", "b"]`.
     Array(Vec<String>),
+    /// Came from a brace-delimited map: `{ KEY = "value" }`.
+    Map(HashMap<String, String>),
 }
 
 impl KvValue {
@@ -590,6 +616,9 @@ impl KvValue {
             Self::Quoted(s) | Self::Bare(s) => s.as_str(),
             Self::Array(_) => unreachable!(
                 "BUG: as_str() called on KvValue::Array — arrays are only valid for array-valued keys (e.g. `with`, `targets`)"
+            ),
+            Self::Map(_) => unreachable!(
+                "BUG: as_str() called on KvValue::Map — maps are only valid for `env =` keys"
             ),
         }
     }
@@ -600,6 +629,9 @@ impl KvValue {
             Self::Array(_) => unreachable!(
                 "BUG: into_string() called on KvValue::Array — arrays are only valid for array-valued keys (e.g. `with`, `targets`)"
             ),
+            Self::Map(_) => unreachable!(
+                "BUG: into_string() called on KvValue::Map — maps are only valid for `env =` keys"
+            ),
         }
     }
 
@@ -607,6 +639,9 @@ impl KvValue {
         match self {
             Self::Array(v) => v,
             Self::Quoted(s) | Self::Bare(s) => vec![s],
+            Self::Map(_) => unreachable!(
+                "BUG: into_string_array() called on KvValue::Map — maps are only valid for `env =` keys"
+            ),
         }
     }
 
@@ -633,6 +668,9 @@ impl KvValue {
             Self::Quoted(s) => AgentRef::Name(s),
             Self::Array(_) => unreachable!(
                 "BUG: into_agent_ref() called on KvValue::Array — arrays are only valid for `with` keys"
+            ),
+            Self::Map(_) => unreachable!(
+                "BUG: into_agent_ref() called on KvValue::Map — maps are only valid for `env =` keys"
             ),
         }
     }
@@ -704,6 +742,15 @@ impl Parser {
             Token::Parallel => Ok(KvValue::Bare("parallel".to_string())),
             Token::Gate => Ok(KvValue::Bare("gate".to_string())),
             Token::Always => Ok(KvValue::Bare("always".to_string())),
+            Token::Script => Ok(KvValue::Bare("script".to_string())),
+            // Map literal: { KEY = "value", KEY2 = "value2" }
+            Token::LBrace => {
+                let kvs = self.parse_kvs()?;
+                self.expect(&Token::RBrace)?;
+                let map: HashMap<String, String> =
+                    kvs.into_iter().map(|(k, v)| (k, v.into_string())).collect();
+                Ok(KvValue::Map(map))
+            }
             // Array literal: ["a", "b", "c"]
             Token::LBracket => {
                 let mut items = Vec::new();
@@ -911,8 +958,9 @@ impl Parser {
             Token::Parallel => self.parse_parallel().map(WorkflowNode::Parallel),
             Token::Gate => self.parse_gate().map(WorkflowNode::Gate),
             Token::Always => self.parse_always().map(WorkflowNode::Always),
+            Token::Script => self.parse_script().map(WorkflowNode::Script),
             other => Err(format!(
-                "Expected a workflow node (call, if, unless, while, do, parallel, gate, always), got {other:?}"
+                "Expected a workflow node (call, if, unless, while, do, parallel, gate, always, script), got {other:?}"
             )),
         }
     }
@@ -1305,6 +1353,55 @@ impl Parser {
 
         Ok(AlwaysNode { body })
     }
+
+    fn parse_script(&mut self) -> std::result::Result<ScriptNode, String> {
+        self.expect(&Token::Script)?;
+        let name = self.expect_ident()?;
+        self.expect(&Token::LBrace)?;
+
+        let mut kvs = self.parse_kvs()?;
+        self.expect(&Token::RBrace)?;
+
+        let run = kvs
+            .remove("run")
+            .ok_or_else(|| format!("script '{name}' is missing required `run` field"))?
+            .into_string();
+
+        let env = kvs
+            .remove("env")
+            .map(|v| match v {
+                KvValue::Map(m) => Ok(m),
+                _ => Err(format!(
+                    "script '{name}': `env` must be a map `{{ KEY = \"value\" }}`"
+                )),
+            })
+            .transpose()?
+            .unwrap_or_default();
+
+        let timeout = kvs
+            .get("timeout")
+            .map(|v| v.as_str().parse::<u64>())
+            .transpose()
+            .map_err(|e| format!("script '{name}': invalid timeout: {e}"))?;
+
+        let retries = kvs
+            .get("retries")
+            .map(|v| v.as_str().parse::<u32>())
+            .transpose()
+            .map_err(|e| format!("script '{name}': invalid retries: {e}"))?
+            .unwrap_or(0);
+
+        let on_fail = kvs.remove("on_fail").map(|v| v.into_agent_ref());
+
+        Ok(ScriptNode {
+            name,
+            run,
+            env,
+            timeout,
+            retries,
+            on_fail,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1471,7 +1568,7 @@ fn count_nodes(nodes: &[WorkflowNode]) -> usize {
     for node in nodes {
         count += 1;
         match node {
-            WorkflowNode::Call(_) | WorkflowNode::CallWorkflow(_) => {}
+            WorkflowNode::Call(_) | WorkflowNode::CallWorkflow(_) | WorkflowNode::Script(_) => {}
             WorkflowNode::If(n) => count += count_nodes(&n.body),
             WorkflowNode::Unless(n) => count += count_nodes(&n.body),
             WorkflowNode::While(n) => count += count_nodes(&n.body),
@@ -1498,6 +1595,12 @@ pub fn collect_agent_names(nodes: &[WorkflowNode]) -> Vec<AgentRef> {
             }
             WorkflowNode::CallWorkflow(n) => {
                 // on_fail agents are still agent refs
+                if let Some(ref f) = n.on_fail {
+                    refs.push(f.clone());
+                }
+            }
+            WorkflowNode::Script(n) => {
+                // on_fail agent ref (the script itself is not an agent)
                 if let Some(ref f) = n.on_fail {
                     refs.push(f.clone());
                 }
@@ -1536,7 +1639,7 @@ pub fn collect_snippet_refs(nodes: &[WorkflowNode]) -> Vec<String> {
                 refs.extend(collect_snippet_refs(&n.body));
             }
             WorkflowNode::Always(n) => refs.extend(collect_snippet_refs(&n.body)),
-            WorkflowNode::CallWorkflow(_) | WorkflowNode::Gate(_) => {}
+            WorkflowNode::CallWorkflow(_) | WorkflowNode::Gate(_) | WorkflowNode::Script(_) => {}
         }
     }
     refs
@@ -1547,7 +1650,7 @@ pub fn collect_workflow_refs(nodes: &[WorkflowNode]) -> Vec<String> {
     let mut refs = Vec::new();
     for node in nodes {
         match node {
-            WorkflowNode::Call(_) | WorkflowNode::Gate(_) => {}
+            WorkflowNode::Call(_) | WorkflowNode::Gate(_) | WorkflowNode::Script(_) => {}
             WorkflowNode::CallWorkflow(n) => refs.push(n.workflow.clone()),
             WorkflowNode::If(n) => refs.extend(collect_workflow_refs(&n.body)),
             WorkflowNode::Unless(n) => refs.extend(collect_workflow_refs(&n.body)),
@@ -1588,7 +1691,7 @@ pub fn collect_schema_refs(nodes: &[WorkflowNode]) -> Vec<String> {
             WorkflowNode::While(n) => refs.extend(collect_schema_refs(&n.body)),
             WorkflowNode::DoWhile(n) => refs.extend(collect_schema_refs(&n.body)),
             WorkflowNode::Always(n) => refs.extend(collect_schema_refs(&n.body)),
-            WorkflowNode::CallWorkflow(_) | WorkflowNode::Gate(_) => {}
+            WorkflowNode::CallWorkflow(_) | WorkflowNode::Gate(_) | WorkflowNode::Script(_) => {}
         }
     }
     refs
@@ -1619,7 +1722,7 @@ pub fn collect_bot_names(nodes: &[WorkflowNode]) -> Vec<String> {
             WorkflowNode::While(n) => names.extend(collect_bot_names(&n.body)),
             WorkflowNode::DoWhile(n) => names.extend(collect_bot_names(&n.body)),
             WorkflowNode::Do(n) => names.extend(collect_bot_names(&n.body)),
-            WorkflowNode::Parallel(_) => {}
+            WorkflowNode::Parallel(_) | WorkflowNode::Script(_) => {}
             WorkflowNode::Always(n) => names.extend(collect_bot_names(&n.body)),
         }
     }
@@ -1831,6 +1934,9 @@ fn validate_nodes<F>(
                 validate_nodes(&n.body, produced, errors, loader);
             }
             WorkflowNode::Gate(_) => {}
+            WorkflowNode::Script(n) => {
+                produced.insert(n.name.clone());
+            }
             WorkflowNode::Always(n) => {
                 // An Always node nested inside a body block sees the current produced set.
                 validate_nodes(&n.body, produced, errors, loader);
