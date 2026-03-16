@@ -822,4 +822,37 @@ mod tests {
         .await
         .unwrap();
     }
+
+    #[tokio::test]
+    async fn notify_workflow_with_notifications_enabled_claims_log_row() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conductor_core::db::migrations::run(&conn).unwrap();
+        let db = Arc::new(Mutex::new(conn));
+
+        let notifications = conductor_core::config::NotificationConfig {
+            enabled: true,
+            workflows: conductor_core::config::WorkflowNotificationConfig {
+                on_success: true,
+                on_failure: true,
+            },
+        };
+
+        let db2 = Arc::clone(&db);
+        tokio::task::spawn_blocking(move || {
+            notify_workflow(db2, &notifications, "run-notify-1", "my-workflow", None, true);
+        })
+        .await
+        .unwrap();
+
+        // Verify the dedup row was inserted into notification_log
+        let conn = db.lock().await;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-notify-1' AND event_type = 'completed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "notification_log must contain exactly one dedup row");
+    }
 }
