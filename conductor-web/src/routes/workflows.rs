@@ -258,9 +258,16 @@ pub async fn run_workflow(
                 let wf_name = workflow_name.clone();
                 let label = wt_target_label.clone();
                 tokio::task::spawn_blocking(move || {
-                    // No run_id was returned on error; use a fresh ULID so the
-                    // dedup claim always passes (no pre-existing log entry).
-                    let error_run_id = ulid::Ulid::new().to_string();
+                    // No run_id was returned on error; build a deterministic key
+                    // from workflow_name + label + 60-second timestamp bucket so
+                    // concurrent web instances observing the same failure dedup to
+                    // a single notification via notification_log.
+                    let bucket = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                        / 60;
+                    let error_run_id = format!("wf-err:{wf_name}:{label}:{bucket}");
                     notify_workflow(&notifications, &error_run_id, &wf_name, Some(&label), false);
                 });
             }
