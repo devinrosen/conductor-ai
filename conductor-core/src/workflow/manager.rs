@@ -1830,4 +1830,44 @@ mod tests {
         assert_eq!(run2_steps.len(), 1, "run2 should have 1 active step");
         assert_eq!(run2_steps[0].id, step2_active);
     }
+
+    #[test]
+    fn test_get_active_steps_for_runs_includes_waiting_steps() {
+        // Verify that get_active_steps_for_runs returns Waiting steps (not just
+        // Running ones), and excludes Pending steps.
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let run = create_worktree_run(&conn, "w1");
+
+        // Insert a step and transition it to Waiting.
+        let waiting_step = mgr
+            .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+            .unwrap();
+        mgr.update_step_status(
+            &waiting_step,
+            WorkflowStepStatus::Waiting,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Insert a second step and leave it Pending — should be excluded.
+        let _pending_step = mgr
+            .insert_step(&run.id, "step-b", "actor", false, 1, 0)
+            .unwrap();
+
+        let result = mgr
+            .get_active_steps_for_runs(&[run.id.as_str()])
+            .unwrap();
+
+        // Only the Waiting step should appear.
+        assert_eq!(result.len(), 1, "expected one run entry");
+        let steps = result.get(&run.id).expect("run missing from result");
+        assert_eq!(steps.len(), 1, "expected exactly one active step");
+        assert_eq!(steps[0].id, waiting_step, "active step should be the Waiting one");
+    }
 }
