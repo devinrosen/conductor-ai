@@ -284,6 +284,12 @@ pub async fn list_all_workflow_runs_handler(
             .collect::<Result<Vec<_>, _>>()?
     };
 
+    if params.status.as_deref().map(|s| !s.is_empty()).unwrap_or(false) && statuses.is_empty() {
+        return Err(ApiError(ConductorError::InvalidInput(
+            "status filter yielded no valid values — did you pass only commas?".into(),
+        )));
+    }
+
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
     let runs = mgr.list_active_workflow_runs(&statuses)?;
@@ -593,5 +599,18 @@ mod tests {
         let (status, _) =
             get_response("/api/workflows/runs?status=running,,waiting", empty_state()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn status_all_commas_returns_400() {
+        let (status, body) = get_response("/api/workflows/runs?status=,,,", empty_state()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("status filter yielded no valid values"),
+            "unexpected error body: {body}"
+        );
     }
 }
