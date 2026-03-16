@@ -136,7 +136,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                         }
 
                         // Fire gate-waiting notifications, skipping already-notified step IDs.
-                        for (step, workflow_name) in &payload.waiting_gate_steps {
+                        for (step, workflow_name, target_label) in &payload.waiting_gate_steps {
                             if notified_gate_ids.insert(step.id.clone()) {
                                 crate::notify::fire_gate_notification(
                                     conn,
@@ -144,6 +144,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     &step.id,
                                     &step.step_name,
                                     workflow_name,
+                                    target_label.as_deref(),
                                 );
                             }
                         }
@@ -161,7 +162,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                             payload
                                 .waiting_gate_steps
                                 .iter()
-                                .any(|(step, _)| &step.id == id)
+                                .any(|(step, _, _)| &step.id == id)
                         });
                     }
                 }
