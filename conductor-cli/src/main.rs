@@ -841,8 +841,18 @@ fn main() -> Result<()> {
                         (None, Some(path)) => {
                             let content = std::fs::read_to_string(&path)
                                 .with_context(|| format!("Failed to read prompt file: {path}"))?;
-                            // Clean up the temp prompt file written by spawn_child_tmux
-                            let _ = std::fs::remove_file(&path);
+                            // Only clean up internal temp files written by spawn_child_tmux;
+                            // user-provided files via --prompt-file should not be deleted.
+                            if let Some(filename) = std::path::Path::new(&path)
+                                .file_name()
+                                .and_then(|f| f.to_str())
+                            {
+                                if filename.starts_with(".conductor-prompt-")
+                                    && filename.ends_with(".txt")
+                                {
+                                    let _ = std::fs::remove_file(&path);
+                                }
+                            }
                             content
                         }
                         (None, None) => {
