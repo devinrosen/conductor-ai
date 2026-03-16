@@ -2420,6 +2420,92 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // execute_script — bot_name / GH_TOKEN injection path
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_execute_script_with_bot_name_not_configured() {
+        // When bot_name is set but no GitHub App is configured, the script
+        // should still run successfully (NotConfigured path — no GH_TOKEN injected).
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = write_script(
+            &dir.path().join("bot.sh"),
+            "#!/bin/sh\necho '<<<CONDUCTOR_OUTPUT>>>\n{\"context\": \"bot ran\"}\n<<<END_CONDUCTOR_OUTPUT>>>'",
+        );
+
+        let conn = crate::test_helpers::setup_db();
+        let config = Box::leak(Box::new(crate::config::Config::default()));
+        let dir_str = dir.path().to_str().unwrap().to_string();
+        let mut state = make_test_state(
+            &conn,
+            config,
+            &dir_str,
+            crate::workflow::types::WorkflowExecConfig::default(),
+        );
+
+        let node = crate::workflow_dsl::ScriptNode {
+            name: "bot-step".into(),
+            run: script_path,
+            env: std::collections::HashMap::new(),
+            timeout: Some(10),
+            retries: 0,
+            on_fail: None,
+            bot_name: Some("my-bot".into()),
+        };
+
+        let result = execute_script(&mut state, &node, 0);
+        assert!(
+            result.is_ok(),
+            "execute_script with bot_name should succeed: {result:?}"
+        );
+        assert!(state.all_succeeded);
+        let step_res = state.step_results.get("bot-step").unwrap();
+        assert_eq!(step_res.context, "bot ran");
+    }
+
+    #[test]
+    fn test_execute_script_bot_name_falls_back_to_default() {
+        // When node.bot_name is None but state.default_bot_name is set,
+        // the effective_bot should use the default. With no app configured,
+        // this exercises the fallback logic without crashing.
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = write_script(
+            &dir.path().join("default-bot.sh"),
+            "#!/bin/sh\necho '<<<CONDUCTOR_OUTPUT>>>\n{\"context\": \"default bot ran\"}\n<<<END_CONDUCTOR_OUTPUT>>>'",
+        );
+
+        let conn = crate::test_helpers::setup_db();
+        let config = Box::leak(Box::new(crate::config::Config::default()));
+        let dir_str = dir.path().to_str().unwrap().to_string();
+        let mut state = make_test_state(
+            &conn,
+            config,
+            &dir_str,
+            crate::workflow::types::WorkflowExecConfig::default(),
+        );
+        state.default_bot_name = Some("default-bot".into());
+
+        let node = crate::workflow_dsl::ScriptNode {
+            name: "default-bot-step".into(),
+            run: script_path,
+            env: std::collections::HashMap::new(),
+            timeout: Some(10),
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        };
+
+        let result = execute_script(&mut state, &node, 0);
+        assert!(
+            result.is_ok(),
+            "execute_script with default bot should succeed: {result:?}"
+        );
+        assert!(state.all_succeeded);
+        let step_res = state.step_results.get("default-bot-step").unwrap();
+        assert_eq!(step_res.context, "default bot ran");
+    }
+
+    // -----------------------------------------------------------------------
     // execute_script — timeout path
     // -----------------------------------------------------------------------
 

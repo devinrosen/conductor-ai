@@ -4636,6 +4636,40 @@ workflow w {
     }
 
     #[test]
+    fn test_parse_script_with_bot_name() {
+        let src = make_wf(
+            r#"  script deploy {
+    run = "scripts/deploy.sh"
+    as = "deploy-bot"
+  }"#,
+        );
+        let def = parse_workflow_str(&src, "w.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Script(s) => {
+                assert_eq!(s.name, "deploy");
+                assert_eq!(s.run, "scripts/deploy.sh");
+                assert_eq!(s.bot_name.as_deref(), Some("deploy-bot"));
+            }
+            other => panic!("expected Script node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_script_without_bot_name_defaults_to_none() {
+        let src = make_wf(r#"  script simple { run = "scripts/run.sh" }"#);
+        let def = parse_workflow_str(&src, "w.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Script(s) => {
+                assert!(
+                    s.bot_name.is_none(),
+                    "bot_name should be None when `as` is not specified"
+                );
+            }
+            other => panic!("expected Script node, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_parse_script_missing_run_field() {
         let src = make_wf(r#"  script my-step { timeout = "30" }"#);
         let err = parse_workflow_str(&src, "w.wf").unwrap_err();

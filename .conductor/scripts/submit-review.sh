@@ -15,6 +15,11 @@ if [ -z "${PR_NUMBER}" ]; then
   exit 0
 fi
 
+if ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+  echo "PR_NUMBER is not a valid number: '${PR_NUMBER}' — aborting."
+  exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # 2. No-op on dry run
 # ---------------------------------------------------------------------------
@@ -120,7 +125,9 @@ if [ -n "${FILED_ISSUES}" ]; then
 ${FILED_ISSUES}"
 fi
 
-echo "${REVIEW_BODY}" > /tmp/conductor_review_body.md
+REVIEW_BODY_FILE=$(mktemp "${TMPDIR:-/tmp}/conductor_review_body.XXXXXXXXXX.md")
+trap 'rm -f "${REVIEW_BODY_FILE}"' EXIT
+echo "${REVIEW_BODY}" > "${REVIEW_BODY_FILE}"
 
 # ---------------------------------------------------------------------------
 # 6. Submit formal review
@@ -129,10 +136,10 @@ OVERALL_APPROVED=$(echo "${PRIOR_OUTPUT}" | jq -r 'if .overall_approved == false
 
 if [ "${OVERALL_APPROVED}" = "true" ]; then
   echo "Submitting APPROVE review for PR #${PR_NUMBER}…"
-  gh pr review "${PR_NUMBER}" --approve --body-file /tmp/conductor_review_body.md
+  gh pr review "${PR_NUMBER}" --approve --body-file "${REVIEW_BODY_FILE}"
 else
   echo "Submitting REQUEST CHANGES review for PR #${PR_NUMBER}…"
-  gh pr review "${PR_NUMBER}" --request-changes --body-file /tmp/conductor_review_body.md
+  gh pr review "${PR_NUMBER}" --request-changes --body-file "${REVIEW_BODY_FILE}"
 fi
 
 echo "Review submitted successfully."
