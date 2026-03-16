@@ -544,6 +544,13 @@ mod tests {
         (status, json)
     }
 
+    fn assert_error_contains(body: &serde_json::Value, substr: &str) {
+        assert!(
+            body["error"].as_str().unwrap_or("").contains(substr),
+            "unexpected error body: {body}"
+        );
+    }
+
     #[tokio::test]
     async fn status_valid_returns_200() {
         let (status, _) = get_response("/api/workflows/runs?status=running", empty_state()).await;
@@ -554,13 +561,7 @@ mod tests {
     async fn status_bogus_returns_400() {
         let (status, body) = get_response("/api/workflows/runs?status=bogus", empty_state()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(
-            body["error"]
-                .as_str()
-                .unwrap_or("")
-                .contains("unknown WorkflowRunStatus: bogus"),
-            "unexpected error body: {body}"
-        );
+        assert_error_contains(&body, "unknown WorkflowRunStatus: bogus");
     }
 
     #[tokio::test]
@@ -605,26 +606,14 @@ mod tests {
     async fn status_all_commas_returns_400() {
         let (status, body) = get_response("/api/workflows/runs?status=,,,", empty_state()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(
-            body["error"]
-                .as_str()
-                .unwrap_or("")
-                .contains("empty status token in list"),
-            "unexpected error body: {body}"
-        );
+        assert_error_contains(&body, "empty status token in list");
     }
 
     #[tokio::test]
     async fn status_whitespace_only_param_returns_400() {
         let (status, body) = get_response("/api/workflows/runs?status=%20", empty_state()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(
-            body["error"]
-                .as_str()
-                .unwrap_or("")
-                .contains("empty status token in list"),
-            "unexpected error body: {body}"
-        );
+        assert_error_contains(&body, "status filter yielded no valid values");
     }
 
     #[tokio::test]
@@ -635,13 +624,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(
-            body["error"]
-                .as_str()
-                .unwrap_or("")
-                .contains("empty status token in list"),
-            "unexpected error body: {body}"
-        );
+        assert_error_contains(&body, "empty status token in list");
     }
 
     #[tokio::test]
