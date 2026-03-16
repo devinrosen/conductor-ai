@@ -1326,10 +1326,15 @@ impl<'a> WorkflowManager<'a> {
 /// Returns a comma-separated list of numbered SQLite positional placeholders:
 /// `?1, ?2, …, ?n`.  Returns an empty string when `n == 0`.
 fn sql_placeholders(n: usize) -> String {
-    (1..=n)
-        .map(|i| format!("?{i}"))
-        .collect::<Vec<_>>()
-        .join(", ")
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(n.saturating_mul(4));
+    for i in 1..=n {
+        if i > 1 {
+            s.push_str(", ");
+        }
+        write!(s, "?{i}").unwrap();
+    }
+    s
 }
 
 /// Returns `(where_clause, params)` where `params` is a `Vec<String>` whose
@@ -1717,5 +1722,12 @@ mod tests {
         assert!(ids.contains(&pending_run.id.as_str()));
         assert!(ids.contains(&running_run.id.as_str()));
         assert!(!ids.contains(&failed_run.id.as_str()));
+    }
+
+    #[test]
+    fn test_sql_placeholders() {
+        assert_eq!(sql_placeholders(0), "");
+        assert_eq!(sql_placeholders(1), "?1");
+        assert_eq!(sql_placeholders(3), "?1, ?2, ?3");
     }
 }
