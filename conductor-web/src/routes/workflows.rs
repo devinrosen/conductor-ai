@@ -635,8 +635,11 @@ mod tests {
 
     #[tokio::test]
     async fn status_whitespace_only_token_in_csv_returns_400() {
-        let (status, body) =
-            get_response("/api/workflows/runs?status=running,%20,waiting", empty_state()).await;
+        let (status, body) = get_response(
+            "/api/workflows/runs?status=running,%20,waiting",
+            empty_state(),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(
             body["error"]
@@ -649,8 +652,7 @@ mod tests {
 
     #[tokio::test]
     async fn status_whitespace_only_tokens_only_returns_400() {
-        let (status, _) =
-            get_response("/api/workflows/runs?status=%20,%20", empty_state()).await;
+        let (status, _) = get_response("/api/workflows/runs?status=%20,%20", empty_state()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }
