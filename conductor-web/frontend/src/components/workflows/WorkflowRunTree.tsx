@@ -125,6 +125,7 @@ export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTr
   const { repoSlugs, repoGroups } = useMemo(() => {
     const repoSlugs: string[] = [];
     const repoGroups = new Map<string, Map<string, WorkflowRun[]>>();
+    const repoById = new Map(repos.map((r) => [r.id, r]));
 
     for (const run of runs) {
       if (childIds.has(run.id)) continue;
@@ -132,7 +133,7 @@ export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTr
       let repoSlug = "unknown";
       let targetKey = "unknown";
 
-      const repo = run.repo_id ? repos.find((r) => r.id === run.repo_id) : undefined;
+      const repo = run.repo_id ? repoById.get(run.repo_id) : undefined;
 
       if (run.target_label) {
         const parsed = parseTargetLabel(run.target_label);
