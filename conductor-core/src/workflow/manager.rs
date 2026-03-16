@@ -1324,7 +1324,10 @@ impl<'a> WorkflowManager<'a> {
 /// Returns a comma-separated list of numbered SQLite positional placeholders:
 /// `?1, ?2, …, ?n`.  Returns an empty string when `n == 0`.
 fn sql_placeholders(n: usize) -> String {
-    (1..=n).map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ")
+    (1..=n)
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Returns `(where_clause, params)` where `params` is a `Vec<String>` whose
