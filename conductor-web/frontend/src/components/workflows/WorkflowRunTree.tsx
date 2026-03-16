@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { Link } from "react-router";
 import type { WorkflowRun, Repo } from "../../api/types";
 import { StatusBadge } from "../shared/StatusBadge";
@@ -39,7 +39,7 @@ function parseTargetLabel(label: string): ParsedTarget {
   return { repoSlug: "unknown", targetKey: label, type: "worktree" };
 }
 
-function RunRow({
+const RunRow = memo(function RunRow({
   run,
   ctxMap,
   onCancel,
@@ -82,70 +82,77 @@ function RunRow({
       </div>
     </div>
   );
-}
+});
 
 export function WorkflowRunTree({ runs, repos, ctxMap, onCancel }: WorkflowRunTreeProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
-  const toggle = (key: string) => {
+  const toggle = useCallback((key: string) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
     });
-  };
+  }, []);
 
   // Build child set and children map
-  const childIds = new Set<string>();
-  const childrenMap = new Map<string, WorkflowRun[]>();
+  const { childIds, childrenMap } = useMemo(() => {
+    const childIds = new Set<string>();
+    const childrenMap = new Map<string, WorkflowRun[]>();
 
-  for (const run of runs) {
-    if (run.parent_workflow_run_id) {
-      childIds.add(run.id);
-      if (!childrenMap.has(run.parent_workflow_run_id)) {
-        childrenMap.set(run.parent_workflow_run_id, []);
+    for (const run of runs) {
+      if (run.parent_workflow_run_id) {
+        childIds.add(run.id);
+        if (!childrenMap.has(run.parent_workflow_run_id)) {
+          childrenMap.set(run.parent_workflow_run_id, []);
+        }
+        childrenMap.get(run.parent_workflow_run_id)!.push(run);
       }
-      childrenMap.get(run.parent_workflow_run_id)!.push(run);
     }
-  }
 
-  // Sort children ASC by started_at
-  for (const children of childrenMap.values()) {
-    children.sort((a, b) => a.started_at.localeCompare(b.started_at));
-  }
+    // Sort children ASC by started_at
+    for (const children of childrenMap.values()) {
+      children.sort((a, b) => a.started_at.localeCompare(b.started_at));
+    }
+
+    return { childIds, childrenMap };
+  }, [runs]);
 
   // Group root runs into (repoSlug → targetKey → runs[]) preserving first-seen order
-  const repoSlugs: string[] = [];
-  const repoGroups = new Map<string, Map<string, WorkflowRun[]>>();
+  const { repoSlugs, repoGroups } = useMemo(() => {
+    const repoSlugs: string[] = [];
+    const repoGroups = new Map<string, Map<string, WorkflowRun[]>>();
 
-  for (const run of runs) {
-    if (childIds.has(run.id)) continue;
+    for (const run of runs) {
+      if (childIds.has(run.id)) continue;
 
-    let repoSlug = "unknown";
-    let targetKey = "unknown";
+      let repoSlug = "unknown";
+      let targetKey = "unknown";
 
-    const repo = run.repo_id ? repos.find((r) => r.id === run.repo_id) : undefined;
+      const repo = run.repo_id ? repos.find((r) => r.id === run.repo_id) : undefined;
 
-    if (run.target_label) {
-      const parsed = parseTargetLabel(run.target_label);
-      repoSlug = parsed.repoSlug;
-      targetKey = parsed.targetKey;
-      if (repoSlug === "unknown" && repo) repoSlug = repo.slug;
-    } else if (repo) {
-      repoSlug = repo.slug;
-    }
+      if (run.target_label) {
+        const parsed = parseTargetLabel(run.target_label);
+        repoSlug = parsed.repoSlug;
+        targetKey = parsed.targetKey;
+        if (repoSlug === "unknown" && repo) repoSlug = repo.slug;
+      } else if (repo) {
+        repoSlug = repo.slug;
+      }
 
-    if (!repoGroups.has(repoSlug)) {
-      repoGroups.set(repoSlug, new Map());
-      repoSlugs.push(repoSlug);
-    }
-    const targetGroups = repoGroups.get(repoSlug)!;
-    if (!targetGroups.has(targetKey)) {
-      targetGroups.set(targetKey, []);
-    }
-    targetGroups.get(targetKey)!.push(run);
-  }
+      if (!repoGroups.has(repoSlug)) {
+        repoGroups.set(repoSlug, new Map());
+        repoSlugs.push(repoSlug);
+      }
+      const targetGroups = repoGroups.get(repoSlug)!;
+      if (!targetGroups.has(targetKey)) {
+        targetGroups.set(targetKey, []);
+      }
+      targetGroups.get(targetKey)!.push(run);
+
+    return { repoSlugs, repoGroups };
+  }, [runs, repos, childIds]);
 
   if (runs.length === 0) {
     return (
