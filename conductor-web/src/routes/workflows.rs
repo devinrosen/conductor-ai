@@ -793,4 +793,18 @@ mod tests {
             "waiting step should be included"
         );
     }
+
+    #[tokio::test]
+    async fn notify_workflow_completes_without_panic() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conductor_core::db::migrations::run(&conn).unwrap();
+        let db = Arc::new(Mutex::new(conn));
+        let notifications = conductor_core::config::NotificationConfig::default(); // enabled=false
+
+        tokio::task::spawn_blocking(move || {
+            notify_workflow(db, &notifications, "test-run-id", "test-wf", None, false);
+        })
+        .await
+        .unwrap();
+    }
 }
