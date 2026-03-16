@@ -17,7 +17,9 @@ workflow ticket-to-pr {
 
   call workflow lint-fix
 
-  call fmt-fix
+  script fmt-fix {
+    run = ".conductor/scripts/fmt-fix.sh"
+  }
 
   call push-and-pr
 
