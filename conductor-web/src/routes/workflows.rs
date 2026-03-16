@@ -239,12 +239,20 @@ pub async fn run_workflow(
                 let wf_name = workflow_name.clone();
                 let label = wt_target_label.clone();
                 tokio::task::spawn_blocking(move || {
-                    crate::notify::fire_workflow_notification(
-                        &notifications,
-                        &wf_name,
-                        Some(&label),
-                        false,
-                    );
+                    // No run_id was returned on error; use a fresh ULID so the
+                    // dedup claim always passes (no pre-existing log entry).
+                    let error_run_id = ulid::Ulid::new().to_string();
+                    match conductor_core::db::open_database(&conductor_core::config::db_path()) {
+                        Ok(conn) => crate::notify::fire_workflow_notification(
+                            &conn,
+                            &notifications,
+                            &error_run_id,
+                            &wf_name,
+                            Some(&label),
+                            false,
+                        ),
+                        Err(e) => tracing::warn!("notification skipped — DB open failed: {e}"),
+                    }
                 });
             }
         }
@@ -447,12 +455,17 @@ pub async fn resume_workflow_endpoint(
             }
             Err(e) => {
                 tracing::error!("Workflow resume failed: {e}");
-                crate::notify::fire_workflow_notification(
-                    &notifications,
-                    &workflow_name,
-                    target_label.as_deref(),
-                    false,
-                );
+                match conductor_core::db::open_database(&conductor_core::config::db_path()) {
+                    Ok(conn) => crate::notify::fire_workflow_notification(
+                        &conn,
+                        &notifications,
+                        &params.workflow_run_id,
+                        &workflow_name,
+                        target_label.as_deref(),
+                        false,
+                    ),
+                    Err(e) => tracing::warn!("notification skipped — DB open failed: {e}"),
+                }
             }
         }
     });
