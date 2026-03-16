@@ -255,7 +255,7 @@ pub async fn run_workflow(
 /// Query params for GET /api/workflows/runs
 #[derive(Deserialize)]
 pub struct ListAllRunsQuery {
-    /// Comma-separated list of statuses. Defaults to "running,waiting,pending".
+    /// Comma-separated list of statuses. Defaults to running, waiting, pending (owned by the manager layer).
     pub status: Option<String>,
 }
 
@@ -269,7 +269,7 @@ pub async fn list_all_workflow_runs_handler(
     let statuses: Vec<WorkflowRunStatus> = params
         .status
         .as_deref()
-        .unwrap_or("running,waiting,pending")
+        .unwrap_or("")
         .split(',')
         .filter(|s| !s.is_empty())
         .filter_map(|s| WorkflowRunStatus::from_str(s.trim()).ok())
