@@ -157,6 +157,15 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
     });
 }
 
+/// Run `f` only when `enabled` is true; return an empty `Vec` otherwise.
+fn query_if_enabled<T>(enabled: bool, f: impl FnOnce() -> Vec<T>) -> Vec<T> {
+    if enabled {
+        f()
+    } else {
+        vec![]
+    }
+}
+
 /// Poll all data from the database. Returns a DataRefreshed action, the loaded config, and the
 /// open DB connection so the caller can reuse it (e.g. for notification claims) without opening
 /// a second connection on the same tick.
@@ -252,24 +261,20 @@ pub fn poll_data() -> Option<PollResult> {
         .unwrap_or_default();
 
     // Only run notification-specific queries when notifications are enabled.
-    let pending_feedback_requests = if config.notifications.enabled {
+    let pending_feedback_requests = query_if_enabled(config.notifications.enabled, || {
         agent_mgr
             .list_all_pending_feedback_requests()
             .unwrap_or_else(|e| {
                 tracing::warn!("list_all_pending_feedback_requests failed: {e}");
                 vec![]
             })
-    } else {
-        vec![]
-    };
-    let waiting_gate_steps = if config.notifications.enabled {
+    });
+    let waiting_gate_steps = query_if_enabled(config.notifications.enabled, || {
         wf_mgr.list_all_waiting_gate_steps().unwrap_or_else(|e| {
             tracing::warn!("list_all_waiting_gate_steps failed: {e}");
             vec![]
         })
-    } else {
-        vec![]
-    };
+    });
 
     let action = Action::DataRefreshed(Box::new(DataRefreshedPayload {
         repos,
