@@ -1930,11 +1930,19 @@ pub(super) fn execute_script(
             Some(attempt as i64),
         )?;
 
-        // Create a temp file for the script's stdout
+        // Create a temp file for the script's stdout+stderr.
+        // Both streams are redirected here so that subprocess output never
+        // reaches the terminal directly (which would corrupt TUI rendering).
         let output_path = format!("{}/script-{}.out", state.working_dir, step_id);
         let output_file = std::fs::File::create(&output_path).map_err(|e| {
             ConductorError::Workflow(format!(
                 "Script step '{}': failed to create output file: {e}",
+                step_label
+            ))
+        })?;
+        let stderr_file = output_file.try_clone().map_err(|e| {
+            ConductorError::Workflow(format!(
+                "Script step '{}': failed to clone output file handle for stderr: {e}",
                 step_label
             ))
         })?;
@@ -1956,7 +1964,7 @@ pub(super) fn execute_script(
         let mut cmd = Command::new(&resolved_path);
         cmd.envs(&resolved_env)
             .stdout(output_file)
-            .stderr(std::process::Stdio::inherit())
+            .stderr(stderr_file)
             .current_dir(&state.working_dir);
         match crate::github_app::resolve_named_app_token(state.config, effective_bot, "script") {
             crate::github_app::TokenResolution::AppToken(token) => {
