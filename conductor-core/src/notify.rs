@@ -308,6 +308,24 @@ mod tests {
     }
 
     #[test]
+    fn fire_workflow_notification_on_failure_false_does_not_claim_failure() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, false); // enabled, on_success=true, on_failure=false
+        fire_workflow_notification(&conn, &cfg, "run-5", "my-workflow", None, false);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-5'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "on_failure=false must not claim for failure events"
+        );
+    }
+
+    #[test]
     fn fire_workflow_notification_enabled_claims_once_for_success() {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
