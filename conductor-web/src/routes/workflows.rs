@@ -839,7 +839,14 @@ mod tests {
 
         let db2 = Arc::clone(&db);
         tokio::task::spawn_blocking(move || {
-            notify_workflow(db2, &notifications, "run-notify-1", "my-workflow", None, true);
+            notify_workflow(
+                db2,
+                &notifications,
+                "run-notify-1",
+                "my-workflow",
+                None,
+                true,
+            );
         })
         .await
         .unwrap();
@@ -853,6 +860,9 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(count, 1, "notification_log must contain exactly one dedup row");
+        assert_eq!(
+            count, 1,
+            "notification_log must contain exactly one dedup row"
+        );
     }
 }
