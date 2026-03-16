@@ -5,7 +5,9 @@ workflow review-pr {
     targets     = ["pr", "worktree"]
   }
 
-  call detect-db-migrations { output = "db-check" }
+  script detect-db-migrations {
+    run = ".conductor/scripts/detect-db-migrations.sh"
+  }
   script detect-file-types {
     run = ".conductor/scripts/detect-file-types.sh"
   }
