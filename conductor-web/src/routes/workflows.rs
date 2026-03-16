@@ -10,7 +10,7 @@ use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
     WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowManager, WorkflowResumeStandalone,
-    WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
+    WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -294,20 +294,12 @@ pub async fn list_all_workflow_runs_handler(
     let mgr = WorkflowManager::new(&db);
     let mut runs = mgr.list_active_workflow_runs(&statuses)?;
 
-    // Batch-fetch steps for all runs and attach the active (running/waiting) ones
+    // Batch-fetch only running/waiting steps for all runs (filter pushed to SQL)
     let run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
-    let mut steps_by_run = mgr.get_steps_for_runs(&run_ids)?;
+    let mut steps_by_run = mgr.get_active_steps_for_runs(&run_ids)?;
     for run in &mut runs {
         if let Some(steps) = steps_by_run.remove(&run.id) {
-            run.active_steps = steps
-                .into_iter()
-                .filter(|s| {
-                    matches!(
-                        s.status,
-                        WorkflowStepStatus::Running | WorkflowStepStatus::Waiting
-                    )
-                })
-                .collect();
+            run.active_steps = steps;
         }
     }
 
@@ -531,6 +523,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use conductor_core::config::Config;
+    use conductor_core::workflow::WorkflowStepStatus;
     use tokio::sync::{Mutex, RwLock};
     use tower::ServiceExt;
 
