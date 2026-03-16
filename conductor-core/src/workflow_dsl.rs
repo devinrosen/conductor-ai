@@ -4578,4 +4578,79 @@ workflow w {
         assert_eq!(names.len(), 1);
         assert_eq!(names[0], "shared-bot");
     }
+
+    // -----------------------------------------------------------------------
+    // parse_script tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_script_happy_path() {
+        let src = make_wf(r#"  script my-step { run = "scripts/build.sh" }"#);
+        let def = parse_workflow_str(&src, "w.wf").unwrap();
+        assert_eq!(def.body.len(), 1);
+        match &def.body[0] {
+            WorkflowNode::Script(s) => {
+                assert_eq!(s.name, "my-step");
+                assert_eq!(s.run, "scripts/build.sh");
+                assert!(s.env.is_empty());
+                assert!(s.timeout.is_none());
+                assert_eq!(s.retries, 0);
+                assert!(s.on_fail.is_none());
+            }
+            other => panic!("expected Script node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_script_with_all_fields() {
+        let src = make_wf(
+            r#"  script build {
+    run = "ci/build.sh"
+    timeout = "120"
+    retries = "2"
+    env = { CI = "true" BRANCH = "main" }
+  }"#,
+        );
+        let def = parse_workflow_str(&src, "w.wf").unwrap();
+        match &def.body[0] {
+            WorkflowNode::Script(s) => {
+                assert_eq!(s.run, "ci/build.sh");
+                assert_eq!(s.timeout, Some(120));
+                assert_eq!(s.retries, 2);
+                assert_eq!(s.env.get("CI").map(|s| s.as_str()), Some("true"));
+                assert_eq!(s.env.get("BRANCH").map(|s| s.as_str()), Some("main"));
+            }
+            other => panic!("expected Script node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_script_missing_run_field() {
+        let src = make_wf(r#"  script my-step { timeout = "30" }"#);
+        let err = parse_workflow_str(&src, "w.wf").unwrap_err();
+        assert!(
+            err.to_string().contains("missing required `run` field"),
+            "expected 'missing required `run` field', got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_script_invalid_timeout() {
+        let src = make_wf(r#"  script my-step { run = "x.sh" timeout = "not-a-number" }"#);
+        let err = parse_workflow_str(&src, "w.wf").unwrap_err();
+        assert!(
+            err.to_string().contains("invalid timeout"),
+            "expected 'invalid timeout', got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_script_invalid_retries() {
+        let src = make_wf(r#"  script my-step { run = "x.sh" retries = "bad" }"#);
+        let err = parse_workflow_str(&src, "w.wf").unwrap_err();
+        assert!(
+            err.to_string().contains("invalid retries"),
+            "expected 'invalid retries', got: {err}"
+        );
+    }
 }

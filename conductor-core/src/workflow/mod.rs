@@ -1380,6 +1380,7 @@ And here is my actual output:
             gate_approved_at: None,
             gate_feedback: None,
             structured_output: None,
+            output_file: None,
         };
         let entries = step.metadata_fields();
         assert_eq!(entries.len(), 6); // 4 always-present + Started + Ended
@@ -1459,6 +1460,7 @@ And here is my actual output:
             gate_approved_at: None,
             gate_feedback: Some("Looks good".into()),
             structured_output: None,
+            output_file: None,
         };
         let entries = step.metadata_fields();
         assert!(entries.contains(&MetadataEntry::Field {
@@ -3367,6 +3369,7 @@ And here is my actual output:
             gate_approved_at: None,
             gate_feedback: None,
             structured_output: structured_output.map(String::from),
+            output_file: None,
         }
     }
 

@@ -361,6 +361,15 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
+    /// Persist the stdout capture file path for a script step.
+    pub fn set_step_output_file(&self, step_id: &str, output_file: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workflow_run_steps SET output_file = ?1 WHERE id = ?2",
+            params![output_file, step_id],
+        )?;
+        Ok(())
+    }
+
     /// Update gate-specific columns on a step.
     pub fn set_step_gate_info(
         &self,
@@ -1376,6 +1385,7 @@ pub(super) fn row_to_workflow_step(row: &rusqlite::Row) -> rusqlite::Result<Work
         gate_approved_at: row.get(22)?,
         gate_feedback: row.get(23)?,
         structured_output: row.get(24)?,
+        output_file: row.get(25)?,
     })
 }
 

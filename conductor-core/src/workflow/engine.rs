@@ -783,6 +783,7 @@ pub(super) fn record_step_success(
     child_run_id: Option<String>,
     iteration: u32,
     structured_output: Option<String>,
+    output_file: Option<String>,
 ) {
     if let Some(cost) = cost_usd {
         state.total_cost += cost;
@@ -799,6 +800,11 @@ pub(super) fn record_step_success(
         state.last_structured_output = structured_output.clone();
     }
 
+    // Update last_output_file for {{prior_output_file}} substitution
+    if output_file.is_some() {
+        state.last_output_file = output_file.clone();
+    }
+
     let step_result = StepResult {
         step_name: step_name.to_string(),
         status: WorkflowStepStatus::Completed,
@@ -810,7 +816,7 @@ pub(super) fn record_step_success(
         context: context.clone(),
         child_run_id,
         structured_output,
-        output_file: None,
+        output_file,
     };
     state.step_results.insert(step_key, step_result);
 
@@ -979,6 +985,10 @@ pub(super) fn restore_completed_step(
         state.last_structured_output = step.structured_output.clone();
     }
 
+    if step.output_file.is_some() {
+        state.last_output_file = step.output_file.clone();
+    }
+
     let step_result = StepResult {
         step_name: step_key.to_string(),
         status: WorkflowStepStatus::Completed,
@@ -990,7 +1000,7 @@ pub(super) fn restore_completed_step(
         context: context.clone(),
         child_run_id: step.child_run_id.clone(),
         structured_output: step.structured_output.clone(),
-        output_file: None,
+        output_file: step.output_file.clone(),
     };
     state.step_results.insert(step_key.to_string(), step_result);
 
@@ -1124,7 +1134,7 @@ pub(super) fn fetch_child_completion_data(
                 context,
                 child_run_id: s.child_run_id.clone(),
                 structured_output: s.structured_output.clone(),
-                output_file: None,
+                output_file: s.output_file.clone(),
             };
             (s.step_name, result)
         })
@@ -1180,7 +1190,7 @@ pub(super) fn bubble_up_child_step_results(
                 context,
                 child_run_id: s.child_run_id.clone(),
                 structured_output: s.structured_output.clone(),
-                output_file: None,
+                output_file: s.output_file.clone(),
             };
             (s.step_name, result)
         })

@@ -645,6 +645,29 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 36)?;
     }
 
+    // Migration 037: add 'script' to the role CHECK constraint and add output_file column.
+    // Requires a table swap (FK constraint). Guarded by output_file column existence
+    // to be idempotent and to skip gracefully on partial test schemas.
+    let has_output_file: bool = conn
+        .prepare("SELECT output_file FROM workflow_run_steps LIMIT 0")
+        .is_ok();
+    if version < 37 {
+        if !has_output_file {
+            let steps_table_exists = conn
+                .prepare("SELECT 1 FROM workflow_run_steps LIMIT 0")
+                .is_ok();
+            if steps_table_exists {
+                with_foreign_keys_off(conn, || {
+                    conn.execute_batch(include_str!(
+                        "migrations/037_workflow_step_output_file.sql"
+                    ))?;
+                    Ok(())
+                })?;
+            }
+        }
+        bump_version(conn, 37)?;
+    }
+
     Ok(())
 }
 

@@ -64,6 +64,8 @@ pub struct WorkflowRunStep {
     pub gate_feedback: Option<String>,
     /// Full structured output JSON (when schema was used).
     pub structured_output: Option<String>,
+    /// Path to the stdout capture file for script steps (persisted for resume).
+    pub output_file: Option<String>,
 }
 
 /// Lightweight summary of the currently-running step for a workflow run.

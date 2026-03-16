@@ -817,6 +817,7 @@ mod tests {
             gate_approved_at: None,
             gate_feedback: None,
             structured_output: None,
+            output_file: None,
         }];
         state
     }

@@ -264,6 +264,7 @@ fn execute_call_with_schema(
                         Some(completed_run.id),
                         iteration,
                         structured_json,
+                        None,
                     );
 
                     return Ok(());
@@ -464,6 +465,7 @@ pub(super) fn execute_call_workflow(
                     Some(result.workflow_run_id.clone()),
                     iteration,
                     None,
+                    None,
                 );
 
                 for (key, value) in child_steps {
@@ -629,6 +631,7 @@ pub(super) fn execute_call_workflow(
                         context,
                         Some(result.workflow_run_id.clone()),
                         iteration,
+                        None,
                         None,
                     );
 
@@ -1732,6 +1735,31 @@ pub(super) fn handle_gate_timeout(
 // Script step executor
 // ---------------------------------------------------------------------------
 
+/// Maximum bytes read from a script's stdout file into memory.
+/// Output beyond this limit is truncated with a notice appended.
+const MAX_STDOUT_BYTES: usize = 100 * 1024; // 100 KB
+
+/// Read at most [`MAX_STDOUT_BYTES`] from `path`, returning a UTF-8 string.
+/// If the file is larger than the limit the content is truncated and a notice
+/// is appended so callers can see that truncation occurred.
+fn read_stdout_bounded(path: &str) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut buf = Vec::with_capacity(MAX_STDOUT_BYTES + 1);
+    f.by_ref()
+        .take((MAX_STDOUT_BYTES + 1) as u64)
+        .read_to_end(&mut buf)?;
+    let truncated = buf.len() > MAX_STDOUT_BYTES;
+    if truncated {
+        buf.truncate(MAX_STDOUT_BYTES);
+    }
+    let mut s = String::from_utf8_lossy(&buf).into_owned();
+    if truncated {
+        s.push_str("\n...[output truncated at 100 KB]");
+    }
+    Ok(s)
+}
+
 /// Outcome of polling a spawned script child process.
 enum ScriptPollResult {
     /// Process exited with success (exit code 0).
@@ -1954,7 +1982,12 @@ pub(super) fn execute_script(
             state.exec_config.shutdown.as_ref(),
         ) {
             ScriptPollResult::Succeeded => {
-                let stdout = std::fs::read_to_string(&output_path).unwrap_or_default();
+                let stdout = read_stdout_bounded(&output_path).map_err(|e| {
+                    ConductorError::Workflow(format!(
+                        "Script step '{}': failed to read stdout file '{}': {e}",
+                        step_label, output_path
+                    ))
+                })?;
                 let parsed = parse_conductor_output(&stdout);
                 let (markers, context) = match parsed {
                     Some(out) => (out.markers, out.context),
@@ -1982,6 +2015,7 @@ pub(super) fn execute_script(
                     Some(&markers_json),
                     Some(attempt as i64),
                 )?;
+                state.wf_mgr.set_step_output_file(&step_id, &output_path)?;
 
                 record_step_success(
                     state,
@@ -1996,20 +2030,23 @@ pub(super) fn execute_script(
                     None,
                     iteration,
                     None,
+                    Some(output_path),
                 );
-
-                // Update last_output_file for {{prior_output_file}} substitution
-                state.last_output_file = Some(output_path);
-
-                // Update output_file on the inserted StepResult
-                if let Some(result) = state.step_results.get_mut(&step_key) {
-                    result.output_file = state.last_output_file.clone();
-                }
 
                 return Ok(());
             }
 
             ScriptPollResult::Failed(err) => {
+                // Try to capture stdout so the failure message includes script output
+                let stdout_snippet = read_stdout_bounded(&output_path)
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| {
+                        let snippet: String = s.chars().take(2000).collect();
+                        format!("\n--- script stdout ---\n{snippet}")
+                    })
+                    .unwrap_or_default();
+                let full_err = format!("{err}{stdout_snippet}");
                 tracing::warn!(
                     "Script step '{}' failed (attempt {}/{}): {err}",
                     step_label,
@@ -2020,12 +2057,12 @@ pub(super) fn execute_script(
                     &step_id,
                     WorkflowStepStatus::Failed,
                     None,
-                    Some(&err),
+                    Some(&full_err),
                     None,
                     None,
                     Some(attempt as i64),
                 )?;
-                last_error = err;
+                last_error = full_err;
                 // continue to next attempt
             }
 
@@ -2081,4 +2118,266 @@ pub(super) fn execute_script(
     }
 
     record_step_failure(state, step_key, step_label, last_error, max_attempts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // resolve_script_path tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_script_path_absolute_exists() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        let result = resolve_script_path(&path, "/nonexistent", "/nonexistent");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), tmp.path());
+    }
+
+    #[test]
+    fn test_resolve_script_path_absolute_missing() {
+        let result = resolve_script_path("/nonexistent/path/script.sh", "/wd", "/repo");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_script_path_relative_in_working_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("run.sh");
+        std::fs::write(&script, "#!/bin/sh\necho hi").unwrap();
+        let working_dir = dir.path().to_str().unwrap();
+        let result = resolve_script_path("run.sh", working_dir, "/nonexistent");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), script);
+    }
+
+    #[test]
+    fn test_resolve_script_path_relative_in_repo_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("ci.sh");
+        std::fs::write(&script, "#!/bin/sh\necho ci").unwrap();
+        let repo_path = dir.path().to_str().unwrap();
+        let result = resolve_script_path("ci.sh", "/nonexistent", repo_path);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), script);
+    }
+
+    #[test]
+    fn test_resolve_script_path_not_found() {
+        let result = resolve_script_path("totally-missing.sh", "/nonexistent", "/nonexistent");
+        assert!(result.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // read_stdout_bounded tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_read_stdout_bounded_small_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.txt");
+        std::fs::write(&path, "hello world").unwrap();
+        let s = read_stdout_bounded(path.to_str().unwrap()).unwrap();
+        assert_eq!(s, "hello world");
+    }
+
+    #[test]
+    fn test_read_stdout_bounded_large_file_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.txt");
+        // Write 200 KB of data (over the 100 KB limit)
+        let data = "A".repeat(200 * 1024);
+        std::fs::write(&path, &data).unwrap();
+        let s = read_stdout_bounded(path.to_str().unwrap()).unwrap();
+        assert!(s.len() < data.len(), "output should be truncated");
+        assert!(
+            s.contains("[output truncated at 100 KB]"),
+            "truncation notice should be present"
+        );
+    }
+
+    #[test]
+    fn test_read_stdout_bounded_missing_file() {
+        let result = read_stdout_bounded("/nonexistent/path/file.txt");
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // execute_script integration tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_execute_script_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("hello.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho '<<<CONDUCTOR_OUTPUT>>>\n{\"markers\": [\"done\"], \"context\": \"ran ok\"}\n<<<END_CONDUCTOR_OUTPUT>>>'",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let conn = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let config: &'static crate::config::Config = Box::leak(Box::new(config));
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "test", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = ExecutionState {
+            conn: &conn,
+            config,
+            workflow_run_id: run.id,
+            workflow_name: "test-wf".into(),
+            worktree_id: None,
+            working_dir: dir.path().to_str().unwrap().to_string(),
+            worktree_slug: String::new(),
+            repo_path: dir.path().to_str().unwrap().to_string(),
+            ticket_id: None,
+            repo_id: None,
+            model: None,
+            exec_config: crate::workflow::types::WorkflowExecConfig::default(),
+            inputs: std::collections::HashMap::new(),
+            agent_mgr: crate::agent::AgentManager::new(&conn),
+            wf_mgr: crate::workflow::manager::WorkflowManager::new(&conn),
+            parent_run_id: String::new(),
+            depth: 0,
+            target_label: None,
+            step_results: std::collections::HashMap::new(),
+            contexts: Vec::new(),
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            last_gate_feedback: None,
+            last_structured_output: None,
+            last_output_file: None,
+            block_output: None,
+            block_with: Vec::new(),
+            resume_ctx: None,
+            default_bot_name: None,
+        };
+
+        let node = crate::workflow_dsl::ScriptNode {
+            name: "hello".into(),
+            run: script.to_str().unwrap().to_string(),
+            env: std::collections::HashMap::new(),
+            timeout: Some(10),
+            retries: 0,
+            on_fail: None,
+        };
+
+        let result = execute_script(&mut state, &node, 0);
+        assert!(result.is_ok(), "execute_script should succeed: {result:?}");
+        assert!(state.all_succeeded);
+        let step_res = state.step_results.get("hello").unwrap();
+        assert!(step_res.markers.contains(&"done".to_string()));
+        assert_eq!(step_res.context, "ran ok");
+        assert!(
+            state.last_output_file.is_some(),
+            "last_output_file should be set"
+        );
+    }
+
+    #[test]
+    fn test_execute_script_failure_captures_stdout() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fail.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho 'something before failure'\nexit 1",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let conn = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let config: &'static crate::config::Config = Box::leak(Box::new(config));
+
+        let agent_mgr = crate::agent::AgentManager::new(&conn);
+        let parent = agent_mgr
+            .create_run(Some("w1"), "test", None, None)
+            .unwrap();
+        let wf_mgr = crate::workflow::manager::WorkflowManager::new(&conn);
+        let run = wf_mgr
+            .create_workflow_run("test-wf", Some("w1"), &parent.id, false, "manual", None)
+            .unwrap();
+
+        let mut state = ExecutionState {
+            conn: &conn,
+            config,
+            workflow_run_id: run.id,
+            workflow_name: "test-wf".into(),
+            worktree_id: None,
+            working_dir: dir.path().to_str().unwrap().to_string(),
+            worktree_slug: String::new(),
+            repo_path: dir.path().to_str().unwrap().to_string(),
+            ticket_id: None,
+            repo_id: None,
+            model: None,
+            exec_config: crate::workflow::types::WorkflowExecConfig {
+                fail_fast: false,
+                ..crate::workflow::types::WorkflowExecConfig::default()
+            },
+            inputs: std::collections::HashMap::new(),
+            agent_mgr: crate::agent::AgentManager::new(&conn),
+            wf_mgr: crate::workflow::manager::WorkflowManager::new(&conn),
+            parent_run_id: String::new(),
+            depth: 0,
+            target_label: None,
+            step_results: std::collections::HashMap::new(),
+            contexts: Vec::new(),
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            last_gate_feedback: None,
+            last_structured_output: None,
+            last_output_file: None,
+            block_output: None,
+            block_with: Vec::new(),
+            resume_ctx: None,
+            default_bot_name: None,
+        };
+
+        let node = crate::workflow_dsl::ScriptNode {
+            name: "fail".into(),
+            run: script.to_str().unwrap().to_string(),
+            env: std::collections::HashMap::new(),
+            timeout: Some(10),
+            retries: 0,
+            on_fail: None,
+        };
+
+        // Should return Ok (not an Err) because fail_fast is false; all_succeeded flips false
+        let result = execute_script(&mut state, &node, 0);
+        assert!(result.is_ok());
+        assert!(!state.all_succeeded);
+        let step_res = state.step_results.get("fail").unwrap();
+        // The result_text should contain the stdout snippet
+        let result_text = step_res.result_text.as_deref().unwrap_or("");
+        assert!(
+            result_text.contains("something before failure"),
+            "stdout should be captured in failure result, got: {result_text}"
+        );
+    }
 }

@@ -4,7 +4,7 @@ pub(super) const STEP_COLUMNS: &str =
      child_run_id, position, started_at, ended_at, result_text, condition_met, \
      iteration, parallel_group_id, context_out, markers_out, retry_count, \
      gate_type, gate_prompt, gate_timeout, gate_approved_by, gate_approved_at, gate_feedback, \
-     structured_output";
+     structured_output, output_file";
 
 /// Column list for `workflow_runs` SELECT queries (used by `row_to_workflow_run`).
 pub(super) const RUN_COLUMNS: &str =
