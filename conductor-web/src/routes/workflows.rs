@@ -613,4 +613,40 @@ mod tests {
             "unexpected error body: {body}"
         );
     }
+
+    #[tokio::test]
+    async fn status_whitespace_only_param_returns_400() {
+        let (status, body) = get_response("/api/workflows/runs?status=%20", empty_state()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("status filter yielded no valid values"),
+            "unexpected error body: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_whitespace_only_token_in_csv_returns_400() {
+        let (status, body) = get_response(
+            "/api/workflows/runs?status=running,%20,waiting",
+            empty_state(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("empty status token in list"),
+            "unexpected error body: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_whitespace_only_tokens_only_returns_400() {
+        let (status, _) = get_response("/api/workflows/runs?status=%20,%20", empty_state()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
 }
