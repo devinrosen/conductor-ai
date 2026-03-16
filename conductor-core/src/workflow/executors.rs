@@ -2380,7 +2380,10 @@ mod tests {
 
     #[test]
     fn test_poll_script_child_cancelled() {
-        use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
         let flag = Arc::new(AtomicBool::new(true)); // already cancelled
         let mut child = std::process::Command::new("sleep")
             .arg("60")
@@ -2428,8 +2431,14 @@ mod tests {
 
         let result = execute_script(&mut state, &node, 0);
         // fail_fast=false → returns Ok, but all_succeeded is false
-        assert!(result.is_ok(), "expected Ok on timeout with fail_fast=false: {result:?}");
-        assert!(!state.all_succeeded, "all_succeeded should be false after timeout");
+        assert!(
+            result.is_ok(),
+            "expected Ok on timeout with fail_fast=false: {result:?}"
+        );
+        assert!(
+            !state.all_succeeded,
+            "all_succeeded should be false after timeout"
+        );
 
         // DB step should be marked TimedOut
         let steps = state
@@ -2449,7 +2458,7 @@ mod tests {
 
     #[test]
     fn test_execute_script_cancelled() {
-        use std::sync::{Arc, atomic::AtomicBool};
+        use std::sync::{atomic::AtomicBool, Arc};
         let dir = tempfile::tempdir().unwrap();
         let script_path = write_script(&dir.path().join("cancel.sh"), "#!/bin/sh\nsleep 60");
 
@@ -2522,8 +2531,14 @@ mod tests {
         };
 
         let result = execute_script(&mut state, &node, 0);
-        assert!(result.is_ok(), "fail_fast=false: expected Ok after retries: {result:?}");
-        assert!(!state.all_succeeded, "all_succeeded should be false after exhausting retries");
+        assert!(
+            result.is_ok(),
+            "fail_fast=false: expected Ok after retries: {result:?}"
+        );
+        assert!(
+            !state.all_succeeded,
+            "all_succeeded should be false after exhausting retries"
+        );
 
         // Three step records should exist (one per attempt)
         let steps = state.wf_mgr.get_workflow_steps(&run_id).unwrap();
