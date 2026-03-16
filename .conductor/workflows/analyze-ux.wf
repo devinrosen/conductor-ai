@@ -15,5 +15,7 @@ workflow analyze-ux {
   call read-diagrams
   call analyze-per-persona
   call write-analysis-report
-  call push-and-pr
+  script push-and-pr {
+    run = ".conductor/scripts/push-and-pr.sh"
+  }
 }

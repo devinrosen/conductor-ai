@@ -17,5 +17,7 @@ workflow generate-diagrams {
   }
 
   call generate-diagram-files
-  call push-and-pr
+  script push-and-pr {
+    run = ".conductor/scripts/push-and-pr.sh"
+  }
 }

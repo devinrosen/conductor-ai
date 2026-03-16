@@ -24,7 +24,9 @@ workflow update-diagrams {
     }
 
     call commit-diagrams
-    call push-and-pr
+    script push-and-pr {
+      run = ".conductor/scripts/push-and-pr.sh"
+    }
   }
 
   unless read-ticket.is_refined {

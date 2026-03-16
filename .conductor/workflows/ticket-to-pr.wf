@@ -21,7 +21,9 @@ workflow ticket-to-pr {
     run = ".conductor/scripts/fmt-fix.sh"
   }
 
-  call push-and-pr
+  script push-and-pr {
+    run = ".conductor/scripts/push-and-pr.sh"
+  }
 
   call workflow iterate-pr
 }
