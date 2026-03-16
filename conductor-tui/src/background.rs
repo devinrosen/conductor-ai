@@ -248,12 +248,18 @@ pub fn poll_data() -> Option<(Action, conductor_core::config::Config, rusqlite::
     let pending_feedback_requests = if config.notifications.enabled {
         agent_mgr
             .list_all_pending_feedback_requests()
-            .unwrap_or_default()
+            .unwrap_or_else(|e| {
+                tracing::warn!("list_all_pending_feedback_requests failed: {e}");
+                vec![]
+            })
     } else {
         vec![]
     };
     let waiting_gate_steps = if config.notifications.enabled {
-        wf_mgr.list_all_waiting_gate_steps().unwrap_or_default()
+        wf_mgr.list_all_waiting_gate_steps().unwrap_or_else(|e| {
+            tracing::warn!("list_all_waiting_gate_steps failed: {e}");
+            vec![]
+        })
     } else {
         vec![]
     };

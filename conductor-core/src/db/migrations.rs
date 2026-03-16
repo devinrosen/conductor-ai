@@ -674,6 +674,22 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 38)?;
     }
 
+    // Migration 039: composite index on workflow_run_steps(status, gate_type)
+    // for list_all_waiting_gate_steps poll performance.
+    // Guard: only create the index if the table exists (it may be absent in
+    // minimal test schemas that start at version > 20).
+    if version < 39 {
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='workflow_run_steps'",
+            [],
+            |row| row.get(0),
+        )?;
+        if table_exists {
+            conn.execute_batch(include_str!("migrations/039_idx_steps_status_gate.sql"))?;
+        }
+        bump_version(conn, 39)?;
+    }
+
     Ok(())
 }
 
