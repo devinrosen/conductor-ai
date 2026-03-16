@@ -4831,6 +4831,27 @@ workflow w {
         }
     }
 
+    fn make_always_script_def(run: &str) -> WorkflowDef {
+        WorkflowDef {
+            name: "test-wf".to_string(),
+            description: String::new(),
+            trigger: WorkflowTrigger::Manual,
+            targets: vec![],
+            inputs: vec![],
+            body: vec![],
+            always: vec![WorkflowNode::Script(ScriptNode {
+                name: "always-step".to_string(),
+                run: run.to_string(),
+                env: std::collections::HashMap::new(),
+                timeout: None,
+                retries: 0,
+                on_fail: None,
+                bot_name: None,
+            })],
+            source_path: "test.wf".to_string(),
+        }
+    }
+
     #[test]
     fn test_validate_script_steps_run_not_found() {
         let def = make_script_def("nonexistent-script.sh");
@@ -4954,26 +4975,7 @@ workflow w {
 
     #[test]
     fn test_validate_script_steps_in_always_block() {
-        use std::collections::HashMap;
-
-        let def = WorkflowDef {
-            name: "test-wf".to_string(),
-            description: String::new(),
-            trigger: WorkflowTrigger::Manual,
-            targets: vec![],
-            inputs: vec![],
-            body: vec![],
-            always: vec![WorkflowNode::Script(ScriptNode {
-                name: "always-step".to_string(),
-                run: "always-step.sh".to_string(),
-                env: HashMap::new(),
-                timeout: None,
-                retries: 0,
-                on_fail: None,
-                bot_name: None,
-            })],
-            source_path: "test.wf".to_string(),
-        };
+        let def = make_always_script_def("always-step.sh");
         let errors = validate_script_steps(&def, "/tmp/wt", "/tmp/repo");
         assert_eq!(
             errors.len(),
