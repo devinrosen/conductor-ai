@@ -5,7 +5,9 @@ max_attempts=3
 attempt=0
 
 while [ $attempt -lt $max_attempts ]; do
-  mergeable=$(gh pr view --json mergeable -q .mergeable 2>/dev/null || echo "UNKNOWN")
+  json=$(gh pr view --json mergeable,mergeStateStatus 2>/dev/null || echo "")
+  mergeable=$(echo "$json" | jq -r '.mergeable // "UNKNOWN"')
+  merge_state=$(echo "$json" | jq -r '.mergeStateStatus // "UNKNOWN"')
 
   if [ "$mergeable" != "UNKNOWN" ]; then
     break
@@ -18,15 +20,15 @@ while [ $attempt -lt $max_attempts ]; do
 done
 
 if [ "$mergeable" = "CONFLICTING" ]; then
-  cat <<'EOF'
+  cat <<EOF
 <<<CONDUCTOR_OUTPUT>>>
-{"markers": ["has_conflicts"], "context": "PR is CONFLICTING — rebase needed"}
+{"markers": ["has_conflicts"], "context": "PR is CONFLICTING (mergeStateStatus: $merge_state) — rebase needed"}
 <<<END_CONDUCTOR_OUTPUT>>>
 EOF
 else
-  cat <<'EOF'
+  cat <<EOF
 <<<CONDUCTOR_OUTPUT>>>
-{"markers": [], "context": "PR is mergeable — no rebase needed"}
+{"markers": [], "context": "PR is mergeable (mergeStateStatus: $merge_state) — no rebase needed"}
 <<<END_CONDUCTOR_OUTPUT>>>
 EOF
 fi
