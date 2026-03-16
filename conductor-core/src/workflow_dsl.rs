@@ -2022,10 +2022,7 @@ pub fn validate_script_steps(
                                 .to_string()
                         })
                         .unwrap_or_else(|| format!("~/.claude/skills/{run}"));
-                    format!(
-                        "{}/{run}, {}/{run}, {skills_path}",
-                        working_dir, repo_path
-                    )
+                    format!("{}/{run}, {}/{run}, {skills_path}", working_dir, repo_path)
                 };
                 errors.push(ValidationError {
                     message: format!(
@@ -2049,10 +2046,7 @@ pub fn validate_script_steps(
                                     resolved.display(),
                                     mode & 0o777,
                                 ),
-                                hint: Some(format!(
-                                    "Run: chmod +x {}",
-                                    resolved.display()
-                                )),
+                                hint: Some(format!("Run: chmod +x {}", resolved.display())),
                             });
                         }
                     }
@@ -4885,8 +4879,7 @@ workflow w {
         std::fs::set_permissions(&script, perms).unwrap();
 
         let def = make_script_def("my-script.sh");
-        let errors =
-            validate_script_steps(&def, dir.path().to_str().unwrap(), "/tmp/no-repo");
+        let errors = validate_script_steps(&def, dir.path().to_str().unwrap(), "/tmp/no-repo");
         assert!(
             errors.is_empty(),
             "valid executable script should produce no errors, got: {:?}",
@@ -4909,8 +4902,7 @@ workflow w {
         std::fs::set_permissions(&script, perms).unwrap();
 
         let def = make_script_def("noexec.sh");
-        let errors =
-            validate_script_steps(&def, dir.path().to_str().unwrap(), "/tmp/no-repo");
+        let errors = validate_script_steps(&def, dir.path().to_str().unwrap(), "/tmp/no-repo");
         assert_eq!(
             errors.len(),
             1,
@@ -4922,10 +4914,7 @@ workflow w {
             msg.contains("not executable"),
             "error should mention not executable, got: {msg}"
         );
-        assert!(
-            errors[0].hint.is_some(),
-            "should include a chmod hint"
-        );
+        assert!(errors[0].hint.is_some(), "should include a chmod hint");
     }
 
     #[test]
