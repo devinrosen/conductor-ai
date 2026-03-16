@@ -183,6 +183,20 @@ pub fn spawn_child_tmux(
     window_name: &str,
     bot_name: Option<&str>,
 ) -> std::result::Result<(), String> {
+    // tmux has a hard limit on command-line length (~2 KB depending on version).
+    // For prompts that exceed a safe threshold, write to a file and pass
+    // --prompt-file instead so we never hit that limit.
+    const PROMPT_FILE_THRESHOLD: usize = 512;
+
+    let prompt_file_path: Option<String> = if prompt.len() > PROMPT_FILE_THRESHOLD {
+        let path = format!("{worktree_path}/.conductor-prompt-{run_id}.txt");
+        std::fs::write(&path, prompt)
+            .map_err(|e| format!("Failed to write prompt file '{path}': {e}"))?;
+        Some(path)
+    } else {
+        None
+    };
+
     let mut args = vec![
         "agent".to_string(),
         "run".to_string(),
@@ -190,9 +204,15 @@ pub fn spawn_child_tmux(
         run_id.to_string(),
         "--worktree-path".to_string(),
         worktree_path.to_string(),
-        "--prompt".to_string(),
-        prompt.to_string(),
     ];
+
+    if let Some(ref path) = prompt_file_path {
+        args.push("--prompt-file".to_string());
+        args.push(path.clone());
+    } else {
+        args.push("--prompt".to_string());
+        args.push(prompt.to_string());
+    }
 
     if let Some(m) = model {
         args.push("--model".to_string());
