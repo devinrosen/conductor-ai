@@ -776,7 +776,11 @@ mod tests {
         // Tick 2: same run is now Completed (fast resume — no Running tick observed)
         let tick2 = [make_run("r1", "ci", WorkflowRunStatus::Completed)];
         let t2 = detect_new_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
-        assert_eq!(t2.len(), 1, "Failed→Completed must fire exactly one notification");
+        assert_eq!(
+            t2.len(),
+            1,
+            "Failed→Completed must fire exactly one notification"
+        );
         assert_eq!(t2[0].0, "ci");
         assert!(t2[0].2, "should be succeeded=true for Completed");
     }
