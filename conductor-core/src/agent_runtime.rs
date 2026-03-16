@@ -174,6 +174,10 @@ pub fn poll_child_completion(
     }
 }
 
+/// Maximum number of CLI arguments produced by `build_agent_args`:
+/// 2 subcommands + 4 fixed flags + 2 for prompt/prompt-file + 2 optional model + 2 optional bot_name.
+const AGENT_ARGS_CAPACITY: usize = 12;
+
 /// Build the `conductor agent run` argument list for a child agent.
 ///
 /// If the prompt exceeds the safe tmux command-length threshold, it is written
@@ -201,7 +205,7 @@ pub(crate) fn build_agent_args(
         None
     };
 
-    let mut args = Vec::with_capacity(12);
+    let mut args = Vec::with_capacity(AGENT_ARGS_CAPACITY);
     args.push("agent".to_string());
     args.push("run".to_string());
     args.push("--run-id".to_string());
