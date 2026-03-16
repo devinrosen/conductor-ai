@@ -1091,7 +1091,7 @@ impl App {
                     let events = parse_agent_log(path);
                     for ev in events {
                         fallback.push(AgentRunEvent {
-                            id: ulid::Ulid::new().to_string(),
+                            id: conductor_core::new_id(),
                             run_id: run.id.clone(),
                             kind: ev.kind,
                             summary: ev.summary,
