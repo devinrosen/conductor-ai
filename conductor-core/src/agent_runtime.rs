@@ -201,14 +201,13 @@ pub(crate) fn build_agent_args(
         None
     };
 
-    let mut args = vec![
-        "agent".to_string(),
-        "run".to_string(),
-        "--run-id".to_string(),
-        run_id.to_string(),
-        "--worktree-path".to_string(),
-        worktree_path.to_string(),
-    ];
+    let mut args = Vec::with_capacity(12);
+    args.push("agent".to_string());
+    args.push("run".to_string());
+    args.push("--run-id".to_string());
+    args.push(run_id.to_string());
+    args.push("--worktree-path".to_string());
+    args.push(worktree_path.to_string());
 
     if let Some(path) = prompt_file_path {
         args.push("--prompt-file".to_string());
