@@ -3419,11 +3419,19 @@ And here is my actual output:
         assert_eq!(result.result_text.as_deref(), Some("looks good"));
         assert_eq!(result.markers, vec!["approved"]);
         assert_eq!(result.context, "reviewed code");
+        assert_eq!(
+            result.structured_output.as_deref(),
+            Some(r#"{"verdict":"approve"}"#)
+        );
 
         // Verify contexts populated
         assert_eq!(state.contexts.len(), 1);
         assert_eq!(state.contexts[0].step, "review");
         assert_eq!(state.contexts[0].context, "reviewed code");
+        assert_eq!(
+            state.contexts[0].structured_output.as_deref(),
+            Some(r#"{"verdict":"approve"}"#)
+        );
 
         // Verify structured output updated
         assert_eq!(
