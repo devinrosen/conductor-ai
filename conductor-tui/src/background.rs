@@ -147,6 +147,14 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                 );
                             }
                         }
+
+                        // Prune resolved feedback requests to prevent unbounded growth.
+                        notified_feedback_ids
+                            .retain(|id| payload.pending_feedback_requests.iter().any(|r| &r.id == id));
+
+                        // Prune resolved gate steps to prevent unbounded growth.
+                        notified_gate_ids
+                            .retain(|id| payload.waiting_gate_steps.iter().any(|(step, _)| &step.id == id));
                     }
                 }
                 if !tx.send(action) {
