@@ -82,6 +82,12 @@ if [ "${FINDING_COUNT}" -gt 0 ]; then
     MESSAGE=$(echo "${finding}" | jq -r '.message')
     REVIEWER=$(echo "${finding}" | jq -r '.reviewer')
 
+    # Skip suggestion-severity findings — they appear in PR review body but are not filed as tracked issues
+    if [ "${SEVERITY}" = "suggestion" ]; then
+      echo "Skipping suggestion-severity off-diff finding: ${FILE}:${LINE} (not filed as issue)"
+      continue
+    fi
+
     FILE_LINE_REF="${FILE}:${LINE}"
 
     # Skip if already tracked
