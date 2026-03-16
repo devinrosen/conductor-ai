@@ -613,7 +613,7 @@ mod tests {
     async fn status_whitespace_only_param_returns_400() {
         let (status, body) = get_response("/api/workflows/runs?status=%20", empty_state()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_error_contains(&body, "status filter yielded no valid values");
+        assert_error_contains(&body, "empty status token in list");
     }
 
     #[tokio::test]
