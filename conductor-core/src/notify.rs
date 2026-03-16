@@ -260,6 +260,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn error_path_deterministic_key_deduplicates() {
+        // Simulate two concurrent web instances both observing the same workflow
+        // failure: they construct the same deterministic key and only the first
+        // should win the dedup claim.
+        let conn = in_memory_db();
+        let key = "wf-err:my-workflow:repo/wt:12345";
+        assert!(
+            try_claim_notification(&conn, key, "failed"),
+            "first instance must claim"
+        );
+        assert!(
+            !try_claim_notification(&conn, key, "failed"),
+            "second instance with same key must be deduped"
+        );
+    }
+
     // --- fire_workflow_notification smoke test ---
 
     #[test]
