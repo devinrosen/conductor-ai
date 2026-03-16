@@ -81,13 +81,8 @@ impl Worktree {
 const WORKTREE_COLUMNS: &str =
     "id, repo_id, slug, branch, path, ticket_id, status, created_at, completed_at, model, base_branch";
 
-static WORKTREE_COLUMNS_W: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    WORKTREE_COLUMNS
-        .split(',')
-        .map(|col| format!("w.{}", col.trim()))
-        .collect::<Vec<_>>()
-        .join(", ")
-});
+static WORKTREE_COLUMNS_W: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| crate::db::prefix_columns(WORKTREE_COLUMNS, "w."));
 
 pub struct WorktreeManager<'a> {
     conn: &'a Connection,

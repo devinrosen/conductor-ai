@@ -10,13 +10,7 @@ pub(super) const STEP_COLUMNS: &str =
 /// Use this when selecting step columns alongside columns from other tables to avoid ambiguity.
 /// Derived from `STEP_COLUMNS` at first access to avoid duplication.
 pub(super) static STEP_COLUMNS_WITH_PREFIX: std::sync::LazyLock<String> =
-    std::sync::LazyLock::new(|| {
-        STEP_COLUMNS
-            .split(',')
-            .map(|col| format!("s.{}", col.trim()))
-            .collect::<Vec<_>>()
-            .join(", ")
-    });
+    std::sync::LazyLock::new(|| crate::db::prefix_columns(STEP_COLUMNS, "s."));
 
 /// Column list for `workflow_runs` SELECT queries (used by `row_to_workflow_run`).
 pub(super) const RUN_COLUMNS: &str =
