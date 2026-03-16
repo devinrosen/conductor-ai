@@ -45,11 +45,9 @@ pub(crate) fn detect_new_terminal_transitions<'a>(
             WorkflowRunStatus::Completed | WorkflowRunStatus::Failed
         );
         if *initialized {
-            let prev_terminal = seen
-                .get(&run.id)
-                .map(|s| matches!(s, WorkflowRunStatus::Completed | WorkflowRunStatus::Failed))
-                .unwrap_or(false);
-            if now_terminal && !prev_terminal {
+            let prev_status = seen.get(&run.id);
+            let status_changed = prev_status.map(|s| s != &run.status).unwrap_or(true);
+            if now_terminal && status_changed {
                 transitions.push((
                     run.workflow_name.clone(),
                     run.target_label.clone(),
@@ -761,6 +759,26 @@ mod tests {
         assert_eq!(seen.len(), 1);
         assert!(seen.contains_key("r1"));
         assert!(!seen.contains_key("r2"), "r2 should have been pruned");
+    }
+
+    /// A resumed run that goes from Failed → Completed without a Running tick in
+    /// between must fire a notification (the fast-resume path).
+    #[test]
+    fn test_failed_to_completed_resume_fires_notification() {
+        let mut seen = HashMap::new();
+        let mut initialized = false;
+
+        // Tick 1: run is Failed — seeds `seen` without firing (initialized=false)
+        let tick1 = [make_run("r1", "ci", WorkflowRunStatus::Failed)];
+        detect_new_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
+        assert_eq!(seen[&"r1".to_string()], WorkflowRunStatus::Failed);
+
+        // Tick 2: same run is now Completed (fast resume — no Running tick observed)
+        let tick2 = [make_run("r1", "ci", WorkflowRunStatus::Completed)];
+        let t2 = detect_new_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
+        assert_eq!(t2.len(), 1, "Failed→Completed must fire exactly one notification");
+        assert_eq!(t2[0].0, "ci");
+        assert!(t2[0].2, "should be succeeded=true for Completed");
     }
 
     /// A brand-new run that appears already-terminal on the second tick (e.g.
