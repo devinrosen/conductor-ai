@@ -1866,4 +1866,23 @@ mod tests {
         assert!(result.is_some());
         assert_eq!(result.unwrap().id, "wt2");
     }
+
+    #[test]
+    fn test_worktree_columns_w_derivation() {
+        // Every column in WORKTREE_COLUMNS must appear in WORKTREE_COLUMNS_W
+        // with the "w." prefix, in the same order, with no extra whitespace.
+        let expected: String = WORKTREE_COLUMNS
+            .split(',')
+            .map(|col| format!("w.{}", col.trim()))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        assert_eq!(*WORKTREE_COLUMNS_W, expected);
+
+        // Also assert the column count matches so adding a column to
+        // WORKTREE_COLUMNS without updating WORKTREE_COLUMNS_W is caught.
+        let base_count = WORKTREE_COLUMNS.split(',').count();
+        let prefixed_count = WORKTREE_COLUMNS_W.split(',').count();
+        assert_eq!(base_count, prefixed_count);
+    }
 }
