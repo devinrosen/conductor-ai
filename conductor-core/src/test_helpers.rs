@@ -16,9 +16,7 @@ pub fn create_test_conn() -> Connection {
 /// - repo `r1` (slug `test-repo`)
 /// - worktree `w1` (slug `feat-test`, branch `feat/test`, status `active`)
 pub fn setup_db() -> Connection {
-    let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-    db::migrations::run(&conn).unwrap();
+    let conn = create_test_conn();
     conn.execute(
         "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
          VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
