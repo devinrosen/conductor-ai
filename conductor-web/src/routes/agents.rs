@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::process::Command;
 
@@ -134,26 +133,18 @@ pub async fn start_agent(
     };
 
     // Build conductor agent run command
-    let mut args: Vec<Cow<'static, str>> = vec![
-        Cow::Borrowed("agent"),
-        Cow::Borrowed("run"),
-        Cow::Borrowed("--run-id"),
-        Cow::Owned(run.id.clone()),
-        Cow::Borrowed("--worktree-path"),
-        Cow::Owned(wt.path.clone()),
-        Cow::Borrowed("--prompt"),
-        Cow::Owned(body.prompt),
-    ];
-
-    if let Some(ref session_id) = body.resume_session_id {
-        args.push(Cow::Borrowed("--resume"));
-        args.push(Cow::Owned(session_id.clone()));
-    }
-
-    if let Some(ref m) = model {
-        args.push(Cow::Borrowed("--model"));
-        args.push(Cow::Owned(m.clone()));
-    }
+    let args = conductor_core::agent_runtime::build_agent_args(
+        &run.id,
+        &wt.path,
+        &body.prompt,
+        body.resume_session_id.as_deref(),
+        model.as_deref(),
+        None,
+    )
+    .map_err(|e| {
+        let _ = agent_mgr.update_run_failed(&run.id, &e);
+        ConductorError::Agent(e)
+    })?;
 
     match conductor_core::agent_runtime::spawn_tmux_window(&args, &wt.slug) {
         Ok(()) => {
@@ -523,26 +514,13 @@ pub async fn orchestrate_agent(
     )?;
 
     // Build conductor agent orchestrate command
-    let mut args: Vec<Cow<'static, str>> = vec![
-        Cow::Borrowed("agent"),
-        Cow::Borrowed("orchestrate"),
-        Cow::Borrowed("--run-id"),
-        Cow::Owned(run.id.clone()),
-        Cow::Borrowed("--worktree-path"),
-        Cow::Owned(wt.path.clone()),
-    ];
-
-    if let Some(ref m) = model {
-        args.push(Cow::Borrowed("--model"));
-        args.push(Cow::Owned(m.clone()));
-    }
-
-    if body.fail_fast {
-        args.push(Cow::Borrowed("--fail-fast"));
-    }
-
-    args.push(Cow::Borrowed("--child-timeout-secs"));
-    args.push(Cow::Owned(body.child_timeout_secs.to_string()));
+    let args = conductor_core::agent_runtime::build_orchestrate_args(
+        &run.id,
+        &wt.path,
+        model.as_deref(),
+        body.fail_fast,
+        Some(body.child_timeout_secs),
+    );
 
     match conductor_core::agent_runtime::spawn_tmux_window(&args, &wt.slug) {
         Ok(()) => {

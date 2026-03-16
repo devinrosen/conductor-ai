@@ -179,8 +179,8 @@ pub fn poll_child_completion(
 }
 
 /// Maximum number of CLI arguments produced by `build_agent_args`:
-/// 2 subcommands + 4 fixed flags + 2 for prompt/prompt-file + 2 optional model + 2 optional bot_name.
-const AGENT_ARGS_CAPACITY: usize = 12;
+/// 2 subcommands + 4 fixed flags + 2 for prompt/prompt-file + 2 optional resume + 2 optional model + 2 optional bot_name.
+const AGENT_ARGS_CAPACITY: usize = 14;
 
 /// Build the `conductor agent run` argument list for a child agent.
 ///
@@ -188,10 +188,11 @@ const AGENT_ARGS_CAPACITY: usize = 12;
 /// to a temp file (`<worktree_path>/.conductor-prompt-<run_id>.txt`) and
 /// `--prompt-file` is used instead of `--prompt`.  Returns the argument list
 /// ready to pass to [`spawn_tmux_window`].
-pub(crate) fn build_agent_args(
+pub fn build_agent_args(
     run_id: &str,
     worktree_path: &str,
     prompt: &str,
+    resume_session_id: Option<&str>,
     model: Option<&str>,
     bot_name: Option<&str>,
 ) -> std::result::Result<Vec<Cow<'static, str>>, String> {
@@ -225,6 +226,11 @@ pub(crate) fn build_agent_args(
         args.push(Cow::Owned(prompt.to_string()));
     }
 
+    if let Some(id) = resume_session_id {
+        args.push(Cow::Borrowed("--resume"));
+        args.push(Cow::Owned(id.to_string()));
+    }
+
     if let Some(m) = model {
         args.push(Cow::Borrowed("--model"));
         args.push(Cow::Owned(m.to_string()));
@@ -238,6 +244,42 @@ pub(crate) fn build_agent_args(
     Ok(args)
 }
 
+/// Build the `conductor agent orchestrate` argument list.
+///
+/// This function is infallible because orchestrate has no `--prompt` argument
+/// and therefore no risk of exceeding tmux's command-line length limit.
+pub fn build_orchestrate_args(
+    run_id: &str,
+    worktree_path: &str,
+    model: Option<&str>,
+    fail_fast: bool,
+    child_timeout_secs: Option<u64>,
+) -> Vec<Cow<'static, str>> {
+    let mut args: Vec<Cow<'static, str>> = Vec::with_capacity(10);
+    args.push(Cow::Borrowed("agent"));
+    args.push(Cow::Borrowed("orchestrate"));
+    args.push(Cow::Borrowed("--run-id"));
+    args.push(Cow::Owned(run_id.to_string()));
+    args.push(Cow::Borrowed("--worktree-path"));
+    args.push(Cow::Owned(worktree_path.to_string()));
+
+    if let Some(m) = model {
+        args.push(Cow::Borrowed("--model"));
+        args.push(Cow::Owned(m.to_string()));
+    }
+
+    if fail_fast {
+        args.push(Cow::Borrowed("--fail-fast"));
+    }
+
+    if let Some(secs) = child_timeout_secs {
+        args.push(Cow::Borrowed("--child-timeout-secs"));
+        args.push(Cow::Owned(secs.to_string()));
+    }
+
+    args
+}
+
 /// Spawn a child agent in a new tmux window.
 pub fn spawn_child_tmux(
     run_id: &str,
@@ -247,7 +289,7 @@ pub fn spawn_child_tmux(
     window_name: &str,
     bot_name: Option<&str>,
 ) -> std::result::Result<(), String> {
-    let args = build_agent_args(run_id, worktree_path, prompt, model, bot_name)?;
+    let args = build_agent_args(run_id, worktree_path, prompt, None, model, bot_name)?;
     spawn_tmux_window(&args, window_name)
 }
 
@@ -298,7 +340,7 @@ mod tests {
     fn build_agent_args_short_prompt_uses_inline() {
         let prompt = "short prompt";
         assert!(prompt.len() <= 512);
-        let args = super::build_agent_args("run-1", "/tmp/wt", prompt, None, None).unwrap();
+        let args = super::build_agent_args("run-1", "/tmp/wt", prompt, None, None, None).unwrap();
         assert_inline_prompt(&args, prompt);
     }
 
@@ -310,7 +352,7 @@ mod tests {
         let run_id = "run-long-99";
 
         let prompt = "x".repeat(513);
-        let args = super::build_agent_args(run_id, worktree, &prompt, None, None).unwrap();
+        let args = super::build_agent_args(run_id, worktree, &prompt, None, None, None).unwrap();
 
         assert_file_prompt(&args, &prompt);
 
@@ -325,7 +367,7 @@ mod tests {
     fn build_agent_args_file_write_error_propagates() {
         let worktree = "/nonexistent/path/that/does/not/exist";
         let prompt = "x".repeat(513);
-        let result = super::build_agent_args("run-err-01", worktree, &prompt, None, None);
+        let result = super::build_agent_args("run-err-01", worktree, &prompt, None, None, None);
         assert!(result.is_err(), "expected Err when write fails");
         let msg = result.unwrap_err();
         assert!(
@@ -340,7 +382,46 @@ mod tests {
         // because the condition is strictly `>`, not `>=`.
         let prompt = "x".repeat(512);
         assert_eq!(prompt.len(), 512);
-        let args = super::build_agent_args("run-boundary", "/tmp/wt", &prompt, None, None).unwrap();
+        let args =
+            super::build_agent_args("run-boundary", "/tmp/wt", &prompt, None, None, None).unwrap();
         assert_inline_prompt(&args, &prompt);
+    }
+
+    #[test]
+    fn build_agent_args_with_resume_sets_flag() {
+        let prompt = "short prompt";
+        let args =
+            super::build_agent_args("run-1", "/tmp/wt", prompt, Some("sess-abc"), None, None)
+                .unwrap();
+        let resume_idx = args
+            .iter()
+            .position(|a| a == "--resume")
+            .expect("--resume flag missing");
+        assert_eq!(args[resume_idx + 1], "sess-abc");
+    }
+
+    #[test]
+    fn build_orchestrate_args_basic() {
+        let args = super::build_orchestrate_args("run-o1", "/tmp/wt", None, false, None);
+        assert_eq!(args[0], "agent");
+        assert_eq!(args[1], "orchestrate");
+        let run_id_idx = args.iter().position(|a| a == "--run-id").unwrap();
+        assert_eq!(args[run_id_idx + 1], "run-o1");
+        let wt_idx = args.iter().position(|a| a == "--worktree-path").unwrap();
+        assert_eq!(args[wt_idx + 1], "/tmp/wt");
+        assert!(!args.iter().any(|a| a == "--model"));
+        assert!(!args.iter().any(|a| a == "--fail-fast"));
+        assert!(!args.iter().any(|a| a == "--child-timeout-secs"));
+    }
+
+    #[test]
+    fn build_orchestrate_args_all_flags() {
+        let args =
+            super::build_orchestrate_args("run-o2", "/tmp/wt", Some("claude-3"), true, Some(120));
+        assert!(args.iter().any(|a| a == "--fail-fast"));
+        let model_idx = args.iter().position(|a| a == "--model").unwrap();
+        assert_eq!(args[model_idx + 1], "claude-3");
+        let timeout_idx = args.iter().position(|a| a == "--child-timeout-secs").unwrap();
+        assert_eq!(args[timeout_idx + 1], "120");
     }
 }

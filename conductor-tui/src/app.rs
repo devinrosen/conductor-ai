@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -4061,19 +4060,13 @@ impl App {
         };
 
         // Build the conductor agent orchestrate command
-        let mut args: Vec<Cow<'static, str>> = vec![
-            Cow::Borrowed("agent"),
-            Cow::Borrowed("orchestrate"),
-            Cow::Borrowed("--run-id"),
-            Cow::Owned(run.id.clone()),
-            Cow::Borrowed("--worktree-path"),
-            Cow::Owned(worktree_path),
-        ];
-
-        if let Some(ref m) = model {
-            args.push(Cow::Borrowed("--model"));
-            args.push(Cow::Owned(m.clone()));
-        }
+        let args = conductor_core::agent_runtime::build_orchestrate_args(
+            &run.id,
+            &worktree_path,
+            model.as_deref(),
+            false,
+            None,
+        );
 
         match conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug) {
             Ok(()) => {
@@ -4322,26 +4315,21 @@ impl App {
         };
 
         // Build the conductor agent run command
-        let mut args: Vec<Cow<'static, str>> = vec![
-            Cow::Borrowed("agent"),
-            Cow::Borrowed("run"),
-            Cow::Borrowed("--run-id"),
-            Cow::Owned(run.id.clone()),
-            Cow::Borrowed("--worktree-path"),
-            Cow::Owned(worktree_path),
-            Cow::Borrowed("--prompt"),
-            Cow::Owned(prompt),
-        ];
-
-        if let Some(ref session_id) = resume_session_id {
-            args.push(Cow::Borrowed("--resume"));
-            args.push(Cow::Owned(session_id.clone()));
-        }
-
-        if let Some(ref m) = model {
-            args.push(Cow::Borrowed("--model"));
-            args.push(Cow::Owned(m.clone()));
-        }
+        let args = match conductor_core::agent_runtime::build_agent_args(
+            &run.id,
+            &worktree_path,
+            &prompt,
+            resume_session_id.as_deref(),
+            model.as_deref(),
+            None,
+        ) {
+            Ok(a) => a,
+            Err(e) => {
+                let _ = mgr.update_run_failed(&run.id, &e);
+                self.state.modal = Modal::Error { message: e };
+                return;
+            }
+        };
 
         match conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug) {
             Ok(()) => {
