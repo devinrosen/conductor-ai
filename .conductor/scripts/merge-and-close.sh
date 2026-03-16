@@ -1,20 +1,29 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
-# Resolve PR number and state from current branch
+# Resolve PR number and current state
 PR_NUMBER=$(gh pr view --json number -q .number)
 PR_STATE=$(gh pr view --json state -q .state)
 
-# Merge if not already merged; if already merged (e.g. via auto-merge), skip
-if [ "${PR_STATE}" = "MERGED" ]; then
-  echo "PR #${PR_NUMBER} already merged — skipping merge step"
-else
-  # Attempt auto-merge (merge queue); fall back to direct squash if unsupported
-  if ! gh pr merge --auto --squash --delete-branch 2>/dev/null; then
-    gh pr merge --squash --delete-branch
-  fi
-  echo "Merged PR #${PR_NUMBER}"
+# Attempt merge only if not already merged.
+# Suppress exit code from merge commands — the state re-check below is
+# authoritative. This avoids failures from:
+#   - "already merged" errors when auto-merge fires before this script runs
+#   - git worktree conflicts when --delete-branch tries to checkout main
+if [ "${PR_STATE}" != "MERGED" ]; then
+  gh pr merge --auto --squash --delete-branch 2>/dev/null \
+    || gh pr merge --squash --delete-branch 2>/dev/null \
+    || true
+
+  PR_STATE=$(gh pr view --json state -q .state)
 fi
+
+if [ "${PR_STATE}" != "MERGED" ]; then
+  echo "ERROR: PR #${PR_NUMBER} was not merged" >&2
+  exit 1
+fi
+
+echo "Merged PR #${PR_NUMBER}"
 
 # Close linked issue if TICKET_NUMBER was provided and is a valid number
 if [ -n "${TICKET_NUMBER:-}" ] && [[ "${TICKET_NUMBER}" =~ ^#?[0-9]+$ ]]; then
