@@ -1774,13 +1774,17 @@ mod tests {
         let mgr = WorkflowManager::new(&conn);
         let run = create_worktree_run(&conn, "w1");
 
-        let step_id = mgr.insert_step(&run.id, "approval-gate", "gate", false, 0, 0).unwrap();
-        mgr.set_step_gate_info(&step_id, "human", Some("Please approve"), "1h").unwrap();
+        let step_id = mgr
+            .insert_step(&run.id, "approval-gate", "gate", false, 0, 0)
+            .unwrap();
+        mgr.set_step_gate_info(&step_id, "human", Some("Please approve"), "1h")
+            .unwrap();
         // Mark step as waiting so it appears in the query.
         conn.execute(
             "UPDATE workflow_run_steps SET status = 'waiting' WHERE id = ?1",
             rusqlite::params![step_id],
-        ).unwrap();
+        )
+        .unwrap();
 
         let steps = mgr.list_all_waiting_gate_steps().unwrap();
         assert_eq!(steps.len(), 1, "one waiting gate step should be returned");
@@ -1797,11 +1801,14 @@ mod tests {
         let run = create_worktree_run(&conn, "w1");
 
         // Regular step with no gate_type — must not appear.
-        let step_id = mgr.insert_step(&run.id, "regular-step", "actor", false, 0, 0).unwrap();
+        let step_id = mgr
+            .insert_step(&run.id, "regular-step", "actor", false, 0, 0)
+            .unwrap();
         conn.execute(
             "UPDATE workflow_run_steps SET status = 'waiting' WHERE id = ?1",
             rusqlite::params![step_id],
-        ).unwrap();
+        )
+        .unwrap();
 
         let steps = mgr.list_all_waiting_gate_steps().unwrap();
         assert!(
@@ -2252,8 +2259,11 @@ mod tests {
         let mgr = WorkflowManager::new(&conn);
         let run = create_worktree_run(&conn, "w1");
 
-        let step_id = mgr.insert_step(&run.id, "gate", "gate", false, 0, 0).unwrap();
-        mgr.set_step_gate_info(&step_id, "human", None, "1h").unwrap();
+        let step_id = mgr
+            .insert_step(&run.id, "gate", "gate", false, 0, 0)
+            .unwrap();
+        mgr.set_step_gate_info(&step_id, "human", None, "1h")
+            .unwrap();
         // Mark as completed (approved) — must not appear in waiting list.
         conn.execute(
             "UPDATE workflow_run_steps SET status = 'completed', gate_approved_at = '2024-01-01T00:00:00Z' WHERE id = ?1",

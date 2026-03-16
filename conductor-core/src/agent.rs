@@ -4483,7 +4483,9 @@ mod tests {
     fn list_all_pending_feedback_requests_returns_pending_only() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
-        let run = mgr.create_run(Some("w1"), "test prompt", None, None).unwrap();
+        let run = mgr
+            .create_run(Some("w1"), "test prompt", None, None)
+            .unwrap();
 
         // Create two pending requests and one responded request.
         let req1 = mgr.request_feedback(&run.id, "question 1").unwrap();
