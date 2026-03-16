@@ -29,7 +29,14 @@ fn notify_workflow(
     succeeded: bool,
 ) {
     let conn = db.blocking_lock();
-    fire_workflow_notification(&conn, notifications, run_id, workflow_name, label, succeeded);
+    fire_workflow_notification(
+        &conn,
+        notifications,
+        run_id,
+        workflow_name,
+        label,
+        succeeded,
+    );
 }
 
 // ── Response types ────────────────────────────────────────────────────
