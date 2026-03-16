@@ -1599,4 +1599,121 @@ mod tests {
             .unwrap();
         assert!(runs.is_empty());
     }
+
+    // ── list_active_workflow_runs ────────────────────────────────────────────
+
+    #[test]
+    fn test_list_active_workflow_runs_empty_slice_defaults_to_pending_running_waiting() {
+        // Empty status slice should default to [pending, running, waiting].
+        // A completed run must NOT appear; pending/running runs must appear.
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let pending_run = create_worktree_run(&conn, "w1"); // created as pending
+        let running_run = create_worktree_run(&conn, "w1");
+        mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+        let completed_run = create_worktree_run(&conn, "w1");
+        mgr.update_workflow_status(&completed_run.id, WorkflowRunStatus::Completed, None)
+            .unwrap();
+
+        let runs = mgr.list_active_workflow_runs(&[]).unwrap();
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+        assert!(ids.contains(&pending_run.id.as_str()), "pending run must appear");
+        assert!(ids.contains(&running_run.id.as_str()), "running run must appear");
+        assert!(
+            !ids.contains(&completed_run.id.as_str()),
+            "completed run must not appear"
+        );
+    }
+
+    #[test]
+    fn test_list_active_workflow_runs_explicit_status_filter() {
+        // When an explicit status slice is given, only runs with those statuses appear.
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let pending_run = create_worktree_run(&conn, "w1");
+        let running_run = create_worktree_run(&conn, "w1");
+        mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+
+        // Ask only for running — pending must not appear.
+        let runs = mgr
+            .list_active_workflow_runs(&[WorkflowRunStatus::Running])
+            .unwrap();
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+        assert!(ids.contains(&running_run.id.as_str()), "running run must appear");
+        assert!(
+            !ids.contains(&pending_run.id.as_str()),
+            "pending run must not appear when filter is running-only"
+        );
+    }
+
+    #[test]
+    fn test_list_active_workflow_runs_null_worktree_included() {
+        // Runs with no worktree_id (ephemeral/repo-targeted runs) must always appear.
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let repo_run = create_repo_run(&conn, "r1"); // worktree_id IS NULL
+
+        let runs = mgr.list_active_workflow_runs(&[WorkflowRunStatus::Pending]).unwrap();
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&repo_run.id.as_str()),
+            "repo-targeted run with NULL worktree_id must be included"
+        );
+    }
+
+    #[test]
+    fn test_list_active_workflow_runs_inactive_worktree_excluded() {
+        // Runs linked to a non-active (e.g. merged) worktree must not appear.
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let run = create_worktree_run(&conn, "w1");
+
+        // Mark w1 as merged so it no longer counts as active.
+        conn.execute(
+            "UPDATE worktrees SET status = 'merged' WHERE id = 'w1'",
+            [],
+        )
+        .unwrap();
+
+        let runs = mgr.list_active_workflow_runs(&[WorkflowRunStatus::Pending]).unwrap();
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+        assert!(
+            !ids.contains(&run.id.as_str()),
+            "run linked to a merged worktree must not appear"
+        );
+    }
+
+    #[test]
+    fn test_list_active_workflow_runs_multiple_statuses_dynamic_placeholders() {
+        // Passing two explicit statuses exercises the dynamic placeholder builder.
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let pending_run = create_worktree_run(&conn, "w1");
+        let running_run = create_worktree_run(&conn, "w1");
+        mgr.update_workflow_status(&running_run.id, WorkflowRunStatus::Running, None)
+            .unwrap();
+        let failed_run = create_worktree_run(&conn, "w1");
+        mgr.update_workflow_status(&failed_run.id, WorkflowRunStatus::Failed, None)
+            .unwrap();
+
+        let runs = mgr
+            .list_active_workflow_runs(&[WorkflowRunStatus::Pending, WorkflowRunStatus::Running])
+            .unwrap();
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+        assert!(ids.contains(&pending_run.id.as_str()));
+        assert!(ids.contains(&running_run.id.as_str()));
+        assert!(!ids.contains(&failed_run.id.as_str()));
+    }
 }
