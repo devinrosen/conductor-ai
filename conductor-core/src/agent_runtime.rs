@@ -298,4 +298,17 @@ mod tests {
         let _ = std::fs::remove_file(file_path);
         let _ = std::fs::remove_dir(&tmp);
     }
+
+    #[test]
+    fn build_agent_args_file_write_error_propagates() {
+        let worktree = "/nonexistent/path/that/does/not/exist";
+        let prompt = "x".repeat(513);
+        let result = super::build_agent_args("run-err-01", worktree, &prompt, None, None);
+        assert!(result.is_err(), "expected Err when write fails");
+        let msg = result.unwrap_err();
+        assert!(
+            msg.starts_with("Failed to write prompt file"),
+            "unexpected error message: {msg}"
+        );
+    }
 }
