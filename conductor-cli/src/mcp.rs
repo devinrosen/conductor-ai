@@ -2454,7 +2454,8 @@ fn tool_validate_workflow(db_path: &Path, args: &serde_json::Map<String, Value>)
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::WorkflowManager;
     use conductor_core::workflow::{
-        collect_agent_names, detect_workflow_cycles, validate_workflow_semantics,
+        collect_agent_names, detect_workflow_cycles, validate_script_steps,
+        validate_workflow_semantics,
     };
 
     let repo_slug = require_arg!(args, "repo");
@@ -2520,6 +2521,14 @@ fn tool_validate_workflow(db_path: &Path, args: &serde_json::Map<String, Value>)
         errors.push(format!("Cycle detected: {msg}"));
     }
     for err in &report.errors {
+        if let Some(hint) = &err.hint {
+            errors.push(format!("{} (hint: {hint})", err.message));
+        } else {
+            errors.push(err.message.clone());
+        }
+    }
+    let script_errors = validate_script_steps(&workflow, wt_path, repo_path);
+    for err in &script_errors {
         if let Some(hint) = &err.hint {
             errors.push(format!("{} (hint: {hint})", err.message));
         } else {

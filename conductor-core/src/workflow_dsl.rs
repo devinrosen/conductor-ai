@@ -1978,6 +1978,118 @@ fn check_condition_reachable(
 }
 
 // ---------------------------------------------------------------------------
+// Script step validation
+// ---------------------------------------------------------------------------
+
+/// Validate all `script` steps in a workflow: check that the `run` target
+/// exists and is executable, using the same search order the engine uses at
+/// runtime (`working_dir` → `repo_path` → `~/.claude/skills/`).
+///
+/// Paths containing `{{` (template variables) are silently skipped because
+/// they cannot be resolved statically.
+pub fn validate_script_steps(
+    def: &WorkflowDef,
+    working_dir: &str,
+    repo_path: &str,
+) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+    let nodes: Vec<&ScriptNode> = collect_script_nodes(&def.body)
+        .into_iter()
+        .chain(collect_script_nodes(&def.always))
+        .collect();
+
+    for node in nodes {
+        let run = &node.run;
+
+        // Skip template-variable paths — can't resolve them statically.
+        if run.contains("{{") {
+            continue;
+        }
+
+        match crate::workflow::executors::resolve_script_path(run, working_dir, repo_path) {
+            None => {
+                let p = std::path::Path::new(run);
+                let searched = if p.is_absolute() {
+                    run.to_string()
+                } else {
+                    let skills_path = std::env::var_os("HOME")
+                        .map(|h| {
+                            std::path::Path::new(&h)
+                                .join(".claude")
+                                .join("skills")
+                                .join(run)
+                                .display()
+                                .to_string()
+                        })
+                        .unwrap_or_else(|| format!("~/.claude/skills/{run}"));
+                    format!(
+                        "{}/{run}, {}/{run}, {skills_path}",
+                        working_dir, repo_path
+                    )
+                };
+                errors.push(ValidationError {
+                    message: format!(
+                        "Script step '{}': '{}' not found. Searched: {}",
+                        node.name, run, searched
+                    ),
+                    hint: None,
+                });
+            }
+            Some(resolved) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(meta) = std::fs::metadata(&resolved) {
+                        let mode = meta.permissions().mode();
+                        if mode & 0o111 == 0 {
+                            errors.push(ValidationError {
+                                message: format!(
+                                    "Script step '{}': '{}' is not executable (mode {:04o})",
+                                    node.name,
+                                    resolved.display(),
+                                    mode & 0o777,
+                                ),
+                                hint: Some(format!(
+                                    "Run: chmod +x {}",
+                                    resolved.display()
+                                )),
+                            });
+                        }
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = resolved;
+                }
+            }
+        }
+    }
+
+    errors
+}
+
+/// Recursively collect all `ScriptNode` references from a node list.
+fn collect_script_nodes(nodes: &[WorkflowNode]) -> Vec<&ScriptNode> {
+    let mut out = Vec::new();
+    for node in nodes {
+        match node {
+            WorkflowNode::Script(s) => out.push(s),
+            WorkflowNode::If(n) => out.extend(collect_script_nodes(&n.body)),
+            WorkflowNode::Unless(n) => out.extend(collect_script_nodes(&n.body)),
+            WorkflowNode::While(n) => out.extend(collect_script_nodes(&n.body)),
+            WorkflowNode::DoWhile(n) => out.extend(collect_script_nodes(&n.body)),
+            WorkflowNode::Do(n) => out.extend(collect_script_nodes(&n.body)),
+            WorkflowNode::Always(n) => out.extend(collect_script_nodes(&n.body)),
+            WorkflowNode::Call(_)
+            | WorkflowNode::CallWorkflow(_)
+            | WorkflowNode::Gate(_)
+            | WorkflowNode::Parallel(_) => {}
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -4696,6 +4808,157 @@ workflow w {
         assert!(
             err.to_string().contains("invalid retries"),
             "expected 'invalid retries', got: {err}"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // validate_script_steps tests
+    // ---------------------------------------------------------------------------
+
+    fn make_script_def(run: &str) -> WorkflowDef {
+        WorkflowDef {
+            name: "test-wf".to_string(),
+            description: String::new(),
+            trigger: WorkflowTrigger::Manual,
+            targets: vec![],
+            inputs: vec![],
+            body: vec![WorkflowNode::Script(ScriptNode {
+                name: "my-step".to_string(),
+                run: run.to_string(),
+                env: std::collections::HashMap::new(),
+                timeout: None,
+                retries: 0,
+                on_fail: None,
+                bot_name: None,
+            })],
+            always: vec![],
+            source_path: "test.wf".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_validate_script_steps_run_not_found() {
+        let def = make_script_def("nonexistent-script.sh");
+        let errors = validate_script_steps(&def, "/tmp/wt", "/tmp/repo");
+        assert_eq!(errors.len(), 1, "expected one error, got: {:?}", errors);
+        let msg = &errors[0].message;
+        assert!(
+            msg.contains("nonexistent-script.sh"),
+            "error should mention the script path, got: {msg}"
+        );
+        assert!(
+            msg.contains("not found"),
+            "error should say 'not found', got: {msg}"
+        );
+        assert!(
+            msg.contains("/tmp/wt"),
+            "error should list working_dir search path, got: {msg}"
+        );
+        assert!(
+            msg.contains("/tmp/repo"),
+            "error should list repo_path search path, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_validate_script_steps_skips_variable_paths() {
+        let def = make_script_def("{{script_path}}");
+        let errors = validate_script_steps(&def, "/tmp/wt", "/tmp/repo");
+        assert!(
+            errors.is_empty(),
+            "template-variable paths should be skipped, got: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_validate_script_steps_run_valid() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let script = dir.path().join("my-script.sh");
+        let mut f = std::fs::File::create(&script).unwrap();
+        f.write_all(b"#!/bin/sh\n").unwrap();
+        let mut perms = f.metadata().unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let def = make_script_def("my-script.sh");
+        let errors =
+            validate_script_steps(&def, dir.path().to_str().unwrap(), "/tmp/no-repo");
+        assert!(
+            errors.is_empty(),
+            "valid executable script should produce no errors, got: {:?}",
+            errors
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_validate_script_steps_run_not_executable() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let script = dir.path().join("noexec.sh");
+        let mut f = std::fs::File::create(&script).unwrap();
+        f.write_all(b"#!/bin/sh\n").unwrap();
+        let mut perms = f.metadata().unwrap().permissions();
+        perms.set_mode(0o644); // no execute bit
+        std::fs::set_permissions(&script, perms).unwrap();
+
+        let def = make_script_def("noexec.sh");
+        let errors =
+            validate_script_steps(&def, dir.path().to_str().unwrap(), "/tmp/no-repo");
+        assert_eq!(
+            errors.len(),
+            1,
+            "non-executable script should produce one error, got: {:?}",
+            errors
+        );
+        let msg = &errors[0].message;
+        assert!(
+            msg.contains("not executable"),
+            "error should mention not executable, got: {msg}"
+        );
+        assert!(
+            errors[0].hint.is_some(),
+            "should include a chmod hint"
+        );
+    }
+
+    #[test]
+    fn test_validate_script_steps_nested_in_if_block() {
+        use std::collections::HashMap;
+
+        let def = WorkflowDef {
+            name: "test-wf".to_string(),
+            description: String::new(),
+            trigger: WorkflowTrigger::Manual,
+            targets: vec![],
+            inputs: vec![],
+            body: vec![WorkflowNode::If(IfNode {
+                step: "some-step".to_string(),
+                marker: "done".to_string(),
+                body: vec![WorkflowNode::Script(ScriptNode {
+                    name: "nested-script".to_string(),
+                    run: "deeply-nested.sh".to_string(),
+                    env: HashMap::new(),
+                    timeout: None,
+                    retries: 0,
+                    on_fail: None,
+                    bot_name: None,
+                })],
+            })],
+            always: vec![],
+            source_path: "test.wf".to_string(),
+        };
+        let errors = validate_script_steps(&def, "/tmp/wt", "/tmp/repo");
+        assert_eq!(errors.len(), 1, "nested script error should be propagated");
+        assert!(
+            errors[0].message.contains("nested-script"),
+            "error should name the nested step"
         );
     }
 }

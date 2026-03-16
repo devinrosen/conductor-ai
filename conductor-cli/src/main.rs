@@ -20,8 +20,8 @@ use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager}
 use conductor_core::schema_config;
 use conductor_core::tickets::{build_agent_prompt, TicketInput, TicketSyncer};
 use conductor_core::workflow::{
-    collect_agent_names, detect_workflow_cycles, validate_workflow_semantics, WorkflowExecConfig,
-    WorkflowManager,
+    collect_agent_names, detect_workflow_cycles, validate_script_steps,
+    validate_workflow_semantics, WorkflowExecConfig, WorkflowManager,
 };
 use conductor_core::workflow_config;
 use conductor_core::worktree::WorktreeManager;
@@ -1724,6 +1724,19 @@ fn main() -> Result<()> {
                 if !report.is_ok() {
                     println!("\n  SEMANTIC ERRORS ({}):", report.errors.len());
                     for err in &report.errors {
+                        println!("    \u{2717} {}", err.message);
+                        if let Some(hint) = &err.hint {
+                            println!("      hint: {hint}");
+                        }
+                    }
+                    has_errors = true;
+                }
+
+                // Script step validation (existence + executable bit).
+                let script_errors = validate_script_steps(&workflow, &wt_path, &repo_path);
+                if !script_errors.is_empty() {
+                    println!("\n  SCRIPT STEP ERRORS ({}):", script_errors.len());
+                    for err in &script_errors {
                         println!("    \u{2717} {}", err.message);
                         if let Some(hint) = &err.hint {
                             println!("      hint: {hint}");

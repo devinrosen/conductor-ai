@@ -1825,7 +1825,7 @@ fn poll_script_child(
 /// 1. Absolute paths are used as-is.
 /// 2. Relative paths are tried against `working_dir`, then `repo_path`,
 ///    then `~/.claude/skills/`.
-fn resolve_script_path(
+pub(crate) fn resolve_script_path(
     run: &str,
     working_dir: &str,
     repo_path: &str,
