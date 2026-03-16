@@ -226,7 +226,7 @@ export function WorkflowRunTree({ runs, repos, ctxMap }: WorkflowRunTreeProps) {
                         <div key={run.id} className="ml-4">
                           <RunRow run={run} ctxMap={ctxMap} indent={false} />
                           {(run.active_steps ?? []).length > 0 && (
-                            <StepLeaves steps={run.active_steps!} />
+                            <StepLeaves steps={run.active_steps ?? []} />
                           )}
                           {childrenMap.get(run.id)?.map((child) => (
                             <div key={child.id}>
@@ -236,7 +236,7 @@ export function WorkflowRunTree({ runs, repos, ctxMap }: WorkflowRunTreeProps) {
                                 indent={true}
                               />
                               {(child.active_steps ?? []).length > 0 && (
-                                <StepLeaves steps={child.active_steps!} />
+                                <StepLeaves steps={child.active_steps ?? []} />
                               )}
                             </div>
                           ))}
