@@ -249,6 +249,35 @@ pub fn spawn_child_tmux(
 
 #[cfg(test)]
 mod tests {
+    fn assert_inline_prompt(args: &[String], prompt: &str) {
+        let prompt_idx = args
+            .iter()
+            .position(|a| a == "--prompt")
+            .expect("--prompt flag missing");
+        assert_eq!(args[prompt_idx + 1], prompt);
+        assert!(
+            !args.iter().any(|a| a == "--prompt-file"),
+            "--prompt-file should not appear"
+        );
+    }
+
+    fn assert_file_prompt(args: &[String], expected_content: &str) {
+        let file_idx = args
+            .iter()
+            .position(|a| a == "--prompt-file")
+            .expect("--prompt-file flag missing");
+        let file_path = &args[file_idx + 1];
+        assert!(
+            std::path::Path::new(file_path).exists(),
+            "prompt file should have been written"
+        );
+        assert_eq!(std::fs::read_to_string(file_path).unwrap(), expected_content);
+        assert!(
+            !args.iter().any(|a| a == "--prompt"),
+            "--prompt should not appear"
+        );
+    }
+
     #[test]
     fn verify_tmux_window_rejects_nonexistent_window() {
         // Whether or not tmux is running, a bogus window name should fail.
@@ -261,15 +290,7 @@ mod tests {
         let prompt = "short prompt";
         assert!(prompt.len() <= 512);
         let args = super::build_agent_args("run-1", "/tmp/wt", prompt, None, None).unwrap();
-        let prompt_idx = args
-            .iter()
-            .position(|a| a == "--prompt")
-            .expect("--prompt flag missing");
-        assert_eq!(args[prompt_idx + 1], prompt);
-        assert!(
-            !args.iter().any(|a| a == "--prompt-file"),
-            "--prompt-file should not appear"
-        );
+        assert_inline_prompt(&args, prompt);
     }
 
     #[test]
@@ -282,22 +303,11 @@ mod tests {
         let prompt = "x".repeat(513);
         let args = super::build_agent_args(run_id, worktree, &prompt, None, None).unwrap();
 
-        let file_idx = args
-            .iter()
-            .position(|a| a == "--prompt-file")
-            .expect("--prompt-file flag missing");
-        let file_path = &args[file_idx + 1];
-        assert!(
-            std::path::Path::new(file_path).exists(),
-            "prompt file should have been written"
-        );
-        assert_eq!(std::fs::read_to_string(file_path).unwrap(), prompt);
-        assert!(
-            !args.iter().any(|a| a == "--prompt"),
-            "--prompt should not appear"
-        );
+        assert_file_prompt(&args, &prompt);
 
         // cleanup
+        let file_idx = args.iter().position(|a| a == "--prompt-file").unwrap();
+        let file_path = &args[file_idx + 1];
         let _ = std::fs::remove_file(file_path);
         let _ = std::fs::remove_dir(&tmp);
     }
@@ -322,14 +332,6 @@ mod tests {
         let prompt = "x".repeat(512);
         assert_eq!(prompt.len(), 512);
         let args = super::build_agent_args("run-boundary", "/tmp/wt", &prompt, None, None).unwrap();
-        let prompt_idx = args
-            .iter()
-            .position(|a| a == "--prompt")
-            .expect("--prompt flag missing for exactly-512-byte prompt");
-        assert_eq!(args[prompt_idx + 1], prompt);
-        assert!(
-            !args.iter().any(|a| a == "--prompt-file"),
-            "--prompt-file should not appear for exactly-512-byte prompt"
-        );
+        assert_inline_prompt(&args, &prompt);
     }
 }
