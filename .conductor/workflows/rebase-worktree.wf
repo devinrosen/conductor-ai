@@ -5,7 +5,9 @@ workflow rebase-worktree {
     targets     = ["worktree"]
   }
 
-  call check-mergeability { output = "merge-check" }
+  script check-mergeability {
+    run = ".conductor/scripts/check-mergeability.sh"
+  }
 
   if check-mergeability.has_conflicts {
     call sync-with-main { output = "sync-result" }
