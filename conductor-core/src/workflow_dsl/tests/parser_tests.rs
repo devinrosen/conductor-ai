@@ -1,5 +1,5 @@
-use std::fs;
 use crate::workflow_dsl::*;
+use std::fs;
 
 const FULL_WORKFLOW: &str = r#"
 workflow ticket-to-pr {
@@ -582,8 +582,7 @@ fn test_load_workflow_by_name_not_found() {
     )
     .unwrap();
 
-    let result =
-        load_workflow_by_name(tmp.path().to_str().unwrap(), "/nonexistent", "nonexistent");
+    let result = load_workflow_by_name(tmp.path().to_str().unwrap(), "/nonexistent", "nonexistent");
     assert!(result.is_err());
     let err_msg = result.unwrap_err().to_string();
     assert!(err_msg.contains("not found"));

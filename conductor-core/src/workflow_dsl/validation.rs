@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 
-use super::types::{
-    Condition, InputType, ScriptNode, WorkflowDef, WorkflowNode,
-};
+use super::types::{Condition, InputType, ScriptNode, WorkflowDef, WorkflowNode};
 
 // ---------------------------------------------------------------------------
 // Semantic validation

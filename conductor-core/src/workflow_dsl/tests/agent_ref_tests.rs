@@ -34,7 +34,8 @@ fn test_agent_ref_step_key() {
 /// not `AgentRef::Path` — quoting alone does not make a value a path.
 #[test]
 fn test_on_fail_quoted_bare_name_is_name() {
-    let input = r#"workflow test { meta { targets = ["worktree"] } call agent { on_fail = "diagnose" } }"#;
+    let input =
+        r#"workflow test { meta { targets = ["worktree"] } call agent { on_fail = "diagnose" } }"#;
     let def = parse_workflow_str(input, "test.wf").unwrap();
     match &def.body[0] {
         WorkflowNode::Call(c) => {
@@ -51,7 +52,8 @@ fn test_on_fail_quoted_bare_name_is_name() {
 /// A bare (unquoted) name in `on_fail` should produce `AgentRef::Name`.
 #[test]
 fn test_on_fail_bare_name_is_name() {
-    let input = r#"workflow test { meta { targets = ["worktree"] } call agent { on_fail = diagnose } }"#;
+    let input =
+        r#"workflow test { meta { targets = ["worktree"] } call agent { on_fail = diagnose } }"#;
     let def = parse_workflow_str(input, "test.wf").unwrap();
     match &def.body[0] {
         WorkflowNode::Call(c) => {

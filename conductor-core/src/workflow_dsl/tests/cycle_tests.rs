@@ -91,7 +91,9 @@ fn test_detect_workflow_cycles_depth_limit() {
         let idx: usize = name[1..].parse().unwrap();
         if idx < 6 {
             let next = format!("w{}", idx + 1);
-            let src = format!("workflow {name} {{ meta {{ targets = [\"worktree\"] }} call workflow {next} }}");
+            let src = format!(
+                "workflow {name} {{ meta {{ targets = [\"worktree\"] }} call workflow {next} }}"
+            );
             parse_workflow_str(&src, &format!("{name}.wf")).map_err(|e| e.to_string())
         } else {
             let src =

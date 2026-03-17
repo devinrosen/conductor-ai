@@ -27,34 +27,32 @@
 //! `agent_ref` is a bare identifier (short name resolved via search order) or a
 //! quoted string (explicit path relative to the repo root).
 
-mod types;
+mod api;
 mod lexer;
 mod parser;
-mod api;
+mod types;
 pub mod validation;
 
 // Re-export everything that is currently public
 pub use types::{
-    WorkflowDef, WorkflowWarning, WorkflowTrigger, InputType, InputDecl,
-    WorkflowNode, CallNode, CallWorkflowNode, IfNode, UnlessNode, WhileNode,
-    DoWhileNode, DoNode, ParallelNode, GateNode, AlwaysNode, ScriptNode,
-    AgentRef, Condition, GateType, ApprovalMode, OnTimeout, OnMaxIter,
-    collect_agent_names, collect_workflow_refs,
+    collect_agent_names, collect_workflow_refs, AgentRef, AlwaysNode, ApprovalMode, CallNode,
+    CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode, GateType, IfNode, InputDecl,
+    InputType, OnMaxIter, OnTimeout, ParallelNode, ScriptNode, UnlessNode, WhileNode, WorkflowDef,
+    WorkflowNode, WorkflowTrigger, WorkflowWarning,
 };
 // Tree-walking helpers used in tests and available for external callers
-#[allow(unused_imports)]
-pub use types::{collect_snippet_refs, collect_schema_refs, collect_bot_names, count_nodes};
-pub use parser::parse_workflow_str;
+pub use api::{
+    detect_workflow_cycles, load_workflow_by_name, load_workflow_defs, validate_workflow_name,
+    MAX_WORKFLOW_DEPTH,
+};
+pub(crate) use parser::parse_duration_str;
 #[allow(unused_imports)]
 pub use parser::parse_workflow_file;
-pub(crate) use parser::parse_duration_str;
-pub use api::{
-    load_workflow_defs, load_workflow_by_name, validate_workflow_name,
-    detect_workflow_cycles, MAX_WORKFLOW_DEPTH,
-};
+pub use parser::parse_workflow_str;
+#[allow(unused_imports)]
+pub use types::{collect_bot_names, collect_schema_refs, collect_snippet_refs, count_nodes};
 pub use validation::{
-    ValidationError, ValidationReport,
-    validate_workflow_semantics, validate_script_steps,
+    validate_script_steps, validate_workflow_semantics, ValidationError, ValidationReport,
 };
 
 #[cfg(test)]

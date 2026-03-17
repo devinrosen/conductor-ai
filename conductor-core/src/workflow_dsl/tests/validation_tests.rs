@@ -310,8 +310,7 @@ workflow test {
 #[test]
 fn test_validate_known_targets_accepted() {
     for target in &["worktree", "ticket", "repo", "pr", "workflow_run"] {
-        let input =
-            format!("workflow test {{ meta {{ targets = [\"{target}\"] }} call step }}",);
+        let input = format!("workflow test {{ meta {{ targets = [\"{target}\"] }} call step }}",);
         let def = parse_workflow_str(&input, "test.wf").unwrap();
         let report = validate_workflow_semantics(&def, &no_loader);
         assert!(
