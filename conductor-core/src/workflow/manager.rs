@@ -1182,7 +1182,8 @@ impl<'a> WorkflowManager<'a> {
             "SELECT {cols}, r.workflow_name, r.target_label \
              FROM workflow_run_steps s \
              JOIN workflow_runs r ON r.id = s.workflow_run_id{ej} \
-             WHERE s.gate_type IS NOT NULL AND s.status = 'waiting'{ew} \
+             WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
+             AND r.status IN ('pending', 'running', 'waiting'){ew} \
              ORDER BY s.started_at",
             cols = &*STEP_COLUMNS_WITH_PREFIX,
             ej = extra_join,
@@ -2494,6 +2495,54 @@ mod tests {
         assert!(
             steps.is_empty(),
             "completed gate steps must not be returned"
+        );
+    }
+
+    #[test]
+    fn test_list_waiting_gate_steps_for_repo_excludes_cancelled_run() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let run = create_worktree_run(&conn, "w1");
+
+        let step_id = mgr
+            .insert_step(&run.id, "gate", "gate", false, 0, 0)
+            .unwrap();
+        mgr.set_step_gate_info(&step_id, "human", None, "1h")
+            .unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET status = 'cancelled' WHERE id = ?1",
+            [&run.id],
+        )
+        .unwrap();
+
+        let steps = mgr.list_waiting_gate_steps_for_repo("r1").unwrap();
+        assert!(
+            steps.is_empty(),
+            "waiting gate steps from cancelled runs must not be returned"
+        );
+    }
+
+    #[test]
+    fn test_list_waiting_gate_steps_for_repo_excludes_failed_run() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let run = create_worktree_run(&conn, "w1");
+
+        let step_id = mgr
+            .insert_step(&run.id, "gate", "gate", false, 0, 0)
+            .unwrap();
+        mgr.set_step_gate_info(&step_id, "human", None, "1h")
+            .unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET status = 'failed' WHERE id = ?1",
+            [&run.id],
+        )
+        .unwrap();
+
+        let steps = mgr.list_waiting_gate_steps_for_repo("r1").unwrap();
+        assert!(
+            steps.is_empty(),
+            "waiting gate steps from failed runs must not be returned"
         );
     }
 }
