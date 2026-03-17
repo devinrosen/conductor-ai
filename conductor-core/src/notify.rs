@@ -103,7 +103,9 @@ pub fn fire_feedback_notification(
         return;
     }
 
-    if let Err(e) = show_desktop_notification("Conductor \u{2014} Agent Needs Input", prompt_preview) {
+    if let Err(e) =
+        show_desktop_notification("Conductor \u{2014} Agent Needs Input", prompt_preview)
+    {
         tracing::warn!(request_id, "desktop notification failed: {e}");
     }
 }
