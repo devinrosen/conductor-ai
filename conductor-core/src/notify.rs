@@ -297,6 +297,24 @@ mod tests {
     }
 
     #[test]
+    fn fire_workflow_notification_disabled_does_not_claim_on_failure() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true);
+        fire_workflow_notification(&conn, &cfg, "run-6", "my-workflow", None, false);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-6'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "disabled config must not write to notification_log even for failure events"
+        );
+    }
+
+    #[test]
     fn fire_workflow_notification_on_success_false_does_not_claim_success() {
         let conn = in_memory_db();
         let cfg = config(true, false, true);
