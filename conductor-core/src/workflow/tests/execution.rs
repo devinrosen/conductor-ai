@@ -224,19 +224,11 @@ fn test_recover_stuck_steps_failed_child_marks_step_failed() {
 #[test]
 fn test_fetch_child_final_output_returns_last_completed_step() {
     let conn = setup_db();
-    let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("child-wf", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
+    let (mgr, run_id) = create_child_run(&conn);
 
     // Insert two completed steps; the second (position=1) should be returned
     let step1_id = mgr
-        .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+        .insert_step(&run_id, "step-a", "actor", false, 0, 0)
         .unwrap();
     mgr.update_step_status(
         &step1_id,
@@ -250,7 +242,7 @@ fn test_fetch_child_final_output_returns_last_completed_step() {
     .unwrap();
 
     let step2_id = mgr
-        .insert_step(&run.id, "step-b", "actor", false, 1, 0)
+        .insert_step(&run_id, "step-b", "actor", false, 1, 0)
         .unwrap();
     mgr.update_step_status(
         &step2_id,
@@ -263,7 +255,7 @@ fn test_fetch_child_final_output_returns_last_completed_step() {
     )
     .unwrap();
 
-    let (markers, context) = fetch_child_final_output(&mgr, &run.id);
+    let (markers, context) = fetch_child_final_output(&mgr, &run_id);
     assert_eq!(markers, vec!["marker_b1", "marker_b2"]);
     assert_eq!(context, "context-b");
 }
@@ -271,19 +263,11 @@ fn test_fetch_child_final_output_returns_last_completed_step() {
 #[test]
 fn test_fetch_child_final_output_no_completed_steps() {
     let conn = setup_db();
-    let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("child-wf", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
+    let (mgr, run_id) = create_child_run(&conn);
 
     // Insert a failed step only
     let step_id = mgr
-        .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+        .insert_step(&run_id, "step-a", "actor", false, 0, 0)
         .unwrap();
     mgr.update_step_status(
         &step_id,
@@ -296,7 +280,7 @@ fn test_fetch_child_final_output_no_completed_steps() {
     )
     .unwrap();
 
-    let (markers, context) = fetch_child_final_output(&mgr, &run.id);
+    let (markers, context) = fetch_child_final_output(&mgr, &run_id);
     assert!(markers.is_empty());
     assert!(context.is_empty());
 }
@@ -304,18 +288,10 @@ fn test_fetch_child_final_output_no_completed_steps() {
 #[test]
 fn test_fetch_child_final_output_malformed_markers_json() {
     let conn = setup_db();
-    let agent_mgr = AgentManager::new(&conn);
-    let parent = agent_mgr
-        .create_run(Some("w1"), "workflow", None, None)
-        .unwrap();
-
-    let mgr = WorkflowManager::new(&conn);
-    let run = mgr
-        .create_workflow_run("child-wf", Some("w1"), &parent.id, false, "manual", None)
-        .unwrap();
+    let (mgr, run_id) = create_child_run(&conn);
 
     let step_id = mgr
-        .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+        .insert_step(&run_id, "step-a", "actor", false, 0, 0)
         .unwrap();
     mgr.update_step_status(
         &step_id,
@@ -328,7 +304,7 @@ fn test_fetch_child_final_output_malformed_markers_json() {
     )
     .unwrap();
 
-    let (markers, context) = fetch_child_final_output(&mgr, &run.id);
+    let (markers, context) = fetch_child_final_output(&mgr, &run_id);
     assert!(markers.is_empty()); // malformed JSON falls back to empty
     assert_eq!(context, "some context");
 }
@@ -600,22 +576,9 @@ fn test_execute_unless_marker_absent_runs_body() {
     let mut state = make_test_state(&conn);
 
     // Step "build" exists but does NOT have the "has_errors" marker
-    state.step_results.insert(
-        "build".to_string(),
-        StepResult {
-            step_name: "build".to_string(),
-            status: WorkflowStepStatus::Completed,
-            result_text: None,
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
-            markers: vec!["build_ok".to_string()],
-            context: String::new(),
-            child_run_id: None,
-            structured_output: None,
-            output_file: None,
-        },
-    );
+    state
+        .step_results
+        .insert("build".to_string(), make_step_result("build", vec!["build_ok"]));
 
     let node = UnlessNode {
         condition: crate::workflow_dsl::Condition::StepMarker {
@@ -635,22 +598,9 @@ fn test_execute_unless_marker_present_skips_body() {
     let mut state = make_test_state(&conn);
 
     // Step "build" has the "has_errors" marker
-    state.step_results.insert(
-        "build".to_string(),
-        StepResult {
-            step_name: "build".to_string(),
-            status: WorkflowStepStatus::Completed,
-            result_text: None,
-            cost_usd: None,
-            num_turns: None,
-            duration_ms: None,
-            markers: vec!["has_errors".to_string()],
-            context: String::new(),
-            child_run_id: None,
-            structured_output: None,
-            output_file: None,
-        },
-    );
+    state
+        .step_results
+        .insert("build".to_string(), make_step_result("build", vec!["has_errors"]));
 
     let node = UnlessNode {
         condition: crate::workflow_dsl::Condition::StepMarker {
