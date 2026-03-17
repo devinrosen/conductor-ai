@@ -1564,8 +1564,7 @@ impl App {
                     self.state.detail_pr_index = self.state.detail_pr_index.saturating_sub(1);
                 }
                 RepoDetailFocus::Gates => {
-                    self.state.detail_gate_index =
-                        self.state.detail_gate_index.saturating_sub(1);
+                    self.state.detail_gate_index = self.state.detail_gate_index.saturating_sub(1);
                 }
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
