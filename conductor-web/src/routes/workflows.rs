@@ -1046,17 +1046,22 @@ mod tests {
             "run_workflow must return 202 Accepted"
         );
 
-        // Give the background task time to call execute_workflow and write the DB record.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        let db = state.db.lock().await;
-        let count: i64 = db
-            .query_row(
-                "SELECT COUNT(*) FROM workflow_runs WHERE workflow_name = 'noop'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
+        // Poll until the background task writes the workflow_runs record (or 5 s timeout).
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let count = loop {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let db = state.db.lock().await;
+            let n: i64 = db
+                .query_row(
+                    "SELECT COUNT(*) FROM workflow_runs WHERE workflow_name = 'noop'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            if n > 0 || tokio::time::Instant::now() >= deadline {
+                break n;
+            }
+        };
         assert_eq!(
             count, 1,
             "handler must invoke execute_workflow — no workflow_runs row found for 'noop'"
