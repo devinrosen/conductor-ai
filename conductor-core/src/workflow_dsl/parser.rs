@@ -514,12 +514,15 @@ impl Parser {
         }
     }
 
-    fn parse_if(&mut self) -> std::result::Result<IfNode, String> {
-        self.expect(&Token::If)?;
+    /// Parse the shared `<condition> { [kvs] <body-nodes> }` pattern used by
+    /// both `if` and `unless` (after the keyword has already been consumed).
+    fn parse_condition_body(
+        &mut self,
+    ) -> std::result::Result<(Condition, Vec<WorkflowNode>), String> {
         let condition = self.parse_condition()?;
         self.expect(&Token::LBrace)?;
 
-        // Parse optional kvs (not used for if, but kept for grammar consistency)
+        // Parse optional kvs (not used for if/unless, but kept for grammar consistency)
         let _kvs = self.parse_kvs()?;
 
         let mut body = Vec::new();
@@ -528,23 +531,18 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
 
+        Ok((condition, body))
+    }
+
+    fn parse_if(&mut self) -> std::result::Result<IfNode, String> {
+        self.expect(&Token::If)?;
+        let (condition, body) = self.parse_condition_body()?;
         Ok(IfNode { condition, body })
     }
 
     fn parse_unless(&mut self) -> std::result::Result<UnlessNode, String> {
         self.expect(&Token::Unless)?;
-        let condition = self.parse_condition()?;
-        self.expect(&Token::LBrace)?;
-
-        // Parse optional kvs (not used for unless, but kept for grammar consistency)
-        let _kvs = self.parse_kvs()?;
-
-        let mut body = Vec::new();
-        while self.peek() != &Token::RBrace && self.peek() != &Token::Eof {
-            body.push(self.parse_node()?);
-        }
-        self.expect(&Token::RBrace)?;
-
+        let (condition, body) = self.parse_condition_body()?;
         Ok(UnlessNode { condition, body })
     }
 
