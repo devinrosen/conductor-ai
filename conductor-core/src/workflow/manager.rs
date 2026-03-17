@@ -534,14 +534,13 @@ impl<'a> WorkflowManager<'a> {
              WHERE workflow_run_id IN ({placeholders}){status_clause} \
              ORDER BY workflow_run_id, position"
         );
-        let mut params: Vec<&dyn rusqlite::ToSql> =
-            run_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-        if let Some(statuses) = status_filter {
-            params.extend(statuses.iter().map(|s| s as &dyn rusqlite::ToSql));
-        }
+        let combined = run_ids
+            .iter()
+            .copied()
+            .chain(status_filter.unwrap_or_default().iter().copied());
         let mut stmt = self.conn.prepare(&sql)?;
         let steps = stmt
-            .query_map(params.as_slice(), row_to_workflow_step)?
+            .query_map(rusqlite::params_from_iter(combined), row_to_workflow_step)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut map: HashMap<String, Vec<WorkflowRunStep>> = HashMap::new();
         for step in steps {
