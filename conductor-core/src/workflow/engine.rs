@@ -856,6 +856,13 @@ pub(super) fn resolve_child_inputs(
             if let Some(ref default) = decl.default {
                 child_inputs.insert(decl.name.clone(), default.clone());
             }
+            // Boolean inputs default to "false" when absent, matching
+            // the behaviour of apply_workflow_input_defaults.
+            if decl.input_type == workflow_dsl::InputType::Boolean {
+                child_inputs
+                    .entry(decl.name.clone())
+                    .or_insert_with(|| "false".to_string());
+            }
         }
     }
     Ok(child_inputs)

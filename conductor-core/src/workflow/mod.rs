@@ -1839,6 +1839,44 @@ And here is my actual output:
         assert!(!result.contains_key("optional_field"));
     }
 
+    #[test]
+    fn test_resolve_child_inputs_boolean_defaults_to_false() {
+        use crate::workflow_dsl::{InputDecl, InputType};
+
+        let raw = HashMap::new(); // boolean input not explicitly passed
+        let vars: HashMap<&str, String> = HashMap::new();
+        let decls = vec![InputDecl {
+            name: "flag".to_string(),
+            required: false,
+            default: None,
+            description: None,
+            input_type: InputType::Boolean,
+        }];
+
+        let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
+        assert_eq!(result.get("flag").map(|s| s.as_str()), Some("false"));
+    }
+
+    #[test]
+    fn test_resolve_child_inputs_boolean_provided_value_not_overwritten() {
+        use crate::workflow_dsl::{InputDecl, InputType};
+
+        let mut raw = HashMap::new();
+        raw.insert("flag".to_string(), "true".to_string());
+
+        let vars: HashMap<&str, String> = HashMap::new();
+        let decls = vec![InputDecl {
+            name: "flag".to_string(),
+            required: false,
+            default: None,
+            description: None,
+            input_type: InputType::Boolean,
+        }];
+
+        let result = resolve_child_inputs(&raw, &vars, &decls).unwrap();
+        assert_eq!(result.get("flag").map(|s| s.as_str()), Some("true"));
+    }
+
     // -----------------------------------------------------------------------
     // execute_unless tests
     // -----------------------------------------------------------------------
