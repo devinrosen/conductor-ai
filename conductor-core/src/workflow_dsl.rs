@@ -2724,7 +2724,9 @@ workflow lint-fix {
     targets     = ["worktree"]
   }
 
-  call analyze-lint
+  script analyze-lint {
+    run = ".conductor/scripts/analyze-lint.sh"
+  }
 
   if analyze-lint.has_lint_errors {
     call lint-fix-impl
@@ -2736,10 +2738,11 @@ workflow lint-fix {
         assert_eq!(def.body.len(), 2);
 
         match &def.body[0] {
-            WorkflowNode::Call(c) => {
-                assert_eq!(c.agent, AgentRef::Name("analyze-lint".to_string()))
+            WorkflowNode::Script(s) => {
+                assert_eq!(s.name, "analyze-lint");
+                assert_eq!(s.run, ".conductor/scripts/analyze-lint.sh");
             }
-            _ => panic!("Expected Call node"),
+            _ => panic!("Expected Script node"),
         }
     }
 

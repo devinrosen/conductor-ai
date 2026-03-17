@@ -9,7 +9,9 @@ workflow lint-fix {
     max_iterations = 3
     on_max_iter    = fail
 
-    call analyze-lint
+    script analyze-lint {
+      run = ".conductor/scripts/analyze-lint.sh"
+    }
 
     if analyze-lint.has_lint_errors {
       call lint-fix-impl
