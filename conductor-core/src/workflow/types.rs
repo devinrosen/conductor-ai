@@ -250,6 +250,8 @@ pub struct ContextEntry {
     pub markers: Vec<String>,
     #[serde(default)]
     pub structured_output: Option<String>,
+    #[serde(default)]
+    pub output_file: Option<String>,
 }
 
 /// Counts of active workflow runs (pending / running / waiting) for a single repo.

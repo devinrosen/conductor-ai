@@ -569,7 +569,6 @@ mod tests {
             total_turns: 0,
             total_duration_ms: 0,
             last_gate_feedback: None,
-            last_output_file: None,
             block_output: None,
             block_with: Vec::new(),
             resume_ctx: None,
@@ -1618,7 +1617,6 @@ And here is my actual output:
             total_turns: 0,
             total_duration_ms: 0,
             last_gate_feedback: None,
-            last_output_file: None,
             block_output: None,
             block_with: Vec::new(),
             resume_ctx: None,
@@ -1639,6 +1637,7 @@ And here is my actual output:
             context: "previous output".to_string(),
             markers: vec![],
             structured_output: None,
+            output_file: None,
         });
 
         let vars = build_variable_map(&state);
@@ -1660,6 +1659,7 @@ And here is my actual output:
             context: "LGTM from reviewer A".to_string(),
             markers: vec![],
             structured_output: None,
+            output_file: None,
         });
         state.contexts.push(ContextEntry {
             step: "reviewer-b".to_string(),
@@ -1667,6 +1667,7 @@ And here is my actual output:
             context: "Needs changes from reviewer B".to_string(),
             markers: vec!["has_review_issues".to_string()],
             structured_output: None,
+            output_file: None,
         });
 
         let vars = build_variable_map(&state);
@@ -1718,6 +1719,7 @@ And here is my actual output:
             context: String::new(),
             markers: Vec::new(),
             structured_output: Some(json.clone()),
+            output_file: None,
         });
 
         let vars = build_variable_map(&state);
@@ -2095,7 +2097,6 @@ And here is my actual output:
             total_turns: 0,
             total_duration_ms: 0,
             last_gate_feedback: None,
-            last_output_file: None,
             block_output: None,
             block_with: Vec::new(),
             resume_ctx: None,

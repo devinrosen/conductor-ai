@@ -1196,6 +1196,7 @@ pub(super) fn execute_parallel(
                                 context: context.clone(),
                                 markers: markers.clone(),
                                 structured_output: structured_json.clone(),
+                                output_file: None,
                             });
                             WorkflowStepStatus::Completed
                         } else {
@@ -2191,7 +2192,6 @@ mod tests {
             total_turns: 0,
             total_duration_ms: 0,
             last_gate_feedback: None,
-            last_output_file: None,
             block_output: None,
             block_with: Vec::new(),
             resume_ctx: None,
@@ -2400,8 +2400,8 @@ mod tests {
         assert!(step_res.markers.contains(&"done".to_string()));
         assert_eq!(step_res.context, "ran ok");
         assert!(
-            state.last_output_file.is_some(),
-            "last_output_file should be set"
+            state.contexts.iter().any(|c| c.output_file.is_some()),
+            "output_file should be set in context"
         );
     }
 

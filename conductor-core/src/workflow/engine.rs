@@ -77,8 +77,6 @@ pub(super) struct ExecutionState<'a> {
     pub total_turns: i64,
     pub total_duration_ms: i64,
     pub last_gate_feedback: Option<String>,
-    /// Path to the most recent script step's stdout file (for `{{prior_output_file}}`).
-    pub last_output_file: Option<String>,
     /// Block-level output schema name inherited from an enclosing `do {}` block.
     pub block_output: Option<String>,
     /// Block-level prompt snippet refs inherited from an enclosing `do {}` block.
@@ -316,7 +314,6 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         total_turns: 0,
         total_duration_ms: 0,
         last_gate_feedback: None,
-        last_output_file: None,
         block_output: None,
         block_with: Vec::new(),
         resume_ctx: None,
@@ -706,7 +703,6 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         total_turns: 0,
         total_duration_ms: 0,
         last_gate_feedback: None,
-        last_output_file: None,
         block_output: None,
         block_with: Vec::new(),
         resume_ctx,
@@ -814,13 +810,9 @@ pub(super) fn record_step_success(
         state.total_duration_ms += dur;
     }
 
-    // Update last_output_file for {{prior_output_file}} substitution
-    if output_file.is_some() {
-        state.last_output_file = output_file.clone();
-    }
-
     let markers_for_ctx = markers.clone();
     let structured_output_for_ctx = structured_output.clone();
+    let output_file_for_ctx = output_file.clone();
     let step_result = StepResult {
         step_name: step_name.to_string(),
         status: WorkflowStepStatus::Completed,
@@ -842,6 +834,7 @@ pub(super) fn record_step_success(
         context,
         markers: markers_for_ctx,
         structured_output: structured_output_for_ctx,
+        output_file: output_file_for_ctx,
     });
 }
 
@@ -1006,10 +999,6 @@ pub(super) fn restore_completed_step(
         state.last_gate_feedback = Some(feedback.clone());
     }
 
-    if step.output_file.is_some() {
-        state.last_output_file = step.output_file.clone();
-    }
-
     let markers_for_ctx = markers.clone();
     let step_result = StepResult {
         step_name: step_key.to_string(),
@@ -1032,6 +1021,7 @@ pub(super) fn restore_completed_step(
         context,
         markers: markers_for_ctx,
         structured_output: step.structured_output.clone(),
+        output_file: step.output_file.clone(),
     });
 }
 
