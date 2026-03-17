@@ -576,9 +576,10 @@ fn test_execute_unless_marker_absent_runs_body() {
     let mut state = make_test_state(&conn);
 
     // Step "build" exists but does NOT have the "has_errors" marker
-    state
-        .step_results
-        .insert("build".to_string(), make_step_result("build", vec!["build_ok"]));
+    state.step_results.insert(
+        "build".to_string(),
+        make_step_result("build", vec!["build_ok"]),
+    );
 
     let node = UnlessNode {
         condition: crate::workflow_dsl::Condition::StepMarker {
@@ -598,9 +599,10 @@ fn test_execute_unless_marker_present_skips_body() {
     let mut state = make_test_state(&conn);
 
     // Step "build" has the "has_errors" marker
-    state
-        .step_results
-        .insert("build".to_string(), make_step_result("build", vec!["has_errors"]));
+    state.step_results.insert(
+        "build".to_string(),
+        make_step_result("build", vec!["has_errors"]),
+    );
 
     let node = UnlessNode {
         condition: crate::workflow_dsl::Condition::StepMarker {
