@@ -7,8 +7,8 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use conductor_core::workflow::WorkflowNode;
-use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStatus};
 use conductor_core::workflow::{parse_workflow_str, InputType};
+use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStatus};
 
 use super::common::truncate;
 use super::helpers::{format_condition, shorten_paths, visual_idx_with_headers};
@@ -1212,11 +1212,7 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         .map(|run| {
             declared_inputs
                 .iter()
-                .filter_map(|decl| {
-                    run.inputs
-                        .get(&decl.name)
-                        .map(|val| (decl, val.as_str()))
-                })
+                .filter_map(|decl| run.inputs.get(&decl.name).map(|val| (decl, val.as_str())))
                 .collect()
         })
         .unwrap_or_default();
