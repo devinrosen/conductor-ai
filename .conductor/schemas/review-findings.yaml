@@ -4,7 +4,7 @@ fields:
     items:
       file: string
       line: number
-      severity: enum(critical, warning, suggestion)
+      severity: enum(critical, warning)
       message: string
       suggestion?:
         type: string
@@ -16,7 +16,7 @@ fields:
       title: string
       file: string
       line: number
-      severity: enum(critical, warning, suggestion)
+      severity: enum(critical, warning)
       body: string
   approved: boolean
   summary: string

@@ -24,7 +24,7 @@ Steps:
    - For each reviewer entry, extract off-diff findings as follows:
      - **Primary path**: If `entry.structured_output` is present (non-null), parse it as JSON and read `.off_diff_findings[]` from it. The reviewer schema uses `body` for the finding description — map `body` → `message` in your output.
      - **Fallback path**: If `entry.structured_output` is null or absent, attempt to parse the `context` string as JSON and extract the `off_diff_findings` array (if present).
-   - Collect all off-diff findings across all reviewers into a single deduplicated list (deduplicate by `(file, line)`, keeping highest severity: `critical > warning > suggestion`).
+   - Collect all off-diff findings across all reviewers into a single deduplicated list (deduplicate by `(file, line)`, keeping highest severity: `critical > warning`).
 
 2. Get the PR number:
    - If `{{pr_number}}` is set and does not contain `{{` (i.e. it was substituted), use it directly.
@@ -46,13 +46,8 @@ Steps:
    | security | :white_check_mark: approve |
    | ... | ... |
 
-   ### Suggestions (non-blocking)
-   - **<reviewer>**: <suggestion text>
-   - **<reviewer>**: <suggestion text>
-
    <!-- conductor-review -->
    ```
-   (Omit the `### Suggestions` section entirely if there are no suggestions.)
 
    **If any reviewer has blocking issues:**
    ```
@@ -73,12 +68,8 @@ Steps:
    - **warning** `src/bar.rs:10` — Hardcoded API token ...
    </details>
 
-   ### Suggestions (non-blocking)
-   - **<reviewer>**: <suggestion text>
-
    <!-- conductor-review -->
    ```
-   (Omit the `### Suggestions` section entirely if there are no suggestions.)
 
    Do NOT include the off-diff section in the review body — the script step will append it after filing issues.
 
