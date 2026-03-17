@@ -1184,8 +1184,9 @@ impl<'a> WorkflowManager<'a> {
                 "SELECT {}, r.workflow_name, r.target_label \
                  FROM workflow_run_steps s \
                  JOIN workflow_runs r ON r.id = s.workflow_run_id \
+                 LEFT JOIN worktrees wt ON wt.id = r.worktree_id \
                  WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
-                 AND r.repo_id = ?1 \
+                 AND (r.repo_id = ?1 OR wt.repo_id = ?1) \
                  ORDER BY s.started_at",
                 &*STEP_COLUMNS_WITH_PREFIX
             ),
@@ -2345,6 +2346,130 @@ mod tests {
             target_label.as_deref(),
             Some("conductor-ai/feat-123"),
             "target_label must be propagated from workflow_runs"
+        );
+    }
+
+    // --- list_waiting_gate_steps_for_repo ---
+
+    #[test]
+    fn test_list_waiting_gate_steps_for_repo_empty() {
+        let conn = setup_db();
+        let steps = WorkflowManager::new(&conn)
+            .list_waiting_gate_steps_for_repo("r1")
+            .unwrap();
+        assert!(steps.is_empty(), "no gate steps should exist yet");
+    }
+
+    #[test]
+    fn test_list_waiting_gate_steps_for_repo_via_worktree() {
+        // Runs linked through a worktree (worktree_id set, repo_id NULL) must appear.
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        // w1 belongs to r1 (seeded in setup_db via test_helpers)
+        let run = create_worktree_run(&conn, "w1");
+
+        let step_id = mgr
+            .insert_step(&run.id, "approval-gate", "gate", false, 0, 0)
+            .unwrap();
+        mgr.set_step_gate_info(&step_id, "human", Some("Please approve"), "1h")
+            .unwrap();
+        set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
+
+        let steps = mgr.list_waiting_gate_steps_for_repo("r1").unwrap();
+        assert_eq!(
+            steps.len(),
+            1,
+            "worktree-linked gate step must appear for its repo"
+        );
+        let (step, workflow_name, target_label) = &steps[0];
+        assert_eq!(step.id, step_id);
+        assert_eq!(step.step_name, "approval-gate");
+        assert_eq!(workflow_name, "wf");
+        assert!(target_label.is_none());
+    }
+
+    #[test]
+    fn test_list_waiting_gate_steps_for_repo_via_direct_repo_id() {
+        // Runs with repo_id set directly (no worktree) must also appear.
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let run = create_repo_run(&conn, "r1");
+
+        let step_id = mgr
+            .insert_step(&run.id, "direct-gate", "gate", false, 0, 0)
+            .unwrap();
+        mgr.set_step_gate_info(&step_id, "human", None, "1h")
+            .unwrap();
+        set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
+
+        let steps = mgr.list_waiting_gate_steps_for_repo("r1").unwrap();
+        assert_eq!(
+            steps.len(),
+            1,
+            "directly-linked gate step must appear for its repo"
+        );
+        assert_eq!(steps[0].0.id, step_id);
+    }
+
+    #[test]
+    fn test_list_waiting_gate_steps_for_repo_excludes_other_repo() {
+        // Gate steps from r2 must not appear when querying r1, and vice versa.
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        // w3 belongs to r2 (inserted in setup_db)
+        let run = create_worktree_run(&conn, "w3");
+
+        let step_id = mgr
+            .insert_step(&run.id, "gate-other", "gate", false, 0, 0)
+            .unwrap();
+        mgr.set_step_gate_info(&step_id, "human", None, "1h")
+            .unwrap();
+        set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
+
+        let steps_r1 = mgr.list_waiting_gate_steps_for_repo("r1").unwrap();
+        assert!(steps_r1.is_empty(), "r1 must not see r2's gate steps");
+
+        let steps_r2 = mgr.list_waiting_gate_steps_for_repo("r2").unwrap();
+        assert_eq!(steps_r2.len(), 1, "r2 should return its own gate step");
+        assert_eq!(steps_r2[0].0.id, step_id);
+    }
+
+    #[test]
+    fn test_list_waiting_gate_steps_for_repo_excludes_non_gate_steps() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let run = create_worktree_run(&conn, "w1");
+
+        // A regular actor step with waiting status must not be returned.
+        let step_id = mgr
+            .insert_step(&run.id, "regular-step", "actor", false, 0, 0)
+            .unwrap();
+        set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
+
+        let steps = mgr.list_waiting_gate_steps_for_repo("r1").unwrap();
+        assert!(steps.is_empty(), "non-gate steps must not be returned");
+    }
+
+    #[test]
+    fn test_list_waiting_gate_steps_for_repo_excludes_completed_gate_steps() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let run = create_worktree_run(&conn, "w1");
+
+        let step_id = mgr
+            .insert_step(&run.id, "gate", "gate", false, 0, 0)
+            .unwrap();
+        mgr.set_step_gate_info(&step_id, "human", None, "1h")
+            .unwrap();
+        conn.execute(
+            "UPDATE workflow_run_steps SET status = 'completed', gate_approved_at = '2024-01-01T00:00:00Z' WHERE id = ?1",
+            rusqlite::params![step_id],
+        ).unwrap();
+
+        let steps = mgr.list_waiting_gate_steps_for_repo("r1").unwrap();
+        assert!(
+            steps.is_empty(),
+            "completed gate steps must not be returned"
         );
     }
 }
