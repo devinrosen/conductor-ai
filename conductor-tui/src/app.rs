@@ -755,8 +755,16 @@ impl App {
                     .iter()
                     .filter_map(|run| {
                         let snapshot = run.definition_snapshot.as_deref()?;
-                        let inputs = parse_workflow_str(snapshot, "").ok()?.inputs;
-                        Some((run.id.clone(), inputs))
+                        match parse_workflow_str(snapshot, "") {
+                            Ok(def) => Some((run.id.clone(), def.inputs)),
+                            Err(e) => {
+                                tracing::warn!(
+                                    run_id = %run.id,
+                                    "failed to parse workflow definition snapshot: {e}"
+                                );
+                                None
+                            }
+                        }
                     })
                     .collect();
                 self.state.data.workflow_runs = payload.workflow_runs;
