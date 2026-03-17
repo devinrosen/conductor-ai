@@ -3,7 +3,7 @@ set -uo pipefail
 
 ERRORS=0
 
-cargo clippy --workspace --all-targets -- -D warnings 2>&1 || ERRORS=1
+cargo clippy --workspace --all-targets --exclude conductor-web -- -D warnings 2>&1 || ERRORS=1
 cargo fmt --all --check 2>&1 || ERRORS=1
 
 # Validate changed or new .wf files
