@@ -3076,7 +3076,9 @@ And here is my actual output:
         // Stale marker must be gone — do-while condition would evaluate false and exit
         let result = state.step_results.get("review-aggregator").unwrap();
         assert!(
-            !result.markers.contains(&"has_blocking_findings".to_string()),
+            !result
+                .markers
+                .contains(&"has_blocking_findings".to_string()),
             "stale has_blocking_findings marker must be cleared after iteration 2"
         );
     }
