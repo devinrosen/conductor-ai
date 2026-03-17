@@ -31,7 +31,7 @@ mod api;
 mod lexer;
 mod parser;
 mod types;
-pub mod validation;
+mod validation;
 
 // Re-export everything that is currently public
 pub use types::{
@@ -46,11 +46,9 @@ pub use api::{
     MAX_WORKFLOW_DEPTH,
 };
 pub(crate) use parser::parse_duration_str;
-#[allow(unused_imports)]
-pub use parser::parse_workflow_file;
 pub use parser::parse_workflow_str;
-#[allow(unused_imports)]
-pub use types::{collect_bot_names, collect_schema_refs, collect_snippet_refs, count_nodes};
+#[cfg(test)]
+pub(crate) use types::{collect_bot_names, collect_schema_refs, collect_snippet_refs, count_nodes};
 pub use validation::{
     validate_script_steps, validate_workflow_semantics, ValidationError, ValidationReport,
 };

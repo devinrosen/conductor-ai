@@ -382,7 +382,7 @@ pub struct AlwaysNode {
 // ---------------------------------------------------------------------------
 
 /// Count the total number of nodes in a node list (for display).
-pub fn count_nodes(nodes: &[WorkflowNode]) -> usize {
+pub(crate) fn count_nodes(nodes: &[WorkflowNode]) -> usize {
     let mut count = 0;
     for node in nodes {
         count += 1;
@@ -438,7 +438,7 @@ pub fn collect_agent_names(nodes: &[WorkflowNode]) -> Vec<AgentRef> {
 }
 
 /// Collect all prompt snippet references (`with` values) from a node tree.
-pub fn collect_snippet_refs(nodes: &[WorkflowNode]) -> Vec<String> {
+pub(crate) fn collect_snippet_refs(nodes: &[WorkflowNode]) -> Vec<String> {
     let mut refs = Vec::new();
     for node in nodes {
         match node {
@@ -484,7 +484,7 @@ pub fn collect_workflow_refs(nodes: &[WorkflowNode]) -> Vec<String> {
 }
 
 /// Collect all output schema references (`output =` values) from a node tree.
-pub fn collect_schema_refs(nodes: &[WorkflowNode]) -> Vec<String> {
+pub(crate) fn collect_schema_refs(nodes: &[WorkflowNode]) -> Vec<String> {
     let mut refs = Vec::new();
     for node in nodes {
         match node {
@@ -517,7 +517,7 @@ pub fn collect_schema_refs(nodes: &[WorkflowNode]) -> Vec<String> {
 }
 
 /// Collect all bot names (`bot_name =` values) from a node tree.
-pub fn collect_bot_names(nodes: &[WorkflowNode]) -> Vec<String> {
+pub(crate) fn collect_bot_names(nodes: &[WorkflowNode]) -> Vec<String> {
     let mut names = Vec::new();
     for node in nodes {
         match node {

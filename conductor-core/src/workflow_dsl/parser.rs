@@ -399,6 +399,25 @@ impl Parser {
         }
     }
 
+    /// Extract the `retries`, `on_fail`, and `bot_name` fields that are shared
+    /// across `call`, `call workflow`, and `script` nodes.
+    ///
+    /// `err_prefix` is prepended to parse errors (e.g. `"script 'foo': "`).
+    fn extract_retries_on_fail_bot_name(
+        kvs: &mut HashMap<String, KvValue>,
+        err_prefix: &str,
+    ) -> std::result::Result<(u32, Option<AgentRef>, Option<String>), String> {
+        let retries = kvs
+            .get("retries")
+            .map(|v| v.as_str().parse::<u32>())
+            .transpose()
+            .map_err(|e| format!("{err_prefix}invalid retries: {e}"))?
+            .unwrap_or(0);
+        let on_fail = kvs.remove("on_fail").map(|v| v.into_agent_ref());
+        let bot_name = kvs.remove("as").map(|v| v.into_string());
+        Ok((retries, on_fail, bot_name))
+    }
+
     fn parse_call(&mut self) -> std::result::Result<CallNode, String> {
         self.expect(&Token::Call)?;
         let agent = self.expect_agent_ref()?;
@@ -414,23 +433,12 @@ impl Parser {
             let mut kvs = self.parse_kvs()?;
             self.expect(&Token::RBrace)?;
 
-            if let Some(r) = kvs.get("retries") {
-                retries = r
-                    .as_str()
-                    .parse()
-                    .map_err(|e| format!("Invalid retries: {e}"))?;
-            }
-            if let Some(f) = kvs.remove("on_fail") {
-                on_fail = Some(f.into_agent_ref());
-            }
+            (retries, on_fail, bot_name) = Self::extract_retries_on_fail_bot_name(&mut kvs, "")?;
             if let Some(o) = kvs.remove("output") {
                 output = Some(o.into_string());
             }
             if let Some(w) = kvs.remove("with") {
                 with = w.into_string_array();
-            }
-            if let Some(b) = kvs.remove("as") {
-                bot_name = Some(b.into_string());
             }
         }
 
@@ -475,18 +483,7 @@ impl Parser {
             kvs.extend(self.parse_kvs()?);
             self.expect(&Token::RBrace)?;
 
-            if let Some(r) = kvs.get("retries") {
-                retries = r
-                    .as_str()
-                    .parse()
-                    .map_err(|e| format!("Invalid retries: {e}"))?;
-            }
-            if let Some(f) = kvs.remove("on_fail") {
-                on_fail = Some(f.into_agent_ref());
-            }
-            if let Some(b) = kvs.remove("as") {
-                bot_name = Some(b.into_string());
-            }
+            (retries, on_fail, bot_name) = Self::extract_retries_on_fail_bot_name(&mut kvs, "")?;
         }
 
         Ok(CallWorkflowNode {
@@ -841,15 +838,8 @@ impl Parser {
             .transpose()
             .map_err(|e| format!("script '{name}': invalid timeout: {e}"))?;
 
-        let retries = kvs
-            .get("retries")
-            .map(|v| v.as_str().parse::<u32>())
-            .transpose()
-            .map_err(|e| format!("script '{name}': invalid retries: {e}"))?
-            .unwrap_or(0);
-
-        let on_fail = kvs.remove("on_fail").map(|v| v.into_agent_ref());
-        let bot_name = kvs.remove("as").map(|v| v.into_string());
+        let (retries, on_fail, bot_name) =
+            Self::extract_retries_on_fail_bot_name(&mut kvs, &format!("script '{name}': "))?;
 
         Ok(ScriptNode {
             name,
@@ -897,7 +887,7 @@ pub(crate) fn parse_duration_str(s: &str) -> std::result::Result<u64, String> {
 // ---------------------------------------------------------------------------
 
 /// Parse a `.wf` file into a `WorkflowDef`.
-pub fn parse_workflow_file(path: &Path) -> Result<WorkflowDef> {
+pub(crate) fn parse_workflow_file(path: &Path) -> Result<WorkflowDef> {
     let content = fs::read_to_string(path)
         .map_err(|e| ConductorError::Workflow(format!("Failed to read {}: {e}", path.display())))?;
 
