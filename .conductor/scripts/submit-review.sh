@@ -140,6 +140,15 @@ echo "${REVIEW_BODY}" > "${REVIEW_BODY_FILE}"
 # ---------------------------------------------------------------------------
 OVERALL_APPROVED=$(echo "${PRIOR_OUTPUT}" | jq -r 'if .overall_approved == false then "false" else "true" end')
 
+# Safety net: if blocking_findings is non-empty, override to REQUEST CHANGES
+# regardless of overall_approved (guards against prompt inconsistency producing
+# overall_approved:true with non-empty blocking_findings)
+HAS_BLOCKING=$(echo "${PRIOR_OUTPUT}" | jq -r 'if (.blocking_findings // [] | length) > 0 then "true" else "false" end')
+if [ "${OVERALL_APPROVED}" = "true" ] && [ "${HAS_BLOCKING}" = "true" ]; then
+  echo "WARNING: overall_approved=true but blocking_findings is non-empty — overriding to REQUEST CHANGES."
+  OVERALL_APPROVED="false"
+fi
+
 if [ "${OVERALL_APPROVED}" = "true" ]; then
   echo "Submitting APPROVE review for PR #${PR_NUMBER}…"
   gh pr review "${PR_NUMBER}" --approve --body-file "${REVIEW_BODY_FILE}"

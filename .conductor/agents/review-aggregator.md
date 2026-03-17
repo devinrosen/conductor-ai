@@ -18,9 +18,11 @@ Steps:
 
 1. Parse all reviewer outputs from prior_contexts:
    - Each entry in `prior_contexts` has `step`, `iteration`, `context` (string), `markers` (array of strings), and `structured_output` (string or null).
-   - Classify the overall result using **markers first** (authoritative), then context strings as fallback:
-     - **Blocking**: Any entry whose `markers` array contains `"has_review_issues"` → that reviewer requested changes.
-     - **Clean**: No entry has `"has_review_issues"` in markers AND no context string clearly signals blocking issues.
+   - Classify the overall result using **markers and findings** (both authoritative), then context strings as fallback:
+     - **Blocking**: Any entry that meets **either** condition:
+       (a) its `markers` array contains `"has_review_issues"`, OR
+       (b) its `structured_output` (parsed as JSON) contains a `.findings[]` entry with `severity` of `"critical"` or `"warning"`.
+     - **Clean**: No entry is blocking AND no context string clearly signals blocking issues.
    - For each reviewer entry, extract off-diff findings as follows:
      - **Primary path**: If `entry.structured_output` is present (non-null), parse it as JSON and read `.off_diff_findings[]` from it. The reviewer schema uses `body` for the finding description — map `body` → `message` in your output.
      - **Fallback path**: If `entry.structured_output` is null or absent, attempt to parse the `context` string as JSON and extract the `off_diff_findings` array (if present).
@@ -77,7 +79,7 @@ Steps:
 
 4. Produce your CONDUCTOR_OUTPUT with the correct structured fields so the workflow engine can derive outcome markers automatically from the schema:
 
-   - Set `overall_approved: true` if **all** reviewers approved (no critical or warning findings). Set `overall_approved: false` if **any** reviewer reported a critical or warning finding.
+   - Set `overall_approved: false` if **any** reviewer is classified as blocking in Phase 1 (i.e. has `has_review_issues` marker OR has critical/warning findings in `structured_output`). Set `overall_approved: true` only if no reviewer is blocking.
    - Populate `blocking_findings` with every critical and warning finding collected across all reviewers. Include warnings here — use `severity: "warning"` for warning-level items and `severity: "critical"` for critical items. Leave the array empty if there are no blocking findings.
    - Set `review_body` to the full formatted markdown string produced in Phase 2 (without the off-diff section).
    - Set `off_diff_findings` to the deduplicated list of off-diff findings collected in Phase 1 (each with `file`, `line`, `severity`, `title`, `message`, `reviewer` fields). Leave the array empty if there are none.
