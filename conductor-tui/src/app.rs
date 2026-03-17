@@ -3124,18 +3124,13 @@ impl App {
             }
             // Mark engine-injected fields as readonly when they have been pre-populated
             for field in &mut fields {
-                if ENGINE_INJECTED_KEYS.contains(&field.label.as_str())
-                    && !field.value.is_empty()
-                {
+                if ENGINE_INJECTED_KEYS.contains(&field.label.as_str()) && !field.value.is_empty() {
                     field.readonly = true;
                     field.manually_edited = false;
                 }
             }
             // Start cursor on the first editable field (or 0 as fallback)
-            let first_editable = fields
-                .iter()
-                .position(|f| !f.readonly)
-                .unwrap_or(0);
+            let first_editable = fields.iter().position(|f| !f.readonly).unwrap_or(0);
             self.state.modal = Modal::Form {
                 title: format!("Inputs for '{}'", def.name),
                 fields,
