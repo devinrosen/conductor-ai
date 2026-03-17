@@ -832,8 +832,7 @@ impl App {
                     })
                     .collect();
                 self.state.data.workflow_runs = payload.workflow_runs;
-                self.state.data.workflow_steps =
-                    collapse_loop_iterations(payload.workflow_steps);
+                self.state.data.workflow_steps = collapse_loop_iterations(payload.workflow_steps);
                 self.state.data.step_agent_events = payload.step_agent_events;
                 self.state.data.step_agent_run = payload.step_agent_run;
                 self.state.data.workflow_run_steps = payload.all_run_steps;
