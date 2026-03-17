@@ -10,7 +10,9 @@ workflow rebase-worktree {
   }
 
   if check-mergeability.has_conflicts {
-    call sync-with-main { output = "sync-result" }
+    script sync-with-main {
+      run = ".conductor/scripts/sync-with-main.sh"
+    }
 
     if sync-with-main.has_conflicts {
       call resolve-conflicts
