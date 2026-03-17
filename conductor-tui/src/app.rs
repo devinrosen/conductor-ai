@@ -2891,8 +2891,9 @@ impl App {
                     remote_url,
                 } => self.submit_add_issue_source(fields, &repo_id, &repo_slug, &remote_url),
                 FormAction::RunWorkflow(action) => {
+                    let inputs = fields.into_iter().map(|f| (f.label, f.value)).collect();
                     self.submit_run_workflow_with_inputs(
-                        fields,
+                        inputs,
                         action.target,
                         action.workflow_def,
                     );
@@ -3074,21 +3075,17 @@ impl App {
                 )),
             };
         } else {
-            self.submit_run_workflow_with_inputs(vec![], target, def);
+            self.submit_run_workflow_with_inputs(prefill, target, def);
         }
     }
 
     fn submit_run_workflow_with_inputs(
         &mut self,
-        fields: Vec<FormField>,
+        inputs: std::collections::HashMap<String, String>,
         target: crate::state::WorkflowPickerTarget,
         def: conductor_core::workflow::WorkflowDef,
     ) {
         use crate::state::WorkflowPickerTarget;
-
-        // Collect inputs from form fields (field label = input name, value = input value)
-        let inputs: std::collections::HashMap<String, String> =
-            fields.into_iter().map(|f| (f.label, f.value)).collect();
 
         match target {
             WorkflowPickerTarget::Worktree {
