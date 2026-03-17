@@ -2139,22 +2139,8 @@ pub fn validate_script_steps(
             }
             Some(resolved) => {
                 #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    if let Ok(meta) = std::fs::metadata(&resolved) {
-                        let mode = meta.permissions().mode();
-                        if mode & 0o111 == 0 {
-                            errors.push(ValidationError {
-                                message: format!(
-                                    "Script step '{}': '{}' is not executable (mode {:04o})",
-                                    node.name,
-                                    resolved.display(),
-                                    mode & 0o777,
-                                ),
-                                hint: Some(format!("Run: chmod +x {}", resolved.display())),
-                            });
-                        }
-                    }
+                if let Some(err) = check_script_unix_permissions(&node.name, &resolved) {
+                    errors.push(err);
                 }
                 #[cfg(not(unix))]
                 {
@@ -2165,6 +2151,45 @@ pub fn validate_script_steps(
     }
 
     errors
+}
+
+/// Check Unix execute permissions for a resolved script path.
+///
+/// Returns a `ValidationError` if `fs::metadata` fails or the file lacks the
+/// execute bit; returns `None` if the file is executable.
+#[cfg(unix)]
+fn check_script_unix_permissions(
+    step_name: &str,
+    resolved: &std::path::Path,
+) -> Option<ValidationError> {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::metadata(resolved) {
+        Err(e) => Some(ValidationError {
+            message: format!(
+                "Script step '{}': could not read metadata for '{}': {}",
+                step_name,
+                resolved.display(),
+                e,
+            ),
+            hint: None,
+        }),
+        Ok(meta) => {
+            let mode = meta.permissions().mode();
+            if mode & 0o111 == 0 {
+                Some(ValidationError {
+                    message: format!(
+                        "Script step '{}': '{}' is not executable (mode {:04o})",
+                        step_name,
+                        resolved.display(),
+                        mode & 0o777,
+                    ),
+                    hint: Some(format!("Run: chmod +x {}", resolved.display())),
+                })
+            } else {
+                None
+            }
+        }
+    }
 }
 
 /// Recursively collect all `ScriptNode` references from a node list.
@@ -5045,6 +5070,34 @@ workflow w {
             "error should mention not executable, got: {msg}"
         );
         assert!(errors[0].hint.is_some(), "should include a chmod hint");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_check_script_unix_permissions_metadata_error() {
+        // A path that does not exist causes fs::metadata to fail, exercising the
+        // Err(e) branch added in #889.
+        let err = check_script_unix_permissions(
+            "my-step",
+            std::path::Path::new("/nonexistent/path/to/script.sh"),
+        );
+        assert!(
+            err.is_some(),
+            "missing path should produce a validation error"
+        );
+        let msg = &err.unwrap().message;
+        assert!(
+            msg.contains("could not read metadata"),
+            "error should mention metadata failure, got: {msg}"
+        );
+        assert!(
+            msg.contains("my-step"),
+            "error should include the step name, got: {msg}"
+        );
+        assert!(
+            msg.contains("/nonexistent/path/to/script.sh"),
+            "error should include the path, got: {msg}"
+        );
     }
 
     #[test]
