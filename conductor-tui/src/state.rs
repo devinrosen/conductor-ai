@@ -1018,8 +1018,20 @@ fn push_steps_for_run(
         return;
     }
     if let Some(steps) = workflow_run_steps.get(run_id) {
-        let max_iter = steps.iter().map(|s| s.iteration).max().unwrap_or(0);
-        let mut ordered: Vec<_> = steps.iter().filter(|s| s.iteration == max_iter).collect();
+        // Use per-step-name max iteration, matching collapse_loop_iterations in app.rs, so
+        // the detail panel and the tree show consistent steps for partially-completed loops.
+        let mut max_iter_by_name: std::collections::HashMap<&str, i64> =
+            std::collections::HashMap::new();
+        for s in steps {
+            let e = max_iter_by_name.entry(s.step_name.as_str()).or_insert(0);
+            if s.iteration > *e {
+                *e = s.iteration;
+            }
+        }
+        let mut ordered: Vec<_> = steps
+            .iter()
+            .filter(|s| s.iteration == *max_iter_by_name.get(s.step_name.as_str()).unwrap_or(&0))
+            .collect();
         ordered.sort_by_key(|s| s.position);
         let mut seen_groups: std::collections::HashSet<String> = std::collections::HashSet::new();
         for step in &ordered {
@@ -1782,7 +1794,7 @@ impl AppState {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use conductor_core::agent::AgentRunEvent;
 
@@ -2871,7 +2883,7 @@ mod tests {
         assert_eq!(state.dashboard_index, 2);
     }
 
-    fn make_iter_step(
+    pub(crate) fn make_iter_step(
         run_id: &str,
         step_name: &str,
         iteration: i64,
@@ -2972,6 +2984,37 @@ mod tests {
         let mut rows = vec![];
         push_steps_for_run("run1", 1, &mut rows, &expanded, &map);
         assert_eq!(rows.len(), 3);
+    }
+
+    #[test]
+    fn push_steps_for_run_partial_loop_uses_per_step_max() {
+        // step-a ran in iter 0 and iter 1; step-b only ran in iter 0 (loop still in progress).
+        // Per-step-name max: step-a shows iter 1, step-b shows iter 0 (not hidden).
+        let steps = vec![
+            make_iter_step("run1", "step-a", 0, 0),
+            make_iter_step("run1", "step-b", 0, 1),
+            make_iter_step("run1", "step-a", 1, 0),
+        ];
+        let mut map = std::collections::HashMap::new();
+        map.insert("run1".to_string(), steps);
+
+        let mut expanded = std::collections::HashSet::new();
+        expanded.insert("run1".to_string());
+
+        let mut rows = vec![];
+        push_steps_for_run("run1", 1, &mut rows, &expanded, &map);
+
+        // Both steps should be visible (step-b is NOT dropped just because global max is 1).
+        assert_eq!(rows.len(), 2, "both steps should appear");
+        let names: Vec<_> = rows
+            .iter()
+            .map(|r| match r {
+                WorkflowRunRow::Step { step_name, .. } => step_name.clone(),
+                other => panic!("unexpected row: {other:?}"),
+            })
+            .collect();
+        assert!(names.contains(&"step-a".to_string()));
+        assert!(names.contains(&"step-b".to_string()));
     }
 
     #[test]

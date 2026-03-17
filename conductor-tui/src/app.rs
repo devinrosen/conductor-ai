@@ -6676,34 +6676,7 @@ mod tests {
         iteration: i64,
         position: i64,
     ) -> conductor_core::workflow::WorkflowRunStep {
-        conductor_core::workflow::WorkflowRunStep {
-            id: format!("{step_name}-iter{iteration}"),
-            workflow_run_id: "run1".to_string(),
-            step_name: step_name.to_string(),
-            role: "agent".to_string(),
-            can_commit: false,
-            condition_expr: None,
-            status: conductor_core::workflow::WorkflowStepStatus::Completed,
-            child_run_id: None,
-            position,
-            started_at: None,
-            ended_at: None,
-            result_text: None,
-            condition_met: None,
-            iteration,
-            parallel_group_id: None,
-            context_out: None,
-            markers_out: None,
-            retry_count: 0,
-            gate_type: None,
-            gate_prompt: None,
-            gate_timeout: None,
-            gate_approved_by: None,
-            gate_approved_at: None,
-            gate_feedback: None,
-            structured_output: None,
-            output_file: None,
-        }
+        crate::state::tests::make_iter_step("run1", step_name, iteration, position)
     }
 
     #[test]
