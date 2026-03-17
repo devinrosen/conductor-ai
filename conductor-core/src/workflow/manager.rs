@@ -42,7 +42,7 @@ impl<'a> WorkflowManager<'a> {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(active_strings.iter()), |row| {
             let repo_id: String = row.get(0)?;
             let status: String = row.get(1)?;
@@ -1187,11 +1187,14 @@ impl<'a> WorkflowManager<'a> {
             ),
             None => ("", ""),
         };
-        let active_in: String = WorkflowRunStatus::ACTIVE
+        let active_strings: Vec<String> = WorkflowRunStatus::ACTIVE
             .iter()
-            .map(|s| format!("'{s}'"))
-            .collect::<Vec<_>>()
-            .join(", ");
+            .map(|s| s.to_string())
+            .collect();
+        let active_placeholders = match repo_id {
+            Some(_) => sql_placeholders_from(WorkflowRunStatus::ACTIVE.len(), 2),
+            None => sql_placeholders(WorkflowRunStatus::ACTIVE.len()),
+        };
         let sql = format!(
             "SELECT {cols}, r.workflow_name, r.target_label \
              FROM workflow_run_steps s \
@@ -1201,14 +1204,27 @@ impl<'a> WorkflowManager<'a> {
              ORDER BY s.started_at",
             cols = &*STEP_COLUMNS_WITH_PREFIX,
             ej = extra_join,
-            ai = active_in,
+            ai = active_placeholders,
             ew = extra_where,
         );
         match repo_id {
             Some(id) => {
-                crate::db::query_collect(self.conn, &sql, [id], waiting_gate_step_row_mapper)
+                let mut all_params: Vec<rusqlite::types::Value> =
+                    vec![rusqlite::types::Value::Text(id.to_owned())];
+                all_params.extend(active_strings.into_iter().map(rusqlite::types::Value::Text));
+                crate::db::query_collect(
+                    self.conn,
+                    &sql,
+                    rusqlite::params_from_iter(all_params.iter()),
+                    waiting_gate_step_row_mapper,
+                )
             }
-            None => crate::db::query_collect(self.conn, &sql, [], waiting_gate_step_row_mapper),
+            None => crate::db::query_collect(
+                self.conn,
+                &sql,
+                rusqlite::params_from_iter(active_strings.iter()),
+                waiting_gate_step_row_mapper,
+            ),
         }
     }
 
