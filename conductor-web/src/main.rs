@@ -54,6 +54,7 @@ async fn main() -> Result<()> {
         db: Arc::new(Mutex::new(conn)),
         config: Arc::new(RwLock::new(config)),
         events: EventBus::new(64),
+        workflow_done_notify: None,
     };
 
     // Spawn a background task that periodically reaps orphaned runs and

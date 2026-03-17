@@ -229,6 +229,7 @@ mod tests {
             db: Arc::new(Mutex::new(conn)),
             config: Arc::new(RwLock::new(Config::default())),
             events: EventBus::new(1),
+            workflow_done_notify: None,
         }
     }
 

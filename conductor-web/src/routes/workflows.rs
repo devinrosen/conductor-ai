@@ -313,6 +313,10 @@ pub async fn run_workflow(
                 });
             }
         }
+
+        if let Some(notify) = &state_clone.workflow_done_notify {
+            notify.notify_one();
+        }
     });
 
     Ok((
@@ -620,6 +624,7 @@ mod tests {
             db: Arc::new(Mutex::new(conn)),
             config: Arc::new(RwLock::new(Config::default())),
             events: EventBus::new(1),
+            workflow_done_notify: None,
         }
     }
 
@@ -1006,7 +1011,11 @@ mod tests {
         .unwrap();
         let wt_path = tmp.path().to_str().unwrap().to_string();
 
-        let state = empty_state();
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let state = AppState {
+            workflow_done_notify: Some(Arc::clone(&notify)),
+            ..empty_state()
+        };
         {
             let db = state.db.lock().await;
             db.execute_batch(&format!(
@@ -1042,22 +1051,19 @@ mod tests {
             "run_workflow must return 202 Accepted"
         );
 
-        // Poll until the background task writes the workflow_runs record (or 5 s timeout).
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        let count = loop {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            let db = state.db.lock().await;
-            let n: i64 = db
-                .query_row(
-                    "SELECT COUNT(*) FROM workflow_runs WHERE workflow_name = 'noop'",
-                    [],
-                    |r| r.get(0),
-                )
-                .unwrap();
-            if n > 0 || tokio::time::Instant::now() >= deadline {
-                break n;
-            }
-        };
+        // Wait deterministically for the background task to signal completion.
+        tokio::time::timeout(std::time::Duration::from_secs(5), notify.notified())
+            .await
+            .expect("run_workflow background task did not complete within 5 s");
+
+        let db = state.db.lock().await;
+        let count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM workflow_runs WHERE workflow_name = 'noop'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(
             count, 1,
             "handler must invoke execute_workflow — no workflow_runs row found for 'noop'"
