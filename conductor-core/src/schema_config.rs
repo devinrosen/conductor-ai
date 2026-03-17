@@ -512,13 +512,39 @@ pub struct StructuredOutput {
     pub json_string: String,
 }
 
+/// Find the start position of the real `<<<CONDUCTOR_OUTPUT>>>` block.
+///
+/// Returns the position of the last occurrence of `marker` where the immediately
+/// following content (after trimming whitespace) starts with `{`, `[`, or a markdown
+/// code fence (`` ` ``). This is the real block delimiter because:
+/// - Occurrences inside sentences or code examples are not followed by JSON
+/// - Occurrences inside a JSON field value appear mid-string, not at a JSON boundary
+/// - The real block start is always immediately followed by JSON or a code-fenced JSON block
+pub(crate) fn find_conductor_output_start(text: &str, marker: &str) -> Option<usize> {
+    let mut last_valid = None;
+    let mut search_pos = 0;
+    while let Some(rel) = text[search_pos..].find(marker) {
+        let abs = search_pos + rel;
+        let after = text[abs + marker.len()..].trim_start();
+        if after.starts_with('{') || after.starts_with('[') || after.starts_with('`') {
+            last_valid = Some(abs);
+        }
+        search_pos = abs + 1;
+    }
+    last_valid
+}
+
 /// Parse the `<<<CONDUCTOR_OUTPUT>>>` block as structured JSON, validate against
 /// the schema, and derive markers.
 pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<StructuredOutput> {
     let start_marker = "<<<CONDUCTOR_OUTPUT>>>";
     let end_marker = "<<<END_CONDUCTOR_OUTPUT>>>";
 
-    let start = text.find(start_marker).ok_or_else(|| {
+    // Find the last occurrence of the start marker where the immediately following content
+    // (after trimming whitespace) starts with `{` or `[`. This correctly handles agent output
+    // that contains the marker in code examples, grep output, or JSON field values — all of
+    // which are not followed by a JSON object/array.
+    let start = find_conductor_output_start(text, start_marker).ok_or_else(|| {
         ConductorError::Schema("No <<<CONDUCTOR_OUTPUT>>> block found in agent output".to_string())
     })?;
     let json_start = start + start_marker.len();
@@ -560,7 +586,7 @@ pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<Stru
 }
 
 /// Strip markdown code fences (```json ... ```) from the output.
-fn strip_code_fences(s: &str) -> String {
+pub(crate) fn strip_code_fences(s: &str) -> String {
     let s = s.trim();
     // Handle ```json\n...\n``` or ```\n...\n```
     if let Some(rest) = s.strip_prefix("```") {
@@ -1804,8 +1830,71 @@ fields:
         assert!(issues.is_empty());
     }
 
-    /// Regression test: when a field value contains the start marker string,
-    /// `find` (not `rfind`) must be used so the real delimiter is found first.
+    /// Marker appears in code examples before the real block — structured path must find the real block.
+    #[test]
+    fn test_parse_structured_output_skips_code_examples() {
+        let schema_yaml = "fields:\n  summary: string\n";
+        let schema = parse_schema_content(schema_yaml, "test").unwrap();
+
+        let text = r#"Here is how to emit output:
+```bash
+echo '<<<CONDUCTOR_OUTPUT>>>'
+echo '{"summary": "fake"}'
+echo '<<<END_CONDUCTOR_OUTPUT>>>'
+```
+
+Actual output:
+<<<CONDUCTOR_OUTPUT>>>
+{"summary": "real result"}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let result = parse_structured_output(text, &schema).unwrap();
+        assert_eq!(result.context, "real result");
+    }
+
+    /// Multiple complete blocks before the real one — structured path must find the last valid block.
+    #[test]
+    fn test_parse_structured_output_multiple_complete_blocks() {
+        let schema_yaml = "fields:\n  summary: string\n";
+        let schema = parse_schema_content(schema_yaml, "test").unwrap();
+
+        let text = r#"Example 1:
+<<<CONDUCTOR_OUTPUT>>>
+{"summary": "first example"}
+<<<END_CONDUCTOR_OUTPUT>>>
+
+Example 2:
+<<<CONDUCTOR_OUTPUT>>>
+{"summary": "second example"}
+<<<END_CONDUCTOR_OUTPUT>>>
+
+Real output:
+<<<CONDUCTOR_OUTPUT>>>
+{"summary": "the actual result"}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let result = parse_structured_output(text, &schema).unwrap();
+        assert_eq!(result.context, "the actual result");
+    }
+
+    /// Output block wrapped in a markdown code fence — structured path must strip fences.
+    #[test]
+    fn test_parse_structured_output_code_fenced() {
+        let schema_yaml = "fields:\n  summary: string\n";
+        let schema = parse_schema_content(schema_yaml, "test").unwrap();
+
+        let text = r#"Here is my output:
+<<<CONDUCTOR_OUTPUT>>>
+```json
+{"summary": "fenced result"}
+```
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let result = parse_structured_output(text, &schema).unwrap();
+        assert_eq!(result.context, "fenced result");
+    }
+
+    /// Regression: when a field value contains the start marker string, the real block is still found.
     #[test]
     fn test_parse_structured_output_marker_in_field_value() {
         let schema_yaml = r#"

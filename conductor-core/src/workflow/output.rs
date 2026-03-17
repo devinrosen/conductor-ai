@@ -12,17 +12,22 @@ pub struct ConductorOutput {
 }
 
 /// Parse the `<<<CONDUCTOR_OUTPUT>>>` block from agent result text.
-/// Finds the *first* occurrence — the real block delimiter always comes before any JSON content.
+/// Finds the last occurrence immediately followed by `{`, `[`, or a code fence — the real block
+/// delimiter. Strips markdown code fences before JSON parsing. This correctly skips occurrences
+/// inside code examples, grep output, and JSON field values.
 pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
     let start_marker = "<<<CONDUCTOR_OUTPUT>>>";
     let end_marker = "<<<END_CONDUCTOR_OUTPUT>>>";
 
-    let start = text.find(start_marker)?;
+    let start = crate::schema_config::find_conductor_output_start(text, start_marker)?;
     let json_start = start + start_marker.len();
     let end = text[json_start..].find(end_marker)?;
     let json_str = text[json_start..json_start + end].trim();
 
-    serde_json::from_str(json_str).ok()
+    // Strip markdown code fences (e.g. ```json\n...\n```) that agents sometimes wrap around output
+    let cleaned = crate::schema_config::strip_code_fences(json_str);
+
+    serde_json::from_str(&cleaned).ok()
 }
 
 /// Interpret agent output using a schema (if present) or generic `CONDUCTOR_OUTPUT` parsing.
@@ -65,8 +70,7 @@ pub(super) fn interpret_agent_output(
 mod tests {
     use super::*;
 
-    /// Regression test: when the context field value contains the start marker string,
-    /// `find` (not `rfind`) must be used so the real delimiter is found first.
+    /// Marker appears inside a JSON field value — must still find the real block.
     #[test]
     fn test_parse_conductor_output_marker_in_field_value() {
         let text = r#"Some agent output.
@@ -80,5 +84,63 @@ mod tests {
         let result = parse_conductor_output(text).unwrap();
         assert_eq!(result.markers, vec!["done"]);
         assert!(result.context.contains("<<<CONDUCTOR_OUTPUT>>>"));
+    }
+
+    /// Marker appears in code examples before the real block — must find the real block.
+    #[test]
+    fn test_parse_conductor_output_skips_code_examples() {
+        let text = r#"Here is how to emit output:
+```bash
+echo '<<<CONDUCTOR_OUTPUT>>>'
+echo '{"markers": ["fake"], "context": "example"}'
+echo '<<<END_CONDUCTOR_OUTPUT>>>'
+```
+
+Actual output:
+<<<CONDUCTOR_OUTPUT>>>
+{"markers": ["real"], "context": "this is the real result"}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let result = parse_conductor_output(text).unwrap();
+        assert_eq!(result.markers, vec!["real"]);
+        assert_eq!(result.context, "this is the real result");
+    }
+
+    /// Multiple complete example blocks before the real one — must find the last real block.
+    #[test]
+    fn test_parse_conductor_output_multiple_complete_blocks() {
+        let text = r#"Example 1:
+<<<CONDUCTOR_OUTPUT>>>
+{"markers": ["example1"], "context": "first example"}
+<<<END_CONDUCTOR_OUTPUT>>>
+
+Example 2:
+<<<CONDUCTOR_OUTPUT>>>
+{"markers": ["example2"], "context": "second example"}
+<<<END_CONDUCTOR_OUTPUT>>>
+
+Real output:
+<<<CONDUCTOR_OUTPUT>>>
+{"markers": ["real"], "context": "the actual result"}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let result = parse_conductor_output(text).unwrap();
+        assert_eq!(result.markers, vec!["real"]);
+        assert_eq!(result.context, "the actual result");
+    }
+
+    /// Output block wrapped in a markdown code fence — must strip fences before parsing.
+    #[test]
+    fn test_parse_conductor_output_code_fenced() {
+        let text = r#"Here is my output:
+<<<CONDUCTOR_OUTPUT>>>
+```json
+{"markers": ["done"], "context": "fenced result"}
+```
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let result = parse_conductor_output(text).unwrap();
+        assert_eq!(result.markers, vec!["done"]);
+        assert_eq!(result.context, "fenced result");
     }
 }

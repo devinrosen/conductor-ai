@@ -652,9 +652,8 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_conductor_output_first_occurrence() {
-        // Should find the FIRST occurrence — the real block delimiter always comes before
-        // the JSON content where a false match (e.g. the marker in a field value) could appear.
+    fn test_parse_conductor_output_marker_in_field_value() {
+        // The real block has the marker string inside a field value — must still parse correctly.
         let text = r#"The agent output block:
 <<<CONDUCTOR_OUTPUT>>>
 {"markers": ["real"], "context": "actual output with <<<CONDUCTOR_OUTPUT>>> mentioned inside"}
