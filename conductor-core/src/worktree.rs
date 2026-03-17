@@ -1895,4 +1895,52 @@ mod tests {
 
         assert_eq!(*WORKTREE_COLUMNS_W, expected);
     }
+
+    #[test]
+    fn test_get_by_ids_empty_returns_empty_vec() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+        // Empty slice must not produce an `IN ()` SQL syntax error
+        let result = mgr.get_by_ids(&[]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_by_ids_returns_matching_worktrees() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt1', 'r1', 'feat-a', 'feat/a', '/tmp/ws/feat-a', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt2', 'r1', 'feat-b', 'feat/b', '/tmp/ws/feat-b', 'active', '2024-01-02T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('wt3', 'r1', 'feat-c', 'feat/c', '/tmp/ws/feat-c', 'active', '2024-01-03T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+
+        // Fetch two of the three; the third must not appear
+        let mut result = mgr.get_by_ids(&["wt1", "wt2"]).unwrap();
+        result.sort_by(|a, b| a.id.cmp(&b.id));
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id, "wt1");
+        assert_eq!(result[1].id, "wt2");
+
+        // Nonexistent ID returns nothing extra
+        let result = mgr.get_by_ids(&["nonexistent"]).unwrap();
+        assert!(result.is_empty());
+    }
 }
