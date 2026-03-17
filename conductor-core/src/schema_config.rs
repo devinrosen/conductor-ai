@@ -1830,6 +1830,70 @@ fields:
         assert!(issues.is_empty());
     }
 
+    /// Marker appears in code examples before the real block — structured path must find the real block.
+    #[test]
+    fn test_parse_structured_output_skips_code_examples() {
+        let schema_yaml = "fields:\n  summary: string\n";
+        let schema = parse_schema_content(schema_yaml, "test").unwrap();
+
+        let text = r#"Here is how to emit output:
+```bash
+echo '<<<CONDUCTOR_OUTPUT>>>'
+echo '{"summary": "fake"}'
+echo '<<<END_CONDUCTOR_OUTPUT>>>'
+```
+
+Actual output:
+<<<CONDUCTOR_OUTPUT>>>
+{"summary": "real result"}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let result = parse_structured_output(text, &schema).unwrap();
+        assert_eq!(result.context, "real result");
+    }
+
+    /// Multiple complete blocks before the real one — structured path must find the last valid block.
+    #[test]
+    fn test_parse_structured_output_multiple_complete_blocks() {
+        let schema_yaml = "fields:\n  summary: string\n";
+        let schema = parse_schema_content(schema_yaml, "test").unwrap();
+
+        let text = r#"Example 1:
+<<<CONDUCTOR_OUTPUT>>>
+{"summary": "first example"}
+<<<END_CONDUCTOR_OUTPUT>>>
+
+Example 2:
+<<<CONDUCTOR_OUTPUT>>>
+{"summary": "second example"}
+<<<END_CONDUCTOR_OUTPUT>>>
+
+Real output:
+<<<CONDUCTOR_OUTPUT>>>
+{"summary": "the actual result"}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let result = parse_structured_output(text, &schema).unwrap();
+        assert_eq!(result.context, "the actual result");
+    }
+
+    /// Output block wrapped in a markdown code fence — structured path must strip fences.
+    #[test]
+    fn test_parse_structured_output_code_fenced() {
+        let schema_yaml = "fields:\n  summary: string\n";
+        let schema = parse_schema_content(schema_yaml, "test").unwrap();
+
+        let text = r#"Here is my output:
+<<<CONDUCTOR_OUTPUT>>>
+```json
+{"summary": "fenced result"}
+```
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let result = parse_structured_output(text, &schema).unwrap();
+        assert_eq!(result.context, "fenced result");
+    }
+
     /// Regression: when a field value contains the start marker string, the real block is still found.
     #[test]
     fn test_parse_structured_output_marker_in_field_value() {
