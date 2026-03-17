@@ -136,6 +136,9 @@ pub enum WorkflowRunRow {
         run_id: String,
         collapsed: bool,
         child_count: usize,
+        /// Highest `iteration` value seen across all steps for this run (0-indexed).
+        /// 0 means either a single-pass run or steps not yet loaded.
+        max_iteration: i64,
     },
     Child {
         run_id: String,
@@ -147,6 +150,9 @@ pub enum WorkflowRunRow {
         collapsed: bool,
         /// Number of direct children (0 = leaf).
         child_count: usize,
+        /// Highest `iteration` value seen across all steps for this run (0-indexed).
+        /// 0 means either a single-pass run or steps not yet loaded.
+        max_iteration: i64,
     },
     /// An individual step of a leaf run, shown when the user expands the run.
     Step {
@@ -1012,7 +1018,8 @@ fn push_steps_for_run(
         return;
     }
     if let Some(steps) = workflow_run_steps.get(run_id) {
-        let mut ordered: Vec<_> = steps.iter().collect();
+        let max_iter = steps.iter().map(|s| s.iteration).max().unwrap_or(0);
+        let mut ordered: Vec<_> = steps.iter().filter(|s| s.iteration == max_iter).collect();
         ordered.sort_by_key(|s| s.position);
         let mut seen_groups: std::collections::HashSet<String> = std::collections::HashSet::new();
         for step in &ordered {
@@ -1104,12 +1111,17 @@ fn push_children(
     for child in children {
         let child_count = children_map.get(child.id.as_str()).map_or(0, |v| v.len());
         let collapsed = collapsed_ids.contains(&child.id);
+        let max_iteration = workflow_run_steps
+            .get(child.id.as_str())
+            .map(|steps| steps.iter().map(|s| s.iteration).max().unwrap_or(0))
+            .unwrap_or(0);
         rows.push(WorkflowRunRow::Child {
             run_id: child.id.clone(),
             parent_id: parent_id.to_string(),
             depth,
             collapsed,
             child_count,
+            max_iteration,
         });
         if !collapsed {
             if child_count == 0 {
@@ -1435,10 +1447,17 @@ impl AppState {
 
                 let child_count = children_map.get(run.id.as_str()).map_or(0, |v| v.len());
                 let collapsed = self.collapsed_workflow_run_ids.contains(&run.id);
+                let max_iteration = self
+                    .data
+                    .workflow_run_steps
+                    .get(run.id.as_str())
+                    .map(|steps| steps.iter().map(|s| s.iteration).max().unwrap_or(0))
+                    .unwrap_or(0);
                 result.push(WorkflowRunRow::Parent {
                     run_id: run.id.clone(),
                     collapsed,
                     child_count,
+                    max_iteration,
                 });
                 if !collapsed {
                     if child_count == 0 {
@@ -1583,10 +1602,17 @@ impl AppState {
                     }
                     let child_count = children_map.get(run.id.as_str()).map_or(0, |v| v.len());
                     let collapsed = self.collapsed_workflow_run_ids.contains(&run.id);
+                    let max_iteration = self
+                        .data
+                        .workflow_run_steps
+                        .get(run.id.as_str())
+                        .map(|steps| steps.iter().map(|s| s.iteration).max().unwrap_or(0))
+                        .unwrap_or(0);
                     result.push(WorkflowRunRow::Parent {
                         run_id: run.id.clone(),
                         collapsed,
                         child_count,
+                        max_iteration,
                     });
                     if !collapsed {
                         if child_count == 0 {
@@ -2094,7 +2120,7 @@ mod tests {
         let rows = state.visible_workflow_run_rows();
         assert_eq!(rows.len(), 1);
         assert!(
-            matches!(&rows[0], WorkflowRunRow::Parent { run_id, child_count: 0, collapsed: false } if run_id == "p1")
+            matches!(&rows[0], WorkflowRunRow::Parent { run_id, child_count: 0, collapsed: false, .. } if run_id == "p1")
         );
     }
 
@@ -2109,7 +2135,7 @@ mod tests {
         let rows = state.visible_workflow_run_rows();
         assert_eq!(rows.len(), 2);
         assert!(
-            matches!(&rows[0], WorkflowRunRow::Parent { run_id, child_count: 1, collapsed: false } if run_id == "p1")
+            matches!(&rows[0], WorkflowRunRow::Parent { run_id, child_count: 1, collapsed: false, .. } if run_id == "p1")
         );
         assert!(matches!(&rows[1], WorkflowRunRow::Child { run_id, .. } if run_id == "c1"));
     }
@@ -2126,7 +2152,7 @@ mod tests {
         let rows = state.visible_workflow_run_rows();
         assert_eq!(rows.len(), 1);
         assert!(
-            matches!(&rows[0], WorkflowRunRow::Parent { run_id, child_count: 1, collapsed: true } if run_id == "p1")
+            matches!(&rows[0], WorkflowRunRow::Parent { run_id, child_count: 1, collapsed: true, .. } if run_id == "p1")
         );
     }
 

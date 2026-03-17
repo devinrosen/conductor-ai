@@ -242,6 +242,22 @@ fn build_form_fields(inputs: &[conductor_core::workflow::InputDecl]) -> Vec<Form
         .collect()
 }
 
+/// Filter `steps` to only those from the latest iteration for each `step_name`.
+/// Keeps `workflow_step_index` valid since it's an index into the filtered list.
+fn collapse_loop_iterations(
+    mut steps: Vec<conductor_core::workflow::WorkflowRunStep>,
+) -> Vec<conductor_core::workflow::WorkflowRunStep> {
+    let mut max_iter: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    for s in &steps {
+        let e = max_iter.entry(s.step_name.clone()).or_insert(0);
+        if s.iteration > *e {
+            *e = s.iteration;
+        }
+    }
+    steps.retain(|s| s.iteration == *max_iter.get(&s.step_name).unwrap_or(&0));
+    steps
+}
+
 pub struct App {
     state: AppState,
     conn: Connection,
@@ -816,7 +832,8 @@ impl App {
                     })
                     .collect();
                 self.state.data.workflow_runs = payload.workflow_runs;
-                self.state.data.workflow_steps = payload.workflow_steps;
+                self.state.data.workflow_steps =
+                    collapse_loop_iterations(payload.workflow_steps);
                 self.state.data.step_agent_events = payload.step_agent_events;
                 self.state.data.step_agent_run = payload.step_agent_run;
                 self.state.data.workflow_run_steps = payload.all_run_steps;
@@ -5378,7 +5395,8 @@ impl App {
 
         if let Some(ref run_id) = self.state.selected_workflow_run_id {
             let wf_mgr = WorkflowManager::new(&self.conn);
-            self.state.data.workflow_steps = wf_mgr.get_workflow_steps(run_id).unwrap_or_default();
+            self.state.data.workflow_steps =
+                collapse_loop_iterations(wf_mgr.get_workflow_steps(run_id).unwrap_or_default());
         } else {
             self.state.data.workflow_steps.clear();
         }

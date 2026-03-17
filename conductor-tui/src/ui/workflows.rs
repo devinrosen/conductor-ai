@@ -1003,6 +1003,7 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                     collapsed,
                     child_count,
                     run_id,
+                    max_iteration,
                     ..
                 } => {
                     // Prefix: collapse toggle indicator.
@@ -1058,6 +1059,13 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         Style::default().fg(state.theme.label_accent),
                     ));
 
+                    if *max_iteration > 0 {
+                        spans.push(Span::styled(
+                            format!("  (iter {})", max_iteration + 1),
+                            Style::default().fg(state.theme.label_accent),
+                        ));
+                    }
+
                     // Child count badge when collapsed.
                     if *collapsed && *child_count > 0 {
                         spans.push(Span::styled(
@@ -1082,6 +1090,7 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                     depth,
                     collapsed,
                     child_count,
+                    max_iteration,
                     ..
                 } => {
                     let base_indent = if global_mode {
@@ -1117,6 +1126,13 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                             Style::default().fg(state.theme.label_accent),
                         ),
                     ];
+
+                    if *max_iteration > 0 {
+                        spans.push(Span::styled(
+                            format!("  (iter {})", max_iteration + 1),
+                            Style::default().fg(state.theme.label_accent),
+                        ));
+                    }
 
                     if *collapsed && *child_count > 0 {
                         spans.push(Span::styled(
@@ -1461,7 +1477,7 @@ fn render_step_list(
 
                 if step.iteration > 0 {
                     spans.push(Span::styled(
-                        format!("  iter:{}", step.iteration),
+                        format!("  (iter {})", step.iteration + 1),
                         Style::default().fg(state.theme.label_accent),
                     ));
                 }
