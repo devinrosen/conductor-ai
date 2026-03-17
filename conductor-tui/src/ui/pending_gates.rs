@@ -5,6 +5,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
 use crate::state::AppState;
+use crate::ui::common::truncate;
 
 /// Render the Pending Gates pane in the right workflow column.
 /// Returns early (renders nothing) when there are no pending gates.
@@ -29,18 +30,7 @@ pub fn render_pending_gates(frame: &mut Frame, area: Rect, state: &AppState, foc
                 .as_deref()
                 .or(gate.target_label.as_deref())
                 .unwrap_or("");
-            let location_display = if location.chars().count() > 28 {
-                format!(
-                    "{}\u{2026}",
-                    &location[..location
-                        .char_indices()
-                        .nth(28)
-                        .map(|(i, _)| i)
-                        .unwrap_or(location.len())]
-                )
-            } else {
-                location.to_string()
-            };
+            let location_display = truncate(location, 31);
 
             // Look up PR number from already-loaded detail_prs by matching head_ref_name
             let pr_ref = gate.branch.as_deref().and_then(|branch| {

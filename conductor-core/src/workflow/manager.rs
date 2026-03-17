@@ -2512,6 +2512,42 @@ mod tests {
     }
 
     #[test]
+    fn test_list_waiting_gate_steps_for_repo_ticket_ref_populated() {
+        // When the workflow run has a linked ticket, ticket_ref must be the ticket's source_id.
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let run = create_worktree_run(&conn, "w1");
+
+        // Insert a ticket and link it to the workflow run.
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES ('ticket-1', 'r1', 'github', '42', 'Fix bug', '', 'open', '[]', '', '2024-01-01T00:00:00Z', '{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET ticket_id = 'ticket-1' WHERE id = ?1",
+            [&run.id],
+        )
+        .unwrap();
+
+        let step_id = mgr
+            .insert_step(&run.id, "approval-gate", "gate", false, 0, 0)
+            .unwrap();
+        mgr.set_step_gate_info(&step_id, "human", None, "1h")
+            .unwrap();
+        set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
+
+        let steps = mgr.list_waiting_gate_steps_for_repo("r1").unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(
+            steps[0].ticket_ref.as_deref(),
+            Some("42"),
+            "ticket_ref must be the ticket's source_id"
+        );
+    }
+
+    #[test]
     fn test_list_waiting_gate_steps_for_repo_excludes_other_repo() {
         // Gate steps from r2 must not appear when querying r1, and vice versa.
         let conn = setup_db();
