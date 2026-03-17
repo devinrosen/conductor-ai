@@ -1726,8 +1726,7 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
 
     // Condvar-based notification: the workflow engine writes the run ID here and
     // signals the condvar once the run record is created (before any steps execute).
-    let notify_pair: RunIdSlot =
-        Arc::new((Mutex::new(None), std::sync::Condvar::new()));
+    let notify_pair: RunIdSlot = Arc::new((Mutex::new(None), std::sync::Condvar::new()));
 
     // Fire-and-forget: execute in a background thread
     let standalone = WorkflowExecStandalone {
