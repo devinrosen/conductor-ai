@@ -14,7 +14,6 @@ fields:
       line: number
       severity: enum(critical, warning)
       message: string
-  suggestion_count: number
   overall_approved: boolean
   summary: string
   review_body: string
@@ -23,7 +22,7 @@ fields:
     items:
       file: string
       line: number
-      severity: enum(critical, warning, suggestion)
+      severity: enum(critical, warning)
       title: string
       message: string
       reviewer: string
