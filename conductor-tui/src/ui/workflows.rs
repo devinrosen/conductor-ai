@@ -1743,8 +1743,7 @@ fn time_ago(ts: &str) -> String {
     }
 }
 
-/// Returns `(symbol, label, color)` for the most-recent run of `def_name`.
-/// Push an iteration counter badge span when `max_iteration > 0`.
+/// Push an iteration counter badge span onto `spans` when `max_iteration > 0`.
 fn push_iteration_badge(spans: &mut Vec<Span<'static>>, max_iteration: i64, accent_color: Color) {
     if max_iteration > 0 {
         spans.push(Span::styled(

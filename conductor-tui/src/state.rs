@@ -1003,6 +1003,22 @@ pub struct AppState {
     pub workflow_def_expanded_calls: HashSet<String>,
 }
 
+/// Compute the highest iteration seen for each step name.
+/// Returns a map of `step_name → max_iteration` for use in filtering
+/// duplicated loop iterations from both the tree view and the detail panel.
+pub(crate) fn max_iter_by_step_name(
+    steps: &[conductor_core::workflow::WorkflowRunStep],
+) -> std::collections::HashMap<String, i64> {
+    let mut map: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    for s in steps {
+        let e = map.entry(s.step_name.clone()).or_insert(0);
+        if s.iteration > *e {
+            *e = s.iteration;
+        }
+    }
+    map
+}
+
 /// Append step rows for `run_id` when it is in `expanded_step_run_ids`.
 fn push_steps_for_run(
     run_id: &str,
@@ -1018,19 +1034,12 @@ fn push_steps_for_run(
         return;
     }
     if let Some(steps) = workflow_run_steps.get(run_id) {
-        // Use per-step-name max iteration, matching collapse_loop_iterations in app.rs, so
-        // the detail panel and the tree show consistent steps for partially-completed loops.
-        let mut max_iter_by_name: std::collections::HashMap<&str, i64> =
-            std::collections::HashMap::new();
-        for s in steps {
-            let e = max_iter_by_name.entry(s.step_name.as_str()).or_insert(0);
-            if s.iteration > *e {
-                *e = s.iteration;
-            }
-        }
+        // Use per-step-name max iteration (via shared helper) so the detail panel and the
+        // tree show consistent steps for partially-completed loops.
+        let max_iter_by_name = max_iter_by_step_name(steps);
         let mut ordered: Vec<_> = steps
             .iter()
-            .filter(|s| s.iteration == *max_iter_by_name.get(s.step_name.as_str()).unwrap_or(&0))
+            .filter(|s| s.iteration == *max_iter_by_name.get(&s.step_name).unwrap_or(&0))
             .collect();
         ordered.sort_by_key(|s| s.position);
         let mut seen_groups: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -3033,5 +3042,72 @@ pub(crate) mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert("run1".to_string(), steps);
         assert_eq!(max_iteration_for_run("run1", &map), 3);
+    }
+
+    #[test]
+    fn visible_workflow_run_rows_parent_max_iteration_populated() {
+        // A parent run with 3 iterations should have max_iteration=2 in its Parent row.
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        state.data.workflow_runs = vec![make_wf_run_full("p1", WorkflowRunStatus::Running, None)];
+        state.data.workflow_run_steps.insert(
+            "p1".to_string(),
+            vec![
+                make_iter_step("p1", "step-a", 0, 0),
+                make_iter_step("p1", "step-a", 1, 0),
+                make_iter_step("p1", "step-a", 2, 0),
+            ],
+        );
+        let rows = state.visible_workflow_run_rows();
+        assert_eq!(rows.len(), 1);
+        match &rows[0] {
+            WorkflowRunRow::Parent {
+                run_id,
+                max_iteration,
+                ..
+            } => {
+                assert_eq!(run_id, "p1");
+                assert_eq!(
+                    *max_iteration, 2,
+                    "expected max_iteration=2 (3rd iteration, 0-indexed)"
+                );
+            }
+            other => panic!("expected Parent row, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn visible_workflow_run_rows_child_max_iteration_populated() {
+        // A child run with 2 iterations should have max_iteration=1 in its Child row.
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Running, None),
+            make_wf_run_full("c1", WorkflowRunStatus::Running, Some("p1")),
+        ];
+        state.data.workflow_run_steps.insert(
+            "c1".to_string(),
+            vec![
+                make_iter_step("c1", "step-x", 0, 0),
+                make_iter_step("c1", "step-x", 1, 0),
+            ],
+        );
+        let rows = state.visible_workflow_run_rows();
+        // rows[0] = Parent p1, rows[1] = Child c1
+        assert_eq!(rows.len(), 2);
+        match &rows[1] {
+            WorkflowRunRow::Child {
+                run_id,
+                max_iteration,
+                ..
+            } => {
+                assert_eq!(run_id, "c1");
+                assert_eq!(
+                    *max_iteration, 1,
+                    "expected max_iteration=1 for child with 2 iterations"
+                );
+            }
+            other => panic!("expected Child row, got {other:?}"),
+        }
     }
 }

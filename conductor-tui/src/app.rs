@@ -247,13 +247,7 @@ fn build_form_fields(inputs: &[conductor_core::workflow::InputDecl]) -> Vec<Form
 fn collapse_loop_iterations(
     mut steps: Vec<conductor_core::workflow::WorkflowRunStep>,
 ) -> Vec<conductor_core::workflow::WorkflowRunStep> {
-    let mut max_iter: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
-    for s in &steps {
-        let e = max_iter.entry(s.step_name.clone()).or_insert(0);
-        if s.iteration > *e {
-            *e = s.iteration;
-        }
-    }
+    let max_iter = crate::state::max_iter_by_step_name(&steps);
     steps.retain(|s| s.iteration == *max_iter.get(&s.step_name).unwrap_or(&0));
     steps
 }
