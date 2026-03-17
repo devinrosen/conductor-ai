@@ -232,16 +232,23 @@ pub async fn run_workflow(
                 let label = wt_target_label.clone();
                 let notify_run_id = res.workflow_run_id.clone();
                 tokio::task::spawn_blocking(move || {
-                    let conn = match conductor_core::db::open_database(
-                        &conductor_core::config::db_path(),
-                    ) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            tracing::error!("notify: DB open failed: {e}");
-                            return;
-                        }
-                    };
-                    notify_workflow(&conn, &notifications, &notify_run_id, &wf_name, Some(&label), succeeded);
+                    let conn =
+                        match conductor_core::db::open_database(&conductor_core::config::db_path())
+                        {
+                            Ok(c) => c,
+                            Err(e) => {
+                                tracing::error!("notify: DB open failed: {e}");
+                                return;
+                            }
+                        };
+                    notify_workflow(
+                        &conn,
+                        &notifications,
+                        &notify_run_id,
+                        &wf_name,
+                        Some(&label),
+                        succeeded,
+                    );
                 });
 
                 state_clone
@@ -267,16 +274,23 @@ pub async fn run_workflow(
                         .as_secs()
                         / 60;
                     let error_run_id = format!("wf-err:{wf_name}:{label}:{bucket}");
-                    let conn = match conductor_core::db::open_database(
-                        &conductor_core::config::db_path(),
-                    ) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            tracing::error!("notify: DB open failed: {e}");
-                            return;
-                        }
-                    };
-                    notify_workflow(&conn, &notifications, &error_run_id, &wf_name, Some(&label), false);
+                    let conn =
+                        match conductor_core::db::open_database(&conductor_core::config::db_path())
+                        {
+                            Ok(c) => c,
+                            Err(e) => {
+                                tracing::error!("notify: DB open failed: {e}");
+                                return;
+                            }
+                        };
+                    notify_workflow(
+                        &conn,
+                        &notifications,
+                        &error_run_id,
+                        &wf_name,
+                        Some(&label),
+                        false,
+                    );
                 });
             }
         }
