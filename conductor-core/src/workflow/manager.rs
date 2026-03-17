@@ -13,8 +13,8 @@ use crate::workflow_dsl;
 use super::constants::{RUN_COLUMNS, STEP_COLUMNS, STEP_COLUMNS_WITH_PREFIX};
 use super::status::{WorkflowRunStatus, WorkflowStepStatus};
 use super::types::{
-    ActiveWorkflowCounts, StepKey, WorkflowRun, WorkflowRunContext, WorkflowRunStep,
-    WorkflowStepSummary,
+    ActiveWorkflowCounts, PendingGateRow, StepKey, WorkflowRun, WorkflowRunContext,
+    WorkflowRunStep, WorkflowStepSummary,
 };
 
 /// Manages workflow definitions, execution, and persistence.
@@ -1157,13 +1157,22 @@ impl<'a> WorkflowManager<'a> {
 
     /// List gate steps currently in `waiting` status for a specific repo.
     ///
-    /// Same as `list_all_waiting_gate_steps` but scoped to `repo_id`. Used by the TUI repo detail
-    /// view to populate the Pending Gates pane.
-    pub fn list_waiting_gate_steps_for_repo(
-        &self,
-        repo_id: &str,
-    ) -> Result<Vec<(WorkflowRunStep, String, Option<String>)>> {
-        self.list_waiting_gate_steps_scoped(Some(repo_id))
+    /// Returns enriched [`PendingGateRow`] values that include the worktree branch and linked
+    /// ticket source_id so the TUI can display context without additional queries.
+    pub fn list_waiting_gate_steps_for_repo(&self, repo_id: &str) -> Result<Vec<PendingGateRow>> {
+        let sql = format!(
+            "SELECT {cols}, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref \
+             FROM workflow_run_steps s \
+             JOIN workflow_runs r ON r.id = s.workflow_run_id \
+             LEFT JOIN worktrees wt ON wt.id = r.worktree_id \
+             LEFT JOIN tickets t ON t.id = r.ticket_id \
+             WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
+             AND r.status IN ('pending', 'running', 'waiting') \
+             AND (r.repo_id = ?1 OR wt.repo_id = ?1) \
+             ORDER BY s.started_at",
+            cols = &*STEP_COLUMNS_WITH_PREFIX,
+        );
+        crate::db::query_collect(self.conn, &sql, [repo_id], pending_gate_row_mapper)
     }
 
     /// Shared implementation for listing waiting gate steps, optionally scoped to a repo.
@@ -1512,6 +1521,21 @@ fn waiting_gate_step_row_mapper(
     let workflow_name: String = row.get("workflow_name")?;
     let target_label: Option<String> = row.get("target_label")?;
     Ok((step, workflow_name, target_label))
+}
+
+fn pending_gate_row_mapper(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingGateRow> {
+    let step = row_to_workflow_step(row)?;
+    let workflow_name: String = row.get("workflow_name")?;
+    let target_label: Option<String> = row.get("target_label")?;
+    let branch: Option<String> = row.get("branch")?;
+    let ticket_ref: Option<String> = row.get("ticket_ref")?;
+    Ok(PendingGateRow {
+        step,
+        workflow_name,
+        target_label,
+        branch,
+        ticket_ref,
+    })
 }
 
 pub(super) fn row_to_workflow_step(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRunStep> {
@@ -2440,11 +2464,11 @@ mod tests {
             1,
             "worktree-linked gate step must appear for its repo"
         );
-        let (step, workflow_name, target_label) = &steps[0];
-        assert_eq!(step.id, step_id);
-        assert_eq!(step.step_name, "approval-gate");
-        assert_eq!(workflow_name, "wf");
-        assert!(target_label.is_none());
+        let row = &steps[0];
+        assert_eq!(row.step.id, step_id);
+        assert_eq!(row.step.step_name, "approval-gate");
+        assert_eq!(row.workflow_name, "wf");
+        assert!(row.target_label.is_none());
     }
 
     #[test]
@@ -2467,7 +2491,7 @@ mod tests {
             1,
             "directly-linked gate step must appear for its repo"
         );
-        assert_eq!(steps[0].0.id, step_id);
+        assert_eq!(steps[0].step.id, step_id);
     }
 
     #[test]
@@ -2490,7 +2514,7 @@ mod tests {
 
         let steps_r2 = mgr.list_waiting_gate_steps_for_repo("r2").unwrap();
         assert_eq!(steps_r2.len(), 1, "r2 should return its own gate step");
-        assert_eq!(steps_r2[0].0.id, step_id);
+        assert_eq!(steps_r2[0].step.id, step_id);
     }
 
     #[test]

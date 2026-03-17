@@ -3,6 +3,7 @@ mod dashboard;
 mod help;
 pub(crate) mod helpers;
 mod modal;
+mod pending_gates;
 mod repo_detail;
 mod workflow_column;
 mod workflow_def_detail;

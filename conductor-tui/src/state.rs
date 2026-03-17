@@ -41,7 +41,8 @@ use conductor_core::repo::Repo;
 use conductor_core::tickets::{Ticket, TicketLabel};
 use conductor_core::workflow::InputDecl;
 use conductor_core::workflow::{
-    WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepSummary,
+    PendingGateRow, WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
+    WorkflowStepSummary,
 };
 
 use crate::theme::Theme;
@@ -74,7 +75,6 @@ pub enum RepoDetailFocus {
     Worktrees,
     Tickets,
     Prs,
-    Gates,
 }
 
 impl RepoDetailFocus {
@@ -82,8 +82,7 @@ impl RepoDetailFocus {
         match self {
             Self::Info => Self::Worktrees,
             Self::Worktrees => Self::Prs,
-            Self::Prs => Self::Gates,
-            Self::Gates => Self::Tickets,
+            Self::Prs => Self::Tickets,
             Self::Tickets => Self::Info,
         }
     }
@@ -93,8 +92,7 @@ impl RepoDetailFocus {
             Self::Info => Self::Tickets,
             Self::Worktrees => Self::Info,
             Self::Prs => Self::Worktrees,
-            Self::Gates => Self::Prs,
-            Self::Tickets => Self::Gates,
+            Self::Tickets => Self::Prs,
         }
     }
 }
@@ -102,6 +100,7 @@ impl RepoDetailFocus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkflowsFocus {
     Defs,
+    Gates,
     Runs,
 }
 
@@ -226,10 +225,33 @@ pub fn parse_target_label(label: &str) -> (String, String, TargetType) {
 }
 
 impl WorkflowsFocus {
-    pub fn toggle(self) -> Self {
+    /// Cycle forward: Defs → Gates → Runs → Defs, skipping Gates when empty.
+    pub fn next_for_gates(self, has_gates: bool) -> Self {
+        match self {
+            Self::Defs => {
+                if has_gates {
+                    Self::Gates
+                } else {
+                    Self::Runs
+                }
+            }
+            Self::Gates => Self::Runs,
+            Self::Runs => Self::Defs,
+        }
+    }
+
+    /// Cycle backward: Defs → Runs → Gates → Defs, skipping Gates when empty.
+    pub fn prev_for_gates(self, has_gates: bool) -> Self {
         match self {
             Self::Defs => Self::Runs,
-            Self::Runs => Self::Defs,
+            Self::Gates => Self::Defs,
+            Self::Runs => {
+                if has_gates {
+                    Self::Gates
+                } else {
+                    Self::Defs
+                }
+            }
         }
     }
 }
@@ -911,7 +933,7 @@ pub struct AppState {
     pub detail_worktrees: Vec<Worktree>,
     pub detail_tickets: Vec<Ticket>,
     pub detail_prs: Vec<GithubPr>,
-    pub detail_gates: Vec<(WorkflowRunStep, String, Option<String>)>,
+    pub detail_gates: Vec<PendingGateRow>,
     pub detail_wt_index: usize,
     pub detail_ticket_index: usize,
     pub detail_pr_index: usize,
@@ -1331,6 +1353,7 @@ impl AppState {
         if self.column_focus == ColumnFocus::Workflow {
             return match self.workflows_focus {
                 WorkflowsFocus::Defs => (self.workflow_def_index, self.data.workflow_defs.len()),
+                WorkflowsFocus::Gates => (self.detail_gate_index, self.detail_gates.len()),
                 WorkflowsFocus::Runs => (
                     self.workflow_run_index,
                     self.visible_workflow_run_rows().len(),
@@ -1346,7 +1369,6 @@ impl AppState {
                     (self.detail_ticket_index, self.filtered_detail_tickets.len())
                 }
                 RepoDetailFocus::Prs => (self.detail_pr_index, self.detail_prs.len()),
-                RepoDetailFocus::Gates => (self.detail_gate_index, self.detail_gates.len()),
             },
             View::WorktreeDetail => {
                 let idx = self.agent_list_state.borrow().selected().unwrap_or(0);
@@ -1371,6 +1393,7 @@ impl AppState {
         if self.column_focus == ColumnFocus::Workflow {
             match self.workflows_focus {
                 WorkflowsFocus::Defs => self.workflow_def_index = index,
+                WorkflowsFocus::Gates => self.detail_gate_index = index,
                 WorkflowsFocus::Runs => self.workflow_run_index = index,
             }
             return;
@@ -1382,7 +1405,6 @@ impl AppState {
                 RepoDetailFocus::Worktrees => self.detail_wt_index = index,
                 RepoDetailFocus::Tickets => self.detail_ticket_index = index,
                 RepoDetailFocus::Prs => self.detail_pr_index = index,
-                RepoDetailFocus::Gates => self.detail_gate_index = index,
             },
             View::WorktreeDetail => {
                 self.agent_list_state.borrow_mut().select(Some(index));
@@ -1823,8 +1845,7 @@ pub(crate) mod tests {
     fn repo_detail_focus_next_cycles_forward() {
         assert_eq!(RepoDetailFocus::Info.next(), RepoDetailFocus::Worktrees);
         assert_eq!(RepoDetailFocus::Worktrees.next(), RepoDetailFocus::Prs);
-        assert_eq!(RepoDetailFocus::Prs.next(), RepoDetailFocus::Gates);
-        assert_eq!(RepoDetailFocus::Gates.next(), RepoDetailFocus::Tickets);
+        assert_eq!(RepoDetailFocus::Prs.next(), RepoDetailFocus::Tickets);
         assert_eq!(RepoDetailFocus::Tickets.next(), RepoDetailFocus::Info);
     }
 
@@ -1833,8 +1854,7 @@ pub(crate) mod tests {
         assert_eq!(RepoDetailFocus::Info.prev(), RepoDetailFocus::Tickets);
         assert_eq!(RepoDetailFocus::Worktrees.prev(), RepoDetailFocus::Info);
         assert_eq!(RepoDetailFocus::Prs.prev(), RepoDetailFocus::Worktrees);
-        assert_eq!(RepoDetailFocus::Gates.prev(), RepoDetailFocus::Prs);
-        assert_eq!(RepoDetailFocus::Tickets.prev(), RepoDetailFocus::Gates);
+        assert_eq!(RepoDetailFocus::Tickets.prev(), RepoDetailFocus::Prs);
     }
 
     #[test]
@@ -1844,11 +1864,66 @@ pub(crate) mod tests {
             RepoDetailFocus::Worktrees,
             RepoDetailFocus::Tickets,
             RepoDetailFocus::Prs,
-            RepoDetailFocus::Gates,
         ] {
             assert_eq!(focus.next().prev(), focus);
             assert_eq!(focus.prev().next(), focus);
         }
+    }
+
+    #[test]
+    fn workflows_focus_next_for_gates_with_gates() {
+        assert_eq!(
+            WorkflowsFocus::Defs.next_for_gates(true),
+            WorkflowsFocus::Gates
+        );
+        assert_eq!(
+            WorkflowsFocus::Gates.next_for_gates(true),
+            WorkflowsFocus::Runs
+        );
+        assert_eq!(
+            WorkflowsFocus::Runs.next_for_gates(true),
+            WorkflowsFocus::Defs
+        );
+    }
+
+    #[test]
+    fn workflows_focus_next_for_gates_without_gates() {
+        assert_eq!(
+            WorkflowsFocus::Defs.next_for_gates(false),
+            WorkflowsFocus::Runs
+        );
+        assert_eq!(
+            WorkflowsFocus::Runs.next_for_gates(false),
+            WorkflowsFocus::Defs
+        );
+    }
+
+    #[test]
+    fn workflows_focus_prev_for_gates_with_gates() {
+        assert_eq!(
+            WorkflowsFocus::Defs.prev_for_gates(true),
+            WorkflowsFocus::Runs
+        );
+        assert_eq!(
+            WorkflowsFocus::Gates.prev_for_gates(true),
+            WorkflowsFocus::Defs
+        );
+        assert_eq!(
+            WorkflowsFocus::Runs.prev_for_gates(true),
+            WorkflowsFocus::Gates
+        );
+    }
+
+    #[test]
+    fn workflows_focus_prev_for_gates_without_gates() {
+        assert_eq!(
+            WorkflowsFocus::Defs.prev_for_gates(false),
+            WorkflowsFocus::Runs
+        );
+        assert_eq!(
+            WorkflowsFocus::Runs.prev_for_gates(false),
+            WorkflowsFocus::Defs
+        );
     }
 
     #[test]

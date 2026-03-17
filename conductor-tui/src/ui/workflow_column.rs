@@ -1,26 +1,51 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::Frame;
 
-use crate::state::AppState;
+use crate::state::{AppState, WorkflowsFocus};
 
-/// Render the persistent workflow column split into Defs (top 40%) and Runs (bottom 60%).
+/// Render the persistent workflow column split into Defs, optional Gates, and Runs.
 pub fn render_workflow_column(frame: &mut Frame, area: Rect, state: &AppState) {
     if !state.workflow_column_visible || area.width < 20 {
         return;
     }
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(area);
+    if !state.detail_gates.is_empty() {
+        let gate_height = (state.detail_gates.len() as u16 + 2)
+            .max(3)
+            .min(area.height / 4);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(40),
+                Constraint::Length(gate_height),
+                Constraint::Min(0),
+            ])
+            .split(area);
 
-    super::workflows::render_defs(frame, chunks[0], state);
-    if state.workflows_focus == crate::state::WorkflowsFocus::Defs
-        && state.workflow_def_focus == crate::state::WorkflowDefFocus::Steps
-    {
-        super::workflows::render_def_steps(frame, chunks[1], state);
+        super::workflows::render_defs(frame, chunks[0], state);
+        let gates_focused = state.workflows_focus == WorkflowsFocus::Gates;
+        super::pending_gates::render_pending_gates(frame, chunks[1], state, gates_focused);
+        if state.workflows_focus == WorkflowsFocus::Defs
+            && state.workflow_def_focus == crate::state::WorkflowDefFocus::Steps
+        {
+            super::workflows::render_def_steps(frame, chunks[2], state);
+        } else {
+            super::workflows::render_runs(frame, chunks[2], state);
+        }
     } else {
-        super::workflows::render_runs(frame, chunks[1], state);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .split(area);
+
+        super::workflows::render_defs(frame, chunks[0], state);
+        if state.workflows_focus == WorkflowsFocus::Defs
+            && state.workflow_def_focus == crate::state::WorkflowDefFocus::Steps
+        {
+            super::workflows::render_def_steps(frame, chunks[1], state);
+        } else {
+            super::workflows::render_runs(frame, chunks[1], state);
+        }
     }
 }
 

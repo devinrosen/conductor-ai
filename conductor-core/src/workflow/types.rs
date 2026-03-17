@@ -254,6 +254,18 @@ pub struct ContextEntry {
     pub output_file: Option<String>,
 }
 
+/// An enriched pending gate row used by the TUI repo detail pane (right workflow column).
+#[derive(Debug, Clone)]
+pub struct PendingGateRow {
+    pub step: WorkflowRunStep,
+    pub workflow_name: String,
+    pub target_label: Option<String>,
+    /// Worktree branch (None for ephemeral PR runs).
+    pub branch: Option<String>,
+    /// Ticket source_id (e.g. "1151") from the linked ticket, if any.
+    pub ticket_ref: Option<String>,
+}
+
 /// Counts of active workflow runs (pending / running / waiting) for a single repo.
 #[derive(Debug, Clone, Default)]
 pub struct ActiveWorkflowCounts {

@@ -754,18 +754,6 @@ impl App {
             Action::CancelWorkflow => self.handle_cancel_workflow(),
             Action::ApproveGate => self.handle_approve_gate(),
             Action::RejectGate => self.handle_reject_gate(),
-            Action::OpenGateModal {
-                step_id,
-                run_id,
-                gate_prompt,
-            } => {
-                self.state.modal = Modal::GateAction {
-                    run_id,
-                    step_id,
-                    gate_prompt,
-                    feedback: String::new(),
-                };
-            }
             Action::ViewWorkflowDef => self.handle_view_workflow_def(),
             Action::EditWorkflowDef => self.handle_edit_workflow_def(),
             Action::ToggleDefStepTree => {
@@ -1351,11 +1339,13 @@ impl App {
         use crate::state::ColumnFocus;
         match self.state.column_focus {
             ColumnFocus::Workflow => {
-                // Exit step tree first if active, then Tab toggles Defs↔Runs.
+                // Exit step tree first if active, then cycle Defs → Gates → Runs → Defs.
                 if self.state.workflow_def_focus == WorkflowDefFocus::Steps {
                     self.state.workflow_def_focus = WorkflowDefFocus::List;
                 } else {
-                    self.state.workflows_focus = self.state.workflows_focus.toggle();
+                    let has_gates = !self.state.detail_gates.is_empty();
+                    self.state.workflows_focus =
+                        self.state.workflows_focus.next_for_gates(has_gates);
                 }
             }
             ColumnFocus::Content => match self.state.view {
@@ -1383,7 +1373,9 @@ impl App {
                 {
                     self.state.workflow_def_focus = WorkflowDefFocus::List;
                 } else {
-                    self.state.workflows_focus = self.state.workflows_focus.toggle();
+                    let has_gates = !self.state.detail_gates.is_empty();
+                    self.state.workflows_focus =
+                        self.state.workflows_focus.prev_for_gates(has_gates);
                 }
             }
             ColumnFocus::Content => match self.state.view {
@@ -1422,6 +1414,9 @@ impl App {
                     self.state.workflow_def_expanded_calls.clear();
                 }
             }
+            WorkflowsFocus::Gates => {
+                self.state.detail_gate_index = self.state.detail_gate_index.saturating_sub(1);
+            }
             WorkflowsFocus::Runs => {
                 self.state.workflow_run_index = self.state.workflow_run_index.saturating_sub(1);
             }
@@ -1459,6 +1454,12 @@ impl App {
                     self.state.workflow_def_step_index = 0;
                     self.state.workflow_def_expanded_calls.clear();
                 }
+            }
+            WorkflowsFocus::Gates => {
+                clamp_increment(
+                    &mut self.state.detail_gate_index,
+                    self.state.detail_gates.len(),
+                );
             }
             WorkflowsFocus::Runs => {
                 let visible_len = self.state.visible_workflow_run_rows().len();
@@ -1502,6 +1503,34 @@ impl App {
                     self.state.workflow_def_detail_scroll = 0;
                     self.state.previous_view = Some(self.state.view);
                     self.state.view = View::WorkflowDefDetail;
+                }
+            }
+            WorkflowsFocus::Gates => {
+                if let Some(gate) = self.state.detail_gates.get(self.state.detail_gate_index) {
+                    let run_id = gate.step.workflow_run_id.clone();
+                    if let Some(run) = self
+                        .state
+                        .data
+                        .workflow_runs
+                        .iter()
+                        .find(|r| r.id == run_id)
+                    {
+                        let worktree_id = run.worktree_id.clone();
+                        let run_id = run.id.clone();
+                        self.state.previous_selected_worktree_id =
+                            Some(self.state.selected_worktree_id.clone());
+                        if self.state.selected_worktree_id.is_none() {
+                            self.state.selected_worktree_id = worktree_id;
+                        }
+                        self.state.selected_workflow_run_id = Some(run_id);
+                        self.state.previous_view = Some(self.state.view);
+                        self.state.view = View::WorkflowRunDetail;
+                        self.state.workflow_step_index = 0;
+                        self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
+                        self.state.step_agent_event_index = 0;
+                        self.state.column_focus = crate::state::ColumnFocus::Content;
+                        self.reload_workflow_steps();
+                    }
                 }
             }
             WorkflowsFocus::Runs => {
@@ -1628,9 +1657,6 @@ impl App {
                 RepoDetailFocus::Prs => {
                     self.state.detail_pr_index = self.state.detail_pr_index.saturating_sub(1);
                 }
-                RepoDetailFocus::Gates => {
-                    self.state.detail_gate_index = self.state.detail_gate_index.saturating_sub(1);
-                }
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
                 WorkflowRunDetailFocus::Steps => {
@@ -1756,12 +1782,6 @@ impl App {
                 RepoDetailFocus::Prs => {
                     clamp_increment(&mut self.state.detail_pr_index, self.state.detail_prs.len());
                 }
-                RepoDetailFocus::Gates => {
-                    clamp_increment(
-                        &mut self.state.detail_gate_index,
-                        self.state.detail_gates.len(),
-                    );
-                }
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
                 WorkflowRunDetailFocus::Steps => {
@@ -1886,9 +1906,6 @@ impl App {
                 }
                 RepoDetailFocus::Prs => {
                     // No-op: PR selection deferred to a future ticket.
-                }
-                RepoDetailFocus::Gates => {
-                    // Handled by input.rs: Enter emits OpenGateModal when Gates pane is focused.
                 }
             },
             View::WorkflowRunDetail => {
