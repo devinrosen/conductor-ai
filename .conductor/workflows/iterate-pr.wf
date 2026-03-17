@@ -11,7 +11,9 @@ workflow iterate-pr {
 
     call workflow rebase-worktree
 
-    call workflow lint-fix
+    if rebase-worktree.pulled_new_commits {
+      call workflow lint-fix
+    }
 
     call workflow review-pr
 
