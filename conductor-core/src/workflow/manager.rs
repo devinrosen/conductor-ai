@@ -1150,24 +1150,7 @@ impl<'a> WorkflowManager<'a> {
     pub fn list_all_waiting_gate_steps(
         &self,
     ) -> Result<Vec<(WorkflowRunStep, String, Option<String>)>> {
-        crate::db::query_collect(
-            self.conn,
-            &format!(
-                "SELECT {}, r.workflow_name, r.target_label \
-                 FROM workflow_run_steps s \
-                 JOIN workflow_runs r ON r.id = s.workflow_run_id \
-                 WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
-                 ORDER BY s.started_at",
-                &*STEP_COLUMNS_WITH_PREFIX
-            ),
-            [],
-            |row| {
-                let step = row_to_workflow_step(row)?;
-                let workflow_name: String = row.get("workflow_name")?;
-                let target_label: Option<String> = row.get("target_label")?;
-                Ok((step, workflow_name, target_label))
-            },
-        )
+        self.list_waiting_gate_steps_scoped(None)
     }
 
     /// List gate steps currently in `waiting` status for a specific repo.
@@ -1178,26 +1161,40 @@ impl<'a> WorkflowManager<'a> {
         &self,
         repo_id: &str,
     ) -> Result<Vec<(WorkflowRunStep, String, Option<String>)>> {
-        crate::db::query_collect(
-            self.conn,
-            &format!(
-                "SELECT {}, r.workflow_name, r.target_label \
-                 FROM workflow_run_steps s \
-                 JOIN workflow_runs r ON r.id = s.workflow_run_id \
-                 LEFT JOIN worktrees wt ON wt.id = r.worktree_id \
-                 WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
-                 AND (r.repo_id = ?1 OR wt.repo_id = ?1) \
-                 ORDER BY s.started_at",
-                &*STEP_COLUMNS_WITH_PREFIX
+        self.list_waiting_gate_steps_scoped(Some(repo_id))
+    }
+
+    /// Shared implementation for listing waiting gate steps, optionally scoped to a repo.
+    ///
+    /// When `repo_id` is `Some`, the query adds a `LEFT JOIN worktrees` and filters to runs whose
+    /// `repo_id` matches directly or via their linked worktree.
+    fn list_waiting_gate_steps_scoped(
+        &self,
+        repo_id: Option<&str>,
+    ) -> Result<Vec<(WorkflowRunStep, String, Option<String>)>> {
+        let (extra_join, extra_where) = match repo_id {
+            Some(_) => (
+                " LEFT JOIN worktrees wt ON wt.id = r.worktree_id",
+                " AND (r.repo_id = ?1 OR wt.repo_id = ?1)",
             ),
-            [repo_id],
-            |row| {
-                let step = row_to_workflow_step(row)?;
-                let workflow_name: String = row.get("workflow_name")?;
-                let target_label: Option<String> = row.get("target_label")?;
-                Ok((step, workflow_name, target_label))
-            },
-        )
+            None => ("", ""),
+        };
+        let sql = format!(
+            "SELECT {cols}, r.workflow_name, r.target_label \
+             FROM workflow_run_steps s \
+             JOIN workflow_runs r ON r.id = s.workflow_run_id{ej} \
+             WHERE s.gate_type IS NOT NULL AND s.status = 'waiting'{ew} \
+             ORDER BY s.started_at",
+            cols = &*STEP_COLUMNS_WITH_PREFIX,
+            ej = extra_join,
+            ew = extra_where,
+        );
+        match repo_id {
+            Some(id) => {
+                crate::db::query_collect(self.conn, &sql, [id], waiting_gate_step_row_mapper)
+            }
+            None => crate::db::query_collect(self.conn, &sql, [], waiting_gate_step_row_mapper),
+        }
     }
 
     /// Load workflow definitions from the filesystem for a worktree.
@@ -1479,6 +1476,15 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
         target_label,
         default_bot_name,
     })
+}
+
+fn waiting_gate_step_row_mapper(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(WorkflowRunStep, String, Option<String>)> {
+    let step = row_to_workflow_step(row)?;
+    let workflow_name: String = row.get("workflow_name")?;
+    let target_label: Option<String> = row.get("target_label")?;
+    Ok((step, workflow_name, target_label))
 }
 
 pub(super) fn row_to_workflow_step(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRunStep> {

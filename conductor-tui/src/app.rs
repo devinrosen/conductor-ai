@@ -1084,7 +1084,10 @@ impl App {
             let wf_mgr = WorkflowManager::new(&self.conn);
             self.state.detail_gates = wf_mgr
                 .list_waiting_gate_steps_for_repo(repo_id)
-                .unwrap_or_default();
+                .unwrap_or_else(|e| {
+                    tracing::warn!("failed to load pending gates for repo {repo_id}: {e}");
+                    Vec::new()
+                });
             self.state.detail_gate_index = 0;
         } else {
             self.state.detail_gates = Vec::new();
