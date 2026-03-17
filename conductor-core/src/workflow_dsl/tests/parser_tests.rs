@@ -2201,6 +2201,60 @@ fn test_parse_script_invalid_retries() {
     );
 }
 
+/// Regression test for #1195: DirEntry errors silently dropped during workflow directory scan.
+///
+/// The original code used `.filter_map(|e| e.ok())`, which silently discarded DirEntry errors.
+/// The fix emits a `tracing::warn!` and skips the bad entry so callers receive all successfully
+/// parsed definitions.
+///
+/// True `DirEntry` iterator errors (e.g. corrupted inodes) are not reproducible portably.
+/// This test exercises the resilience of `load_workflow_defs` to file-read errors instead:
+/// a `.wf` file with mode 000 causes `parse_workflow_file` to fail, which is collected as a
+/// `WorkflowWarning` (not a panic or `Err`). The function returns `Ok` with all other
+/// successfully parsed definitions.
+#[cfg(unix)]
+#[test]
+fn test_load_workflow_defs_skips_unreadable_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let wf_dir = tmp.path().join(".conductor").join("workflows");
+    fs::create_dir_all(&wf_dir).unwrap();
+
+    // A valid workflow that should always be returned.
+    fs::write(
+        wf_dir.join("good.wf"),
+        "workflow good { meta { targets = [\"worktree\"] } call build }",
+    )
+    .unwrap();
+
+    // A `.wf` file made unreadable — simulates a permission-denied scenario.
+    let bad_path = wf_dir.join("unreadable.wf");
+    fs::write(
+        &bad_path,
+        "workflow unreadable { meta { targets = [\"worktree\"] } call build }",
+    )
+    .unwrap();
+    fs::set_permissions(&bad_path, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let result = load_workflow_defs(tmp.path().to_str().unwrap(), "/nonexistent");
+
+    // Restore permissions so TempDir cleanup doesn't fail.
+    fs::set_permissions(&bad_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+    let (defs, warnings) = result.unwrap();
+    // The readable workflow is returned.
+    assert_eq!(defs.len(), 1, "expected exactly one parseable workflow");
+    assert_eq!(defs[0].name, "good");
+    // The unreadable file produces a warning (file-read error path), not a panic.
+    assert_eq!(
+        warnings.len(),
+        1,
+        "expected one warning for the unreadable file"
+    );
+    assert_eq!(warnings[0].file, "unreadable.wf");
+}
+
 #[test]
 fn test_parse_boolean_input_declaration() {
     let input = r#"
