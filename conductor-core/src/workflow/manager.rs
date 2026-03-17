@@ -1941,7 +1941,10 @@ mod tests {
         let conn = setup_db();
         let mgr = WorkflowManager::new(&conn);
         let result = mgr.get_workflow_run_ids_for_agent_runs(&[]).unwrap();
-        assert!(result.is_empty(), "empty agent_run_ids must yield an empty map");
+        assert!(
+            result.is_empty(),
+            "empty agent_run_ids must yield an empty map"
+        );
     }
 
     #[test]
