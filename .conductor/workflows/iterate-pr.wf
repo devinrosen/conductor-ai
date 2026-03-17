@@ -20,6 +20,9 @@ workflow iterate-pr {
       script fmt-fix {
         run = ".conductor/scripts/fmt-fix.sh"
       }
+      script push {
+        run = ".conductor/scripts/push.sh"
+      }
       call workflow lint-fix
     }
   } while review-aggregator.has_blocking_findings

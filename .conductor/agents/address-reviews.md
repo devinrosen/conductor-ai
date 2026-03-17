@@ -20,6 +20,5 @@ Steps:
 4. After all changes are made, run the build and tests to confirm nothing is broken:
    - Rust: `cargo build && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings`
 5. Commit all changes with a message like: `fix: address PR review feedback`
-6. Push the branch: `git push`
 
 Work through all comments in a single pass before committing.
