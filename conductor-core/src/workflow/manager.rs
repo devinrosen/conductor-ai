@@ -537,7 +537,7 @@ impl<'a> WorkflowManager<'a> {
         let mut params: Vec<&dyn rusqlite::ToSql> =
             run_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
         if let Some(statuses) = status_filter {
-            params.extend(statuses.iter().map(|s| &*s as &dyn rusqlite::ToSql));
+            params.extend(statuses.iter().map(|s| s as &dyn rusqlite::ToSql));
         }
         let mut stmt = self.conn.prepare(&sql)?;
         let steps = stmt
@@ -1308,7 +1308,7 @@ impl<'a> WorkflowManager<'a> {
         let name_sql =
             format!("SELECT id, workflow_name FROM workflow_runs WHERE id IN ({placeholders})");
         let name_params: Vec<&dyn rusqlite::ToSql> =
-            run_ids.iter().map(|s| &*s as &dyn rusqlite::ToSql).collect();
+            run_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
         let mut name_stmt = self.conn.prepare(&name_sql)?;
         let mut name_rows = name_stmt.query(name_params.as_slice())?;
         let mut root_names: HashMap<String, String> = HashMap::new();
