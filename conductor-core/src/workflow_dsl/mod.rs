@@ -30,6 +30,7 @@
 mod api;
 mod lexer;
 mod parser;
+mod script_utils;
 mod types;
 mod validation;
 
@@ -47,11 +48,9 @@ pub use api::{
 };
 pub(crate) use parser::parse_duration_str;
 pub use parser::parse_workflow_str;
+pub use script_utils::resolve_script_path;
 #[cfg(test)]
 pub(crate) use types::{collect_bot_names, collect_schema_refs, collect_snippet_refs, count_nodes};
-pub(crate) use validation::resolve_script_path;
-#[cfg(test)]
-pub(crate) use validation::script_search_paths;
 pub use validation::{
     validate_script_steps, validate_workflow_semantics, ValidationError, ValidationReport,
 };

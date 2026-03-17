@@ -53,7 +53,7 @@ pub(super) fn tool_validate_workflow(
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::WorkflowManager;
     use conductor_core::workflow::{
-        collect_agent_names, detect_workflow_cycles, validate_script_steps,
+        collect_agent_names, detect_workflow_cycles, resolve_script_path, validate_script_steps,
         validate_workflow_semantics,
     };
 
@@ -126,7 +126,24 @@ pub(super) fn tool_validate_workflow(
             errors.push(err.message.clone());
         }
     }
-    let script_errors = validate_script_steps(&workflow, wt_path, repo_path);
+    let skills_dir = std::env::var_os("HOME")
+        .map(|h| std::path::PathBuf::from(&h).join(".claude/skills"));
+    let wt = wt_path.to_string();
+    let repo = repo_path.to_string();
+    let script_errors = validate_script_steps(&workflow, &|run| {
+        resolve_script_path(run, &wt, &repo, skills_dir.as_deref()).ok_or_else(|| {
+            let p = std::path::Path::new(run);
+            if p.is_absolute() {
+                run.to_string()
+            } else {
+                let sd = skills_dir
+                    .as_ref()
+                    .map(|s| s.join(run).display().to_string())
+                    .unwrap_or_else(|| format!("~/.claude/skills/{run}"));
+                format!("{wt}/{run}, {repo}/{run}, {sd}")
+            }
+        })
+    });
     for err in &script_errors {
         if let Some(hint) = &err.hint {
             errors.push(format!("{} (hint: {hint})", err.message));

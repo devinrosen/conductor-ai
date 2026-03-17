@@ -258,19 +258,22 @@ fn validate_conditional_branch<F>(
 // ---------------------------------------------------------------------------
 
 /// Validate all `script` steps in a workflow: check that the `run` target
-/// exists and is executable, using the same search order the engine uses at
-/// runtime (`working_dir` → `repo_path` → `~/.claude/skills/`).
+/// exists and is executable.
+///
+/// The `path_resolver` callback receives a script path string and returns:
+/// - `Ok(PathBuf)` — the resolved, existing path (permissions will be checked)
+/// - `Err(String)` — a human-readable "searched paths" string for the error message
 ///
 /// Paths containing `{{` (template variables) are silently skipped because
 /// they cannot be resolved statically.
-pub fn validate_script_steps(
+pub fn validate_script_steps<F>(
     def: &WorkflowDef,
-    working_dir: &str,
-    repo_path: &str,
-) -> Vec<ValidationError> {
+    path_resolver: &F,
+) -> Vec<ValidationError>
+where
+    F: Fn(&str) -> Result<std::path::PathBuf, String>,
+{
     let mut errors = Vec::new();
-    let skills_dir: Option<std::path::PathBuf> =
-        std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".claude").join("skills"));
     let nodes: Vec<&ScriptNode> = collect_script_nodes(&def.body)
         .into_iter()
         .chain(collect_script_nodes(&def.always))
@@ -284,18 +287,8 @@ pub fn validate_script_steps(
             continue;
         }
 
-        match resolve_script_path(run, working_dir, repo_path, skills_dir.as_deref()) {
-            None => {
-                let p = std::path::Path::new(run);
-                let searched = if p.is_absolute() {
-                    run.to_string()
-                } else {
-                    let skills_path = skills_dir
-                        .as_ref()
-                        .map(|s| s.join(run).display().to_string())
-                        .unwrap_or_else(|| format!("~/.claude/skills/{run}"));
-                    format!("{}/{run}, {}/{run}, {skills_path}", working_dir, repo_path)
-                };
+        match path_resolver(run) {
+            Err(searched) => {
                 errors.push(ValidationError {
                     message: format!(
                         "Script step '{}': '{}' not found. Searched: {}",
@@ -304,7 +297,7 @@ pub fn validate_script_steps(
                     hint: None,
                 });
             }
-            Some(resolved) => {
+            Ok(resolved) => {
                 #[cfg(unix)]
                 if let Some(err) = check_script_unix_permissions(&node.name, &resolved) {
                     errors.push(err);
@@ -380,44 +373,6 @@ fn collect_script_nodes(nodes: &[WorkflowNode]) -> Vec<&ScriptNode> {
     out
 }
 
-// ---------------------------------------------------------------------------
-// Script path resolution helpers
-// ---------------------------------------------------------------------------
-
-/// Returns the ordered list of candidate paths for a script name.
-///
-/// For absolute paths: single-element vec with the path as-is.
-/// For relative paths: `[working_dir/run, repo_path/run, skills_dir/run]`.
-pub(crate) fn script_search_paths(
-    run: &str,
-    working_dir: &str,
-    repo_path: &str,
-    skills_dir: Option<&std::path::Path>,
-) -> Vec<std::path::PathBuf> {
-    let p = std::path::Path::new(run);
-    if p.is_absolute() {
-        return vec![p.to_path_buf()];
-    }
-    let mut paths = vec![
-        std::path::Path::new(working_dir).join(run),
-        std::path::Path::new(repo_path).join(run),
-    ];
-    if let Some(skills) = skills_dir {
-        paths.push(skills.join(run));
-    }
-    paths
-}
-
-pub(crate) fn resolve_script_path(
-    run: &str,
-    working_dir: &str,
-    repo_path: &str,
-    skills_dir: Option<&std::path::Path>,
-) -> Option<std::path::PathBuf> {
-    script_search_paths(run, working_dir, repo_path, skills_dir)
-        .into_iter()
-        .find(|p| p.exists())
-}
 
 #[cfg(test)]
 mod tests {
