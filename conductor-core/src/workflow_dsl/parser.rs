@@ -343,10 +343,7 @@ impl Parser {
                 Token::Always => {
                     self.advance();
                     self.expect(&Token::LBrace)?;
-                    while self.peek() != &Token::RBrace && self.peek() != &Token::Eof {
-                        always.push(self.parse_node()?);
-                    }
-                    self.expect(&Token::RBrace)?;
+                    always.extend(self.parse_body()?);
                 }
                 _ => {
                     body.push(self.parse_node()?);
@@ -522,13 +519,20 @@ impl Parser {
         // Parse optional kvs (not used for if/unless, but kept for grammar consistency)
         let _kvs = self.parse_kvs()?;
 
+        let body = self.parse_body()?;
+
+        Ok((condition, body))
+    }
+
+    /// Collect `WorkflowNode`s until `}` (or EOF), then consume the closing `}`.
+    /// Callers must have already consumed the opening `{`.
+    fn parse_body(&mut self) -> std::result::Result<Vec<WorkflowNode>, String> {
         let mut body = Vec::new();
         while self.peek() != &Token::RBrace && self.peek() != &Token::Eof {
             body.push(self.parse_node()?);
         }
         self.expect(&Token::RBrace)?;
-
-        Ok((condition, body))
+        Ok(body)
     }
 
     fn parse_if(&mut self) -> std::result::Result<IfNode, String> {
@@ -586,11 +590,7 @@ impl Parser {
         let kvs = self.parse_kvs()?;
         let (max_iterations, stuck_after, on_max_iter) = Self::parse_loop_options(&kvs, "while")?;
 
-        let mut body = Vec::new();
-        while self.peek() != &Token::RBrace && self.peek() != &Token::Eof {
-            body.push(self.parse_node()?);
-        }
-        self.expect(&Token::RBrace)?;
+        let body = self.parse_body()?;
 
         Ok(WhileNode {
             step,
@@ -616,11 +616,7 @@ impl Parser {
 
         let mut kvs = self.parse_kvs()?;
 
-        let mut body = Vec::new();
-        while self.peek() != &Token::RBrace && self.peek() != &Token::Eof {
-            body.push(self.parse_node()?);
-        }
-        self.expect(&Token::RBrace)?;
+        let body = self.parse_body()?;
 
         // Peek for optional `while` clause (one-token lookahead past `}`)
         if self.peek() == &Token::While {
@@ -798,13 +794,7 @@ impl Parser {
     fn parse_always(&mut self) -> std::result::Result<AlwaysNode, String> {
         self.expect(&Token::Always)?;
         self.expect(&Token::LBrace)?;
-
-        let mut body = Vec::new();
-        while self.peek() != &Token::RBrace && self.peek() != &Token::Eof {
-            body.push(self.parse_node()?);
-        }
-        self.expect(&Token::RBrace)?;
-
+        let body = self.parse_body()?;
         Ok(AlwaysNode { body })
     }
 
