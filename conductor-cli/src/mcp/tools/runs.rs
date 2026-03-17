@@ -6,7 +6,6 @@ use serde_json::Value;
 use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
 use crate::mcp::resources::{
     format_run_detail_with_log, format_run_summary_line, format_run_summary_line_with_repo,
-    resolve_worktree_info,
 };
 
 pub(super) fn tool_list_runs(
@@ -75,14 +74,27 @@ pub(super) fn tool_list_runs(
         if runs.is_empty() {
             return tool_ok(format!("No workflow runs for {slug}."));
         }
+
+        // Bulk-fetch all worktrees for this repo once, then build a lookup map.
+        // This avoids N+1 DB queries and config file reads (one per run).
+        let wt_mgr = WorktreeManager::new(&conn, &config);
+        let worktrees = match wt_mgr.list_by_repo_id(&repo.id, false) {
+            Ok(wts) => wts,
+            Err(e) => return tool_err(e),
+        };
+        let wt_map: std::collections::HashMap<&str, (&str, &str)> = worktrees
+            .iter()
+            .map(|wt| (wt.id.as_str(), (wt.slug.as_str(), wt.branch.as_str())))
+            .collect();
+
         let mut out = String::new();
         for run in &runs {
-            let (slug, branch, _) = resolve_worktree_info(&conn, run);
-            out.push_str(&format_run_summary_line(
-                run,
-                slug.as_deref(),
-                branch.as_deref(),
-            ));
+            let (wt_slug, wt_branch) = run
+                .worktree_id
+                .as_deref()
+                .and_then(|id| wt_map.get(id).copied())
+                .unzip();
+            out.push_str(&format_run_summary_line(run, wt_slug, wt_branch));
         }
         if runs.len() == limit {
             out.push_str(&format!(
