@@ -1042,12 +1042,9 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::agent_output::extract_last_code_block;
-    use super::helpers::{
-        advance_form_field, clamp_increment, collapse_loop_iterations, wrap_decrement,
-        wrap_increment,
-    };
+    use super::helpers::{clamp_increment, collapse_loop_iterations, wrap_decrement, wrap_increment};
     use super::*;
-    use crate::state::{FormField, FormFieldType, WorkflowsFocus};
+    use crate::state::WorkflowsFocus;
     use std::io::Cursor;
 
     #[test]
@@ -1314,7 +1311,7 @@ mod tests {
 mod action_handler_tests {
     use super::helpers::advance_form_field;
     use super::*;
-    use crate::state::{FormField, FormFieldType};
+    use crate::state::FormField;
 
     fn make_app() -> App {
         let conn = conductor_core::db::open_database(std::path::Path::new(":memory:")).unwrap();
