@@ -536,10 +536,8 @@ impl<'a> WorkflowManager<'a> {
         );
         let mut params: Vec<&dyn rusqlite::ToSql> =
             run_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-        let status_owned: Vec<String>;
         if let Some(statuses) = status_filter {
-            status_owned = statuses.iter().map(|s| s.to_string()).collect();
-            params.extend(status_owned.iter().map(|s| s as &dyn rusqlite::ToSql));
+            params.extend(statuses.iter().map(|s| s as &dyn rusqlite::ToSql));
         }
         let mut stmt = self.conn.prepare(&sql)?;
         let steps = stmt
@@ -718,7 +716,7 @@ impl<'a> WorkflowManager<'a> {
         );
 
         let status_strings: Vec<String> = effective.iter().map(|s| s.to_string()).collect();
-        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(
             rusqlite::params_from_iter(status_strings.iter()),
             row_to_workflow_run,
@@ -933,7 +931,7 @@ impl<'a> WorkflowManager<'a> {
              WHERE child_run_id IN ({placeholders}) \
              GROUP BY child_run_id"
         );
-        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let mut stmt = self.conn.prepare(&sql)?;
         let mut map = std::collections::HashMap::new();
         let params_iter = rusqlite::params_from_iter(agent_run_ids.iter());
         let rows = stmt.query_map(params_iter, |row| {
@@ -1309,12 +1307,9 @@ impl<'a> WorkflowManager<'a> {
         let placeholders = sql_placeholders(run_ids.len());
         let name_sql =
             format!("SELECT id, workflow_name FROM workflow_runs WHERE id IN ({placeholders})");
-        let run_id_strings: Vec<String> = run_ids.iter().map(|s| s.to_string()).collect();
-        let name_params: Vec<&dyn rusqlite::ToSql> = run_id_strings
-            .iter()
-            .map(|s| s as &dyn rusqlite::ToSql)
-            .collect();
-        let mut name_stmt = self.conn.prepare_cached(&name_sql)?;
+        let name_params: Vec<&dyn rusqlite::ToSql> =
+            run_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let mut name_stmt = self.conn.prepare(&name_sql)?;
         let mut name_rows = name_stmt.query(name_params.as_slice())?;
         let mut root_names: HashMap<String, String> = HashMap::new();
         while let Some(row) = name_rows.next()? {
