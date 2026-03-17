@@ -42,6 +42,31 @@ pub fn resolve_script_path(
         .find(|p| p.exists())
 }
 
+/// Build a resolver closure suitable for passing to `validate_script_steps`.
+///
+/// Returns `Ok(path)` when the script is found, or `Err(searched)` where
+/// `searched` is a human-readable string of the paths that were checked.
+pub fn make_script_resolver(
+    working_dir: String,
+    repo_path: String,
+    skills_dir: Option<std::path::PathBuf>,
+) -> impl Fn(&str) -> Result<std::path::PathBuf, String> {
+    move |run| {
+        resolve_script_path(run, &working_dir, &repo_path, skills_dir.as_deref()).ok_or_else(|| {
+            let p = std::path::Path::new(run);
+            if p.is_absolute() {
+                run.to_string()
+            } else {
+                let sd = skills_dir
+                    .as_ref()
+                    .map(|s| s.join(run).display().to_string())
+                    .unwrap_or_else(|| format!("~/.claude/skills/{run}"));
+                format!("{working_dir}/{run}, {repo_path}/{run}, {sd}")
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
