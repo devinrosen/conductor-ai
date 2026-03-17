@@ -1,0 +1,403 @@
+use std::collections::HashSet;
+
+use super::types::{
+    Condition, InputType, ScriptNode, WorkflowDef, WorkflowNode,
+};
+
+// ---------------------------------------------------------------------------
+// Semantic validation
+// ---------------------------------------------------------------------------
+
+/// A single semantic validation error found during static analysis of a workflow.
+#[derive(Debug, Clone)]
+pub struct ValidationError {
+    pub message: String,
+    /// Optional hint to help the user fix the error.
+    pub hint: Option<String>,
+}
+
+/// The result of running `validate_workflow_semantics`.
+#[derive(Debug, Default)]
+pub struct ValidationReport {
+    pub errors: Vec<ValidationError>,
+}
+
+impl ValidationReport {
+    pub fn is_ok(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
+/// Validate a `WorkflowDef` semantically:
+///
+/// 1. Forward-pass dataflow analysis: every condition reference (`step.marker`)
+///    must name a step key that has been "produced" before that point.
+/// 2. Sub-workflow required-input satisfaction: every `required` input declared
+///    by a called sub-workflow must be supplied at the call site.
+/// 3. Sub-workflow existence: if the loader returns an error the missing workflow
+///    is reported as a validation error.
+///
+/// The `loader` callback receives a workflow name and returns its parsed
+/// `WorkflowDef`, allowing this function to be tested without touching the
+/// filesystem.
+pub fn validate_workflow_semantics<F>(def: &WorkflowDef, loader: &F) -> ValidationReport
+where
+    F: Fn(&str) -> std::result::Result<WorkflowDef, String>,
+{
+    let mut errors = Vec::new();
+    let mut produced: HashSet<String> = HashSet::new();
+
+    // Collect declared boolean input names for condition validation.
+    let bool_inputs: HashSet<String> = def
+        .inputs
+        .iter()
+        .filter(|i| i.input_type == InputType::Boolean)
+        .map(|i| i.name.clone())
+        .collect();
+
+    validate_nodes(&def.body, &mut produced, &mut errors, loader, &bool_inputs);
+
+    // The `always` block sees every step key produced anywhere in the main body.
+    let mut always_produced = produced.clone();
+    validate_nodes(
+        &def.always,
+        &mut always_produced,
+        &mut errors,
+        loader,
+        &bool_inputs,
+    );
+
+    // Validate target values
+    const VALID_TARGETS: &[&str] = &["worktree", "ticket", "repo", "pr", "workflow_run"];
+    for target in &def.targets {
+        if !VALID_TARGETS.contains(&target.as_str()) {
+            errors.push(ValidationError {
+                message: format!(
+                    "Unknown target '{}' in workflow '{}'. Valid targets: {}",
+                    target,
+                    def.name,
+                    VALID_TARGETS.join(", ")
+                ),
+                hint: Some(format!(
+                    "Change '{}' to one of: {}",
+                    target,
+                    VALID_TARGETS.join(", ")
+                )),
+            });
+        }
+    }
+
+    ValidationReport { errors }
+}
+
+fn validate_nodes<F>(
+    nodes: &[WorkflowNode],
+    produced: &mut HashSet<String>,
+    errors: &mut Vec<ValidationError>,
+    loader: &F,
+    bool_inputs: &HashSet<String>,
+) where
+    F: Fn(&str) -> std::result::Result<WorkflowDef, String>,
+{
+    for node in nodes {
+        match node {
+            WorkflowNode::Call(n) => {
+                produced.insert(n.agent.step_key());
+            }
+            WorkflowNode::CallWorkflow(n) => {
+                // Check that required inputs are satisfied.
+                match loader(&n.workflow) {
+                    Ok(sub_def) => {
+                        for input_decl in &sub_def.inputs {
+                            if input_decl.required && !n.inputs.contains_key(&input_decl.name) {
+                                errors.push(ValidationError {
+                                    message: format!(
+                                        "Sub-workflow '{}' requires input '{}' but it was not provided at the call site",
+                                        n.workflow, input_decl.name
+                                    ),
+                                    hint: None,
+                                });
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        errors.push(ValidationError {
+                            message: format!(
+                                "Sub-workflow '{}' could not be loaded: {}",
+                                n.workflow, e
+                            ),
+                            hint: None,
+                        });
+                    }
+                }
+                produced.insert(n.workflow.clone());
+            }
+            WorkflowNode::Parallel(n) => {
+                // Validate `if` condition references before inserting produced keys,
+                // since conditions must reference steps produced *before* this block.
+                for (step_name, _marker) in n.call_if.values() {
+                    check_condition_reachable(step_name, produced, errors);
+                }
+                for call in &n.calls {
+                    produced.insert(call.step_key());
+                }
+            }
+            WorkflowNode::If(n) => {
+                match &n.condition {
+                    Condition::StepMarker { step, .. } => {
+                        check_condition_reachable(step, produced, errors);
+                    }
+                    Condition::BoolInput { input } => {
+                        check_bool_input_declared(input, bool_inputs, errors);
+                    }
+                }
+                let mut branch_produced = produced.clone();
+                validate_nodes(&n.body, &mut branch_produced, errors, loader, bool_inputs);
+                // Conservative union: optimistically assume branch steps are available downstream.
+                produced.extend(branch_produced);
+            }
+            WorkflowNode::Unless(n) => {
+                match &n.condition {
+                    Condition::StepMarker { step, .. } => {
+                        check_condition_reachable(step, produced, errors);
+                    }
+                    Condition::BoolInput { input } => {
+                        check_bool_input_declared(input, bool_inputs, errors);
+                    }
+                }
+                let mut branch_produced = produced.clone();
+                validate_nodes(&n.body, &mut branch_produced, errors, loader, bool_inputs);
+                produced.extend(branch_produced);
+            }
+            WorkflowNode::While(n) => {
+                // Condition is checked before the first iteration.
+                check_condition_reachable(&n.step, produced, errors);
+                let mut body_produced = produced.clone();
+                validate_nodes(&n.body, &mut body_produced, errors, loader, bool_inputs);
+                produced.extend(body_produced);
+            }
+            WorkflowNode::DoWhile(n) => {
+                // Body always executes at least once before the condition is checked.
+                validate_nodes(&n.body, produced, errors, loader, bool_inputs);
+                check_condition_reachable(&n.step, produced, errors);
+            }
+            WorkflowNode::Do(n) => {
+                validate_nodes(&n.body, produced, errors, loader, bool_inputs);
+            }
+            WorkflowNode::Gate(_) => {}
+            WorkflowNode::Script(n) => {
+                produced.insert(n.name.clone());
+            }
+            WorkflowNode::Always(n) => {
+                // An Always node nested inside a body block sees the current produced set.
+                validate_nodes(&n.body, produced, errors, loader, bool_inputs);
+            }
+        }
+    }
+}
+
+/// Emit a validation error if `step` has not yet been produced.
+fn check_condition_reachable(
+    step: &str,
+    produced: &HashSet<String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if !produced.contains(step) {
+        errors.push(ValidationError {
+            message: format!(
+                "Condition references step '{}' which has not been produced at this point in the workflow",
+                step
+            ),
+            hint: Some(
+                "Note: inner steps of called sub-workflows are not available in this context. \
+                 Use the sub-workflow's own name (the key produced by `call workflow`) as the condition step."
+                    .to_string(),
+            ),
+        });
+    }
+}
+
+/// Emit a validation error if `input` is not a declared boolean input.
+fn check_bool_input_declared(
+    input: &str,
+    bool_inputs: &HashSet<String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if !bool_inputs.contains(input) {
+        errors.push(ValidationError {
+            message: format!(
+                "Condition references '{}' which is not a declared boolean input",
+                input
+            ),
+            hint: Some(format!(
+                "Declare it in the workflow inputs block: `{} boolean`",
+                input
+            )),
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Script step validation
+// ---------------------------------------------------------------------------
+
+/// Validate all `script` steps in a workflow: check that the `run` target
+/// exists and is executable, using the same search order the engine uses at
+/// runtime (`working_dir` → `repo_path` → `~/.claude/skills/`).
+///
+/// Paths containing `{{` (template variables) are silently skipped because
+/// they cannot be resolved statically.
+pub fn validate_script_steps(
+    def: &WorkflowDef,
+    working_dir: &str,
+    repo_path: &str,
+) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+    let skills_dir: Option<std::path::PathBuf> =
+        std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".claude").join("skills"));
+    let nodes: Vec<&ScriptNode> = collect_script_nodes(&def.body)
+        .into_iter()
+        .chain(collect_script_nodes(&def.always))
+        .collect();
+
+    for node in nodes {
+        let run = &node.run;
+
+        // Skip template-variable paths — can't resolve them statically.
+        if run.contains("{{") {
+            continue;
+        }
+
+        match crate::workflow::executors::resolve_script_path(
+            run,
+            working_dir,
+            repo_path,
+            skills_dir.as_deref(),
+        ) {
+            None => {
+                let p = std::path::Path::new(run);
+                let searched = if p.is_absolute() {
+                    run.to_string()
+                } else {
+                    let skills_path = skills_dir
+                        .as_ref()
+                        .map(|s| s.join(run).display().to_string())
+                        .unwrap_or_else(|| format!("~/.claude/skills/{run}"));
+                    format!("{}/{run}, {}/{run}, {skills_path}", working_dir, repo_path)
+                };
+                errors.push(ValidationError {
+                    message: format!(
+                        "Script step '{}': '{}' not found. Searched: {}",
+                        node.name, run, searched
+                    ),
+                    hint: None,
+                });
+            }
+            Some(resolved) => {
+                #[cfg(unix)]
+                if let Some(err) = check_script_unix_permissions(&node.name, &resolved) {
+                    errors.push(err);
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = resolved;
+                }
+            }
+        }
+    }
+
+    errors
+}
+
+/// Check Unix execute permissions for a resolved script path.
+///
+/// Returns a `ValidationError` if `fs::metadata` fails or the file lacks the
+/// execute bit; returns `None` if the file is executable.
+#[cfg(unix)]
+fn check_script_unix_permissions(
+    step_name: &str,
+    resolved: &std::path::Path,
+) -> Option<ValidationError> {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::metadata(resolved) {
+        Err(e) => Some(ValidationError {
+            message: format!(
+                "Script step '{}': could not read metadata for '{}': {}",
+                step_name,
+                resolved.display(),
+                e,
+            ),
+            hint: None,
+        }),
+        Ok(meta) => {
+            let mode = meta.permissions().mode();
+            if mode & 0o111 == 0 {
+                Some(ValidationError {
+                    message: format!(
+                        "Script step '{}': '{}' is not executable (mode {:04o})",
+                        step_name,
+                        resolved.display(),
+                        mode & 0o777,
+                    ),
+                    hint: Some(format!("Run: chmod +x {}", resolved.display())),
+                })
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Recursively collect all `ScriptNode` references from a node list.
+fn collect_script_nodes(nodes: &[WorkflowNode]) -> Vec<&ScriptNode> {
+    let mut out = Vec::new();
+    for node in nodes {
+        match node {
+            WorkflowNode::Script(s) => out.push(s),
+            WorkflowNode::If(n) => out.extend(collect_script_nodes(&n.body)),
+            WorkflowNode::Unless(n) => out.extend(collect_script_nodes(&n.body)),
+            WorkflowNode::While(n) => out.extend(collect_script_nodes(&n.body)),
+            WorkflowNode::DoWhile(n) => out.extend(collect_script_nodes(&n.body)),
+            WorkflowNode::Do(n) => out.extend(collect_script_nodes(&n.body)),
+            WorkflowNode::Always(n) => out.extend(collect_script_nodes(&n.body)),
+            WorkflowNode::Call(_)
+            | WorkflowNode::CallWorkflow(_)
+            | WorkflowNode::Gate(_)
+            | WorkflowNode::Parallel(_) => {}
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn test_check_script_unix_permissions_metadata_error() {
+        // A path that does not exist causes fs::metadata to fail, exercising the
+        // Err(e) branch added in #889.
+        let err = check_script_unix_permissions(
+            "my-step",
+            std::path::Path::new("/nonexistent/path/to/script.sh"),
+        );
+        assert!(
+            err.is_some(),
+            "missing path should produce a validation error"
+        );
+        let msg = &err.unwrap().message;
+        assert!(
+            msg.contains("could not read metadata"),
+            "error should mention metadata failure, got: {msg}"
+        );
+        assert!(
+            msg.contains("my-step"),
+            "error should include the step name, got: {msg}"
+        );
+        assert!(
+            msg.contains("/nonexistent/path/to/script.sh"),
+            "error should include the path, got: {msg}"
+        );
+    }
+}
