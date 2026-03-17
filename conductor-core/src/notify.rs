@@ -42,9 +42,7 @@ pub fn try_claim_notification(
     ) {
         Ok(rows) => rows == 1,
         Err(e) => {
-            tracing::warn!(
-                "try_claim_notification DB error for ({entity_id}, {event_type}): {e}"
-            );
+            tracing::warn!(entity_id, event_type, "try_claim_notification DB error: {e}");
             false
         }
     }
