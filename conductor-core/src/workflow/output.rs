@@ -12,13 +12,12 @@ pub struct ConductorOutput {
 }
 
 /// Parse the `<<<CONDUCTOR_OUTPUT>>>` block from agent result text.
-/// Finds the *last* occurrence to avoid false positives in code blocks.
+/// Finds the *first* occurrence — the real block delimiter always comes before any JSON content.
 pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
     let start_marker = "<<<CONDUCTOR_OUTPUT>>>";
     let end_marker = "<<<END_CONDUCTOR_OUTPUT>>>";
 
-    // Find the last occurrence
-    let start = text.rfind(start_marker)?;
+    let start = text.find(start_marker)?;
     let json_start = start + start_marker.len();
     let end = text[json_start..].find(end_marker)?;
     let json_str = text[json_start..json_start + end].trim();
@@ -59,5 +58,27 @@ pub(super) fn interpret_agent_output(
             .and_then(parse_conductor_output)
             .unwrap_or_default();
         Ok((output.markers, output.context, None))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test: when the context field value contains the start marker string,
+    /// `find` (not `rfind`) must be used so the real delimiter is found first.
+    #[test]
+    fn test_parse_conductor_output_marker_in_field_value() {
+        let text = r#"Some agent output.
+<<<CONDUCTOR_OUTPUT>>>
+{
+  "markers": ["done"],
+  "context": "saw <<<CONDUCTOR_OUTPUT>>> in the log and handled it"
+}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let result = parse_conductor_output(text).unwrap();
+        assert_eq!(result.markers, vec!["done"]);
+        assert!(result.context.contains("<<<CONDUCTOR_OUTPUT>>>"));
     }
 }

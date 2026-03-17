@@ -518,7 +518,7 @@ pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<Stru
     let start_marker = "<<<CONDUCTOR_OUTPUT>>>";
     let end_marker = "<<<END_CONDUCTOR_OUTPUT>>>";
 
-    let start = text.rfind(start_marker).ok_or_else(|| {
+    let start = text.find(start_marker).ok_or_else(|| {
         ConductorError::Schema("No <<<CONDUCTOR_OUTPUT>>> block found in agent output".to_string())
     })?;
     let json_start = start + start_marker.len();
@@ -1802,5 +1802,30 @@ fields:
             None,
         );
         assert!(issues.is_empty());
+    }
+
+    /// Regression test: when a field value contains the start marker string,
+    /// `find` (not `rfind`) must be used so the real delimiter is found first.
+    #[test]
+    fn test_parse_structured_output_marker_in_field_value() {
+        let schema_yaml = r#"
+fields:
+  summary: string
+  description: string
+"#;
+        let schema = parse_schema_content(schema_yaml, "test").unwrap();
+
+        // The description field value contains <<<CONDUCTOR_OUTPUT>>> — rfind would
+        // have selected that inner occurrence as the block start, causing a parse failure.
+        let text = r#"Some preamble text.
+<<<CONDUCTOR_OUTPUT>>>
+{
+  "summary": "all good",
+  "description": "output block looks like <<<CONDUCTOR_OUTPUT>>> but is inside JSON"
+}
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let result = parse_structured_output(text, &schema).unwrap();
+        assert_eq!(result.context, "all good");
     }
 }

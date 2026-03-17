@@ -652,23 +652,20 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_conductor_output_last_occurrence() {
-        // Should find the LAST occurrence (the real one), not a false positive in a code block
-        let text = r#"Here's an example of the output format:
-```
+    fn test_parse_conductor_output_first_occurrence() {
+        // Should find the FIRST occurrence — the real block delimiter always comes before
+        // the JSON content where a false match (e.g. the marker in a field value) could appear.
+        let text = r#"The agent output block:
 <<<CONDUCTOR_OUTPUT>>>
-{"markers": ["fake"], "context": "This is a code example"}
-<<<END_CONDUCTOR_OUTPUT>>>
-```
-
-And here is my actual output:
-<<<CONDUCTOR_OUTPUT>>>
-{"markers": ["real"], "context": "This is the real output"}
+{"markers": ["real"], "context": "actual output with <<<CONDUCTOR_OUTPUT>>> mentioned inside"}
 <<<END_CONDUCTOR_OUTPUT>>>
 "#;
         let output = parse_conductor_output(text).unwrap();
         assert_eq!(output.markers, vec!["real"]);
-        assert_eq!(output.context, "This is the real output");
+        assert_eq!(
+            output.context,
+            "actual output with <<<CONDUCTOR_OUTPUT>>> mentioned inside"
+        );
     }
 
     #[test]
