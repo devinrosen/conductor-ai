@@ -53,8 +53,8 @@ pub(super) fn tool_validate_workflow(
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::WorkflowManager;
     use conductor_core::workflow::{
-        collect_agent_names, detect_workflow_cycles, make_script_resolver, validate_script_steps,
-        validate_workflow_semantics,
+        collect_agent_names, default_skills_dir, detect_workflow_cycles, make_script_resolver,
+        validate_script_steps, validate_workflow_semantics,
     };
 
     let repo_slug = require_arg!(args, "repo");
@@ -126,11 +126,13 @@ pub(super) fn tool_validate_workflow(
             errors.push(err.message.clone());
         }
     }
-    let skills_dir =
-        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(&h).join(".claude/skills"));
     let script_errors = validate_script_steps(
         &workflow,
-        &make_script_resolver(wt_path.to_string(), repo_path.to_string(), skills_dir),
+        &make_script_resolver(
+            wt_path.to_string(),
+            repo_path.to_string(),
+            default_skills_dir(),
+        ),
     );
     for err in &script_errors {
         if let Some(hint) = &err.hint {

@@ -42,6 +42,12 @@ pub fn resolve_script_path(
         .find(|p| p.exists())
 }
 
+/// Returns the default skills directory (`$HOME/.claude/skills`), or `None`
+/// if the `HOME` environment variable is not set.
+pub fn default_skills_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(|h| std::path::PathBuf::from(&h).join(".claude/skills"))
+}
+
 /// Build a resolver closure suitable for passing to `validate_script_steps`.
 ///
 /// Returns `Ok(path)` when the script is found, or `Err(searched)` where
@@ -128,6 +134,61 @@ mod tests {
         );
         assert!(result.is_some());
         assert_eq!(result.unwrap(), script);
+    }
+
+    #[test]
+    fn test_make_script_resolver_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("run.sh");
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+        let wd = dir.path().to_str().unwrap().to_string();
+        let resolver = make_script_resolver(wd, "/nonexistent".to_string(), None);
+        let result = resolver("run.sh");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), script);
+    }
+
+    #[test]
+    fn test_make_script_resolver_not_found_relative_no_skills() {
+        let resolver = make_script_resolver("/tmp/wd".to_string(), "/tmp/repo".to_string(), None);
+        let result = resolver("missing.sh");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("/tmp/wd/missing.sh"),
+            "should include working_dir path, got: {err}"
+        );
+        assert!(
+            err.contains("/tmp/repo/missing.sh"),
+            "should include repo_path path, got: {err}"
+        );
+        assert!(
+            err.contains("~/.claude/skills/missing.sh"),
+            "should include default skills hint, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_make_script_resolver_not_found_relative_with_skills() {
+        let skills = std::path::PathBuf::from("/home/user/.claude/skills");
+        let resolver =
+            make_script_resolver("/tmp/wd".to_string(), "/tmp/repo".to_string(), Some(skills));
+        let result = resolver("deploy.sh");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("/home/user/.claude/skills/deploy.sh"),
+            "should include explicit skills path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_make_script_resolver_not_found_absolute() {
+        let resolver = make_script_resolver("/tmp/wd".to_string(), "/tmp/repo".to_string(), None);
+        let result = resolver("/nonexistent/absolute/script.sh");
+        let err = result.unwrap_err();
+        assert_eq!(
+            err, "/nonexistent/absolute/script.sh",
+            "absolute not-found should return the path as-is"
+        );
     }
 
     #[test]

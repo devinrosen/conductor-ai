@@ -20,8 +20,8 @@ use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager}
 use conductor_core::schema_config;
 use conductor_core::tickets::{build_agent_prompt, TicketInput, TicketSyncer};
 use conductor_core::workflow::{
-    collect_agent_names, detect_workflow_cycles, make_script_resolver, validate_script_steps,
-    validate_workflow_semantics, WorkflowExecConfig, WorkflowManager,
+    collect_agent_names, default_skills_dir, detect_workflow_cycles, make_script_resolver,
+    validate_script_steps, validate_workflow_semantics, WorkflowExecConfig, WorkflowManager,
 };
 use conductor_core::workflow_config;
 use conductor_core::worktree::WorktreeManager;
@@ -1732,11 +1732,9 @@ fn main() -> Result<()> {
                 }
 
                 // Script step validation (existence + executable bit).
-                let skills_dir = std::env::var_os("HOME")
-                    .map(|h| std::path::PathBuf::from(&h).join(".claude/skills"));
                 let script_errors = validate_script_steps(
                     &workflow,
-                    &make_script_resolver(wt_path.clone(), repo_path.clone(), skills_dir),
+                    &make_script_resolver(wt_path.clone(), repo_path.clone(), default_skills_dir()),
                 );
                 if !script_errors.is_empty() {
                     println!("\n  SCRIPT STEP ERRORS ({}):", script_errors.len());

@@ -1,4 +1,4 @@
-use crate::workflow_dsl::{resolve_script_path, *};
+use crate::workflow_dsl::*;
 
 fn no_loader(name: &str) -> std::result::Result<WorkflowDef, String> {
     Err(format!("no loader: {name}"))
@@ -399,16 +399,8 @@ fn test_parallel_if_validation_step_produced() {
 #[test]
 fn test_validate_script_steps_run_not_found() {
     let def = make_script_def("nonexistent-script.sh");
-    let errors = validate_script_steps(&def, &|run| {
-        resolve_script_path(run, "/tmp/wt", "/tmp/repo", None).ok_or_else(|| {
-            let p = std::path::Path::new(run);
-            if p.is_absolute() {
-                run.to_string()
-            } else {
-                format!("/tmp/wt/{run}, /tmp/repo/{run}")
-            }
-        })
-    });
+    let resolver = make_script_resolver("/tmp/wt".to_string(), "/tmp/repo".to_string(), None);
+    let errors = validate_script_steps(&def, &resolver);
     assert_eq!(errors.len(), 1, "expected one error, got: {:?}", errors);
     let msg = &errors[0].message;
     assert!(
@@ -455,10 +447,8 @@ fn test_validate_script_steps_run_valid() {
 
     let def = make_script_def("my-script.sh");
     let wt_str = dir.path().to_str().unwrap().to_string();
-    let errors = validate_script_steps(&def, &|run| {
-        resolve_script_path(run, &wt_str, "/tmp/no-repo", None)
-            .ok_or_else(|| format!("{wt_str}/{run}, /tmp/no-repo/{run}"))
-    });
+    let resolver = make_script_resolver(wt_str.clone(), "/tmp/no-repo".to_string(), None);
+    let errors = validate_script_steps(&def, &resolver);
     assert!(
         errors.is_empty(),
         "valid executable script should produce no errors, got: {:?}",
@@ -482,10 +472,8 @@ fn test_validate_script_steps_run_not_executable() {
 
     let def = make_script_def("noexec.sh");
     let wt_str = dir.path().to_str().unwrap().to_string();
-    let errors = validate_script_steps(&def, &|run| {
-        resolve_script_path(run, &wt_str, "/tmp/no-repo", None)
-            .ok_or_else(|| format!("{wt_str}/{run}, /tmp/no-repo/{run}"))
-    });
+    let resolver = make_script_resolver(wt_str.clone(), "/tmp/no-repo".to_string(), None);
+    let errors = validate_script_steps(&def, &resolver);
     assert_eq!(
         errors.len(),
         1,
@@ -542,16 +530,8 @@ fn test_validate_script_steps_nested_in_if_block() {
 #[test]
 fn test_validate_script_steps_in_always_block() {
     let def = make_always_script_def("always-step.sh");
-    let errors = validate_script_steps(&def, &|run| {
-        resolve_script_path(run, "/tmp/wt", "/tmp/repo", None).ok_or_else(|| {
-            let p = std::path::Path::new(run);
-            if p.is_absolute() {
-                run.to_string()
-            } else {
-                format!("/tmp/wt/{run}, /tmp/repo/{run}")
-            }
-        })
-    });
+    let resolver = make_script_resolver("/tmp/wt".to_string(), "/tmp/repo".to_string(), None);
+    let errors = validate_script_steps(&def, &resolver);
     assert_eq!(
         errors.len(),
         1,
@@ -576,16 +556,8 @@ fn test_validate_script_steps_in_always_block() {
 #[test]
 fn test_validate_script_steps_absolute_path_not_found() {
     let def = make_script_def("/nonexistent/absolute/path.sh");
-    let errors = validate_script_steps(&def, &|run| {
-        resolve_script_path(run, "/tmp/wt", "/tmp/repo", None).ok_or_else(|| {
-            let p = std::path::Path::new(run);
-            if p.is_absolute() {
-                run.to_string()
-            } else {
-                format!("/tmp/wt/{run}, /tmp/repo/{run}")
-            }
-        })
-    });
+    let resolver = make_script_resolver("/tmp/wt".to_string(), "/tmp/repo".to_string(), None);
+    let errors = validate_script_steps(&def, &resolver);
     assert_eq!(
         errors.len(),
         1,
