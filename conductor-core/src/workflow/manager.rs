@@ -1184,59 +1184,6 @@ impl<'a> WorkflowManager<'a> {
         crate::db::query_collect(self.conn, &sql, [repo_id], pending_gate_row_mapper)
     }
 
-    /// Shared implementation for listing waiting gate steps, optionally scoped to a repo.
-    ///
-    /// When `repo_id` is `Some`, the query adds a `LEFT JOIN worktrees` and filters to runs whose
-    /// `repo_id` matches directly or via their linked worktree.
-    fn list_waiting_gate_steps_scoped(
-        &self,
-        repo_id: Option<&str>,
-    ) -> Result<Vec<(WorkflowRunStep, String, Option<String>)>> {
-        let (extra_join, extra_where) = match repo_id {
-            Some(_) => (
-                " LEFT JOIN worktrees wt ON wt.id = r.worktree_id",
-                " AND (r.repo_id = ?1 OR wt.repo_id = ?1)",
-            ),
-            None => ("", ""),
-        };
-        let active_strings = WorkflowRunStatus::active_strings();
-        let active_placeholders = match repo_id {
-            Some(_) => sql_placeholders_from(WorkflowRunStatus::ACTIVE.len(), 2),
-            None => sql_placeholders(WorkflowRunStatus::ACTIVE.len()),
-        };
-        let sql = format!(
-            "SELECT {cols}, r.workflow_name, r.target_label \
-             FROM workflow_run_steps s \
-             JOIN workflow_runs r ON r.id = s.workflow_run_id{ej} \
-             WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
-             AND r.status IN ({ai}){ew} \
-             ORDER BY s.started_at",
-            cols = &*STEP_COLUMNS_WITH_PREFIX,
-            ej = extra_join,
-            ai = active_placeholders,
-            ew = extra_where,
-        );
-        match repo_id {
-            Some(id) => {
-                let mut all_params: Vec<rusqlite::types::Value> =
-                    vec![rusqlite::types::Value::Text(id.to_owned())];
-                all_params.extend(active_strings.into_iter().map(rusqlite::types::Value::Text));
-                crate::db::query_collect(
-                    self.conn,
-                    &sql,
-                    rusqlite::params_from_iter(all_params.iter()),
-                    waiting_gate_step_row_mapper,
-                )
-            }
-            None => crate::db::query_collect(
-                self.conn,
-                &sql,
-                rusqlite::params_from_iter(active_strings.iter()),
-                waiting_gate_step_row_mapper,
-            ),
-        }
-    }
-
     /// Load workflow definitions from the filesystem for a worktree.
     ///
     /// Wraps `workflow_dsl::load_workflow_defs` so consumers don't need to
