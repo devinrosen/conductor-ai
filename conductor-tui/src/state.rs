@@ -39,6 +39,7 @@ use conductor_core::github::{DiscoveredRepo, GithubPr};
 use conductor_core::issue_source::IssueSource;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::{Ticket, TicketLabel};
+use conductor_core::workflow::InputDecl;
 use conductor_core::workflow::{
     WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepSummary,
 };
@@ -745,6 +746,10 @@ pub struct DataCache {
     /// Steps for every leaf run in the current scope (run_id → ordered steps).
     /// Populated by the background poller on every tick.
     pub workflow_run_steps: HashMap<String, Vec<WorkflowRunStep>>,
+    /// Declared inputs per workflow run, pre-parsed from definition_snapshot.
+    /// Keyed by run_id; populated when workflow_runs is refreshed to avoid
+    /// re-parsing the DSL on every render frame.
+    pub workflow_run_declared_inputs: HashMap<String, Vec<InputDecl>>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.

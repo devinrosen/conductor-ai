@@ -6,6 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
+use conductor_core::workflow::InputType;
 use conductor_core::workflow::WorkflowNode;
 use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStatus};
 
@@ -1201,10 +1202,26 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
             .and_then(|tid| state.data.ticket_map.get(tid))
     });
 
-    // Header height: 3 base lines + optional worktree lines (branch + path) + optional ticket line + 1 border
+    // Look up pre-parsed declared inputs from the cache (populated on data refresh,
+    // not on every render frame).
+    let declared_inputs = run_info
+        .and_then(|run| state.data.workflow_run_declared_inputs.get(&run.id))
+        .map(|v| v.as_slice())
+        .unwrap_or_default();
+    let matched_inputs: Vec<_> = run_info
+        .map(|run| {
+            declared_inputs
+                .iter()
+                .filter_map(|decl| run.inputs.get(&decl.name).map(|val| (decl, val.as_str())))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Header height: 3 base lines + optional worktree lines (branch + path) + optional ticket line + declared inputs + 1 border
     let worktree_extra = if run_worktree.is_some() { 2 } else { 0 };
     let ticket_extra = if run_ticket.is_some() { 1 } else { 0 };
-    let header_height = 3 + worktree_extra + ticket_extra + 1;
+    let inputs_extra = matched_inputs.len();
+    let header_height = 3 + worktree_extra + ticket_extra + inputs_extra + 1;
 
     // Header area + body
     let chunks = Layout::default()
@@ -1268,6 +1285,36 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
                     format!("#{} — {}", ticket.source_id, ticket.title),
                     Style::default().fg(state.theme.group_header),
                 ),
+            ]));
+        }
+
+        for (decl, val) in &matched_inputs {
+            // Right-pad label to 11 chars total (matching " Branch:   ")
+            // Name is capped at 9 chars (1 space prefix + name + ": " = 11)
+            let name_display = if decl.name.chars().count() > 9 {
+                let truncated: String = decl.name.chars().take(8).collect();
+                format!("{truncated}…")
+            } else {
+                decl.name.clone()
+            };
+            let label = format!(" {name_display}: ");
+            let padded_label = format!("{label:<11}");
+            let value_display = match decl.input_type {
+                InputType::Boolean => {
+                    if *val == "true" {
+                        "[x]".to_string()
+                    } else {
+                        "[ ]".to_string()
+                    }
+                }
+                InputType::String => truncate(val, area.width.saturating_sub(12) as usize),
+            };
+            header_lines.push(Line::from(vec![
+                Span::styled(
+                    padded_label,
+                    Style::default().fg(state.theme.label_secondary),
+                ),
+                Span::raw(value_display),
             ]));
         }
 

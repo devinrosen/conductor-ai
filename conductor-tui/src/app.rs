@@ -14,7 +14,7 @@ use conductor_core::github;
 use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
-use conductor_core::workflow::{MetadataEntry, WorkflowWarning};
+use conductor_core::workflow::{parse_workflow_str, MetadataEntry, WorkflowWarning};
 use conductor_core::worktree::WorktreeManager;
 
 use crate::action::{Action, GithubDiscoverPayload};
@@ -750,6 +750,23 @@ impl App {
                 if let Some(slugs) = payload.workflow_def_slugs {
                     self.state.data.workflow_def_slugs = slugs;
                 }
+                self.state.data.workflow_run_declared_inputs = payload
+                    .workflow_runs
+                    .iter()
+                    .filter_map(|run| {
+                        let snapshot = run.definition_snapshot.as_deref()?;
+                        match parse_workflow_str(snapshot, "") {
+                            Ok(def) => Some((run.id.clone(), def.inputs)),
+                            Err(e) => {
+                                tracing::warn!(
+                                    run_id = %run.id,
+                                    "failed to parse workflow definition snapshot: {e}"
+                                );
+                                None
+                            }
+                        }
+                    })
+                    .collect();
                 self.state.data.workflow_runs = payload.workflow_runs;
                 self.state.data.workflow_steps = payload.workflow_steps;
                 self.state.data.step_agent_events = payload.step_agent_events;
@@ -6679,5 +6696,67 @@ mod action_handler_tests {
             !app.state.should_quit,
             "ConfirmNo must not trigger the action"
         );
+    }
+
+    #[test]
+    fn workflow_data_refreshed_populates_declared_inputs() {
+        let mut app = make_app();
+        assert!(app.state.data.workflow_run_declared_inputs.is_empty());
+
+        // A minimal workflow DSL snapshot that declares one required input.
+        let snapshot = r#"
+workflow my-wf {
+    meta { trigger = "manual" targets = ["worktree"] }
+    inputs {
+        pr_url required
+    }
+    call agent
+}
+"#;
+
+        let mut run = conductor_core::workflow::WorkflowRun {
+            id: "run-abc".to_string(),
+            workflow_name: "my-wf".to_string(),
+            worktree_id: None,
+            parent_run_id: String::new(),
+            status: conductor_core::workflow::WorkflowRunStatus::Running,
+            dry_run: false,
+            trigger: "manual".to_string(),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            ended_at: None,
+            result_summary: None,
+            definition_snapshot: Some(snapshot.to_string()),
+            inputs: std::collections::HashMap::new(),
+            ticket_id: None,
+            repo_id: None,
+            parent_workflow_run_id: None,
+            target_label: None,
+            default_bot_name: None,
+        };
+        run.inputs
+            .insert("pr_url".to_string(), "https://example.com".to_string());
+
+        app.update(Action::WorkflowDataRefreshed(Box::new(
+            crate::action::WorkflowDataPayload {
+                workflow_defs: None,
+                workflow_def_slugs: None,
+                workflow_runs: vec![run],
+                workflow_steps: vec![],
+                step_agent_events: vec![],
+                step_agent_run: None,
+                workflow_parse_warnings: vec![],
+                all_run_steps: std::collections::HashMap::new(),
+            },
+        )));
+
+        let decls = app
+            .state
+            .data
+            .workflow_run_declared_inputs
+            .get("run-abc")
+            .expect("declared inputs should be populated for run-abc");
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].name, "pr_url");
+        assert!(decls[0].required);
     }
 }
