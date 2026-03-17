@@ -512,13 +512,39 @@ pub struct StructuredOutput {
     pub json_string: String,
 }
 
+/// Find the start position of the real `<<<CONDUCTOR_OUTPUT>>>` block.
+///
+/// Returns the position of the last occurrence of `marker` where the immediately
+/// following content (after trimming whitespace) starts with `{` or `[`. This is
+/// the real block delimiter because:
+/// - Occurrences inside sentences or code examples are not followed by JSON
+/// - Occurrences inside a JSON field value appear mid-string, not at a JSON boundary
+/// - The real block start is always immediately followed by the JSON object/array
+pub(crate) fn find_conductor_output_start(text: &str, marker: &str) -> Option<usize> {
+    let mut last_valid = None;
+    let mut search_pos = 0;
+    while let Some(rel) = text[search_pos..].find(marker) {
+        let abs = search_pos + rel;
+        let after = text[abs + marker.len()..].trim_start();
+        if after.starts_with('{') || after.starts_with('[') || after.starts_with('`') {
+            last_valid = Some(abs);
+        }
+        search_pos = abs + 1;
+    }
+    last_valid
+}
+
 /// Parse the `<<<CONDUCTOR_OUTPUT>>>` block as structured JSON, validate against
 /// the schema, and derive markers.
 pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<StructuredOutput> {
     let start_marker = "<<<CONDUCTOR_OUTPUT>>>";
     let end_marker = "<<<END_CONDUCTOR_OUTPUT>>>";
 
-    let start = text.find(start_marker).ok_or_else(|| {
+    // Find the last occurrence of the start marker where the immediately following content
+    // (after trimming whitespace) starts with `{` or `[`. This correctly handles agent output
+    // that contains the marker in code examples, grep output, or JSON field values — all of
+    // which are not followed by a JSON object/array.
+    let start = find_conductor_output_start(text, start_marker).ok_or_else(|| {
         ConductorError::Schema("No <<<CONDUCTOR_OUTPUT>>> block found in agent output".to_string())
     })?;
     let json_start = start + start_marker.len();
@@ -1804,8 +1830,7 @@ fields:
         assert!(issues.is_empty());
     }
 
-    /// Regression test: when a field value contains the start marker string,
-    /// `find` (not `rfind`) must be used so the real delimiter is found first.
+    /// Regression: when a field value contains the start marker string, the real block is still found.
     #[test]
     fn test_parse_structured_output_marker_in_field_value() {
         let schema_yaml = r#"
