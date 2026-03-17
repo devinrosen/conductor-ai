@@ -7,7 +7,10 @@ use serde_json::Value;
 use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
 use crate::mcp::resources::format_workflow_def;
 
-pub(super) fn tool_list_workflows(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_list_workflows(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::WorkflowManager;
 
@@ -42,7 +45,10 @@ pub(super) fn tool_list_workflows(db_path: &Path, args: &serde_json::Map<String,
     tool_ok(out)
 }
 
-pub(super) fn tool_validate_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_validate_workflow(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::agent_config::AgentSpec;
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::WorkflowManager;
@@ -143,7 +149,10 @@ pub(super) fn tool_validate_workflow(db_path: &Path, args: &serde_json::Map<Stri
     }
 }
 
-pub(super) fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_run_workflow(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::{
         execute_workflow_standalone, RunIdSlot, WorkflowExecConfig, WorkflowExecStandalone,

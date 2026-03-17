@@ -12,8 +12,8 @@ mod prs;
 mod repos;
 mod runs;
 mod tickets;
-mod worktrees;
 mod workflows;
+mod worktrees;
 
 pub(super) fn conductor_tools() -> Vec<Tool> {
     vec![

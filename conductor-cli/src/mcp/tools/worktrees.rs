@@ -11,7 +11,10 @@ fn looks_like_ulid(s: &str) -> bool {
     s.len() == 26 && s.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
-pub(super) fn tool_list_worktrees(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_list_worktrees(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = require_arg!(args, "repo");
@@ -47,7 +50,10 @@ pub(super) fn tool_list_worktrees(db_path: &Path, args: &serde_json::Map<String,
     tool_ok(out)
 }
 
-pub(super) fn tool_get_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_get_worktree(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::agent::AgentManager;
     use conductor_core::github::get_pr_detail;
     use conductor_core::repo::RepoManager;
@@ -140,7 +146,10 @@ pub(super) fn tool_get_worktree(db_path: &Path, args: &serde_json::Map<String, V
     tool_ok(out)
 }
 
-pub(super) fn tool_create_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_create_worktree(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::TicketSyncer;
     use conductor_core::worktree::WorktreeManager;
@@ -191,7 +200,10 @@ pub(super) fn tool_create_worktree(db_path: &Path, args: &serde_json::Map<String
     }
 }
 
-pub(super) fn tool_delete_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_delete_worktree(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = require_arg!(args, "repo");
@@ -207,7 +219,10 @@ pub(super) fn tool_delete_worktree(db_path: &Path, args: &serde_json::Map<String
     }
 }
 
-pub(super) fn tool_push_worktree(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_push_worktree(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::worktree::WorktreeManager;
 
     let repo_slug = require_arg!(args, "repo");

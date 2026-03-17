@@ -2,10 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, Implementation, ListResourcesResult,
-    ListToolsResult, PaginatedRequestParams, ReadResourceRequestParams,
-    ReadResourceResult, ResourceContents, ResourcesCapability, ServerCapabilities,
-    ServerInfo, ToolsCapability,
+    CallToolRequestParams, CallToolResult, Implementation, ListResourcesResult, ListToolsResult,
+    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
+    ResourcesCapability, ServerCapabilities, ServerInfo, ToolsCapability,
 };
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, ServerHandler};
@@ -47,13 +46,12 @@ impl ServerHandler for ConductorMcpServer {
     {
         let db_path = self.db_path.clone();
         async move {
-            let resources =
-                tokio::task::spawn_blocking(move || super::resources::enumerate_resources(&db_path))
-                    .await
-                    .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
-                    .map_err(|e: anyhow::Error| {
-                        rmcp::ErrorData::internal_error(e.to_string(), None)
-                    })?;
+            let resources = tokio::task::spawn_blocking(move || {
+                super::resources::enumerate_resources(&db_path)
+            })
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?
+            .map_err(|e: anyhow::Error| rmcp::ErrorData::internal_error(e.to_string(), None))?;
 
             Ok(ListResourcesResult::with_all_items(resources))
         }

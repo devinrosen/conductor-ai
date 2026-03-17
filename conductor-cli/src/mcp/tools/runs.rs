@@ -9,7 +9,10 @@ use crate::mcp::resources::{
     resolve_worktree_info,
 };
 
-pub(super) fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_list_runs(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
     use conductor_core::worktree::WorktreeManager;
@@ -126,7 +129,10 @@ pub(super) fn tool_list_runs(db_path: &Path, args: &serde_json::Map<String, Valu
     }
 }
 
-pub(super) fn tool_get_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_get_run(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::workflow::WorkflowManager;
 
     let run_id = require_arg!(args, "run_id");
@@ -147,7 +153,10 @@ pub(super) fn tool_get_run(db_path: &Path, args: &serde_json::Map<String, Value>
     tool_ok(format_run_detail_with_log(&conn, &run, &steps))
 }
 
-pub(super) fn tool_cancel_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_cancel_run(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::workflow::WorkflowManager;
 
     let run_id = require_arg!(args, "run_id");
@@ -170,7 +179,10 @@ pub(super) fn tool_cancel_run(db_path: &Path, args: &serde_json::Map<String, Val
     }
 }
 
-pub(super) fn tool_resume_run(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_resume_run(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::workflow::{
         resume_workflow_standalone, validate_resume_preconditions, WorkflowManager,
         WorkflowResumeStandalone,
@@ -244,7 +256,10 @@ pub(super) fn tool_resume_run(db_path: &Path, args: &serde_json::Map<String, Val
     ))
 }
 
-pub(super) fn tool_get_step_log(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_get_step_log(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::agent::AgentManager;
     use conductor_core::workflow::WorkflowManager;
 
@@ -916,10 +931,7 @@ mod tests {
     #[test]
     fn test_dispatch_get_step_log_missing_step_name() {
         let (_f, db) = make_test_db();
-        let result = tool_get_step_log(
-            &db,
-            &args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX"),
-        );
+        let result = tool_get_step_log(&db, &args_with("run_id", "01HXXXXXXXXXXXXXXXXXXXXXXX"));
         assert_eq!(result.is_error, Some(true));
         let text = result.content[0]
             .as_text()

@@ -58,7 +58,10 @@ pub(super) fn tool_list_repos(db_path: &Path) -> CallToolResult {
     tool_ok(out)
 }
 
-pub(super) fn tool_register_repo(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_register_repo(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 
     let remote_url = require_arg!(args, "remote_url");
@@ -83,7 +86,10 @@ pub(super) fn tool_register_repo(db_path: &Path, args: &serde_json::Map<String, 
     }
 }
 
-pub(super) fn tool_unregister_repo(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_unregister_repo(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::repo::RepoManager;
 
     let slug = require_arg!(args, "repo");

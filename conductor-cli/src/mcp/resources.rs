@@ -541,7 +541,6 @@ pub(crate) fn resolve_worktree_info(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
 
     fn make_test_db() -> (tempfile::NamedTempFile, std::path::PathBuf) {
         use conductor_core::db::open_database;

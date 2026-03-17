@@ -5,7 +5,10 @@ use serde_json::Value;
 
 use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
 
-pub(super) fn tool_approve_gate(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_approve_gate(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::workflow::WorkflowManager;
 
     let run_id = require_arg!(args, "run_id");
@@ -27,7 +30,10 @@ pub(super) fn tool_approve_gate(db_path: &Path, args: &serde_json::Map<String, V
     }
 }
 
-pub(super) fn tool_reject_gate(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_reject_gate(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::workflow::WorkflowManager;
 
     let run_id = require_arg!(args, "run_id");

@@ -5,7 +5,10 @@ use serde_json::Value;
 
 use crate::mcp::helpers::{get_arg, open_db_and_config, tool_err, tool_ok};
 
-pub(super) fn tool_list_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_list_tickets(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::{TicketFilter, TicketSyncer};
 
@@ -54,7 +57,10 @@ pub(super) fn tool_list_tickets(db_path: &Path, args: &serde_json::Map<String, V
     tool_ok(out)
 }
 
-pub(super) fn tool_sync_tickets(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_sync_tickets(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::github;
     use conductor_core::issue_source::IssueSourceManager;
     use conductor_core::jira_acli;
@@ -202,7 +208,10 @@ pub(super) fn tool_sync_tickets(db_path: &Path, args: &serde_json::Map<String, V
     }
 }
 
-pub(super) fn tool_upsert_ticket(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
+pub(super) fn tool_upsert_ticket(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::{TicketInput, TicketSyncer};
 
