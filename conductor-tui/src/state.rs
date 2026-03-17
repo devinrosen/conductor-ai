@@ -1091,6 +1091,20 @@ fn derive_parallel_group_status(members: &[&&conductor_core::workflow::WorkflowR
     "pending".to_string()
 }
 
+/// Return the highest iteration number seen in the steps for `run_id`, or 0.
+fn max_iteration_for_run(
+    run_id: &str,
+    workflow_run_steps: &std::collections::HashMap<
+        String,
+        Vec<conductor_core::workflow::WorkflowRunStep>,
+    >,
+) -> i64 {
+    workflow_run_steps
+        .get(run_id)
+        .map(|steps| steps.iter().map(|s| s.iteration).max().unwrap_or(0))
+        .unwrap_or(0)
+}
+
 /// Recursively append `Child` rows for `parent_id` into `rows`.
 /// `depth` starts at 1 for direct children of a root run.
 fn push_children(
@@ -1111,10 +1125,7 @@ fn push_children(
     for child in children {
         let child_count = children_map.get(child.id.as_str()).map_or(0, |v| v.len());
         let collapsed = collapsed_ids.contains(&child.id);
-        let max_iteration = workflow_run_steps
-            .get(child.id.as_str())
-            .map(|steps| steps.iter().map(|s| s.iteration).max().unwrap_or(0))
-            .unwrap_or(0);
+        let max_iteration = max_iteration_for_run(child.id.as_str(), workflow_run_steps);
         rows.push(WorkflowRunRow::Child {
             run_id: child.id.clone(),
             parent_id: parent_id.to_string(),
@@ -1447,12 +1458,8 @@ impl AppState {
 
                 let child_count = children_map.get(run.id.as_str()).map_or(0, |v| v.len());
                 let collapsed = self.collapsed_workflow_run_ids.contains(&run.id);
-                let max_iteration = self
-                    .data
-                    .workflow_run_steps
-                    .get(run.id.as_str())
-                    .map(|steps| steps.iter().map(|s| s.iteration).max().unwrap_or(0))
-                    .unwrap_or(0);
+                let max_iteration =
+                    max_iteration_for_run(run.id.as_str(), &self.data.workflow_run_steps);
                 result.push(WorkflowRunRow::Parent {
                     run_id: run.id.clone(),
                     collapsed,
@@ -1602,12 +1609,8 @@ impl AppState {
                     }
                     let child_count = children_map.get(run.id.as_str()).map_or(0, |v| v.len());
                     let collapsed = self.collapsed_workflow_run_ids.contains(&run.id);
-                    let max_iteration = self
-                        .data
-                        .workflow_run_steps
-                        .get(run.id.as_str())
-                        .map(|steps| steps.iter().map(|s| s.iteration).max().unwrap_or(0))
-                        .unwrap_or(0);
+                    let max_iteration =
+                        max_iteration_for_run(run.id.as_str(), &self.data.workflow_run_steps);
                     result.push(WorkflowRunRow::Parent {
                         run_id: run.id.clone(),
                         collapsed,
@@ -2866,5 +2869,126 @@ mod tests {
         state.set_focused_index(2); // targets dashboard_index (Dashboard default)
         assert_eq!(state.workflow_def_index, 5); // unchanged
         assert_eq!(state.dashboard_index, 2);
+    }
+
+    fn make_iter_step(
+        run_id: &str,
+        step_name: &str,
+        iteration: i64,
+        position: i64,
+    ) -> conductor_core::workflow::WorkflowRunStep {
+        conductor_core::workflow::WorkflowRunStep {
+            id: format!("{run_id}-{step_name}-{iteration}"),
+            workflow_run_id: run_id.to_string(),
+            step_name: step_name.to_string(),
+            role: "agent".to_string(),
+            can_commit: false,
+            condition_expr: None,
+            status: conductor_core::workflow::WorkflowStepStatus::Completed,
+            child_run_id: None,
+            position,
+            started_at: None,
+            ended_at: None,
+            result_text: None,
+            condition_met: None,
+            iteration,
+            parallel_group_id: None,
+            context_out: None,
+            markers_out: None,
+            retry_count: 0,
+            gate_type: None,
+            gate_prompt: None,
+            gate_timeout: None,
+            gate_approved_by: None,
+            gate_approved_at: None,
+            gate_feedback: None,
+            structured_output: None,
+            output_file: None,
+        }
+    }
+
+    #[test]
+    fn push_steps_for_run_shows_only_latest_iteration() {
+        // Two iterations: iter 0 has "step-a" and "step-b"; iter 1 has "step-a" and "step-b".
+        // Only the iter-1 steps should appear.
+        let steps = vec![
+            make_iter_step("run1", "step-a", 0, 0),
+            make_iter_step("run1", "step-b", 0, 1),
+            make_iter_step("run1", "step-a", 1, 0),
+            make_iter_step("run1", "step-b", 1, 1),
+        ];
+        let mut map = std::collections::HashMap::new();
+        map.insert("run1".to_string(), steps);
+
+        let mut expanded = std::collections::HashSet::new();
+        expanded.insert("run1".to_string());
+
+        let mut rows = vec![];
+        push_steps_for_run("run1", 1, &mut rows, &expanded, &map);
+
+        assert_eq!(
+            rows.len(),
+            2,
+            "expected 2 step rows (one per step in iter 1)"
+        );
+        for row in &rows {
+            match row {
+                WorkflowRunRow::Step { step_id, .. } => {
+                    assert!(
+                        step_id.ends_with("-1"),
+                        "expected iter-1 step id, got {step_id}"
+                    );
+                }
+                other => panic!("unexpected row type: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn push_steps_for_run_not_expanded_emits_no_rows() {
+        let steps = vec![make_iter_step("run1", "step-a", 0, 0)];
+        let mut map = std::collections::HashMap::new();
+        map.insert("run1".to_string(), steps);
+
+        let expanded = std::collections::HashSet::new(); // run1 not expanded
+        let mut rows = vec![];
+        push_steps_for_run("run1", 1, &mut rows, &expanded, &map);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn push_steps_for_run_single_iteration_emits_all_steps() {
+        let steps = vec![
+            make_iter_step("run1", "step-a", 0, 0),
+            make_iter_step("run1", "step-b", 0, 1),
+            make_iter_step("run1", "step-c", 0, 2),
+        ];
+        let mut map = std::collections::HashMap::new();
+        map.insert("run1".to_string(), steps);
+
+        let mut expanded = std::collections::HashSet::new();
+        expanded.insert("run1".to_string());
+
+        let mut rows = vec![];
+        push_steps_for_run("run1", 1, &mut rows, &expanded, &map);
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[test]
+    fn max_iteration_for_run_returns_zero_for_unknown_run() {
+        let map = std::collections::HashMap::new();
+        assert_eq!(max_iteration_for_run("nonexistent", &map), 0);
+    }
+
+    #[test]
+    fn max_iteration_for_run_returns_highest() {
+        let steps = vec![
+            make_iter_step("run1", "step-a", 0, 0),
+            make_iter_step("run1", "step-a", 3, 0),
+            make_iter_step("run1", "step-a", 1, 0),
+        ];
+        let mut map = std::collections::HashMap::new();
+        map.insert("run1".to_string(), steps);
+        assert_eq!(max_iteration_for_run("run1", &map), 3);
     }
 }

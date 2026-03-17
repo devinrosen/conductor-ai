@@ -1059,12 +1059,7 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         Style::default().fg(state.theme.label_accent),
                     ));
 
-                    if *max_iteration > 0 {
-                        spans.push(Span::styled(
-                            format!("  (iter {})", max_iteration + 1),
-                            Style::default().fg(state.theme.label_accent),
-                        ));
-                    }
+                    push_iteration_badge(&mut spans, *max_iteration, state.theme.label_accent);
 
                     // Child count badge when collapsed.
                     if *collapsed && *child_count > 0 {
@@ -1127,12 +1122,7 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
                         ),
                     ];
 
-                    if *max_iteration > 0 {
-                        spans.push(Span::styled(
-                            format!("  (iter {})", max_iteration + 1),
-                            Style::default().fg(state.theme.label_accent),
-                        ));
-                    }
+                    push_iteration_badge(&mut spans, *max_iteration, state.theme.label_accent);
 
                     if *collapsed && *child_count > 0 {
                         spans.push(Span::styled(
@@ -1754,6 +1744,16 @@ fn time_ago(ts: &str) -> String {
 }
 
 /// Returns `(symbol, label, color)` for the most-recent run of `def_name`.
+/// Push an iteration counter badge span when `max_iteration > 0`.
+fn push_iteration_badge(spans: &mut Vec<Span<'static>>, max_iteration: i64, accent_color: Color) {
+    if max_iteration > 0 {
+        spans.push(Span::styled(
+            format!("  (iter {})", max_iteration + 1),
+            Style::default().fg(accent_color),
+        ));
+    }
+}
+
 fn last_run_badge(
     def_name: &str,
     runs: &[WorkflowRun],

@@ -6671,6 +6671,74 @@ mod tests {
         assert_eq!(state.column_focus, crate::state::ColumnFocus::Content);
     }
 
+    fn make_step(
+        step_name: &str,
+        iteration: i64,
+        position: i64,
+    ) -> conductor_core::workflow::WorkflowRunStep {
+        conductor_core::workflow::WorkflowRunStep {
+            id: format!("{step_name}-iter{iteration}"),
+            workflow_run_id: "run1".to_string(),
+            step_name: step_name.to_string(),
+            role: "agent".to_string(),
+            can_commit: false,
+            condition_expr: None,
+            status: conductor_core::workflow::WorkflowStepStatus::Completed,
+            child_run_id: None,
+            position,
+            started_at: None,
+            ended_at: None,
+            result_text: None,
+            condition_met: None,
+            iteration,
+            parallel_group_id: None,
+            context_out: None,
+            markers_out: None,
+            retry_count: 0,
+            gate_type: None,
+            gate_prompt: None,
+            gate_timeout: None,
+            gate_approved_by: None,
+            gate_approved_at: None,
+            gate_feedback: None,
+            structured_output: None,
+            output_file: None,
+        }
+    }
+
+    #[test]
+    fn collapse_loop_iterations_single_iteration_passthrough() {
+        let steps = vec![make_step("a", 0, 0), make_step("b", 0, 1)];
+        let result = collapse_loop_iterations(steps);
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|s| s.iteration == 0));
+    }
+
+    #[test]
+    fn collapse_loop_iterations_keeps_latest_per_step_name() {
+        // "a" appears in iterations 0, 1, 2 — only 2 should survive.
+        // "b" appears only in iteration 0 — should survive.
+        let steps = vec![
+            make_step("a", 0, 0),
+            make_step("b", 0, 1),
+            make_step("a", 1, 0),
+            make_step("a", 2, 0),
+        ];
+        let result = collapse_loop_iterations(steps);
+        // Should keep "a" at iter 2 and "b" at iter 0.
+        assert_eq!(result.len(), 2);
+        let a = result.iter().find(|s| s.step_name == "a").unwrap();
+        assert_eq!(a.iteration, 2);
+        let b = result.iter().find(|s| s.step_name == "b").unwrap();
+        assert_eq!(b.iteration, 0);
+    }
+
+    #[test]
+    fn collapse_loop_iterations_empty_input() {
+        let result = collapse_loop_iterations(vec![]);
+        assert!(result.is_empty());
+    }
+
     #[test]
     fn test_focus_workflow_column_allowed_when_visible() {
         let mut state = crate::state::AppState::new();
