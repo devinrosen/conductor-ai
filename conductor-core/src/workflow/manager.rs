@@ -1909,6 +1909,13 @@ mod tests {
     }
 
     #[test]
+    fn test_sql_placeholders_from_non_one_start() {
+        assert_eq!(sql_placeholders_from(0, 5), "");
+        assert_eq!(sql_placeholders_from(1, 2), "?2");
+        assert_eq!(sql_placeholders_from(3, 4), "?4, ?5, ?6");
+    }
+
+    #[test]
     fn test_get_active_steps_for_runs_groups_by_run_id() {
         // Seed two runs, each with one running step (and one completed step that
         // should be excluded).  Verify that get_active_steps_for_runs returns
