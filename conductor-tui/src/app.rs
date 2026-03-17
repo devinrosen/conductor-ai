@@ -23,8 +23,8 @@ use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
 use crate::state::{
     info_row, repo_info_row, AppState, ConfirmAction, DashboardRow, FormAction, FormField,
-    FormFieldType, InputAction, Modal, PostCreateChoice, RepoDetailFocus, View,
-    WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowsFocus, WorktreeDetailFocus,
+    FormFieldType, InputAction, Modal, PostCreateChoice, RepoDetailFocus, View, WorkflowDefFocus,
+    WorkflowRunDetailFocus, WorkflowsFocus, WorktreeDetailFocus,
 };
 use crate::theme::Theme;
 use crate::ui;

@@ -1,0 +1,10 @@
+remote: 
+remote: Create a pull request for 'feat/1004-feat-boolean-input-type-for' on GitHub by visiting:        
+remote:      https://github.com/devinrosen/conductor-ai/pull/new/feat/1004-feat-boolean-input-type-for        
+remote: 
+To github.com:devinrosen/conductor-ai.git
+ * [new branch]      HEAD -> feat/1004-feat-boolean-input-type-for
+branch 'feat/1004-feat-boolean-input-type-for' set up to track 'origin/feat/1004-feat-boolean-input-type-for'.
+<<<CONDUCTOR_OUTPUT>>>
+{"markers": [], "context": "PR is open at https://github.com/devinrosen/conductor-ai/pull/1135"}
+<<<END_CONDUCTOR_OUTPUT>>>
