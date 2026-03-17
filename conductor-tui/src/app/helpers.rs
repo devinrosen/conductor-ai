@@ -173,9 +173,7 @@ pub(super) fn send_workflow_result(
     result: conductor_core::error::Result<conductor_core::workflow::WorkflowResult>,
 ) {
     if let Some(ref tx) = bg_tx {
-        let on_label = target
-            .map(|t| format!(" on {t}"))
-            .unwrap_or_default();
+        let on_label = target.map(|t| format!(" on {t}")).unwrap_or_default();
         match result {
             Ok(res) => {
                 let msg = if res.all_succeeded {
