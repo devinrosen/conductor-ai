@@ -12,8 +12,9 @@ pub struct ConductorOutput {
 }
 
 /// Parse the `<<<CONDUCTOR_OUTPUT>>>` block from agent result text.
-/// Finds the last occurrence immediately followed by `{` or `[` — the real block delimiter.
-/// This correctly skips occurrences inside code examples, grep output, and JSON field values.
+/// Finds the last occurrence immediately followed by `{`, `[`, or a code fence — the real block
+/// delimiter. Strips markdown code fences before JSON parsing. This correctly skips occurrences
+/// inside code examples, grep output, and JSON field values.
 pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
     let start_marker = "<<<CONDUCTOR_OUTPUT>>>";
     let end_marker = "<<<END_CONDUCTOR_OUTPUT>>>";
@@ -23,7 +24,10 @@ pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
     let end = text[json_start..].find(end_marker)?;
     let json_str = text[json_start..json_start + end].trim();
 
-    serde_json::from_str(json_str).ok()
+    // Strip markdown code fences (e.g. ```json\n...\n```) that agents sometimes wrap around output
+    let cleaned = crate::schema_config::strip_code_fences(json_str);
+
+    serde_json::from_str(&cleaned).ok()
 }
 
 /// Interpret agent output using a schema (if present) or generic `CONDUCTOR_OUTPUT` parsing.
@@ -123,5 +127,20 @@ Real output:
         let result = parse_conductor_output(text).unwrap();
         assert_eq!(result.markers, vec!["real"]);
         assert_eq!(result.context, "the actual result");
+    }
+
+    /// Output block wrapped in a markdown code fence — must strip fences before parsing.
+    #[test]
+    fn test_parse_conductor_output_code_fenced() {
+        let text = r#"Here is my output:
+<<<CONDUCTOR_OUTPUT>>>
+```json
+{"markers": ["done"], "context": "fenced result"}
+```
+<<<END_CONDUCTOR_OUTPUT>>>
+"#;
+        let result = parse_conductor_output(text).unwrap();
+        assert_eq!(result.markers, vec!["done"]);
+        assert_eq!(result.context, "fenced result");
     }
 }
