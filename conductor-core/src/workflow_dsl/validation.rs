@@ -141,31 +141,24 @@ fn validate_nodes<F>(
                 }
             }
             WorkflowNode::If(n) => {
-                match &n.condition {
-                    Condition::StepMarker { step, .. } => {
-                        check_condition_reachable(step, produced, errors);
-                    }
-                    Condition::BoolInput { input } => {
-                        check_bool_input_declared(input, bool_inputs, errors);
-                    }
-                }
-                let mut branch_produced = produced.clone();
-                validate_nodes(&n.body, &mut branch_produced, errors, loader, bool_inputs);
-                // Conservative union: optimistically assume branch steps are available downstream.
-                produced.extend(branch_produced);
+                validate_conditional_branch(
+                    &n.condition,
+                    &n.body,
+                    produced,
+                    errors,
+                    loader,
+                    bool_inputs,
+                );
             }
             WorkflowNode::Unless(n) => {
-                match &n.condition {
-                    Condition::StepMarker { step, .. } => {
-                        check_condition_reachable(step, produced, errors);
-                    }
-                    Condition::BoolInput { input } => {
-                        check_bool_input_declared(input, bool_inputs, errors);
-                    }
-                }
-                let mut branch_produced = produced.clone();
-                validate_nodes(&n.body, &mut branch_produced, errors, loader, bool_inputs);
-                produced.extend(branch_produced);
+                validate_conditional_branch(
+                    &n.condition,
+                    &n.body,
+                    produced,
+                    errors,
+                    loader,
+                    bool_inputs,
+                );
             }
             WorkflowNode::While(n) => {
                 // Condition is checked before the first iteration.
@@ -233,6 +226,31 @@ fn check_bool_input_declared(
             )),
         });
     }
+}
+
+/// Validate a conditional branch (shared logic for `if` and `unless` nodes).
+fn validate_conditional_branch<F>(
+    condition: &Condition,
+    body: &[WorkflowNode],
+    produced: &mut HashSet<String>,
+    errors: &mut Vec<ValidationError>,
+    loader: &F,
+    bool_inputs: &HashSet<String>,
+) where
+    F: Fn(&str) -> std::result::Result<WorkflowDef, String>,
+{
+    match condition {
+        Condition::StepMarker { step, .. } => {
+            check_condition_reachable(step, produced, errors);
+        }
+        Condition::BoolInput { input } => {
+            check_bool_input_declared(input, bool_inputs, errors);
+        }
+    }
+    let mut branch_produced = produced.clone();
+    validate_nodes(body, &mut branch_produced, errors, loader, bool_inputs);
+    // Conservative union: optimistically assume branch steps are available downstream.
+    produced.extend(branch_produced);
 }
 
 // ---------------------------------------------------------------------------

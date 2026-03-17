@@ -59,9 +59,8 @@ pub fn load_workflow_defs(
 
 /// Validate that a workflow name is safe for use in filesystem paths.
 ///
-/// Only alphanumeric characters, hyphens, underscores, and dots (but not `..`)
-/// are allowed. This prevents path traversal when names are used to construct
-/// file paths.
+/// Only alphanumeric characters, hyphens, and underscores are allowed.
+/// This prevents path traversal when names are used to construct file paths.
 pub fn validate_workflow_name(name: &str) -> Result<()> {
     if name.is_empty() {
         return Err(ConductorError::Workflow(
