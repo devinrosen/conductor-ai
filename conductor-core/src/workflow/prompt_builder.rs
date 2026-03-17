@@ -171,16 +171,23 @@ mod tests {
             .contexts
             .push(make_entry("script-step", Some("/tmp/out.txt")));
         let vars = build_variable_map(&state);
-        assert_eq!(vars.get("prior_output_file").map(String::as_str), Some("/tmp/out.txt"));
+        assert_eq!(
+            vars.get("prior_output_file").map(String::as_str),
+            Some("/tmp/out.txt")
+        );
     }
 
     #[test]
     fn test_prior_output_file_picks_most_recent_entry() {
         let conn = crate::test_helpers::create_test_conn();
         let mut state = make_state(&conn);
-        state.contexts.push(make_entry("step-1", Some("/tmp/first.txt")));
+        state
+            .contexts
+            .push(make_entry("step-1", Some("/tmp/first.txt")));
         state.contexts.push(make_entry("step-2", None));
-        state.contexts.push(make_entry("step-3", Some("/tmp/last.txt")));
+        state
+            .contexts
+            .push(make_entry("step-3", Some("/tmp/last.txt")));
         let vars = build_variable_map(&state);
         assert_eq!(
             vars.get("prior_output_file").map(String::as_str),
@@ -192,7 +199,9 @@ mod tests {
     fn test_prior_output_file_skips_none_entries_to_find_earlier_file() {
         let conn = crate::test_helpers::create_test_conn();
         let mut state = make_state(&conn);
-        state.contexts.push(make_entry("step-1", Some("/tmp/first.txt")));
+        state
+            .contexts
+            .push(make_entry("step-1", Some("/tmp/first.txt")));
         state.contexts.push(make_entry("step-2", None));
         let vars = build_variable_map(&state);
         assert_eq!(
