@@ -25,6 +25,7 @@ tempfile = "3"
 
 [features]
 test-helpers = []
+test-notifications = []
 
 [dev-dependencies]
 tracing-test = "0.2"

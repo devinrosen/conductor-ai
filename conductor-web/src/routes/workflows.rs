@@ -851,8 +851,9 @@ mod tests {
         let notifications1 = notifications.clone();
         let key1 = key.clone();
         tokio::task::spawn_blocking(move || {
+            let conn = db1.blocking_lock();
             notify_workflow(
-                db1,
+                &conn,
                 &notifications1,
                 &key1,
                 "my-workflow",
@@ -867,8 +868,9 @@ mod tests {
         let db2 = Arc::clone(&db);
         let key2 = key.clone();
         tokio::task::spawn_blocking(move || {
+            let conn = db2.blocking_lock();
             notify_workflow(
-                db2,
+                &conn,
                 &notifications,
                 &key2,
                 "my-workflow",

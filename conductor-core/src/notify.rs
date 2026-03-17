@@ -139,15 +139,18 @@ pub fn fire_gate_notification(
 }
 
 fn show_desktop_notification(title: &str, body: &str) -> Result<(), String> {
-    #[cfg(not(test))]
+    #[cfg(any(test, feature = "test-notifications"))]
+    {
+        let _ = (title, body);
+        return Ok(());
+    }
+    #[cfg(not(any(test, feature = "test-notifications")))]
     notify_rust::Notification::new()
         .summary(title)
         .body(body)
         .show()
         .map(|_| ())
         .map_err(|e| e.to_string())?;
-    #[cfg(test)]
-    let _ = (title, body);
     Ok(())
 }
 

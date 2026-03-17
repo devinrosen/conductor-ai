@@ -29,6 +29,6 @@ serde_yml = "0.0"
 tracing = "0.1"
 
 [dev-dependencies]
-conductor-core = { path = "../conductor-core", features = ["test-helpers"] }
+conductor-core = { path = "../conductor-core", features = ["test-helpers", "test-notifications"] }
 tempfile = "3"
 insta = "1"
