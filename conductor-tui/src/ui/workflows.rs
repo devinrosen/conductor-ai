@@ -1206,7 +1206,7 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     // not on every render frame).
     let declared_inputs = run_info
         .and_then(|run| state.data.workflow_run_declared_inputs.get(&run.id))
-        .cloned()
+        .map(|v| v.as_slice())
         .unwrap_or_default();
     let matched_inputs: Vec<_> = run_info
         .map(|run| {
