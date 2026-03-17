@@ -79,7 +79,9 @@ pub fn fire_workflow_notification(
         "Conductor \u{2014} Workflow Failed"
     };
     let body = notification_body(workflow_name, target_label);
-    show_desktop_notification(title, &body);
+    if let Err(e) = show_desktop_notification(title, &body) {
+        tracing::warn!(run_id, workflow_name, "desktop notification failed: {e}");
+    }
 }
 
 /// Fire a desktop notification for an agent feedback request.
@@ -101,7 +103,11 @@ pub fn fire_feedback_notification(
         return;
     }
 
-    show_desktop_notification("Conductor \u{2014} Agent Needs Input", prompt_preview);
+    if let Err(e) =
+        show_desktop_notification("Conductor \u{2014} Agent Needs Input", prompt_preview)
+    {
+        tracing::warn!(request_id, "desktop notification failed: {e}");
+    }
 }
 
 /// Fire a desktop notification for a workflow human gate waiting for approval.
@@ -127,20 +133,22 @@ pub fn fire_gate_notification(
         Some(label) => format!("{workflow_name} on {label}: {step_name}"),
         None => format!("{workflow_name}: {step_name}"),
     };
-    show_desktop_notification("Conductor \u{2014} Approval Required", &body);
+    if let Err(e) = show_desktop_notification("Conductor \u{2014} Approval Required", &body) {
+        tracing::warn!(step_id, workflow_name, "desktop notification failed: {e}");
+    }
 }
 
-fn show_desktop_notification(title: &str, body: &str) {
+fn show_desktop_notification(title: &str, body: &str) -> Result<(), String> {
     #[cfg(not(test))]
-    if let Err(e) = notify_rust::Notification::new()
+    notify_rust::Notification::new()
         .summary(title)
         .body(body)
         .show()
-    {
-        tracing::warn!("desktop notification failed: {e}");
-    }
+        .map(|_| ())
+        .map_err(|e| e.to_string())?;
     #[cfg(test)]
     let _ = (title, body);
+    Ok(())
 }
 
 #[cfg(test)]
