@@ -2272,12 +2272,14 @@ fn test_filter_wf_dir_entries_skips_io_errors() {
     fs::write(dir.join("ignored.txt"), "content").unwrap();
 
     // Collect the real DirEntries first so we can chain them with synthetic errors.
-    let real_entries: Vec<io::Result<fs::DirEntry>> =
-        fs::read_dir(dir).unwrap().collect();
+    let real_entries: Vec<io::Result<fs::DirEntry>> = fs::read_dir(dir).unwrap().collect();
 
     // Prepend two synthetic DirEntry errors — these exercise the Err arm of the filter_map.
     let mixed = vec![
-        Err(io::Error::new(io::ErrorKind::PermissionDenied, "synthetic bad entry 1")),
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "synthetic bad entry 1",
+        )),
         Err(io::Error::other("synthetic bad entry 2")),
     ]
     .into_iter()
@@ -2286,7 +2288,11 @@ fn test_filter_wf_dir_entries_skips_io_errors() {
     let result = filter_wf_dir_entries(mixed, dir);
 
     // Only the real .wf file survives; errors and non-.wf files are dropped.
-    assert_eq!(result.len(), 1, "errors and non-.wf entries must be skipped");
+    assert_eq!(
+        result.len(),
+        1,
+        "errors and non-.wf entries must be skipped"
+    );
     assert_eq!(
         result[0].path().file_name().unwrap().to_str().unwrap(),
         "real.wf"
