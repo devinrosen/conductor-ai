@@ -756,7 +756,7 @@ impl App {
 
             let result = execute_workflow_standalone(&params);
 
-            send_workflow_result(&bg_tx, &def.name, result);
+            send_workflow_result(&bg_tx, &def.name, None, result);
         });
 
         self.workflow_threads.push(handle);
@@ -804,7 +804,7 @@ impl App {
 
             let result = execute_workflow_standalone(&params);
 
-            send_workflow_result(&bg_tx, &def.name, result);
+            send_workflow_result(&bg_tx, &def.name, None, result);
         });
 
         self.workflow_threads.push(handle);
@@ -849,7 +849,7 @@ impl App {
 
             let result = execute_workflow_standalone(&params);
 
-            send_workflow_result(&bg_tx, &def.name, result);
+            send_workflow_result(&bg_tx, &def.name, None, result);
         });
 
         self.workflow_threads.push(handle);
@@ -893,7 +893,7 @@ impl App {
 
             let result = execute_workflow_standalone(&params);
 
-            send_workflow_result(&bg_tx, &def.name, result);
+            send_workflow_result(&bg_tx, &def.name, None, result);
         });
 
         self.workflow_threads.push(handle);
@@ -1001,7 +1001,7 @@ impl App {
         ));
 
         let handle = std::thread::spawn(move || {
-            use conductor_core::workflow::{WorkflowExecConfig, WorkflowResult};
+            use conductor_core::workflow::WorkflowExecConfig;
             use conductor_core::workflow_ephemeral::run_workflow_on_pr;
 
             let db = db_path();
@@ -1033,29 +1033,7 @@ impl App {
                 false,
             );
 
-            if let Some(ref tx) = bg_tx {
-                match result {
-                    Ok(WorkflowResult { all_succeeded, .. }) => {
-                        let msg = if all_succeeded {
-                            format!(
-                                "Workflow '{workflow_name}' on {pr_label} completed successfully"
-                            )
-                        } else {
-                            format!(
-                                "Workflow '{workflow_name}' on {pr_label} completed with failures"
-                            )
-                        };
-                        let _ = tx.send(Action::BackgroundSuccess { message: msg });
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Action::BackgroundError {
-                            message: format!(
-                                "Workflow '{workflow_name}' on {pr_label} failed: {e}"
-                            ),
-                        });
-                    }
-                }
-            }
+            send_workflow_result(&bg_tx, &workflow_name, Some(&pr_label), result);
         });
 
         self.workflow_threads.push(handle);

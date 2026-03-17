@@ -161,26 +161,33 @@ pub(super) fn derive_worktree_slug(source_id: &str, title: &str) -> String {
 
 /// Send a workflow execution result through the background channel.
 ///
-/// Shared by all three `spawn_*_workflow_in_background` helpers to avoid
+/// Shared by all `spawn_*_workflow_in_background` helpers to avoid
 /// duplicating the success/failure dispatch logic.
+///
+/// When `target` is `Some(t)`, messages read `"Workflow 'X' on {t} completed …"`;
+/// when `None`, they read `"Workflow 'X' completed …"`.
 pub(super) fn send_workflow_result(
     bg_tx: &Option<crate::event::BackgroundSender>,
     workflow_name: &str,
+    target: Option<&str>,
     result: conductor_core::error::Result<conductor_core::workflow::WorkflowResult>,
 ) {
     if let Some(ref tx) = bg_tx {
+        let on_label = target
+            .map(|t| format!(" on {t}"))
+            .unwrap_or_default();
         match result {
             Ok(res) => {
                 let msg = if res.all_succeeded {
-                    format!("Workflow '{workflow_name}' completed successfully")
+                    format!("Workflow '{workflow_name}'{on_label} completed successfully")
                 } else {
-                    format!("Workflow '{workflow_name}' completed with failures")
+                    format!("Workflow '{workflow_name}'{on_label} completed with failures")
                 };
                 tx.send(Action::BackgroundSuccess { message: msg });
             }
             Err(e) => {
                 tx.send(Action::BackgroundError {
-                    message: format!("Workflow '{workflow_name}' failed: {e}"),
+                    message: format!("Workflow '{workflow_name}'{on_label} failed: {e}"),
                 });
             }
         }
