@@ -48,6 +48,11 @@ impl WorkflowRunStatus {
         WorkflowRunStatus::Running,
         WorkflowRunStatus::Waiting,
     ];
+
+    /// Returns the SQL string representations of all active statuses.
+    pub fn active_strings() -> Vec<String> {
+        Self::ACTIVE.iter().map(|s| s.to_string()).collect()
+    }
 }
 
 crate::impl_sql_enum!(WorkflowRunStatus);

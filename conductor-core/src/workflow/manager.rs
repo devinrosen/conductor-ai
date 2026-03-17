@@ -38,10 +38,7 @@ impl<'a> WorkflowManager<'a> {
                AND repo_id IS NOT NULL \
              GROUP BY repo_id, status"
         );
-        let active_strings: Vec<String> = WorkflowRunStatus::ACTIVE
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let active_strings = WorkflowRunStatus::active_strings();
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(active_strings.iter()), |row| {
             let repo_id: String = row.get(0)?;
@@ -572,10 +569,7 @@ impl<'a> WorkflowManager<'a> {
     /// or `None` if none exist.
     pub fn get_active_run_for_worktree(&self, worktree_id: &str) -> Result<Option<WorkflowRun>> {
         let placeholders = sql_placeholders_from(WorkflowRunStatus::ACTIVE.len(), 2);
-        let active_strings: Vec<String> = WorkflowRunStatus::ACTIVE
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let active_strings = WorkflowRunStatus::active_strings();
         let sql = format!(
             "SELECT {RUN_COLUMNS} FROM workflow_runs \
              WHERE worktree_id = ?1 AND status IN ({placeholders}) \
@@ -1187,10 +1181,7 @@ impl<'a> WorkflowManager<'a> {
             ),
             None => ("", ""),
         };
-        let active_strings: Vec<String> = WorkflowRunStatus::ACTIVE
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let active_strings = WorkflowRunStatus::active_strings();
         let active_placeholders = match repo_id {
             Some(_) => sql_placeholders_from(WorkflowRunStatus::ACTIVE.len(), 2),
             None => sql_placeholders(WorkflowRunStatus::ACTIVE.len()),
