@@ -1,3 +1,0 @@
-<<<CONDUCTOR_OUTPUT>>>
-{"markers": ["has_code_changes"], "context": "Found 14 code file(s) in diff: conductor-core/src/workflow/engine.rs,conductor-core/src/workflow/executors.rs,conductor-core/src/workflow/mod.rs,conductor-core/src/workflow_dsl.rs,conductor-tui/src/action.rs,conductor-tui/src/app.rs,conductor-tui/src/input.rs,conductor-tui/src/state.rs,conductor-tui/src/ui/modal.rs,conductor-tui/src/ui/workflow_def_detail.rs,conductor-tui/src/ui/workflows.rs,conductor-web/frontend/src/api/types.ts,conductor-web/frontend/src/components/workflows/RunWorkflowModal.tsx,conductor-web/src/routes/workflows.rs"}
-<<<END_CONDUCTOR_OUTPUT>>>
