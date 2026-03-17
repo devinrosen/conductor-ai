@@ -3131,8 +3131,7 @@ impl App {
                     .unwrap_or_default();
                 // Fall back to inputs["ticket_id"] when the worktree's in-memory state
                 // hasn't been refreshed yet (e.g. post-create flow).
-                let ticket_id = wt_ticket_id
-                    .or_else(|| inputs.get("ticket_id").cloned());
+                let ticket_id = wt_ticket_id.or_else(|| inputs.get("ticket_id").cloned());
                 self.spawn_workflow_in_background(
                     def,
                     worktree_id,
