@@ -2207,11 +2207,10 @@ fn test_parse_script_invalid_retries() {
 /// The fix emits a `tracing::warn!` and skips the bad entry so callers receive all successfully
 /// parsed definitions.
 ///
-/// True `DirEntry` iterator errors (e.g. corrupted inodes) are not reproducible portably.
-/// This test exercises the resilience of `load_workflow_defs` to file-read errors instead:
-/// a `.wf` file with mode 000 causes `parse_workflow_file` to fail, which is collected as a
-/// `WorkflowWarning` (not a panic or `Err`). The function returns `Ok` with all other
-/// successfully parsed definitions.
+/// This test exercises the `parse_workflow_file` error path: a `.wf` file with mode 000 causes
+/// parsing to fail, which is collected as a `WorkflowWarning`. The sibling test
+/// `test_filter_wf_dir_entries_skips_io_errors` directly exercises the DirEntry iterator-error
+/// path (api.rs lines 31–39).
 #[cfg(unix)]
 #[test]
 fn test_load_workflow_defs_skips_unreadable_file() {
@@ -2253,6 +2252,45 @@ fn test_load_workflow_defs_skips_unreadable_file() {
         "expected one warning for the unreadable file"
     );
     assert_eq!(warnings[0].file, "unreadable.wf");
+}
+
+/// Directly tests the DirEntry iterator-error path in `filter_wf_dir_entries` (api.rs lines 31–39).
+///
+/// Feeds synthetic `io::Error` values (which cannot be constructed from real filesystem calls in
+/// tests) directly into the helper to confirm they are skipped rather than panicking or returning
+/// an `Err`. Valid `.wf` DirEntries read from a temporary directory are passed through correctly.
+#[test]
+fn test_filter_wf_dir_entries_skips_io_errors() {
+    use crate::workflow_dsl::api::filter_wf_dir_entries;
+    use std::io;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path();
+
+    // Write a real .wf file and a non-.wf file to the temp dir.
+    fs::write(dir.join("real.wf"), "content").unwrap();
+    fs::write(dir.join("ignored.txt"), "content").unwrap();
+
+    // Collect the real DirEntries first so we can chain them with synthetic errors.
+    let real_entries: Vec<io::Result<fs::DirEntry>> =
+        fs::read_dir(dir).unwrap().collect();
+
+    // Prepend two synthetic DirEntry errors — these exercise the Err arm of the filter_map.
+    let mixed = vec![
+        Err(io::Error::new(io::ErrorKind::PermissionDenied, "synthetic bad entry 1")),
+        Err(io::Error::other("synthetic bad entry 2")),
+    ]
+    .into_iter()
+    .chain(real_entries);
+
+    let result = filter_wf_dir_entries(mixed, dir);
+
+    // Only the real .wf file survives; errors and non-.wf files are dropped.
+    assert_eq!(result.len(), 1, "errors and non-.wf entries must be skipped");
+    assert_eq!(
+        result[0].path().file_name().unwrap().to_str().unwrap(),
+        "real.wf"
+    );
 }
 
 #[test]

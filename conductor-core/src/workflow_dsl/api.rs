@@ -24,22 +24,12 @@ pub fn load_workflow_defs(
         None => return Ok((Vec::new(), Vec::new())),
     };
 
-    let mut entries: Vec<_> = fs::read_dir(&workflows_dir)
-        .map_err(|e| {
+    let mut entries: Vec<_> = filter_wf_dir_entries(
+        fs::read_dir(&workflows_dir).map_err(|e| {
             ConductorError::Workflow(format!("Failed to read {}: {e}", workflows_dir.display()))
-        })?
-        .filter_map(|e| match e {
-            Ok(entry) => Some(entry),
-            Err(err) => {
-                tracing::warn!(
-                    "Failed to read directory entry in {}: {err}",
-                    workflows_dir.display()
-                );
-                None
-            }
-        })
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "wf"))
-        .collect();
+        })?,
+        &workflows_dir,
+    );
 
     entries.sort_by_key(|e| e.file_name());
 
@@ -64,6 +54,28 @@ pub fn load_workflow_defs(
         }
     }
     Ok((defs, warnings))
+}
+
+/// Collect valid `.wf` directory entries, skipping and logging any iterator errors.
+///
+/// This is extracted to allow unit testing of the DirEntry error-skip path without
+/// requiring OS-level filesystem tricks.
+pub(crate) fn filter_wf_dir_entries(
+    iter: impl Iterator<Item = std::io::Result<fs::DirEntry>>,
+    dir_path: &std::path::Path,
+) -> Vec<fs::DirEntry> {
+    iter.filter_map(|e| match e {
+        Ok(entry) => Some(entry),
+        Err(err) => {
+            tracing::warn!(
+                "Failed to read directory entry in {}: {err}",
+                dir_path.display()
+            );
+            None
+        }
+    })
+    .filter(|e| e.path().extension().is_some_and(|ext| ext == "wf"))
+    .collect()
 }
 
 /// Validate that a workflow name is safe for use in filesystem paths.
