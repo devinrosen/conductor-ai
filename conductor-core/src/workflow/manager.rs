@@ -1152,7 +1152,16 @@ impl<'a> WorkflowManager<'a> {
     pub fn list_all_waiting_gate_steps(
         &self,
     ) -> Result<Vec<(WorkflowRunStep, String, Option<String>)>> {
-        self.list_waiting_gate_steps_scoped(None)
+        let sql = format!(
+            "SELECT {cols}, r.workflow_name, r.target_label \
+             FROM workflow_run_steps s \
+             JOIN workflow_runs r ON r.id = s.workflow_run_id \
+             WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
+             AND r.status IN ('pending', 'running', 'waiting') \
+             ORDER BY s.started_at",
+            cols = &*STEP_COLUMNS_WITH_PREFIX,
+        );
+        crate::db::query_collect(self.conn, &sql, [], waiting_gate_step_row_mapper)
     }
 
     /// List gate steps currently in `waiting` status for a specific repo.
