@@ -1530,6 +1530,9 @@ impl App {
                         self.state.step_agent_event_index = 0;
                         self.state.column_focus = crate::state::ColumnFocus::Content;
                         self.reload_workflow_steps();
+                    } else {
+                        self.state.status_message =
+                            Some("Workflow run not found — try refreshing".to_string());
                     }
                 }
             }

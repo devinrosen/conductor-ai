@@ -19,31 +19,29 @@ pub fn render_workflow_column(frame: &mut Frame, area: Rect, state: &AppState) {
         }
     };
 
+    // Split area into top 40% for defs and the remainder for gates+runs.
+    let top_rest = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(40), Constraint::Min(0)])
+        .split(area);
+    let (defs_area, rest_area) = (top_rest[0], top_rest[1]);
+
+    super::workflows::render_defs(frame, defs_area, state);
+
     if !state.detail_gates.is_empty() {
         let gate_height = (state.detail_gates.len() as u16 + 2)
             .max(3)
             .min(area.height / 4);
-        let chunks = Layout::default()
+        let gate_lower = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(40),
-                Constraint::Length(gate_height),
-                Constraint::Min(0),
-            ])
-            .split(area);
+            .constraints([Constraint::Length(gate_height), Constraint::Min(0)])
+            .split(rest_area);
 
-        super::workflows::render_defs(frame, chunks[0], state);
         let gates_focused = state.workflows_focus == WorkflowsFocus::Gates;
-        super::pending_gates::render_pending_gates(frame, chunks[1], state, gates_focused);
-        render_lower(frame, chunks[2], state);
+        super::pending_gates::render_pending_gates(frame, gate_lower[0], state, gates_focused);
+        render_lower(frame, gate_lower[1], state);
     } else {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-            .split(area);
-
-        super::workflows::render_defs(frame, chunks[0], state);
-        render_lower(frame, chunks[1], state);
+        render_lower(frame, rest_area, state);
     }
 }
 
