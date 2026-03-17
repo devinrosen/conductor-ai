@@ -126,8 +126,8 @@ pub(super) fn tool_validate_workflow(
             errors.push(err.message.clone());
         }
     }
-    let skills_dir = std::env::var_os("HOME")
-        .map(|h| std::path::PathBuf::from(&h).join(".claude/skills"));
+    let skills_dir =
+        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(&h).join(".claude/skills"));
     let wt = wt_path.to_string();
     let repo = repo_path.to_string();
     let script_errors = validate_script_steps(&workflow, &|run| {

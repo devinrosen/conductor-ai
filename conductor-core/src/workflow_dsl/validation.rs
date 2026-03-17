@@ -266,10 +266,7 @@ fn validate_conditional_branch<F>(
 ///
 /// Paths containing `{{` (template variables) are silently skipped because
 /// they cannot be resolved statically.
-pub fn validate_script_steps<F>(
-    def: &WorkflowDef,
-    path_resolver: &F,
-) -> Vec<ValidationError>
+pub fn validate_script_steps<F>(def: &WorkflowDef, path_resolver: &F) -> Vec<ValidationError>
 where
     F: Fn(&str) -> Result<std::path::PathBuf, String>,
 {
@@ -372,7 +369,6 @@ fn collect_script_nodes(nodes: &[WorkflowNode]) -> Vec<&ScriptNode> {
     }
     out
 }
-
 
 #[cfg(test)]
 mod tests {

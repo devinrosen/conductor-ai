@@ -85,7 +85,8 @@ mod tests {
 
     #[test]
     fn test_resolve_script_path_not_found() {
-        let result = resolve_script_path("totally-missing.sh", "/nonexistent", "/nonexistent", None);
+        let result =
+            resolve_script_path("totally-missing.sh", "/nonexistent", "/nonexistent", None);
         assert!(result.is_none());
     }
 
