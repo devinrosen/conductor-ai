@@ -2474,7 +2474,10 @@ mod tests {
             Some("feat/test"),
             "branch must be propagated from the worktree"
         );
-        assert!(row.ticket_ref.is_none(), "no ticket linked to this worktree");
+        assert!(
+            row.ticket_ref.is_none(),
+            "no ticket linked to this worktree"
+        );
     }
 
     #[test]
