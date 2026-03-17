@@ -2037,7 +2037,6 @@ mod tests {
             parent_workflow_run_id: parent_workflow_run_id.map(|s| s.into()),
             target_label: None,
             default_bot_name: None,
-            active_steps: Vec::new(),
         }
     }
 
@@ -2139,7 +2138,6 @@ mod tests {
             parent_workflow_run_id: None,
             target_label: target_label.map(|s| s.into()),
             default_bot_name: None,
-            active_steps: Vec::new(),
         }
     }
 

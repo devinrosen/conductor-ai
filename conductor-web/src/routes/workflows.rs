@@ -60,6 +60,16 @@ fn notify_workflow(
 
 // ── Response types ────────────────────────────────────────────────────
 
+/// Web-layer wrapper that attaches active steps to a `WorkflowRun` for the list endpoint.
+/// Preserves the exact JSON shape the frontend expects (active_steps is omitted when empty).
+#[derive(Serialize)]
+pub struct WorkflowRunResponse {
+    #[serde(flatten)]
+    run: WorkflowRun,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    active_steps: Vec<WorkflowRunStep>,
+}
+
 #[derive(Serialize)]
 pub struct InputDeclSummary {
     pub name: String,
@@ -339,7 +349,7 @@ pub struct ListAllRunsQuery {
 pub async fn list_all_workflow_runs_handler(
     State(state): State<AppState>,
     Query(params): Query<ListAllRunsQuery>,
-) -> Result<Json<Vec<WorkflowRun>>, ApiError> {
+) -> Result<Json<Vec<WorkflowRunResponse>>, ApiError> {
     use std::str::FromStr;
 
     let raw = params.status.as_deref().unwrap_or("");
@@ -368,18 +378,20 @@ pub async fn list_all_workflow_runs_handler(
 
     let db = state.db.lock().await;
     let mgr = WorkflowManager::new(&db);
-    let mut runs = mgr.list_active_workflow_runs(&statuses)?;
+    let runs = mgr.list_active_workflow_runs(&statuses)?;
 
     // Batch-fetch only running/waiting steps for all runs (filter pushed to SQL)
     let run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
     let mut steps_by_run = mgr.get_active_steps_for_runs(&run_ids)?;
-    for run in &mut runs {
-        if let Some(steps) = steps_by_run.remove(&run.id) {
-            run.active_steps = steps;
-        }
-    }
+    let responses: Vec<WorkflowRunResponse> = runs
+        .into_iter()
+        .map(|run| {
+            let active_steps = steps_by_run.remove(&run.id).unwrap_or_default();
+            WorkflowRunResponse { run, active_steps }
+        })
+        .collect();
 
-    Ok(Json(runs))
+    Ok(Json(responses))
 }
 
 /// GET /api/worktrees/{id}/workflows/runs

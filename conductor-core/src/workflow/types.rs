@@ -37,10 +37,6 @@ pub struct WorkflowRun {
     /// Default named GitHub App bot identity for this run.
     /// Set when the run is invoked via `call workflow { as = "..." }`.
     pub default_bot_name: Option<String>,
-    /// Active (running/waiting) steps for this run — populated by the web API list endpoint.
-    /// Empty for all other callers (skipped during serialization).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub active_steps: Vec<WorkflowRunStep>,
 }
 
 /// A workflow step execution record from the database.
