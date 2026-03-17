@@ -1088,11 +1088,10 @@ impl App {
                     tracing::warn!("failed to load pending gates for repo {repo_id}: {e}");
                     Vec::new()
                 });
-            self.state.detail_gate_index = 0;
         } else {
             self.state.detail_gates = Vec::new();
-            self.state.detail_gate_index = 0;
         }
+        self.state.detail_gate_index = 0;
     }
 
     fn reload_agent_events(&mut self) {

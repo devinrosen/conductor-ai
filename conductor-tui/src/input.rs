@@ -1124,4 +1124,79 @@ mod tests {
             Action::FocusWorkflowColumn
         ));
     }
+
+    // --- RepoDetail Gates pane: Enter→OpenGateModal ---
+
+    fn repo_detail_gates_state_with_gate() -> AppState {
+        use conductor_core::workflow::{WorkflowRunStep, WorkflowStepStatus};
+        let mut state = AppState::new();
+        state.view = View::RepoDetail;
+        state.repo_detail_focus = crate::state::RepoDetailFocus::Gates;
+        state.detail_gates = vec![(
+            WorkflowRunStep {
+                id: "step-gate-1".into(),
+                workflow_run_id: "run-gate-1".into(),
+                step_name: "human-review".into(),
+                role: "reviewer".into(),
+                can_commit: false,
+                condition_expr: None,
+                status: WorkflowStepStatus::Waiting,
+                child_run_id: None,
+                position: 0,
+                started_at: None,
+                ended_at: None,
+                result_text: None,
+                condition_met: None,
+                iteration: 0,
+                parallel_group_id: None,
+                context_out: None,
+                markers_out: None,
+                retry_count: 0,
+                gate_type: Some("approval".into()),
+                gate_prompt: Some("Please approve this change".into()),
+                gate_timeout: None,
+                gate_approved_by: None,
+                gate_approved_at: None,
+                gate_feedback: None,
+                structured_output: None,
+                output_file: None,
+            },
+            "my-workflow".into(),
+            Some("feat/my-feature".into()),
+        )];
+        state.detail_gate_index = 0;
+        state
+    }
+
+    #[test]
+    fn repo_detail_gates_enter_opens_gate_modal() {
+        let state = repo_detail_gates_state_with_gate();
+        assert!(matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::OpenGateModal {
+                step_id,
+                run_id,
+                ..
+            } if step_id == "step-gate-1" && run_id == "run-gate-1"
+        ));
+    }
+
+    #[test]
+    fn repo_detail_gates_enter_with_no_gates_returns_none() {
+        let mut state = AppState::new();
+        state.view = View::RepoDetail;
+        state.repo_detail_focus = crate::state::RepoDetailFocus::Gates;
+        state.detail_gates = Vec::new();
+        assert!(matches!(map_key(key(KeyCode::Enter), &state), Action::None));
+    }
+
+    #[test]
+    fn repo_detail_gates_enter_does_not_fire_when_other_focus() {
+        let mut state = repo_detail_gates_state_with_gate();
+        state.repo_detail_focus = crate::state::RepoDetailFocus::Worktrees;
+        assert!(!matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::OpenGateModal { .. }
+        ));
+    }
 }
