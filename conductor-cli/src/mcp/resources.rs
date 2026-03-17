@@ -12,15 +12,12 @@ use rmcp::model::Resource;
 // ---------------------------------------------------------------------------
 
 pub(super) fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource>> {
-    use conductor_core::config::load_config;
-    use conductor_core::db::open_database;
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::TicketSyncer;
     use conductor_core::workflow::WorkflowManager;
     use conductor_core::worktree::WorktreeManager;
 
-    let conn = open_database(db_path)?;
-    let config = load_config()?;
+    let (conn, config) = super::helpers::open_db_and_config(db_path)?;
 
     let mut resources = Vec::new();
 
@@ -112,16 +109,13 @@ pub(super) fn enumerate_resources(db_path: &Path) -> anyhow::Result<Vec<Resource
 // ---------------------------------------------------------------------------
 
 pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<String> {
-    use conductor_core::config::load_config;
-    use conductor_core::db::open_database;
     use conductor_core::repo::RepoManager;
     use conductor_core::tickets::TicketSyncer;
     use conductor_core::workflow::WorkflowManager;
     use conductor_core::worktree::WorktreeManager;
     use std::collections::HashMap;
 
-    let conn = open_database(db_path)?;
-    let config = load_config()?;
+    let (conn, config) = super::helpers::open_db_and_config(db_path)?;
 
     if uri == "conductor://repos" {
         let mgr = RepoManager::new(&conn, &config);
