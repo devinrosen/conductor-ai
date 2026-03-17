@@ -173,6 +173,13 @@ pub async fn run_workflow(
     let wt_target_label = format!("{repo_slug}/{wt_slug}");
     let state_clone = state.clone();
     tokio::task::spawn(async move {
+        // Slot receives the real workflow run ULID once execute_workflow creates the
+        // DB record. On the error path we prefer the real ULID (so dedup aligns with
+        // any concurrent TUI notification keyed on the same ID); we fall back to the
+        // deterministic bucket key only when no run record was created at all.
+        let run_id_slot: std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)> =
+            std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+
         let result = {
             let db = state_clone.db.lock().await;
             let config = state_clone.config.read().await;
@@ -213,7 +220,7 @@ pub async fn run_workflow(
                 parent_workflow_run_id: None,
                 target_label: Some(&wt_target_label),
                 default_bot_name: None,
-                run_id_notify: None,
+                run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
             };
 
             execute_workflow(&input)
@@ -264,16 +271,27 @@ pub async fn run_workflow(
                 let wf_name = workflow_name.clone();
                 let label = wt_target_label.clone();
                 tokio::task::spawn_blocking(move || {
-                    // No run_id was returned on error; build a deterministic key
-                    // from workflow_name + label + 60-second timestamp bucket so
-                    // concurrent web instances observing the same failure dedup to
-                    // a single notification via notification_log.
-                    let bucket = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs()
-                        / 60;
-                    let error_run_id = format!("wf-err:{wf_name}:{label}:{bucket}");
+                    // If execute_workflow created a run record before failing, use
+                    // its real ULID as the notification key. This ensures dedup
+                    // alignment with any concurrent TUI notification for the same run.
+                    // Fall back to the deterministic bucket key only when no run
+                    // record was created (pre-creation failure).
+                    let captured = run_id_slot
+                        .0
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
+                    let error_run_id = match captured {
+                        Some(id) => id,
+                        None => {
+                            let bucket = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs()
+                                / 60;
+                            format!("wf-err:{wf_name}:{label}:{bucket}")
+                        }
+                    };
                     let conn =
                         match conductor_core::db::open_database(&conductor_core::config::db_path())
                         {
@@ -851,8 +869,9 @@ mod tests {
         let notifications1 = notifications.clone();
         let key1 = key.clone();
         tokio::task::spawn_blocking(move || {
+            let conn = db1.blocking_lock();
             notify_workflow(
-                db1,
+                &conn,
                 &notifications1,
                 &key1,
                 "my-workflow",
@@ -867,8 +886,9 @@ mod tests {
         let db2 = Arc::clone(&db);
         let key2 = key.clone();
         tokio::task::spawn_blocking(move || {
+            let conn = db2.blocking_lock();
             notify_workflow(
-                db2,
+                &conn,
                 &notifications,
                 &key2,
                 "my-workflow",
@@ -924,5 +944,136 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    /// When execute_workflow creates the run record before failing, the slot holds
+    /// the real ULID. The error-path notification must use that ULID as its key so
+    /// dedup aligns with any concurrent TUI notification for the same run.
+    #[tokio::test]
+    async fn error_path_uses_real_run_id_when_slot_is_populated() {
+        let db = empty_state().db;
+
+        let notifications = conductor_core::config::NotificationConfig {
+            enabled: true,
+            workflows: conductor_core::config::WorkflowNotificationConfig {
+                on_success: true,
+                on_failure: true,
+            },
+        };
+
+        let real_run_id = "01REAL0000000000000000000X".to_string();
+
+        // Simulate: slot was populated by execute_workflow before it failed.
+        let slot: std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)> =
+            std::sync::Arc::new((
+                std::sync::Mutex::new(Some(real_run_id.clone())),
+                std::sync::Condvar::new(),
+            ));
+
+        let db2 = Arc::clone(&db);
+        tokio::task::spawn_blocking(move || {
+            let captured = slot.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let error_run_id = match captured {
+                Some(id) => id,
+                None => {
+                    let bucket = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                        / 60;
+                    format!("wf-err:my-workflow:repo/wt:{bucket}")
+                }
+            };
+            let conn = db2.blocking_lock();
+            notify_workflow(
+                &conn,
+                &notifications,
+                &error_run_id,
+                "my-workflow",
+                None,
+                false,
+            );
+        })
+        .await
+        .unwrap();
+
+        let conn = db.lock().await;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = ?1 AND event_type = 'failed'",
+                rusqlite::params![real_run_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "notification_log must use the real run ULID, not a bucket key"
+        );
+    }
+
+    /// When the failure happens before the run record is created, the slot is empty.
+    /// The error-path notification must fall back to the deterministic bucket key.
+    #[tokio::test]
+    async fn error_path_falls_back_to_bucket_key_when_slot_is_empty() {
+        let db = empty_state().db;
+
+        let notifications = conductor_core::config::NotificationConfig {
+            enabled: true,
+            workflows: conductor_core::config::WorkflowNotificationConfig {
+                on_success: true,
+                on_failure: true,
+            },
+        };
+
+        let wf_name = "my-workflow".to_string();
+        let label = "repo/wt".to_string();
+
+        // Simulate: slot was never populated (pre-creation failure).
+        let slot: std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)> =
+            std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+
+        let db2 = Arc::clone(&db);
+        let wf_name2 = wf_name.clone();
+        let label2 = label.clone();
+        let error_run_id_captured = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let erc2 = std::sync::Arc::clone(&error_run_id_captured);
+        tokio::task::spawn_blocking(move || {
+            let captured = slot.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let error_run_id = match captured {
+                Some(id) => id,
+                None => {
+                    let bucket = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                        / 60;
+                    format!("wf-err:{wf_name2}:{label2}:{bucket}")
+                }
+            };
+            *erc2.lock().unwrap() = error_run_id.clone();
+            let conn = db2.blocking_lock();
+            notify_workflow(&conn, &notifications, &error_run_id, &wf_name2, None, false);
+        })
+        .await
+        .unwrap();
+
+        let key = error_run_id_captured.lock().unwrap().clone();
+        assert!(
+            key.starts_with("wf-err:"),
+            "error key must be a bucket key when slot is empty, got: {key}"
+        );
+
+        let conn = db.lock().await;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = ?1 AND event_type = 'failed'",
+                rusqlite::params![key],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "notification_log must contain the bucket-key dedup row"
+        );
     }
 }
