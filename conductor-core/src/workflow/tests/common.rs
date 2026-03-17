@@ -39,6 +39,48 @@ pub(super) fn make_gate_node(gate_type: GateType, on_timeout: OnTimeout) -> Gate
     }
 }
 
+/// Build an `ExecutionState` with all common defaults filled in.
+/// Callers override only the fields they care about via struct update syntax.
+fn base_execution_state<'a>(
+    conn: &'a Connection,
+    config: &'a Config,
+    run_id: String,
+    parent_run_id: String,
+) -> ExecutionState<'a> {
+    ExecutionState {
+        conn,
+        config,
+        workflow_run_id: run_id,
+        workflow_name: "test".to_string(),
+        worktree_id: None,
+        working_dir: String::new(),
+        worktree_slug: String::new(),
+        repo_path: String::new(),
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: WorkflowExecConfig::default(),
+        inputs: HashMap::new(),
+        agent_mgr: AgentManager::new(conn),
+        wf_mgr: WorkflowManager::new(conn),
+        parent_run_id,
+        depth: 0,
+        target_label: None,
+        step_results: HashMap::new(),
+        contexts: Vec::new(),
+        position: 0,
+        all_succeeded: true,
+        total_cost: 0.0,
+        total_turns: 0,
+        total_duration_ms: 0,
+        last_gate_feedback: None,
+        block_output: None,
+        block_with: Vec::new(),
+        resume_ctx: None,
+        default_bot_name: None,
+    }
+}
+
 pub(super) fn make_state_with_run<'a>(
     conn: &'a Connection,
     config: &'static Config,
@@ -56,76 +98,19 @@ pub(super) fn make_state_with_run<'a>(
         .unwrap();
     let run_id = run.id.clone();
     let state = ExecutionState {
-        conn,
-        config,
-        workflow_run_id: run_id.clone(),
-        workflow_name: "test".to_string(),
         worktree_id: Some("w1".to_string()),
-        working_dir: String::new(),
-        worktree_slug: String::new(),
-        repo_path: String::new(),
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: WorkflowExecConfig::default(),
-        inputs: HashMap::new(),
-        agent_mgr: AgentManager::new(conn),
-        wf_mgr: WorkflowManager::new(conn),
-        parent_run_id: parent.id,
-        depth: 0,
-        target_label: None,
-        step_results: HashMap::new(),
-        contexts: Vec::new(),
-        position: 0,
-        all_succeeded: true,
-        total_cost: 0.0,
-        total_turns: 0,
-        total_duration_ms: 0,
-        last_gate_feedback: None,
-        block_output: None,
-        block_with: Vec::new(),
-        resume_ctx: None,
-        default_bot_name: None,
+        ..base_execution_state(conn, config, run_id.clone(), parent.id)
     };
     (state, run_id)
 }
 
 /// Helper to create a minimal ExecutionState for testing build_variable_map.
 pub(super) fn make_test_state(conn: &Connection) -> ExecutionState<'_> {
-    let config = Config::default();
     // We need a config that lives long enough — use a leaked Box for test simplicity.
-    let config: &'static Config = Box::leak(Box::new(config));
+    let config: &'static Config = Box::leak(Box::new(Config::default()));
     ExecutionState {
-        conn,
-        config,
-        workflow_run_id: String::new(),
         workflow_name: String::new(),
-        worktree_id: None,
-        working_dir: String::new(),
-        worktree_slug: String::new(),
-        repo_path: String::new(),
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: WorkflowExecConfig::default(),
-        inputs: HashMap::new(),
-        agent_mgr: AgentManager::new(conn),
-        wf_mgr: WorkflowManager::new(conn),
-        parent_run_id: String::new(),
-        depth: 0,
-        target_label: None,
-        step_results: HashMap::new(),
-        contexts: Vec::new(),
-        position: 0,
-        all_succeeded: true,
-        total_cost: 0.0,
-        total_turns: 0,
-        total_duration_ms: 0,
-        last_gate_feedback: None,
-        block_output: None,
-        block_with: Vec::new(),
-        resume_ctx: None,
-        default_bot_name: None,
+        ..base_execution_state(conn, config, String::new(), String::new())
     }
 }
 
@@ -166,36 +151,11 @@ pub(super) fn make_loop_test_state<'a>(
         .unwrap();
 
     ExecutionState {
-        conn,
-        config,
-        workflow_run_id: run.id,
-        workflow_name: "test".into(),
         worktree_id: Some("w1".into()),
         working_dir: "/tmp/test".into(),
         worktree_slug: "test".into(),
         repo_path: "/tmp/repo".into(),
-        ticket_id: None,
-        repo_id: None,
-        model: None,
-        exec_config: WorkflowExecConfig::default(),
-        inputs: HashMap::new(),
-        agent_mgr: AgentManager::new(conn),
-        wf_mgr: WorkflowManager::new(conn),
-        parent_run_id: parent.id,
-        depth: 0,
-        target_label: None,
-        step_results: HashMap::new(),
-        contexts: Vec::new(),
-        position: 0,
-        all_succeeded: true,
-        total_cost: 0.0,
-        total_turns: 0,
-        total_duration_ms: 0,
-        last_gate_feedback: None,
-        block_output: None,
-        block_with: Vec::new(),
-        resume_ctx: None,
-        default_bot_name: None,
+        ..base_execution_state(conn, config, run.id, parent.id)
     }
 }
 
