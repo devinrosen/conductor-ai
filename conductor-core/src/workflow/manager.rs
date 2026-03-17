@@ -1941,6 +1941,48 @@ mod tests {
         assert!(result.is_empty(), "empty run_ids must yield an empty map");
     }
 
+    #[test]
+    fn test_get_steps_for_runs_returns_all_steps_regardless_of_status() {
+        // Verify that get_steps_for_runs returns ALL steps (pending, running,
+        // completed) for multiple runs, grouped by run_id.
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+
+        let run1 = create_worktree_run(&conn, "w1");
+        let run2 = create_worktree_run(&conn, "w2");
+
+        // run1: one running step and one completed step — both should appear
+        let step1a = mgr
+            .insert_step(&run1.id, "step-a", "actor", false, 0, 0)
+            .unwrap();
+        set_step_status(&mgr, &step1a, WorkflowStepStatus::Running);
+        let step1b = mgr
+            .insert_step(&run1.id, "step-b", "actor", false, 1, 0)
+            .unwrap();
+        set_step_status(&mgr, &step1b, WorkflowStepStatus::Completed);
+
+        // run2: one pending step
+        let step2a = mgr
+            .insert_step(&run2.id, "step-c", "actor", false, 0, 0)
+            .unwrap();
+
+        let result = mgr
+            .get_steps_for_runs(&[run1.id.as_str(), run2.id.as_str()])
+            .unwrap();
+
+        assert_eq!(result.len(), 2, "expected entries for both runs");
+
+        let run1_steps = result.get(&run1.id).expect("run1 missing from result");
+        assert_eq!(run1_steps.len(), 2, "run1 should have both steps");
+        let run1_ids: Vec<&str> = run1_steps.iter().map(|s| s.id.as_str()).collect();
+        assert!(run1_ids.contains(&step1a.as_str()));
+        assert!(run1_ids.contains(&step1b.as_str()));
+
+        let run2_steps = result.get(&run2.id).expect("run2 missing from result");
+        assert_eq!(run2_steps.len(), 1, "run2 should have one step");
+        assert_eq!(run2_steps[0].id, step2a);
+    }
+
     // ── list_workflow_runs_filtered ──────────────────────────────────────────
 
     #[test]
