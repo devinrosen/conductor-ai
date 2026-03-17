@@ -176,6 +176,36 @@ fn send_workflow_result(
     }
 }
 
+/// Build `FormField`s from workflow `InputDecl`s.
+fn build_form_fields(inputs: &[conductor_core::workflow::InputDecl]) -> Vec<FormField> {
+    use conductor_core::workflow::InputType;
+    inputs
+        .iter()
+        .map(|inp| {
+            let (value, field_type) = if inp.input_type == InputType::Boolean {
+                (
+                    inp.default.clone().unwrap_or_else(|| "false".to_string()),
+                    FormFieldType::Boolean,
+                )
+            } else {
+                (inp.default.clone().unwrap_or_default(), FormFieldType::Text)
+            };
+            FormField {
+                label: inp.name.clone(),
+                value,
+                placeholder: if inp.required {
+                    "(required)".to_string()
+                } else {
+                    String::new()
+                },
+                manually_edited: false,
+                required: inp.required,
+                field_type,
+            }
+        })
+        .collect()
+}
+
 pub struct App {
     state: AppState,
     conn: Connection,
@@ -3090,7 +3120,7 @@ impl App {
                     repo,
                     number: pr_number as u64,
                 };
-                self.spawn_pr_workflow_in_background(pr_ref, def);
+                self.spawn_pr_workflow_in_background(pr_ref, def, inputs);
             }
             WorkflowPickerTarget::Ticket {
                 ticket_id,
@@ -3105,6 +3135,7 @@ impl App {
                     repo_id,
                     repo_path,
                     ticket_title,
+                    inputs,
                 );
             }
             WorkflowPickerTarget::Repo {
@@ -3112,7 +3143,7 @@ impl App {
                 repo_path,
                 repo_name,
             } => {
-                self.spawn_repo_workflow_in_background(def, repo_id, repo_path, repo_name);
+                self.spawn_repo_workflow_in_background(def, repo_id, repo_path, repo_name, inputs);
             }
             WorkflowPickerTarget::WorkflowRun {
                 workflow_run_id,
@@ -5543,33 +5574,7 @@ impl App {
 
         // If the workflow declares inputs, show a form before running.
         if !def.inputs.is_empty() {
-            use conductor_core::workflow::InputType;
-            let fields: Vec<FormField> = def
-                .inputs
-                .iter()
-                .map(|inp| {
-                    let (value, field_type) = if inp.input_type == InputType::Boolean {
-                        (
-                            inp.default.clone().unwrap_or_else(|| "false".to_string()),
-                            FormFieldType::Boolean,
-                        )
-                    } else {
-                        (inp.default.clone().unwrap_or_default(), FormFieldType::Text)
-                    };
-                    FormField {
-                        label: inp.name.clone(),
-                        value,
-                        placeholder: if inp.required {
-                            "(required)".to_string()
-                        } else {
-                            String::new()
-                        },
-                        manually_edited: false,
-                        required: inp.required,
-                        field_type,
-                    }
-                })
-                .collect();
+            let fields = build_form_fields(&def.inputs);
             self.state.modal = Modal::Form {
                 title: format!("Inputs for '{}'", def.name),
                 fields,
@@ -5670,7 +5675,7 @@ impl App {
                     number: pr_number as u64,
                 };
 
-                self.spawn_pr_workflow_in_background(pr_ref, def);
+                self.spawn_pr_workflow_in_background(pr_ref, def, std::collections::HashMap::new());
             }
             WorkflowPickerTarget::Ticket {
                 ticket_id,
@@ -5685,6 +5690,7 @@ impl App {
                     repo_id,
                     repo_path,
                     ticket_title,
+                    std::collections::HashMap::new(),
                 );
             }
             WorkflowPickerTarget::Repo {
@@ -5692,7 +5698,13 @@ impl App {
                 repo_path,
                 repo_name,
             } => {
-                self.spawn_repo_workflow_in_background(def, repo_id, repo_path, repo_name);
+                self.spawn_repo_workflow_in_background(
+                    def,
+                    repo_id,
+                    repo_path,
+                    repo_name,
+                    std::collections::HashMap::new(),
+                );
             }
             WorkflowPickerTarget::WorkflowRun {
                 workflow_run_id,
@@ -5851,6 +5863,7 @@ impl App {
         repo_id: String,
         repo_path: String,
         target_label: String,
+        inputs: std::collections::HashMap<String, String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -5877,7 +5890,7 @@ impl App {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
                 },
-                inputs: std::collections::HashMap::new(),
+                inputs,
                 target_label: Some(target_label),
                 run_id_notify: None,
             };
@@ -5897,6 +5910,7 @@ impl App {
         repo_id: String,
         repo_path: String,
         repo_name: String,
+        inputs: std::collections::HashMap<String, String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -5921,7 +5935,7 @@ impl App {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
                 },
-                inputs: std::collections::HashMap::new(),
+                inputs,
                 target_label: Some(repo_name),
                 run_id_notify: None,
             };
@@ -6088,33 +6102,7 @@ impl App {
         // If the workflow declares inputs, show a form before running.
         if !def.inputs.is_empty() {
             use crate::state::WorkflowPickerTarget;
-            use conductor_core::workflow::InputType;
-            let fields: Vec<FormField> = def
-                .inputs
-                .iter()
-                .map(|inp| {
-                    let (value, field_type) = if inp.input_type == InputType::Boolean {
-                        (
-                            inp.default.clone().unwrap_or_else(|| "false".to_string()),
-                            FormFieldType::Boolean,
-                        )
-                    } else {
-                        (inp.default.clone().unwrap_or_default(), FormFieldType::Text)
-                    };
-                    FormField {
-                        label: inp.name.clone(),
-                        value,
-                        placeholder: if inp.required {
-                            "(required)".to_string()
-                        } else {
-                            String::new()
-                        },
-                        manually_edited: false,
-                        required: inp.required,
-                        field_type,
-                    }
-                })
-                .collect();
+            let fields = build_form_fields(&def.inputs);
             let target = WorkflowPickerTarget::Pr {
                 pr_number,
                 pr_title: String::new(),
@@ -6131,7 +6119,7 @@ impl App {
             return;
         }
 
-        self.spawn_pr_workflow_in_background(pr_ref, def);
+        self.spawn_pr_workflow_in_background(pr_ref, def, std::collections::HashMap::new());
     }
 
     /// Spawn an ephemeral PR workflow execution in a background thread.
@@ -6139,6 +6127,7 @@ impl App {
         &mut self,
         pr_ref: conductor_core::workflow_ephemeral::PrRef,
         def: conductor_core::workflow::WorkflowDef,
+        inputs: std::collections::HashMap<String, String>,
     ) {
         use conductor_core::config::db_path;
         use conductor_core::db::open_database;
@@ -6182,7 +6171,7 @@ impl App {
                 &def.name,
                 None,
                 exec_config,
-                std::collections::HashMap::new(),
+                inputs,
                 false,
             );
 

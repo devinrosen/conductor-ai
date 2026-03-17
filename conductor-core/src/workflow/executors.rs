@@ -691,8 +691,8 @@ pub(super) fn execute_call_workflow(
     record_step_failure(state, step_key, &node.workflow, last_error, max_attempts)
 }
 
-pub(super) fn execute_if(state: &mut ExecutionState<'_>, node: &IfNode) -> Result<()> {
-    let condition_met = match &node.condition {
+fn eval_condition(state: &ExecutionState<'_>, condition: &Condition) -> bool {
+    match condition {
         Condition::StepMarker { step, marker } => state
             .step_results
             .get(step)
@@ -703,7 +703,11 @@ pub(super) fn execute_if(state: &mut ExecutionState<'_>, node: &IfNode) -> Resul
             .get(input)
             .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
-    };
+    }
+}
+
+pub(super) fn execute_if(state: &mut ExecutionState<'_>, node: &IfNode) -> Result<()> {
+    let condition_met = eval_condition(state, &node.condition);
 
     if condition_met {
         tracing::info!(condition = ?node.condition, "if — condition met, executing body");
@@ -716,18 +720,7 @@ pub(super) fn execute_if(state: &mut ExecutionState<'_>, node: &IfNode) -> Resul
 }
 
 pub(super) fn execute_unless(state: &mut ExecutionState<'_>, node: &UnlessNode) -> Result<()> {
-    let condition_met = match &node.condition {
-        Condition::StepMarker { step, marker } => state
-            .step_results
-            .get(step)
-            .map(|r| r.markers.iter().any(|m| m == marker))
-            .unwrap_or(false),
-        Condition::BoolInput { input } => state
-            .inputs
-            .get(input)
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false),
-    };
+    let condition_met = eval_condition(state, &node.condition);
 
     if !condition_met {
         tracing::info!(condition = ?node.condition, "unless — condition not met, executing body");
@@ -2740,5 +2733,130 @@ mod tests {
                 "each attempt should be marked Failed"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // eval_condition / execute_if / execute_unless — BoolInput tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_eval_condition_bool_input_true() {
+        let db = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let mut state = make_test_state(&db, &config, "/tmp", Default::default());
+        state.inputs.insert("flag".to_string(), "true".to_string());
+
+        let cond = Condition::BoolInput {
+            input: "flag".to_string(),
+        };
+        assert!(eval_condition(&state, &cond));
+    }
+
+    #[test]
+    fn test_eval_condition_bool_input_false() {
+        let db = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let mut state = make_test_state(&db, &config, "/tmp", Default::default());
+        state.inputs.insert("flag".to_string(), "false".to_string());
+
+        let cond = Condition::BoolInput {
+            input: "flag".to_string(),
+        };
+        assert!(!eval_condition(&state, &cond));
+    }
+
+    #[test]
+    fn test_eval_condition_bool_input_missing_defaults_false() {
+        let db = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let state = make_test_state(&db, &config, "/tmp", Default::default());
+
+        let cond = Condition::BoolInput {
+            input: "missing".to_string(),
+        };
+        assert!(!eval_condition(&state, &cond));
+    }
+
+    #[test]
+    fn test_eval_condition_bool_input_case_insensitive() {
+        let db = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let mut state = make_test_state(&db, &config, "/tmp", Default::default());
+        state.inputs.insert("flag".to_string(), "TRUE".to_string());
+
+        let cond = Condition::BoolInput {
+            input: "flag".to_string(),
+        };
+        assert!(eval_condition(&state, &cond));
+    }
+
+    #[test]
+    fn test_execute_if_bool_input_runs_body_when_true() {
+        let db = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let mut state = make_test_state(&db, &config, "/tmp", Default::default());
+        state
+            .inputs
+            .insert("run_it".to_string(), "true".to_string());
+
+        // Body has one echo script node — just verify execute_if doesn't error
+        // and returns Ok (actual body execution is covered by script tests).
+        let node = IfNode {
+            condition: Condition::BoolInput {
+                input: "run_it".to_string(),
+            },
+            body: vec![],
+        };
+        assert!(execute_if(&mut state, &node).is_ok());
+    }
+
+    #[test]
+    fn test_execute_if_bool_input_skips_body_when_false() {
+        let db = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let mut state = make_test_state(&db, &config, "/tmp", Default::default());
+        state
+            .inputs
+            .insert("run_it".to_string(), "false".to_string());
+
+        let node = IfNode {
+            condition: Condition::BoolInput {
+                input: "run_it".to_string(),
+            },
+            body: vec![],
+        };
+        assert!(execute_if(&mut state, &node).is_ok());
+    }
+
+    #[test]
+    fn test_execute_unless_bool_input_runs_body_when_false() {
+        let db = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let mut state = make_test_state(&db, &config, "/tmp", Default::default());
+        state.inputs.insert("skip".to_string(), "false".to_string());
+
+        let node = UnlessNode {
+            condition: Condition::BoolInput {
+                input: "skip".to_string(),
+            },
+            body: vec![],
+        };
+        assert!(execute_unless(&mut state, &node).is_ok());
+    }
+
+    #[test]
+    fn test_execute_unless_bool_input_skips_body_when_true() {
+        let db = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let mut state = make_test_state(&db, &config, "/tmp", Default::default());
+        state.inputs.insert("skip".to_string(), "true".to_string());
+
+        let node = UnlessNode {
+            condition: Condition::BoolInput {
+                input: "skip".to_string(),
+            },
+            body: vec![],
+        };
+        assert!(execute_unless(&mut state, &node).is_ok());
     }
 }

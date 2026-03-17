@@ -1261,3 +1261,68 @@ pub(super) fn check_max_iterations(
     }
     Ok(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow_dsl::{InputDecl, InputType, WorkflowDef, WorkflowTrigger};
+
+    fn make_bool_workflow(
+        name: &str,
+        input_name: &str,
+        required: bool,
+        default: Option<&str>,
+    ) -> WorkflowDef {
+        WorkflowDef {
+            name: name.to_string(),
+            description: String::new(),
+            trigger: WorkflowTrigger::Manual,
+            targets: vec![],
+            inputs: vec![InputDecl {
+                name: input_name.to_string(),
+                input_type: InputType::Boolean,
+                required,
+                default: default.map(|s| s.to_string()),
+                description: None,
+            }],
+            body: vec![],
+            always: vec![],
+            source_path: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_boolean_input_defaults_to_false_when_absent() {
+        let workflow = make_bool_workflow("wf", "flag", false, None);
+        let mut inputs = HashMap::new();
+        apply_workflow_input_defaults(&workflow, &mut inputs).unwrap();
+        assert_eq!(inputs.get("flag").map(|s| s.as_str()), Some("false"));
+    }
+
+    #[test]
+    fn test_boolean_input_uses_explicit_default_over_false() {
+        let workflow = make_bool_workflow("wf", "flag", false, Some("true"));
+        let mut inputs = HashMap::new();
+        apply_workflow_input_defaults(&workflow, &mut inputs).unwrap();
+        assert_eq!(inputs.get("flag").map(|s| s.as_str()), Some("true"));
+    }
+
+    #[test]
+    fn test_boolean_input_caller_value_not_overwritten() {
+        let workflow = make_bool_workflow("wf", "flag", false, None);
+        let mut inputs = HashMap::new();
+        inputs.insert("flag".to_string(), "true".to_string());
+        apply_workflow_input_defaults(&workflow, &mut inputs).unwrap();
+        // Caller's value wins — default ("false") must not overwrite it.
+        assert_eq!(inputs.get("flag").map(|s| s.as_str()), Some("true"));
+    }
+
+    #[test]
+    fn test_boolean_input_required_and_missing_is_error() {
+        let workflow = make_bool_workflow("wf", "flag", true, None);
+        let mut inputs = HashMap::new();
+        // Required but not provided — should return an error before defaulting.
+        let result = apply_workflow_input_defaults(&workflow, &mut inputs);
+        assert!(result.is_err(), "expected error for missing required input");
+    }
+}

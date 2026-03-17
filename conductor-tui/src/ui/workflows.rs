@@ -7,10 +7,10 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use conductor_core::workflow::WorkflowNode;
-use conductor_core::workflow::{Condition, WorkflowDef, WorkflowRun, WorkflowRunStatus};
+use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStatus};
 
 use super::common::truncate;
-use super::helpers::{shorten_paths, visual_idx_with_headers};
+use super::helpers::{format_condition, shorten_paths, visual_idx_with_headers};
 use crate::state::AppState;
 use crate::state::ColumnFocus;
 use crate::state::TargetType;
@@ -410,13 +410,6 @@ pub(super) fn render_def_steps(frame: &mut Frame, area: Rect, state: &AppState) 
 /// Returns the items so callers can also use `.len()` for navigation bounds.
 ///
 /// `workflow_defs` — all known workflow definitions (for inline CallWorkflow expansion).
-fn format_condition(c: &Condition) -> String {
-    match c {
-        Condition::StepMarker { step, marker } => format!("{step}.{marker}"),
-        Condition::BoolInput { input } => input.clone(),
-    }
-}
-
 /// `expanded_calls` — set of dot-path strings identifying expanded CallWorkflow nodes.
 /// `path_prefix` — dot-path prefix for the current recursion level (e.g. `""` or `"2."`).
 /// `seen` — workflow names already in the current expansion stack (cycle guard).

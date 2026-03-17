@@ -6,16 +6,10 @@ use ratatui::Frame;
 
 use std::collections::HashSet;
 
-use conductor_core::workflow::{AgentRef, Condition, WorkflowDef, WorkflowNode};
-
-fn format_condition(c: &Condition) -> String {
-    match c {
-        Condition::StepMarker { step, marker } => format!("{step}/{marker}"),
-        Condition::BoolInput { input } => input.clone(),
-    }
-}
+use conductor_core::workflow::{AgentRef, WorkflowDef, WorkflowNode};
 
 use crate::state::AppState;
+use crate::ui::helpers::format_condition;
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let Some(ref def) = state.selected_workflow_def else {

@@ -5091,4 +5091,76 @@ workflow w {
             "error should not list repo_path for absolute paths, got: {msg}"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // parse_condition — BoolInput path tests
+    // -----------------------------------------------------------------------
+
+    fn parse_workflow_with_if(condition_str: &str) -> crate::error::Result<WorkflowDef> {
+        let src = format!(
+            r#"
+workflow test {{
+  meta {{ trigger = "manual" targets = ["worktree"] }}
+  if {condition_str} {{
+    call do_something
+  }}
+}}
+"#
+        );
+        parse_workflow_str(&src, "test.wf")
+    }
+
+    fn parse_workflow_with_unless(condition_str: &str) -> crate::error::Result<WorkflowDef> {
+        let src = format!(
+            r#"
+workflow test {{
+  meta {{ trigger = "manual" targets = ["worktree"] }}
+  unless {condition_str} {{
+    call do_something
+  }}
+}}
+"#
+        );
+        parse_workflow_str(&src, "test.wf")
+    }
+
+    #[test]
+    fn test_parse_condition_bare_identifier_is_bool_input() {
+        let def = parse_workflow_with_if("my_flag").unwrap();
+        let WorkflowNode::If(if_node) = &def.body[0] else {
+            panic!("expected If node");
+        };
+        let Condition::BoolInput { input } = &if_node.condition else {
+            panic!("expected BoolInput condition, got {:?}", if_node.condition);
+        };
+        assert_eq!(input, "my_flag");
+    }
+
+    #[test]
+    fn test_parse_condition_dot_notation_is_step_marker() {
+        let def = parse_workflow_with_if("build.success").unwrap();
+        let WorkflowNode::If(if_node) = &def.body[0] else {
+            panic!("expected If node");
+        };
+        let Condition::StepMarker { step, marker } = &if_node.condition else {
+            panic!("expected StepMarker condition, got {:?}", if_node.condition);
+        };
+        assert_eq!(step, "build");
+        assert_eq!(marker, "success");
+    }
+
+    #[test]
+    fn test_parse_unless_bare_identifier_is_bool_input() {
+        let def = parse_workflow_with_unless("skip_tests").unwrap();
+        let WorkflowNode::Unless(unless_node) = &def.body[0] else {
+            panic!("expected Unless node");
+        };
+        let Condition::BoolInput { input } = &unless_node.condition else {
+            panic!(
+                "expected BoolInput condition, got {:?}",
+                unless_node.condition
+            );
+        };
+        assert_eq!(input, "skip_tests");
+    }
 }
