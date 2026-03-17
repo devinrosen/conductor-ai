@@ -9,8 +9,8 @@ use conductor_core::error::ConductorError;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
-    WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowManager, WorkflowResumeStandalone,
-    WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
+    RunIdSlot, WorkflowDef, WorkflowExecConfig, WorkflowExecInput, WorkflowManager,
+    WorkflowResumeStandalone, WorkflowRun, WorkflowRunStatus, WorkflowRunStep,
 };
 use conductor_core::worktree::WorktreeManager;
 
@@ -18,10 +18,6 @@ use crate::error::ApiError;
 use crate::events::ConductorEvent;
 use crate::notify::fire_workflow_notification;
 use crate::state::AppState;
-
-/// Shared slot type used to communicate the workflow run ID from
-/// `execute_workflow` back to the calling context on the error path.
-type RunIdSlot = std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)>;
 
 /// Resolve the run ID to use for error-path notifications.
 ///

@@ -33,7 +33,7 @@ pub use manager::WorkflowManager;
 pub use output::{parse_conductor_output, ConductorOutput};
 pub use status::{WorkflowRunStatus, WorkflowStepStatus};
 pub use types::{
-    ActiveWorkflowCounts, ContextEntry, MetadataEntry, StepResult, WorkflowExecConfig,
+    ActiveWorkflowCounts, ContextEntry, MetadataEntry, RunIdSlot, StepResult, WorkflowExecConfig,
     WorkflowExecInput, WorkflowExecStandalone, WorkflowResult, WorkflowResumeInput,
     WorkflowResumeStandalone, WorkflowRun, WorkflowRunContext, WorkflowRunStep,
     WorkflowStepSummary,
@@ -2514,7 +2514,7 @@ And here is my actual output:
 
         let workflow = make_empty_workflow();
 
-        let slot: std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)> =
+        let slot: RunIdSlot =
             std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
 
         let input = WorkflowExecInput {
