@@ -16,17 +16,7 @@ pub struct ConductorOutput {
 /// delimiter. Strips markdown code fences before JSON parsing. This correctly skips occurrences
 /// inside code examples, grep output, and JSON field values.
 pub fn parse_conductor_output(text: &str) -> Option<ConductorOutput> {
-    let start_marker = "<<<CONDUCTOR_OUTPUT>>>";
-    let end_marker = "<<<END_CONDUCTOR_OUTPUT>>>";
-
-    let start = crate::schema_config::find_conductor_output_start(text, start_marker)?;
-    let json_start = start + start_marker.len();
-    let end = text[json_start..].find(end_marker)?;
-    let json_str = text[json_start..json_start + end].trim();
-
-    // Strip markdown code fences (e.g. ```json\n...\n```) that agents sometimes wrap around output
-    let cleaned = crate::schema_config::strip_code_fences(json_str);
-
+    let cleaned = crate::schema_config::extract_output_block(text)?;
     serde_json::from_str(&cleaned).ok()
 }
 

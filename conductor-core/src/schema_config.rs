@@ -534,27 +534,33 @@ pub(crate) fn find_conductor_output_start(text: &str, marker: &str) -> Option<us
     last_valid
 }
 
-/// Parse the `<<<CONDUCTOR_OUTPUT>>>` block as structured JSON, validate against
-/// the schema, and derive markers.
-pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<StructuredOutput> {
+/// Extract and clean the raw JSON string from a `<<<CONDUCTOR_OUTPUT>>>` block.
+///
+/// Finds the last valid start marker occurrence, slices to the end marker,
+/// trims whitespace, and strips markdown code fences. Returns `None` if no
+/// valid block is found.
+///
+/// Trailing-comma stripping is intentionally omitted here — callers that need
+/// it (e.g. `parse_structured_output`) apply it themselves.
+pub(crate) fn extract_output_block(text: &str) -> Option<String> {
     let start_marker = "<<<CONDUCTOR_OUTPUT>>>";
     let end_marker = "<<<END_CONDUCTOR_OUTPUT>>>";
 
-    // Find the last occurrence of the start marker where the immediately following content
-    // (after trimming whitespace) starts with `{` or `[`. This correctly handles agent output
-    // that contains the marker in code examples, grep output, or JSON field values — all of
-    // which are not followed by a JSON object/array.
-    let start = find_conductor_output_start(text, start_marker).ok_or_else(|| {
-        ConductorError::Schema("No <<<CONDUCTOR_OUTPUT>>> block found in agent output".to_string())
-    })?;
+    let start = find_conductor_output_start(text, start_marker)?;
     let json_start = start + start_marker.len();
-    let end = text[json_start..].find(end_marker).ok_or_else(|| {
-        ConductorError::Schema("No <<<END_CONDUCTOR_OUTPUT>>> found after start marker".to_string())
-    })?;
+    let end = text[json_start..].find(end_marker)?;
     let raw = text[json_start..json_start + end].trim();
 
-    // Lenient parsing: strip markdown code fences
-    let cleaned = strip_code_fences(raw);
+    Some(strip_code_fences(raw))
+}
+
+/// Parse the `<<<CONDUCTOR_OUTPUT>>>` block as structured JSON, validate against
+/// the schema, and derive markers.
+pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<StructuredOutput> {
+    let cleaned = extract_output_block(text).ok_or_else(|| {
+        ConductorError::Schema("No <<<CONDUCTOR_OUTPUT>>> block found in agent output".to_string())
+    })?;
+
     // Strip trailing commas (common LLM artifact)
     let cleaned = strip_trailing_commas(&cleaned);
 
@@ -1625,10 +1631,6 @@ fields:
             &schema,
         );
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("END_CONDUCTOR_OUTPUT"));
     }
 
     #[test]
