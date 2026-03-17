@@ -67,8 +67,7 @@ fn test_gate_reject() {
 #[test]
 fn test_gate_timeout_fail() {
     let conn = setup_db();
-    let config: &'static crate::config::Config =
-        Box::leak(Box::new(crate::config::Config::default()));
+    let config = make_resume_config();
     let (mut state, run_id) = make_state_with_run(&conn, config);
 
     let wf_mgr = WorkflowManager::new(&conn);
@@ -89,8 +88,7 @@ fn test_gate_timeout_fail() {
 #[test]
 fn test_gate_timeout_continue() {
     let conn = setup_db();
-    let config: &'static crate::config::Config =
-        Box::leak(Box::new(crate::config::Config::default()));
+    let config = make_resume_config();
     let (mut state, run_id) = make_state_with_run(&conn, config);
 
     let wf_mgr = WorkflowManager::new(&conn);
