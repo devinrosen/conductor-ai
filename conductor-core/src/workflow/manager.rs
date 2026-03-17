@@ -496,26 +496,7 @@ impl<'a> WorkflowManager<'a> {
         &self,
         run_ids: &[&str],
     ) -> Result<HashMap<String, Vec<WorkflowRunStep>>> {
-        if run_ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let placeholders = sql_placeholders(run_ids.len());
-        let sql = format!(
-            "SELECT {STEP_COLUMNS} FROM workflow_run_steps WHERE workflow_run_id IN ({placeholders}) ORDER BY workflow_run_id, position"
-        );
-        let params: Vec<&dyn rusqlite::ToSql> =
-            run_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-        let mut stmt = self.conn.prepare(&sql)?;
-        let steps = stmt
-            .query_map(params.as_slice(), row_to_workflow_step)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut map: HashMap<String, Vec<WorkflowRunStep>> = HashMap::new();
-        for step in steps {
-            map.entry(step.workflow_run_id.clone())
-                .or_default()
-                .push(step);
-        }
-        Ok(map)
+        self.fetch_steps_for_runs_filtered(run_ids, None)
     }
 
     /// Batch-fetch only running/waiting steps for multiple runs in a single query.
@@ -524,18 +505,42 @@ impl<'a> WorkflowManager<'a> {
         &self,
         run_ids: &[&str],
     ) -> Result<HashMap<String, Vec<WorkflowRunStep>>> {
+        self.fetch_steps_for_runs_filtered(run_ids, Some(&["running", "waiting"]))
+    }
+
+    fn fetch_steps_for_runs_filtered(
+        &self,
+        run_ids: &[&str],
+        status_filter: Option<&[&str]>,
+    ) -> Result<HashMap<String, Vec<WorkflowRunStep>>> {
         if run_ids.is_empty() {
             return Ok(HashMap::new());
         }
         let placeholders = sql_placeholders(run_ids.len());
+        // Status placeholders must be offset so their ?N indices don't collide
+        // with the run_id placeholders (which use ?1..?run_ids.len()).
+        let status_clause = if let Some(statuses) = status_filter {
+            let offset = run_ids.len();
+            let status_placeholders = (1..=statuses.len())
+                .map(|i| format!("?{}", offset + i))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(" AND status IN ({status_placeholders})")
+        } else {
+            String::new()
+        };
         let sql = format!(
             "SELECT {STEP_COLUMNS} FROM workflow_run_steps \
-             WHERE workflow_run_id IN ({placeholders}) \
-               AND status IN ('running', 'waiting') \
+             WHERE workflow_run_id IN ({placeholders}){status_clause} \
              ORDER BY workflow_run_id, position"
         );
-        let params: Vec<&dyn rusqlite::ToSql> =
+        let mut params: Vec<&dyn rusqlite::ToSql> =
             run_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let status_owned: Vec<String>;
+        if let Some(statuses) = status_filter {
+            status_owned = statuses.iter().map(|s| s.to_string()).collect();
+            params.extend(status_owned.iter().map(|s| s as &dyn rusqlite::ToSql));
+        }
         let mut stmt = self.conn.prepare(&sql)?;
         let steps = stmt
             .query_map(params.as_slice(), row_to_workflow_step)?
