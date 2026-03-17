@@ -380,39 +380,6 @@ fn collect_script_nodes(nodes: &[WorkflowNode]) -> Vec<&ScriptNode> {
     out
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(unix)]
-    #[test]
-    fn test_check_script_unix_permissions_metadata_error() {
-        // A path that does not exist causes fs::metadata to fail, exercising the
-        // Err(e) branch added in #889.
-        let err = check_script_unix_permissions(
-            "my-step",
-            std::path::Path::new("/nonexistent/path/to/script.sh"),
-        );
-        assert!(
-            err.is_some(),
-            "missing path should produce a validation error"
-        );
-        let msg = &err.unwrap().message;
-        assert!(
-            msg.contains("could not read metadata"),
-            "error should mention metadata failure, got: {msg}"
-        );
-        assert!(
-            msg.contains("my-step"),
-            "error should include the step name, got: {msg}"
-        );
-        assert!(
-            msg.contains("/nonexistent/path/to/script.sh"),
-            "error should include the path, got: {msg}"
-        );
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Script path resolution helpers
 // ---------------------------------------------------------------------------
@@ -450,4 +417,37 @@ pub(crate) fn resolve_script_path(
     script_search_paths(run, working_dir, repo_path, skills_dir)
         .into_iter()
         .find(|p| p.exists())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn test_check_script_unix_permissions_metadata_error() {
+        // A path that does not exist causes fs::metadata to fail, exercising the
+        // Err(e) branch added in #889.
+        let err = check_script_unix_permissions(
+            "my-step",
+            std::path::Path::new("/nonexistent/path/to/script.sh"),
+        );
+        assert!(
+            err.is_some(),
+            "missing path should produce a validation error"
+        );
+        let msg = &err.unwrap().message;
+        assert!(
+            msg.contains("could not read metadata"),
+            "error should mention metadata failure, got: {msg}"
+        );
+        assert!(
+            msg.contains("my-step"),
+            "error should include the step name, got: {msg}"
+        );
+        assert!(
+            msg.contains("/nonexistent/path/to/script.sh"),
+            "error should include the path, got: {msg}"
+        );
+    }
 }
