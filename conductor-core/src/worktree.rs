@@ -240,6 +240,24 @@ impl<'a> WorktreeManager<'a> {
             })
     }
 
+    /// Fetch multiple worktrees by their IDs in a single query.
+    /// Returns an empty Vec when `ids` is empty (avoids a syntax-error `IN ()` clause).
+    pub fn get_by_ids(&self, ids: &[&str]) -> Result<Vec<Worktree>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let placeholders = ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE id IN ({placeholders})"
+        );
+        query_collect(self.conn, &sql, rusqlite::params_from_iter(ids.iter()), map_worktree_row)
+    }
+
     pub fn get_by_slug(&self, repo_id: &str, slug: &str) -> Result<Worktree> {
         self.conn
             .query_row(

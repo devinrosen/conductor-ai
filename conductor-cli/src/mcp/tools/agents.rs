@@ -88,44 +88,15 @@ pub(super) fn tool_list_agent_runs(
         .into_iter()
         .collect();
 
-    let wt_map: std::collections::HashMap<String, (String, String)> = if wt_ids.is_empty() {
-        std::collections::HashMap::new()
-    } else {
-        let placeholders = wt_ids
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", i + 1))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!("SELECT id, slug, branch FROM worktrees WHERE id IN ({placeholders})");
-        match conn.prepare_cached(&sql) {
+    let wt_mgr = WorktreeManager::new(&conn, &config);
+    let wt_map: std::collections::HashMap<String, (String, String)> =
+        match wt_mgr.get_by_ids(&wt_ids) {
+            Ok(wts) => wts
+                .into_iter()
+                .map(|wt| (wt.id, (wt.slug, wt.branch)))
+                .collect(),
             Err(e) => return tool_err(e),
-            Ok(mut stmt) => {
-                let params = rusqlite::params_from_iter(wt_ids.iter());
-                match stmt.query_map(params, |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                }) {
-                    Err(e) => return tool_err(e),
-                    Ok(rows) => {
-                        let mut m = std::collections::HashMap::new();
-                        for row in rows {
-                            match row {
-                                Ok((id, slug, branch)) => {
-                                    m.insert(id, (slug, branch));
-                                }
-                                Err(e) => return tool_err(e),
-                            }
-                        }
-                        m
-                    }
-                }
-            }
-        }
-    };
+        };
 
     // Batch-load workflow run IDs for all agent run IDs
     let run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
