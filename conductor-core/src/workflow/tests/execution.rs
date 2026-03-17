@@ -1392,7 +1392,7 @@ fn test_bubble_up_child_step_results_basic() {
 #[test]
 fn test_bubble_up_child_step_results_child_overwrites_parent() {
     let conn = setup_db();
-    let config: &'static Config = Box::leak(Box::new(Config::default()));
+    let config = make_resume_config();
     let (mut state, _run_id) = make_state_with_run(&conn, config);
 
     // Parent already has a step result for "review-aggregator" (stale from iteration 1)
@@ -1444,7 +1444,7 @@ fn test_bubble_up_child_step_results_child_overwrites_parent() {
 #[test]
 fn test_do_while_child_results_refreshed_between_iterations() {
     let conn = setup_db();
-    let config: &'static Config = Box::leak(Box::new(Config::default()));
+    let config = make_resume_config();
     let (mut state, _run_id) = make_state_with_run(&conn, config);
 
     // Simulate iteration 1: child produced has_blocking_findings
