@@ -1152,16 +1152,23 @@ impl<'a> WorkflowManager<'a> {
     pub fn list_all_waiting_gate_steps(
         &self,
     ) -> Result<Vec<(WorkflowRunStep, String, Option<String>)>> {
+        let placeholders = sql_placeholders(WorkflowRunStatus::ACTIVE.len());
+        let active_strings = WorkflowRunStatus::active_strings();
         let sql = format!(
             "SELECT {cols}, r.workflow_name, r.target_label \
              FROM workflow_run_steps s \
              JOIN workflow_runs r ON r.id = s.workflow_run_id \
              WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
-             AND r.status IN ('pending', 'running', 'waiting') \
+             AND r.status IN ({placeholders}) \
              ORDER BY s.started_at",
             cols = &*STEP_COLUMNS_WITH_PREFIX,
         );
-        crate::db::query_collect(self.conn, &sql, [], waiting_gate_step_row_mapper)
+        crate::db::query_collect(
+            self.conn,
+            &sql,
+            rusqlite::params_from_iter(active_strings.iter()),
+            waiting_gate_step_row_mapper,
+        )
     }
 
     /// List gate steps currently in `waiting` status for a specific repo.
@@ -1169,6 +1176,8 @@ impl<'a> WorkflowManager<'a> {
     /// Returns enriched [`PendingGateRow`] values that include the worktree branch and linked
     /// ticket source_id so the TUI can display context without additional queries.
     pub fn list_waiting_gate_steps_for_repo(&self, repo_id: &str) -> Result<Vec<PendingGateRow>> {
+        let placeholders = sql_placeholders_from(WorkflowRunStatus::ACTIVE.len(), 2);
+        let active_strings = WorkflowRunStatus::active_strings();
         let sql = format!(
             "SELECT {cols}, r.workflow_name, r.target_label, wt.branch, t.source_id AS ticket_ref \
              FROM workflow_run_steps s \
@@ -1176,12 +1185,20 @@ impl<'a> WorkflowManager<'a> {
              LEFT JOIN worktrees wt ON wt.id = r.worktree_id \
              LEFT JOIN tickets t ON t.id = r.ticket_id \
              WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
-             AND r.status IN ('pending', 'running', 'waiting') \
+             AND r.status IN ({placeholders}) \
              AND (r.repo_id = ?1 OR wt.repo_id = ?1) \
              ORDER BY s.started_at",
             cols = &*STEP_COLUMNS_WITH_PREFIX,
         );
-        crate::db::query_collect(self.conn, &sql, [repo_id], pending_gate_row_mapper)
+        let mut all_params: Vec<rusqlite::types::Value> =
+            vec![rusqlite::types::Value::Text(repo_id.to_owned())];
+        all_params.extend(active_strings.into_iter().map(rusqlite::types::Value::Text));
+        crate::db::query_collect(
+            self.conn,
+            &sql,
+            rusqlite::params_from_iter(all_params.iter()),
+            pending_gate_row_mapper,
+        )
     }
 
     /// Load workflow definitions from the filesystem for a worktree.
