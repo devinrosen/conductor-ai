@@ -31,3 +31,4 @@ conductor-core = { path = "../conductor-core", features = ["test-helpers", "test
 reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1", features = ["full", "test-util"] }
 tower = { version = "0.5", features = ["util"] }
+tempfile = "3"
