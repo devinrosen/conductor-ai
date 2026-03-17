@@ -23,7 +23,7 @@ use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
 use crate::state::{
     info_row, repo_info_row, AppState, ConfirmAction, DashboardRow, FormAction, FormField,
-    FormFieldType, InputAction, Modal, PostCreateChoice, RepoDetailFocus, RunWorkflowAction, View,
+    FormFieldType, InputAction, Modal, PostCreateChoice, RepoDetailFocus, View,
     WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowsFocus, WorktreeDetailFocus,
 };
 use crate::theme::Theme;
@@ -3045,6 +3045,32 @@ impl App {
         }
     }
 
+    /// Show the input form if the workflow declares inputs, otherwise dispatch immediately.
+    /// This is the shared entry point from both `handle_workflow_picker_confirm` and
+    /// `handle_pr_workflow_picker_confirm`.
+    fn show_workflow_inputs_or_run(
+        &mut self,
+        target: crate::state::WorkflowPickerTarget,
+        def: conductor_core::workflow::WorkflowDef,
+    ) {
+        if !def.inputs.is_empty() {
+            let fields = build_form_fields(&def.inputs);
+            self.state.modal = Modal::Form {
+                title: format!("Inputs for '{}'", def.name),
+                fields,
+                active_field: 0,
+                on_submit: crate::state::FormAction::RunWorkflow(Box::new(
+                    crate::state::RunWorkflowAction {
+                        target,
+                        workflow_def: def,
+                    },
+                )),
+            };
+        } else {
+            self.submit_run_workflow_with_inputs(vec![], target, def);
+        }
+    }
+
     fn submit_run_workflow_with_inputs(
         &mut self,
         fields: Vec<FormField>,
@@ -3063,6 +3089,27 @@ impl App {
                 worktree_path,
                 repo_path,
             } => {
+                // Block if a workflow run is already active on this worktree
+                {
+                    use conductor_core::workflow::WorkflowManager;
+                    let wf_mgr = WorkflowManager::new(&self.conn);
+                    match wf_mgr.get_active_run_for_worktree(&worktree_id) {
+                        Ok(Some(active)) => {
+                            self.state.status_message = Some(format!(
+                                "Workflow '{}' is already running — cancel it before starting another",
+                                active.workflow_name
+                            ));
+                            return;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            self.state.status_message =
+                                Some(format!("Failed to check active workflow run: {e}"));
+                            return;
+                        }
+                    }
+                }
+
                 let (wt_target_label, wt_ticket_id) = self
                     .state
                     .data
@@ -5552,8 +5599,6 @@ impl App {
 
     /// Confirm the workflow selection from the generic WorkflowPicker modal.
     fn handle_workflow_picker_confirm(&mut self) {
-        use crate::state::WorkflowPickerTarget;
-
         let (target, def) = if let Modal::WorkflowPicker {
             ref target,
             ref workflow_defs,
@@ -5572,170 +5617,7 @@ impl App {
 
         self.state.modal = Modal::None;
 
-        // If the workflow declares inputs, show a form before running.
-        if !def.inputs.is_empty() {
-            let fields = build_form_fields(&def.inputs);
-            self.state.modal = Modal::Form {
-                title: format!("Inputs for '{}'", def.name),
-                fields,
-                active_field: 0,
-                on_submit: FormAction::RunWorkflow(Box::new(RunWorkflowAction {
-                    target,
-                    workflow_def: def,
-                })),
-            };
-            return;
-        }
-
-        match target {
-            WorkflowPickerTarget::Worktree {
-                worktree_id,
-                worktree_path,
-                repo_path,
-            } => {
-                // Block if a workflow run is already active on this worktree
-                {
-                    use conductor_core::workflow::WorkflowManager;
-                    let wf_mgr = WorkflowManager::new(&self.conn);
-                    match wf_mgr.get_active_run_for_worktree(&worktree_id) {
-                        Ok(Some(active)) => {
-                            self.state.status_message = Some(format!(
-                                "Workflow '{}' is already running — cancel it before starting another",
-                                active.workflow_name
-                            ));
-                            return;
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            self.state.status_message =
-                                Some(format!("Failed to check active workflow run: {e}"));
-                            return;
-                        }
-                    }
-                }
-
-                let (wt_target_label, wt_ticket_id) = self
-                    .state
-                    .data
-                    .worktrees
-                    .iter()
-                    .find(|w| w.id == worktree_id)
-                    .and_then(|w| {
-                        self.state
-                            .data
-                            .repos
-                            .iter()
-                            .find(|r| r.id == w.repo_id)
-                            .map(|r| (format!("{}/{}", r.slug, w.slug), w.ticket_id.clone()))
-                    })
-                    .unwrap_or_default();
-                self.spawn_workflow_in_background(
-                    def,
-                    worktree_id,
-                    worktree_path,
-                    repo_path,
-                    wt_ticket_id,
-                    std::collections::HashMap::new(),
-                    wt_target_label,
-                );
-            }
-            WorkflowPickerTarget::Pr { pr_number, .. } => {
-                // Get owner/repo from selected repo's remote_url
-                let remote_url = match self
-                    .state
-                    .selected_repo_id
-                    .as_ref()
-                    .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
-                    .map(|r| r.remote_url.clone())
-                {
-                    Some(url) => url,
-                    None => {
-                        self.state.modal = Modal::Error {
-                            message: "No repo selected".to_string(),
-                        };
-                        return;
-                    }
-                };
-
-                let (owner, repo) = match conductor_core::github::parse_github_remote(&remote_url) {
-                    Some(pair) => pair,
-                    None => {
-                        self.state.modal = Modal::Error {
-                            message: format!(
-                                "Could not parse GitHub owner/repo from remote URL: {remote_url}"
-                            ),
-                        };
-                        return;
-                    }
-                };
-
-                let pr_ref = conductor_core::workflow_ephemeral::PrRef {
-                    owner,
-                    repo,
-                    number: pr_number as u64,
-                };
-
-                self.spawn_pr_workflow_in_background(pr_ref, def, std::collections::HashMap::new());
-            }
-            WorkflowPickerTarget::Ticket {
-                ticket_id,
-                ticket_title,
-                repo_id,
-                repo_path,
-                ..
-            } => {
-                self.spawn_ticket_workflow_in_background(
-                    def,
-                    ticket_id,
-                    repo_id,
-                    repo_path,
-                    ticket_title,
-                    std::collections::HashMap::new(),
-                );
-            }
-            WorkflowPickerTarget::Repo {
-                repo_id,
-                repo_path,
-                repo_name,
-            } => {
-                self.spawn_repo_workflow_in_background(
-                    def,
-                    repo_id,
-                    repo_path,
-                    repo_name,
-                    std::collections::HashMap::new(),
-                );
-            }
-            WorkflowPickerTarget::WorkflowRun {
-                workflow_run_id,
-                worktree_id,
-                worktree_path,
-                repo_path,
-                ..
-            } => {
-                let mut inputs = std::collections::HashMap::new();
-                inputs.insert("workflow_run_id".to_string(), workflow_run_id.clone());
-                let working_dir = worktree_path.unwrap_or_else(|| repo_path.clone());
-                if let Some(wt_id) = worktree_id {
-                    self.spawn_workflow_in_background(
-                        def,
-                        wt_id,
-                        working_dir,
-                        repo_path,
-                        None,
-                        inputs,
-                        workflow_run_id,
-                    );
-                } else {
-                    self.spawn_workflow_run_target_in_background(
-                        def,
-                        repo_path,
-                        inputs,
-                        workflow_run_id,
-                    );
-                }
-            }
-        }
+        self.show_workflow_inputs_or_run(target, def);
     }
 
     fn handle_run_workflow(&mut self) {
@@ -6046,6 +5928,8 @@ impl App {
     }
 
     fn handle_pr_workflow_picker_confirm(&mut self) {
+        use crate::state::WorkflowPickerTarget;
+
         let (pr_number, def) = if let Modal::PrWorkflowPicker {
             pr_number,
             ref workflow_defs,
@@ -6062,64 +5946,13 @@ impl App {
             return;
         };
 
-        // Get owner/repo from selected repo's remote_url
-        let remote_url = match self
-            .state
-            .selected_repo_id
-            .as_ref()
-            .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
-            .map(|r| r.remote_url.clone())
-        {
-            Some(url) => url,
-            None => {
-                self.state.modal = Modal::Error {
-                    message: "No repo selected".to_string(),
-                };
-                return;
-            }
-        };
-
-        let (owner, repo) = match conductor_core::github::parse_github_remote(&remote_url) {
-            Some(pair) => pair,
-            None => {
-                self.state.modal = Modal::Error {
-                    message: format!(
-                        "Could not parse GitHub owner/repo from remote URL: {remote_url}"
-                    ),
-                };
-                return;
-            }
-        };
-
-        let pr_ref = conductor_core::workflow_ephemeral::PrRef {
-            owner,
-            repo,
-            number: pr_number as u64,
-        };
-
         self.state.modal = Modal::None;
 
-        // If the workflow declares inputs, show a form before running.
-        if !def.inputs.is_empty() {
-            use crate::state::WorkflowPickerTarget;
-            let fields = build_form_fields(&def.inputs);
-            let target = WorkflowPickerTarget::Pr {
-                pr_number,
-                pr_title: String::new(),
-            };
-            self.state.modal = Modal::Form {
-                title: format!("Inputs for '{}'", def.name),
-                fields,
-                active_field: 0,
-                on_submit: FormAction::RunWorkflow(Box::new(RunWorkflowAction {
-                    target,
-                    workflow_def: def,
-                })),
-            };
-            return;
-        }
-
-        self.spawn_pr_workflow_in_background(pr_ref, def, std::collections::HashMap::new());
+        let target = WorkflowPickerTarget::Pr {
+            pr_number,
+            pr_title: String::new(),
+        };
+        self.show_workflow_inputs_or_run(target, def);
     }
 
     /// Spawn an ephemeral PR workflow execution in a background thread.
