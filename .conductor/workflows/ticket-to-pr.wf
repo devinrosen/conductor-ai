@@ -6,7 +6,17 @@ workflow ticket-to-pr {
   }
 
   inputs {
-    ticket_id required
+    ticket_id  required
+    qualify    boolean
+    auto_merge boolean
+  }
+
+  if qualify {
+    call workflow qualify-ticket {
+      inputs {
+        ticket_id = "{{ticket_id}}"
+      }
+    }
   }
 
   call plan { output = "task-plan" }
@@ -26,4 +36,35 @@ workflow ticket-to-pr {
   }
 
   call workflow iterate-pr
+
+  if auto_merge {
+    gate pr_checks {
+      timeout    = "2h"
+      on_timeout = fail
+    }
+
+    gate pr_approval {
+      as            = "reviewer"
+      min_approvals = 1
+      timeout       = "72h"
+      on_timeout    = fail
+    }
+
+    call workflow rebase-worktree
+
+    if rebase-worktree.has_conflicts {
+      call workflow iterate-pr
+    }
+
+    gate pr_checks {
+      timeout    = "2h"
+      on_timeout = fail
+    }
+
+    script merge-and-close {
+      run = ".conductor/scripts/merge-and-close.sh"
+      as  = "merger"
+      env = { TICKET_NUMBER = "{{ticket_source_id}}" }
+    }
+  }
 }
