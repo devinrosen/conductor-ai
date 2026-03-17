@@ -201,6 +201,7 @@ pub enum Action {
     FormNextField,
     FormPrevField,
     FormSubmit,
+    FormToggle,
 
     // Background results
     PrsRefreshed {

@@ -469,7 +469,21 @@ pub fn render_form(
         lines.push(Line::from(Span::styled(label_text, label_style)));
 
         // Value line
-        if is_active {
+        if matches!(field.field_type, crate::state::FormFieldType::Boolean) {
+            let checked = field.value == "true";
+            let box_str = if checked { "[x]" } else { "[ ]" };
+            let style = if is_active {
+                Style::default()
+                    .fg(theme.border_focused)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.label_secondary)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("    {box_str}  Space to toggle"),
+                style,
+            )));
+        } else if is_active {
             lines.push(Line::from(vec![
                 Span::styled("  > ", Style::default().fg(theme.border_focused)),
                 Span::styled(
@@ -490,8 +504,16 @@ pub fn render_form(
         lines.push(Line::from(""));
     }
 
+    let has_boolean = fields
+        .iter()
+        .any(|f| matches!(f.field_type, crate::state::FormFieldType::Boolean));
+    let hint = if has_boolean {
+        "  Tab next field  Space toggle  Enter submit  Esc cancel"
+    } else {
+        "  Tab next field  Enter submit  Esc cancel"
+    };
     lines.push(Line::from(Span::styled(
-        "  Tab next field  Enter submit  Esc cancel",
+        hint,
         Style::default().fg(theme.label_secondary),
     )));
 

@@ -208,7 +208,7 @@ export interface WorkflowDefSummary {
   name: string;
   description: string;
   trigger: string;
-  inputs: { name: string; required: boolean }[];
+  inputs: { name: string; required: boolean; input_type: string; default: string | null }[];
   node_count: number;
 }
 

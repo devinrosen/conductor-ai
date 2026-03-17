@@ -23,8 +23,8 @@ use crate::event::{BackgroundSender, EventLoop};
 use crate::input;
 use crate::state::{
     info_row, repo_info_row, AppState, ConfirmAction, DashboardRow, FormAction, FormField,
-    InputAction, Modal, PostCreateChoice, RepoDetailFocus, View, WorkflowDefFocus,
-    WorkflowRunDetailFocus, WorkflowsFocus, WorktreeDetailFocus,
+    FormFieldType, InputAction, Modal, PostCreateChoice, RepoDetailFocus, RunWorkflowAction, View,
+    WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowsFocus, WorktreeDetailFocus,
 };
 use crate::theme::Theme;
 use crate::ui;
@@ -477,6 +477,7 @@ impl App {
             Action::FormNextField => self.handle_form_next_field(),
             Action::FormPrevField => self.handle_form_prev_field(),
             Action::FormSubmit => self.handle_form_submit(),
+            Action::FormToggle => self.handle_form_toggle(),
 
             // CRUD
             Action::RegisterRepo => self.handle_register_repo(),
@@ -2681,6 +2682,7 @@ impl App {
                     placeholder: "https://github.com/org/repo.git".to_string(),
                     manually_edited: true,
                     required: true,
+                    field_type: FormFieldType::Text,
                 },
                 FormField {
                     label: "Slug".to_string(),
@@ -2688,6 +2690,7 @@ impl App {
                     placeholder: "auto-derived from URL".to_string(),
                     manually_edited: false,
                     required: true,
+                    field_type: FormFieldType::Text,
                 },
                 FormField {
                     label: "Local Path".to_string(),
@@ -2695,6 +2698,7 @@ impl App {
                     placeholder: "auto-derived from slug".to_string(),
                     manually_edited: false,
                     required: false,
+                    field_type: FormFieldType::Text,
                 },
             ],
             active_field: 0,
@@ -2724,6 +2728,7 @@ impl App {
                     Self::sync_issue_source_form_fields(fields);
                 }
                 FormAction::AddIssueSource { .. } => {}
+                FormAction::RunWorkflow(_) => {}
             }
         }
     }
@@ -2752,6 +2757,7 @@ impl App {
                     Self::sync_issue_source_form_fields(fields);
                 }
                 FormAction::AddIssueSource { .. } => {}
+                FormAction::RunWorkflow(_) => {}
             }
         }
     }
@@ -2825,6 +2831,7 @@ impl App {
                 placeholder: "e.g. project = PROJ AND status != Done".to_string(),
                 manually_edited: false,
                 required: true,
+                field_type: FormFieldType::Text,
             });
             fields.push(FormField {
                 label: "Jira URL".to_string(),
@@ -2832,6 +2839,7 @@ impl App {
                 placeholder: "e.g. https://mycompany.atlassian.net".to_string(),
                 manually_edited: false,
                 required: true,
+                field_type: FormFieldType::Text,
             });
         } else if !is_jira && fields.len() > 1 {
             // Remove extra fields when switching away from Jira
@@ -2852,6 +2860,37 @@ impl App {
                     repo_slug,
                     remote_url,
                 } => self.submit_add_issue_source(fields, &repo_id, &repo_slug, &remote_url),
+                FormAction::RunWorkflow(action) => {
+                    self.submit_run_workflow_with_inputs(
+                        fields,
+                        action.target,
+                        action.workflow_def,
+                    );
+                }
+            }
+        }
+    }
+
+    fn handle_form_toggle(&mut self) {
+        if let Modal::Form {
+            ref mut fields,
+            active_field,
+            ..
+        } = self.state.modal
+        {
+            if let Some(field) = fields.get_mut(active_field) {
+                if matches!(field.field_type, FormFieldType::Boolean) {
+                    field.value = if field.value == "true" {
+                        "false".to_string()
+                    } else {
+                        "true".to_string()
+                    };
+                    field.manually_edited = true;
+                } else {
+                    // For text fields, treat space as a regular character input
+                    field.value.push(' ');
+                    field.manually_edited = true;
+                }
             }
         }
     }
@@ -2976,6 +3015,137 @@ impl App {
         }
     }
 
+    fn submit_run_workflow_with_inputs(
+        &mut self,
+        fields: Vec<FormField>,
+        target: crate::state::WorkflowPickerTarget,
+        def: conductor_core::workflow::WorkflowDef,
+    ) {
+        use crate::state::WorkflowPickerTarget;
+
+        // Collect inputs from form fields (field label = input name, value = input value)
+        let inputs: std::collections::HashMap<String, String> =
+            fields.into_iter().map(|f| (f.label, f.value)).collect();
+
+        match target {
+            WorkflowPickerTarget::Worktree {
+                worktree_id,
+                worktree_path,
+                repo_path,
+            } => {
+                let (wt_target_label, wt_ticket_id) = self
+                    .state
+                    .data
+                    .worktrees
+                    .iter()
+                    .find(|w| w.id == worktree_id)
+                    .and_then(|w| {
+                        self.state
+                            .data
+                            .repos
+                            .iter()
+                            .find(|r| r.id == w.repo_id)
+                            .map(|r| (format!("{}/{}", r.slug, w.slug), w.ticket_id.clone()))
+                    })
+                    .unwrap_or_default();
+                self.spawn_workflow_in_background(
+                    def,
+                    worktree_id,
+                    worktree_path,
+                    repo_path,
+                    wt_ticket_id,
+                    inputs,
+                    wt_target_label,
+                );
+            }
+            WorkflowPickerTarget::Pr { pr_number, .. } => {
+                let remote_url = match self
+                    .state
+                    .selected_repo_id
+                    .as_ref()
+                    .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
+                    .map(|r| r.remote_url.clone())
+                {
+                    Some(url) => url,
+                    None => {
+                        self.state.modal = Modal::Error {
+                            message: "No repo selected".to_string(),
+                        };
+                        return;
+                    }
+                };
+                let (owner, repo) = match conductor_core::github::parse_github_remote(&remote_url) {
+                    Some(pair) => pair,
+                    None => {
+                        self.state.modal = Modal::Error {
+                            message: format!(
+                                "Could not parse GitHub owner/repo from remote URL: {remote_url}"
+                            ),
+                        };
+                        return;
+                    }
+                };
+                let pr_ref = conductor_core::workflow_ephemeral::PrRef {
+                    owner,
+                    repo,
+                    number: pr_number as u64,
+                };
+                self.spawn_pr_workflow_in_background(pr_ref, def);
+            }
+            WorkflowPickerTarget::Ticket {
+                ticket_id,
+                ticket_title,
+                repo_id,
+                repo_path,
+                ..
+            } => {
+                self.spawn_ticket_workflow_in_background(
+                    def,
+                    ticket_id,
+                    repo_id,
+                    repo_path,
+                    ticket_title,
+                );
+            }
+            WorkflowPickerTarget::Repo {
+                repo_id,
+                repo_path,
+                repo_name,
+            } => {
+                self.spawn_repo_workflow_in_background(def, repo_id, repo_path, repo_name);
+            }
+            WorkflowPickerTarget::WorkflowRun {
+                workflow_run_id,
+                worktree_id,
+                worktree_path,
+                repo_path,
+                ..
+            } => {
+                let mut run_inputs = inputs;
+                run_inputs.insert("workflow_run_id".to_string(), workflow_run_id.clone());
+                let working_dir = worktree_path.unwrap_or_else(|| repo_path.clone());
+                if let Some(wt_id) = worktree_id {
+                    self.spawn_workflow_in_background(
+                        def,
+                        wt_id,
+                        working_dir,
+                        repo_path,
+                        None,
+                        run_inputs,
+                        format!("workflow_run:{workflow_run_id}"),
+                    );
+                } else {
+                    self.spawn_workflow_run_target_in_background(
+                        def,
+                        repo_path,
+                        run_inputs,
+                        workflow_run_id,
+                    );
+                }
+            }
+        }
+    }
+
     fn handle_manage_issue_sources(&mut self) {
         // Only available from RepoDetail view
         if self.state.view != View::RepoDetail {
@@ -3040,6 +3210,7 @@ impl App {
                 placeholder: "github or jira (Tab to next field)".to_string(),
                 manually_edited: false,
                 required: true,
+                field_type: FormFieldType::Text,
             }];
 
             // If type is pre-filled to jira, include the Jira fields up front
@@ -5370,6 +5541,47 @@ impl App {
 
         self.state.modal = Modal::None;
 
+        // If the workflow declares inputs, show a form before running.
+        if !def.inputs.is_empty() {
+            use conductor_core::workflow::InputType;
+            let fields: Vec<FormField> = def
+                .inputs
+                .iter()
+                .map(|inp| {
+                    let (value, field_type) = if inp.input_type == InputType::Boolean {
+                        (
+                            inp.default.clone().unwrap_or_else(|| "false".to_string()),
+                            FormFieldType::Boolean,
+                        )
+                    } else {
+                        (inp.default.clone().unwrap_or_default(), FormFieldType::Text)
+                    };
+                    FormField {
+                        label: inp.name.clone(),
+                        value,
+                        placeholder: if inp.required {
+                            "(required)".to_string()
+                        } else {
+                            String::new()
+                        },
+                        manually_edited: false,
+                        required: inp.required,
+                        field_type,
+                    }
+                })
+                .collect();
+            self.state.modal = Modal::Form {
+                title: format!("Inputs for '{}'", def.name),
+                fields,
+                active_field: 0,
+                on_submit: FormAction::RunWorkflow(Box::new(RunWorkflowAction {
+                    target,
+                    workflow_def: def,
+                })),
+            };
+            return;
+        }
+
         match target {
             WorkflowPickerTarget::Worktree {
                 worktree_id,
@@ -5872,6 +6084,53 @@ impl App {
         };
 
         self.state.modal = Modal::None;
+
+        // If the workflow declares inputs, show a form before running.
+        if !def.inputs.is_empty() {
+            use crate::state::WorkflowPickerTarget;
+            use conductor_core::workflow::InputType;
+            let fields: Vec<FormField> = def
+                .inputs
+                .iter()
+                .map(|inp| {
+                    let (value, field_type) = if inp.input_type == InputType::Boolean {
+                        (
+                            inp.default.clone().unwrap_or_else(|| "false".to_string()),
+                            FormFieldType::Boolean,
+                        )
+                    } else {
+                        (inp.default.clone().unwrap_or_default(), FormFieldType::Text)
+                    };
+                    FormField {
+                        label: inp.name.clone(),
+                        value,
+                        placeholder: if inp.required {
+                            "(required)".to_string()
+                        } else {
+                            String::new()
+                        },
+                        manually_edited: false,
+                        required: inp.required,
+                        field_type,
+                    }
+                })
+                .collect();
+            let target = WorkflowPickerTarget::Pr {
+                pr_number,
+                pr_title: String::new(),
+            };
+            self.state.modal = Modal::Form {
+                title: format!("Inputs for '{}'", def.name),
+                fields,
+                active_field: 0,
+                on_submit: FormAction::RunWorkflow(Box::new(RunWorkflowAction {
+                    target,
+                    workflow_def: def,
+                })),
+            };
+            return;
+        }
+
         self.spawn_pr_workflow_in_background(pr_ref, def);
     }
 

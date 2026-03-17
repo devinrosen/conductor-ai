@@ -106,6 +106,7 @@ pub fn apply_workflow_input_defaults(
     workflow: &WorkflowDef,
     inputs: &mut HashMap<String, String>,
 ) -> Result<()> {
+    use crate::workflow_dsl::InputType;
     for input_decl in &workflow.inputs {
         if input_decl.required && !inputs.contains_key(&input_decl.name) {
             return Err(ConductorError::Workflow(format!(
@@ -117,6 +118,12 @@ pub fn apply_workflow_input_defaults(
             inputs
                 .entry(input_decl.name.clone())
                 .or_insert_with(|| default.clone());
+        }
+        // Boolean inputs default to "false" when absent.
+        if input_decl.input_type == InputType::Boolean {
+            inputs
+                .entry(input_decl.name.clone())
+                .or_insert_with(|| "false".to_string());
         }
     }
     Ok(())

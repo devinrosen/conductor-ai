@@ -17,7 +17,15 @@ export function RunWorkflowModal({
 }: RunWorkflowModalProps) {
   const [model, setModel] = useState("");
   const [dryRun, setDryRun] = useState(false);
-  const [inputs, setInputs] = useState<Record<string, string>>({});
+  const [inputs, setInputs] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    for (const input of def.inputs) {
+      if (input.input_type === "boolean") {
+        initial[input.name] = input.default ?? "false";
+      }
+    }
+    return initial;
+  });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,18 +81,40 @@ export function RunWorkflowModal({
 
           {def.inputs.map((input) => (
             <div key={input.name}>
-              <label className="block text-sm text-gray-400 mb-1">
-                {input.name}
-                {input.required && <span className="text-red-400 ml-1">*</span>}
-              </label>
-              <input
-                type="text"
-                value={inputs[input.name] || ""}
-                onChange={(e) =>
-                  setInputs((prev) => ({ ...prev, [input.name]: e.target.value }))
-                }
-                className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded text-gray-200 text-sm"
-              />
+              {input.input_type === "boolean" ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id={`input-${input.name}`}
+                    checked={inputs[input.name] === "true"}
+                    onChange={(e) =>
+                      setInputs((prev) => ({
+                        ...prev,
+                        [input.name]: e.target.checked ? "true" : "false",
+                      }))
+                    }
+                    className="rounded"
+                  />
+                  <label htmlFor={`input-${input.name}`} className="text-sm text-gray-400">
+                    {input.name}
+                  </label>
+                </div>
+              ) : (
+                <>
+                  <label className="block text-sm text-gray-400 mb-1">
+                    {input.name}
+                    {input.required && <span className="text-red-400 ml-1">*</span>}
+                  </label>
+                  <input
+                    type="text"
+                    value={inputs[input.name] || ""}
+                    onChange={(e) =>
+                      setInputs((prev) => ({ ...prev, [input.name]: e.target.value }))
+                    }
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded text-gray-200 text-sm"
+                  />
+                </>
+              )}
             </div>
           ))}
 

@@ -64,13 +64,21 @@ fn notify_workflow(
 pub struct InputDeclSummary {
     pub name: String,
     pub required: bool,
+    pub input_type: String,
+    pub default: Option<String>,
 }
 
 impl From<&InputDecl> for InputDeclSummary {
     fn from(d: &InputDecl) -> Self {
+        use conductor_core::workflow::InputType;
         Self {
             name: d.name.clone(),
             required: d.required,
+            input_type: match d.input_type {
+                InputType::Boolean => "boolean".to_string(),
+                InputType::String => "string".to_string(),
+            },
+            default: d.default.clone(),
         }
     }
 }

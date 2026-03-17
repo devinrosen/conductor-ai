@@ -7,8 +7,8 @@ use crate::agent::AgentRunStatus;
 use crate::agent_config::AgentSpec;
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::{
-    ApprovalMode, CallNode, CallWorkflowNode, DoNode, DoWhileNode, GateNode, GateType, IfNode,
-    OnTimeout, ParallelNode, ScriptNode, UnlessNode, WhileNode,
+    ApprovalMode, CallNode, CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode, GateType,
+    IfNode, OnTimeout, ParallelNode, ScriptNode, UnlessNode, WhileNode,
 };
 
 use super::engine::{
@@ -692,50 +692,48 @@ pub(super) fn execute_call_workflow(
 }
 
 pub(super) fn execute_if(state: &mut ExecutionState<'_>, node: &IfNode) -> Result<()> {
-    let has_marker = state
-        .step_results
-        .get(&node.step)
-        .map(|r| r.markers.iter().any(|m| m == &node.marker))
-        .unwrap_or(false);
+    let condition_met = match &node.condition {
+        Condition::StepMarker { step, marker } => state
+            .step_results
+            .get(step)
+            .map(|r| r.markers.iter().any(|m| m == marker))
+            .unwrap_or(false),
+        Condition::BoolInput { input } => state
+            .inputs
+            .get(input)
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false),
+    };
 
-    if has_marker {
-        tracing::info!(
-            "if {}.{} — condition met, executing body",
-            node.step,
-            node.marker
-        );
+    if condition_met {
+        tracing::info!(condition = ?node.condition, "if — condition met, executing body");
         execute_nodes(state, &node.body)?;
     } else {
-        tracing::info!(
-            "if {}.{} — condition not met, skipping",
-            node.step,
-            node.marker
-        );
+        tracing::info!(condition = ?node.condition, "if — condition not met, skipping");
     }
 
     Ok(())
 }
 
 pub(super) fn execute_unless(state: &mut ExecutionState<'_>, node: &UnlessNode) -> Result<()> {
-    let has_marker = state
-        .step_results
-        .get(&node.step)
-        .map(|r| r.markers.iter().any(|m| m == &node.marker))
-        .unwrap_or(false);
+    let condition_met = match &node.condition {
+        Condition::StepMarker { step, marker } => state
+            .step_results
+            .get(step)
+            .map(|r| r.markers.iter().any(|m| m == marker))
+            .unwrap_or(false),
+        Condition::BoolInput { input } => state
+            .inputs
+            .get(input)
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false),
+    };
 
-    if !has_marker {
-        tracing::info!(
-            "unless {}.{} — marker absent, executing body",
-            node.step,
-            node.marker
-        );
+    if !condition_met {
+        tracing::info!(condition = ?node.condition, "unless — condition not met, executing body");
         execute_nodes(state, &node.body)?;
     } else {
-        tracing::info!(
-            "unless {}.{} — marker present, skipping",
-            node.step,
-            node.marker
-        );
+        tracing::info!(condition = ?node.condition, "unless — condition met, skipping");
     }
 
     Ok(())

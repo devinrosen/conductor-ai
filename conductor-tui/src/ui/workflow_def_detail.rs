@@ -6,7 +6,14 @@ use ratatui::Frame;
 
 use std::collections::HashSet;
 
-use conductor_core::workflow::{AgentRef, WorkflowDef, WorkflowNode};
+use conductor_core::workflow::{AgentRef, Condition, WorkflowDef, WorkflowNode};
+
+fn format_condition(c: &Condition) -> String {
+    match c {
+        Condition::StepMarker { step, marker } => format!("{step}/{marker}"),
+        Condition::BoolInput { input } => input.clone(),
+    }
+}
 
 use crate::state::AppState;
 
@@ -346,7 +353,7 @@ fn build_node_lines(
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        format!("{}/{}", n.step, n.marker),
+                        format_condition(&n.condition),
                         Style::default().fg(theme.label_keyword),
                     ),
                 ])));
@@ -362,7 +369,7 @@ fn build_node_lines(
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        format!("{}/{}", n.step, n.marker),
+                        format_condition(&n.condition),
                         Style::default().fg(theme.label_keyword),
                     ),
                 ])));

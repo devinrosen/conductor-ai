@@ -603,6 +603,13 @@ pub enum ConfirmAction {
     Quit,
 }
 
+#[derive(Debug, Clone, Default)]
+pub enum FormFieldType {
+    #[default]
+    Text,
+    Boolean,
+}
+
 #[derive(Debug, Clone)]
 pub struct FormField {
     pub label: String,
@@ -610,6 +617,14 @@ pub struct FormField {
     pub placeholder: String,
     pub manually_edited: bool,
     pub required: bool,
+    #[allow(dead_code)]
+    pub field_type: FormFieldType,
+}
+
+#[derive(Debug, Clone)]
+pub struct RunWorkflowAction {
+    pub target: WorkflowPickerTarget,
+    pub workflow_def: conductor_core::workflow::WorkflowDef,
 }
 
 #[derive(Debug, Clone)]
@@ -621,6 +636,7 @@ pub enum FormAction {
         repo_slug: String,
         remote_url: String,
     },
+    RunWorkflow(Box<RunWorkflowAction>),
 }
 
 #[derive(Debug, Clone)]

@@ -128,6 +128,15 @@ impl std::str::FromStr for WorkflowTrigger {
     }
 }
 
+/// The type of a workflow input.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InputType {
+    #[default]
+    String,
+    Boolean,
+}
+
 /// An input declaration for a workflow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputDecl {
@@ -135,6 +144,8 @@ pub struct InputDecl {
     pub required: bool,
     pub default: Option<String>,
     pub description: Option<String>,
+    #[serde(default)]
+    pub input_type: InputType,
 }
 
 /// A node in the workflow execution graph.
@@ -251,17 +262,25 @@ pub struct CallWorkflowNode {
     pub bot_name: Option<String>,
 }
 
+/// A condition in an `if`/`unless` block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Condition {
+    /// References a marker produced by a prior step: `step.marker`.
+    StepMarker { step: String, marker: String },
+    /// References a boolean input directly: `input_name`.
+    BoolInput { input: String },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IfNode {
-    pub step: String,
-    pub marker: String,
+    pub condition: Condition,
     pub body: Vec<WorkflowNode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnlessNode {
-    pub step: String,
-    pub marker: String,
+    pub condition: Condition,
     pub body: Vec<WorkflowNode>,
 }
 
@@ -413,6 +432,7 @@ enum Token {
     Required,
     Default,
     Description,
+    Boolean,
     // Punctuation
     LBrace,
     RBrace,
@@ -587,6 +607,7 @@ impl Lexer {
             "required" => Token::Required,
             "default" => Token::Default,
             "description" => Token::Description,
+            "boolean" => Token::Boolean,
             _ => Token::Ident(s),
         })
     }
@@ -725,6 +746,7 @@ impl Parser {
             Token::Required => Ok("required".to_string()),
             Token::Default => Ok("default".to_string()),
             Token::Description => Ok("description".to_string()),
+            Token::Boolean => Ok("boolean".to_string()),
             Token::If => Ok("if".to_string()),
             other => Err(format!("Expected identifier, got {other:?}")),
         }
@@ -739,6 +761,7 @@ impl Parser {
             Token::Required => Ok(KvValue::Bare("required".to_string())),
             Token::Default => Ok(KvValue::Bare("default".to_string())),
             Token::Description => Ok(KvValue::Bare("description".to_string())),
+            Token::Boolean => Ok(KvValue::Bare("boolean".to_string())),
             Token::Call => Ok(KvValue::Bare("call".to_string())),
             Token::If => Ok(KvValue::Bare("if".to_string())),
             Token::Unless => Ok(KvValue::Bare("unless".to_string())),
@@ -876,12 +899,17 @@ impl Parser {
                         let mut required = false;
                         let mut default: Option<String> = None;
                         let mut description: Option<String> = None;
-                        // Collect optional modifiers: required, default = "...", description = "..."
+                        let mut input_type = InputType::String;
+                        // Collect optional modifiers: required, boolean, default = "...", description = "..."
                         loop {
                             match self.peek() {
                                 Token::Required => {
                                     self.advance();
                                     required = true;
+                                }
+                                Token::Boolean => {
+                                    self.advance();
+                                    input_type = InputType::Boolean;
                                 }
                                 Token::Default => {
                                     self.advance();
@@ -896,9 +924,12 @@ impl Parser {
                                 _ => break,
                             }
                         }
-                        // A bare identifier with no default is treated as required.
-                        // Having only a description does not make an input optional.
-                        if !required && default.is_none() {
+                        // Boolean inputs are never required (absence = "false").
+                        if input_type == InputType::Boolean {
+                            required = false;
+                        } else if !required && default.is_none() {
+                            // A bare identifier with no default is treated as required.
+                            // Having only a description does not make an input optional.
                             required = true;
                         }
                         inputs.push(InputDecl {
@@ -906,6 +937,7 @@ impl Parser {
                             required,
                             default,
                             description,
+                            input_type,
                         });
                     }
                     self.expect(&Token::RBrace)?;
@@ -1068,16 +1100,25 @@ impl Parser {
         })
     }
 
-    fn parse_condition(&mut self) -> std::result::Result<(String, String), String> {
-        let step = self.expect_ident()?;
-        self.expect(&Token::Dot)?;
-        let marker = self.expect_ident()?;
-        Ok((step, marker))
+    /// Parse a condition: either `step.marker` → `Condition::StepMarker`
+    /// or a bare identifier → `Condition::BoolInput`.
+    fn parse_condition(&mut self) -> std::result::Result<Condition, String> {
+        let first = self.expect_ident()?;
+        if self.peek() == &Token::Dot {
+            self.advance(); // consume dot
+            let marker = self.expect_ident()?;
+            Ok(Condition::StepMarker {
+                step: first,
+                marker,
+            })
+        } else {
+            Ok(Condition::BoolInput { input: first })
+        }
     }
 
     fn parse_if(&mut self) -> std::result::Result<IfNode, String> {
         self.expect(&Token::If)?;
-        let (step, marker) = self.parse_condition()?;
+        let condition = self.parse_condition()?;
         self.expect(&Token::LBrace)?;
 
         // Parse optional kvs (not used for if, but kept for grammar consistency)
@@ -1089,12 +1130,12 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
 
-        Ok(IfNode { step, marker, body })
+        Ok(IfNode { condition, body })
     }
 
     fn parse_unless(&mut self) -> std::result::Result<UnlessNode, String> {
         self.expect(&Token::Unless)?;
-        let (step, marker) = self.parse_condition()?;
+        let condition = self.parse_condition()?;
         self.expect(&Token::LBrace)?;
 
         // Parse optional kvs (not used for unless, but kept for grammar consistency)
@@ -1106,7 +1147,7 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
 
-        Ok(UnlessNode { step, marker, body })
+        Ok(UnlessNode { condition, body })
     }
 
     /// Extract the common loop KV options (`max_iterations`, `stuck_after`, `on_max_iter`)
@@ -1139,7 +1180,14 @@ impl Parser {
 
     fn parse_while(&mut self) -> std::result::Result<WhileNode, String> {
         self.expect(&Token::While)?;
-        let (step, marker) = self.parse_condition()?;
+        let (step, marker) = match self.parse_condition()? {
+            Condition::StepMarker { step, marker } => (step, marker),
+            Condition::BoolInput { input } => {
+                return Err(format!(
+                    "while condition must be `step.marker`, not a bare identifier `{input}`"
+                ))
+            }
+        };
         self.expect(&Token::LBrace)?;
 
         let kvs = self.parse_kvs()?;
@@ -1184,7 +1232,14 @@ impl Parser {
         // Peek for optional `while` clause (one-token lookahead past `}`)
         if self.peek() == &Token::While {
             self.advance(); // consume `while`
-            let (step, marker) = self.parse_condition()?;
+            let (step, marker) = match self.parse_condition()? {
+                Condition::StepMarker { step, marker } => (step, marker),
+                Condition::BoolInput { input } => {
+                    return Err(format!(
+                        "do-while condition must be `step.marker`, not a bare identifier `{input}`"
+                    ))
+                }
+            };
             let (max_iterations, stuck_after, on_max_iter) = Self::parse_loop_options(&kvs, "do")?;
             Ok(WorkflowNode::DoWhile(DoWhileNode {
                 step,
@@ -1917,14 +1972,18 @@ fn validate_nodes<F>(
                 }
             }
             WorkflowNode::If(n) => {
-                check_condition_reachable(&n.step, produced, errors);
+                if let Condition::StepMarker { step, .. } = &n.condition {
+                    check_condition_reachable(step, produced, errors);
+                }
                 let mut branch_produced = produced.clone();
                 validate_nodes(&n.body, &mut branch_produced, errors, loader);
                 // Conservative union: optimistically assume branch steps are available downstream.
                 produced.extend(branch_produced);
             }
             WorkflowNode::Unless(n) => {
-                check_condition_reachable(&n.step, produced, errors);
+                if let Condition::StepMarker { step, .. } = &n.condition {
+                    check_condition_reachable(step, produced, errors);
+                }
                 let mut branch_produced = produced.clone();
                 validate_nodes(&n.body, &mut branch_produced, errors, loader);
                 produced.extend(branch_produced);
@@ -2250,8 +2309,9 @@ workflow ticket-to-pr {
         // if block
         match &def.body[8] {
             WorkflowNode::If(i) => {
-                assert_eq!(i.step, "review");
-                assert_eq!(i.marker, "has_critical_issues");
+                assert!(
+                    matches!(&i.condition, Condition::StepMarker { step, marker } if step == "review" && marker == "has_critical_issues")
+                );
                 assert_eq!(i.body.len(), 1);
             }
             _ => panic!("Expected If node"),
@@ -2260,8 +2320,9 @@ workflow ticket-to-pr {
         // unless block
         match &def.body[9] {
             WorkflowNode::Unless(u) => {
-                assert_eq!(u.step, "review");
-                assert_eq!(u.marker, "has_critical_issues");
+                assert!(
+                    matches!(&u.condition, Condition::StepMarker { step, marker } if step == "review" && marker == "has_critical_issues")
+                );
                 assert_eq!(u.body.len(), 1);
             }
             _ => panic!("Expected Unless node"),
@@ -2574,8 +2635,9 @@ workflow test-coverage {
 
         match &def.body[1] {
             WorkflowNode::If(i) => {
-                assert_eq!(i.step, "analyze-coverage");
-                assert_eq!(i.marker, "has_missing_tests");
+                assert!(
+                    matches!(&i.condition, Condition::StepMarker { step, marker } if step == "analyze-coverage" && marker == "has_missing_tests")
+                );
                 assert_eq!(i.body.len(), 1);
             }
             _ => panic!("Expected If node"),
@@ -3017,8 +3079,9 @@ workflow test {
         assert_eq!(def.body.len(), 2);
         match &def.body[1] {
             WorkflowNode::Unless(u) => {
-                assert_eq!(u.step, "analyze");
-                assert_eq!(u.marker, "has_errors");
+                assert!(
+                    matches!(&u.condition, Condition::StepMarker { step, marker } if step == "analyze" && marker == "has_errors")
+                );
                 assert_eq!(u.body.len(), 1);
                 assert!(matches!(&u.body[0], WorkflowNode::Call(_)));
             }
@@ -4950,8 +5013,10 @@ workflow w {
             targets: vec![],
             inputs: vec![],
             body: vec![WorkflowNode::If(IfNode {
-                step: "some-step".to_string(),
-                marker: "done".to_string(),
+                condition: Condition::StepMarker {
+                    step: "some-step".to_string(),
+                    marker: "done".to_string(),
+                },
                 body: vec![WorkflowNode::Script(ScriptNode {
                     name: "nested-script".to_string(),
                     run: "deeply-nested.sh".to_string(),

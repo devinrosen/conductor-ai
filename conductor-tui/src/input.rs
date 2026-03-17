@@ -58,6 +58,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Tab => Action::FormNextField,
                 KeyCode::BackTab => Action::FormPrevField,
                 KeyCode::Backspace => Action::FormBackspace,
+                KeyCode::Char(' ') => Action::FormToggle,
                 KeyCode::Char(c) => Action::FormChar(c),
                 _ => Action::None,
             };
