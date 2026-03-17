@@ -14,7 +14,7 @@ use conductor_core::github;
 use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
-use conductor_core::workflow::{MetadataEntry, WorkflowWarning};
+use conductor_core::workflow::{parse_workflow_str, MetadataEntry, WorkflowWarning};
 use conductor_core::worktree::WorktreeManager;
 
 use crate::action::{Action, GithubDiscoverPayload};
@@ -750,6 +750,15 @@ impl App {
                 if let Some(slugs) = payload.workflow_def_slugs {
                     self.state.data.workflow_def_slugs = slugs;
                 }
+                self.state.data.workflow_run_declared_inputs = payload
+                    .workflow_runs
+                    .iter()
+                    .filter_map(|run| {
+                        let snapshot = run.definition_snapshot.as_deref()?;
+                        let inputs = parse_workflow_str(snapshot, "").ok()?.inputs;
+                        Some((run.id.clone(), inputs))
+                    })
+                    .collect();
                 self.state.data.workflow_runs = payload.workflow_runs;
                 self.state.data.workflow_steps = payload.workflow_steps;
                 self.state.data.step_agent_events = payload.step_agent_events;

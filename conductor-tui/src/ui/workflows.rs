@@ -6,8 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
+use conductor_core::workflow::InputType;
 use conductor_core::workflow::WorkflowNode;
-use conductor_core::workflow::{parse_workflow_str, InputType};
 use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStatus};
 
 use super::common::truncate;
@@ -1202,11 +1202,11 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
             .and_then(|tid| state.data.ticket_map.get(tid))
     });
 
-    // Parse declared inputs from the definition snapshot (for display in the header).
-    let declared_inputs: Vec<_> = run_info
-        .and_then(|run| run.definition_snapshot.as_deref())
-        .and_then(|snapshot| parse_workflow_str(snapshot, "").ok())
-        .map(|def| def.inputs)
+    // Look up pre-parsed declared inputs from the cache (populated on data refresh,
+    // not on every render frame).
+    let declared_inputs = run_info
+        .and_then(|run| state.data.workflow_run_declared_inputs.get(&run.id))
+        .cloned()
         .unwrap_or_default();
     let matched_inputs: Vec<_> = run_info
         .map(|run| {
@@ -1291,8 +1291,9 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         for (decl, val) in &matched_inputs {
             // Right-pad label to 11 chars total (matching " Branch:   ")
             // Name is capped at 9 chars (1 space prefix + name + ": " = 11)
-            let name_display = if decl.name.len() > 9 {
-                format!("{}…", &decl.name[..8])
+            let name_display = if decl.name.chars().count() > 9 {
+                let truncated: String = decl.name.chars().take(8).collect();
+                format!("{truncated}…")
             } else {
                 decl.name.clone()
             };
