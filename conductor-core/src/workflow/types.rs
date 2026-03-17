@@ -8,6 +8,10 @@ use super::status::{WorkflowRunStatus, WorkflowStepStatus};
 /// A step key is a `(name, iteration)` pair used for skip-set and step-map lookups.
 pub(super) type StepKey = (String, u32);
 
+/// Shared slot used to communicate the workflow run ID from [`super::execute_workflow`] back to
+/// the caller before any steps execute. The `Condvar` is notified once the ID is written.
+pub type RunIdSlot = std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)>;
+
 /// A workflow run record from the database.
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowRun {
@@ -289,8 +293,7 @@ pub struct WorkflowExecInput<'a> {
     ///
     /// The `Condvar` is notified once the ID has been written, allowing waiters to
     /// block efficiently instead of spinning.
-    pub run_id_notify:
-        Option<std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)>>,
+    pub run_id_notify: Option<RunIdSlot>,
 }
 
 /// Owned inputs for [`execute_workflow_standalone`], avoiding lifetime issues
@@ -311,8 +314,7 @@ pub struct WorkflowExecStandalone {
     pub target_label: Option<String>,
     /// If set, the workflow run ID is written here immediately after the run record is
     /// created (before any steps execute). See [`WorkflowExecInput::run_id_notify`].
-    pub run_id_notify:
-        Option<std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)>>,
+    pub run_id_notify: Option<RunIdSlot>,
 }
 
 /// Owned inputs for [`resume_workflow_standalone`], avoiding lifetime issues

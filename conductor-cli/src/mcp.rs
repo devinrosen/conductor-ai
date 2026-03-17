@@ -1617,7 +1617,8 @@ fn tool_upsert_ticket(db_path: &Path, args: &serde_json::Map<String, Value>) -> 
 fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> CallToolResult {
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::{
-        execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone, WorkflowManager,
+        execute_workflow_standalone, RunIdSlot, WorkflowExecConfig, WorkflowExecStandalone,
+        WorkflowManager,
     };
     use conductor_core::worktree::WorktreeManager;
     use std::sync::{Arc, Mutex};
@@ -1725,8 +1726,7 @@ fn tool_run_workflow(db_path: &Path, args: &serde_json::Map<String, Value>) -> C
 
     // Condvar-based notification: the workflow engine writes the run ID here and
     // signals the condvar once the run record is created (before any steps execute).
-    let notify_pair: Arc<(Mutex<Option<String>>, std::sync::Condvar)> =
-        Arc::new((Mutex::new(None), std::sync::Condvar::new()));
+    let notify_pair: RunIdSlot = Arc::new((Mutex::new(None), std::sync::Condvar::new()));
 
     // Fire-and-forget: execute in a background thread
     let standalone = WorkflowExecStandalone {
