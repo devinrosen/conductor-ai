@@ -2141,18 +2141,31 @@ pub fn validate_script_steps(
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    if let Ok(meta) = std::fs::metadata(&resolved) {
-                        let mode = meta.permissions().mode();
-                        if mode & 0o111 == 0 {
+                    match std::fs::metadata(&resolved) {
+                        Err(e) => {
                             errors.push(ValidationError {
                                 message: format!(
-                                    "Script step '{}': '{}' is not executable (mode {:04o})",
+                                    "Script step '{}': could not read metadata for '{}': {}",
                                     node.name,
                                     resolved.display(),
-                                    mode & 0o777,
+                                    e,
                                 ),
-                                hint: Some(format!("Run: chmod +x {}", resolved.display())),
+                                hint: None,
                             });
+                        }
+                        Ok(meta) => {
+                            let mode = meta.permissions().mode();
+                            if mode & 0o111 == 0 {
+                                errors.push(ValidationError {
+                                    message: format!(
+                                        "Script step '{}': '{}' is not executable (mode {:04o})",
+                                        node.name,
+                                        resolved.display(),
+                                        mode & 0o777,
+                                    ),
+                                    hint: Some(format!("Run: chmod +x {}", resolved.display())),
+                                });
+                            }
                         }
                     }
                 }
