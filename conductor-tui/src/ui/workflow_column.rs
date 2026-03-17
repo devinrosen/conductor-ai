@@ -9,6 +9,16 @@ pub fn render_workflow_column(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
 
+    let render_lower = |frame: &mut Frame, area: Rect, state: &AppState| {
+        if state.workflows_focus == WorkflowsFocus::Defs
+            && state.workflow_def_focus == crate::state::WorkflowDefFocus::Steps
+        {
+            super::workflows::render_def_steps(frame, area, state);
+        } else {
+            super::workflows::render_runs(frame, area, state);
+        }
+    };
+
     if !state.detail_gates.is_empty() {
         let gate_height = (state.detail_gates.len() as u16 + 2)
             .max(3)
@@ -25,13 +35,7 @@ pub fn render_workflow_column(frame: &mut Frame, area: Rect, state: &AppState) {
         super::workflows::render_defs(frame, chunks[0], state);
         let gates_focused = state.workflows_focus == WorkflowsFocus::Gates;
         super::pending_gates::render_pending_gates(frame, chunks[1], state, gates_focused);
-        if state.workflows_focus == WorkflowsFocus::Defs
-            && state.workflow_def_focus == crate::state::WorkflowDefFocus::Steps
-        {
-            super::workflows::render_def_steps(frame, chunks[2], state);
-        } else {
-            super::workflows::render_runs(frame, chunks[2], state);
-        }
+        render_lower(frame, chunks[2], state);
     } else {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -39,13 +43,7 @@ pub fn render_workflow_column(frame: &mut Frame, area: Rect, state: &AppState) {
             .split(area);
 
         super::workflows::render_defs(frame, chunks[0], state);
-        if state.workflows_focus == WorkflowsFocus::Defs
-            && state.workflow_def_focus == crate::state::WorkflowDefFocus::Steps
-        {
-            super::workflows::render_def_steps(frame, chunks[1], state);
-        } else {
-            super::workflows::render_runs(frame, chunks[1], state);
-        }
+        render_lower(frame, chunks[1], state);
     }
 }
 

@@ -2469,6 +2469,12 @@ mod tests {
         assert_eq!(row.step.step_name, "approval-gate");
         assert_eq!(row.workflow_name, "wf");
         assert!(row.target_label.is_none());
+        assert_eq!(
+            row.branch.as_deref(),
+            Some("feat/test"),
+            "branch must be propagated from the worktree"
+        );
+        assert!(row.ticket_ref.is_none(), "no ticket linked to this worktree");
     }
 
     #[test]
@@ -2492,6 +2498,14 @@ mod tests {
             "directly-linked gate step must appear for its repo"
         );
         assert_eq!(steps[0].step.id, step_id);
+        assert!(
+            steps[0].branch.is_none(),
+            "repo-targeted run has no worktree branch"
+        );
+        assert!(
+            steps[0].ticket_ref.is_none(),
+            "no ticket linked to this run"
+        );
     }
 
     #[test]
