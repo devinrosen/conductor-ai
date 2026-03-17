@@ -73,6 +73,7 @@ pub enum RepoDetailFocus {
     Worktrees,
     Tickets,
     Prs,
+    Gates,
 }
 
 impl RepoDetailFocus {
@@ -80,7 +81,8 @@ impl RepoDetailFocus {
         match self {
             Self::Info => Self::Worktrees,
             Self::Worktrees => Self::Prs,
-            Self::Prs => Self::Tickets,
+            Self::Prs => Self::Gates,
+            Self::Gates => Self::Tickets,
             Self::Tickets => Self::Info,
         }
     }
@@ -90,7 +92,8 @@ impl RepoDetailFocus {
             Self::Info => Self::Tickets,
             Self::Worktrees => Self::Info,
             Self::Prs => Self::Worktrees,
-            Self::Tickets => Self::Prs,
+            Self::Gates => Self::Prs,
+            Self::Tickets => Self::Gates,
         }
     }
 }
@@ -896,9 +899,11 @@ pub struct AppState {
     pub detail_worktrees: Vec<Worktree>,
     pub detail_tickets: Vec<Ticket>,
     pub detail_prs: Vec<GithubPr>,
+    pub detail_gates: Vec<(WorkflowRunStep, String, Option<String>)>,
     pub detail_wt_index: usize,
     pub detail_ticket_index: usize,
     pub detail_pr_index: usize,
+    pub detail_gate_index: usize,
     /// When the PR list was last successfully fetched (None = never).
     pub pr_last_fetched_at: Option<std::time::Instant>,
 
@@ -1146,9 +1151,11 @@ impl AppState {
             detail_worktrees: Vec::new(),
             detail_tickets: Vec::new(),
             detail_prs: Vec::new(),
+            detail_gates: Vec::new(),
             detail_wt_index: 0,
             detail_ticket_index: 0,
             detail_pr_index: 0,
+            detail_gate_index: 0,
             pr_last_fetched_at: None,
             filtered_tickets: Vec::new(),
             filtered_detail_tickets: Vec::new(),
@@ -1289,6 +1296,7 @@ impl AppState {
                     (self.detail_ticket_index, self.filtered_detail_tickets.len())
                 }
                 RepoDetailFocus::Prs => (self.detail_pr_index, self.detail_prs.len()),
+                RepoDetailFocus::Gates => (self.detail_gate_index, self.detail_gates.len()),
             },
             View::WorktreeDetail => {
                 let idx = self.agent_list_state.borrow().selected().unwrap_or(0);
@@ -1324,6 +1332,7 @@ impl AppState {
                 RepoDetailFocus::Worktrees => self.detail_wt_index = index,
                 RepoDetailFocus::Tickets => self.detail_ticket_index = index,
                 RepoDetailFocus::Prs => self.detail_pr_index = index,
+                RepoDetailFocus::Gates => self.detail_gate_index = index,
             },
             View::WorktreeDetail => {
                 self.agent_list_state.borrow_mut().select(Some(index));
@@ -1758,7 +1767,8 @@ mod tests {
     fn repo_detail_focus_next_cycles_forward() {
         assert_eq!(RepoDetailFocus::Info.next(), RepoDetailFocus::Worktrees);
         assert_eq!(RepoDetailFocus::Worktrees.next(), RepoDetailFocus::Prs);
-        assert_eq!(RepoDetailFocus::Prs.next(), RepoDetailFocus::Tickets);
+        assert_eq!(RepoDetailFocus::Prs.next(), RepoDetailFocus::Gates);
+        assert_eq!(RepoDetailFocus::Gates.next(), RepoDetailFocus::Tickets);
         assert_eq!(RepoDetailFocus::Tickets.next(), RepoDetailFocus::Info);
     }
 
@@ -1767,7 +1777,8 @@ mod tests {
         assert_eq!(RepoDetailFocus::Info.prev(), RepoDetailFocus::Tickets);
         assert_eq!(RepoDetailFocus::Worktrees.prev(), RepoDetailFocus::Info);
         assert_eq!(RepoDetailFocus::Prs.prev(), RepoDetailFocus::Worktrees);
-        assert_eq!(RepoDetailFocus::Tickets.prev(), RepoDetailFocus::Prs);
+        assert_eq!(RepoDetailFocus::Gates.prev(), RepoDetailFocus::Prs);
+        assert_eq!(RepoDetailFocus::Tickets.prev(), RepoDetailFocus::Gates);
     }
 
     #[test]
@@ -1777,6 +1788,7 @@ mod tests {
             RepoDetailFocus::Worktrees,
             RepoDetailFocus::Tickets,
             RepoDetailFocus::Prs,
+            RepoDetailFocus::Gates,
         ] {
             assert_eq!(focus.next().prev(), focus);
             assert_eq!(focus.prev().next(), focus);

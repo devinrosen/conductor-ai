@@ -1170,6 +1170,35 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// List gate steps currently in `waiting` status for a specific repo.
+    ///
+    /// Same as `list_all_waiting_gate_steps` but scoped to `repo_id`. Used by the TUI repo detail
+    /// view to populate the Pending Gates pane.
+    pub fn list_waiting_gate_steps_for_repo(
+        &self,
+        repo_id: &str,
+    ) -> Result<Vec<(WorkflowRunStep, String, Option<String>)>> {
+        crate::db::query_collect(
+            self.conn,
+            &format!(
+                "SELECT {}, r.workflow_name, r.target_label \
+                 FROM workflow_run_steps s \
+                 JOIN workflow_runs r ON r.id = s.workflow_run_id \
+                 WHERE s.gate_type IS NOT NULL AND s.status = 'waiting' \
+                 AND r.repo_id = ?1 \
+                 ORDER BY s.started_at",
+                &*STEP_COLUMNS_WITH_PREFIX
+            ),
+            [repo_id],
+            |row| {
+                let step = row_to_workflow_step(row)?;
+                let workflow_name: String = row.get("workflow_name")?;
+                let target_label: Option<String> = row.get("target_label")?;
+                Ok((step, workflow_name, target_label))
+            },
+        )
+    }
+
     /// Load workflow definitions from the filesystem for a worktree.
     ///
     /// Wraps `workflow_dsl::load_workflow_defs` so consumers don't need to

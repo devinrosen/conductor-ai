@@ -295,6 +295,11 @@ pub enum Action {
     CancelWorkflow,
     ApproveGate,
     RejectGate,
+    OpenGateModal {
+        step_id: String,
+        run_id: String,
+        gate_prompt: String,
+    },
     /// View the selected workflow definition's YAML source in a scrollable modal.
     ViewWorkflowDef,
     /// Open the selected workflow definition's source file in $EDITOR.

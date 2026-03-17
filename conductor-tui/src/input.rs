@@ -437,6 +437,20 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => {}
             }
         }
+        if state.repo_detail_focus == crate::state::RepoDetailFocus::Gates {
+            if let KeyCode::Enter = key.code {
+                if let Some((step, _workflow_name, _target_label)) =
+                    state.detail_gates.get(state.detail_gate_index)
+                {
+                    return Action::OpenGateModal {
+                        step_id: step.id.clone(),
+                        run_id: step.workflow_run_id.clone(),
+                        gate_prompt: step.gate_prompt.clone().unwrap_or_default(),
+                    };
+                }
+                return Action::None;
+            }
+        }
         if let KeyCode::Char('I') = key.code {
             return Action::ToggleAgentIssues;
         }

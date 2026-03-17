@@ -62,13 +62,19 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
     };
     let pr_height = (pr_visual_rows + 2).max(3).min(area.height / 4);
 
-    // Layout: Info | Worktrees | PRs | Tickets
+    // Gates pane: sized to content, capped at 1/4 of available height.
+    let gate_height = (state.detail_gates.len() as u16 + 2)
+        .max(3)
+        .min(area.height / 4);
+
+    // Layout: Info | Worktrees | PRs | Gates | Tickets
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(9),
             Constraint::Length(wt_height),
             Constraint::Length(pr_height),
+            Constraint::Length(gate_height),
             Constraint::Min(0),
         ])
         .split(area);
@@ -279,7 +285,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
     if ticket_focused && !state.filtered_detail_tickets.is_empty() {
         ticket_state.select(Some(state.detail_ticket_index));
     }
-    frame.render_stateful_widget(ticket_list, layout[3], &mut ticket_state);
+    frame.render_stateful_widget(ticket_list, layout[4], &mut ticket_state);
 
     // PRs pane
     let pr_focused = state.column_focus == ColumnFocus::Content
@@ -384,4 +390,90 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         pr_list_state.select(Some(visual_idx));
     }
     frame.render_stateful_widget(pr_list, layout[2], &mut pr_list_state);
+
+    // Pending Gates pane
+    let gates_focused = state.column_focus == ColumnFocus::Content
+        && state.repo_detail_focus == RepoDetailFocus::Gates;
+    let gates_border = if gates_focused {
+        Style::default().fg(state.theme.border_focused)
+    } else {
+        Style::default().fg(state.theme.border_inactive)
+    };
+
+    let gates_items: Vec<ListItem> = if state.detail_gates.is_empty() {
+        vec![ListItem::new(Line::from(Span::styled(
+            "(no pending gates)",
+            Style::default().fg(state.theme.label_secondary),
+        )))]
+    } else {
+        state
+            .detail_gates
+            .iter()
+            .map(|(step, workflow_name, _target_label)| {
+                let gate_type = step.gate_type.as_deref().unwrap_or("gate");
+                let prompt = step.gate_prompt.as_deref().unwrap_or("");
+                let prompt_display = if prompt.chars().count() > 40 {
+                    format!(
+                        "{}\u{2026}",
+                        &prompt[..prompt
+                            .char_indices()
+                            .nth(40)
+                            .map(|(i, _)| i)
+                            .unwrap_or(prompt.len())]
+                    )
+                } else {
+                    prompt.to_string()
+                };
+                let spans = vec![
+                    Span::styled(
+                        format!("[{gate_type}]"),
+                        Style::default().fg(state.theme.label_secondary),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(
+                        workflow_name.as_str(),
+                        Style::default().fg(state.theme.group_header),
+                    ),
+                    Span::raw("  "),
+                    Span::raw(&step.step_name),
+                    Span::raw("  "),
+                    Span::styled(
+                        prompt_display,
+                        Style::default().fg(state.theme.label_secondary),
+                    ),
+                ];
+                ListItem::new(Line::from(spans))
+            })
+            .collect()
+    };
+
+    let gates_title = if gates_focused && !state.detail_gates.is_empty() {
+        " Pending Gates  Enter:review "
+    } else {
+        " Pending Gates "
+    };
+
+    let gates_list = List::new(gates_items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(gates_border)
+                .title(gates_title),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(state.theme.highlight_bg)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("");
+
+    let mut gates_list_state = ListState::default();
+    if gates_focused && !state.detail_gates.is_empty() {
+        gates_list_state.select(Some(
+            state
+                .detail_gate_index
+                .min(state.detail_gates.len().saturating_sub(1)),
+        ));
+    }
+    frame.render_stateful_widget(gates_list, layout[3], &mut gates_list_state);
 }

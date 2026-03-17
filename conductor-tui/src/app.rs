@@ -708,6 +708,18 @@ impl App {
             Action::CancelWorkflow => self.handle_cancel_workflow(),
             Action::ApproveGate => self.handle_approve_gate(),
             Action::RejectGate => self.handle_reject_gate(),
+            Action::OpenGateModal {
+                step_id,
+                run_id,
+                gate_prompt,
+            } => {
+                self.state.modal = Modal::GateAction {
+                    run_id,
+                    step_id,
+                    gate_prompt,
+                    feedback: String::new(),
+                };
+            }
             Action::ViewWorkflowDef => self.handle_view_workflow_def(),
             Action::EditWorkflowDef => self.handle_edit_workflow_def(),
             Action::ToggleDefStepTree => {
@@ -1059,10 +1071,25 @@ impl App {
                 .filter(|t| &t.repo_id == repo_id)
                 .cloned()
                 .collect();
+            self.rebuild_detail_gates();
         }
 
         self.state.rebuild_filtered_tickets();
         self.clamp_indices();
+    }
+
+    fn rebuild_detail_gates(&mut self) {
+        use conductor_core::workflow::WorkflowManager;
+        if let Some(ref repo_id) = self.state.selected_repo_id.clone() {
+            let wf_mgr = WorkflowManager::new(&self.conn);
+            self.state.detail_gates = wf_mgr
+                .list_waiting_gate_steps_for_repo(repo_id)
+                .unwrap_or_default();
+            self.state.detail_gate_index = 0;
+        } else {
+            self.state.detail_gates = Vec::new();
+            self.state.detail_gate_index = 0;
+        }
     }
 
     fn reload_agent_events(&mut self) {
@@ -1201,6 +1228,11 @@ impl App {
         let pr_len = self.state.detail_prs.len();
         if pr_len > 0 && self.state.detail_pr_index >= pr_len {
             self.state.detail_pr_index = pr_len - 1;
+        }
+
+        let gate_len = self.state.detail_gates.len();
+        if gate_len > 0 && self.state.detail_gate_index >= gate_len {
+            self.state.detail_gate_index = gate_len - 1;
         }
     }
 
@@ -1531,6 +1563,10 @@ impl App {
                 RepoDetailFocus::Prs => {
                     self.state.detail_pr_index = self.state.detail_pr_index.saturating_sub(1);
                 }
+                RepoDetailFocus::Gates => {
+                    self.state.detail_gate_index =
+                        self.state.detail_gate_index.saturating_sub(1);
+                }
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
                 WorkflowRunDetailFocus::Steps => {
@@ -1656,6 +1692,12 @@ impl App {
                 RepoDetailFocus::Prs => {
                     clamp_increment(&mut self.state.detail_pr_index, self.state.detail_prs.len());
                 }
+                RepoDetailFocus::Gates => {
+                    clamp_increment(
+                        &mut self.state.detail_gate_index,
+                        self.state.detail_gates.len(),
+                    );
+                }
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
                 WorkflowRunDetailFocus::Steps => {
@@ -1735,6 +1777,7 @@ impl App {
                                     repo_id.clone(),
                                 );
                             }
+                            self.rebuild_detail_gates();
                             self.state.rebuild_filtered_tickets();
                             self.state.repo_detail_focus = RepoDetailFocus::Worktrees;
                             self.state.view = View::RepoDetail;
@@ -1779,6 +1822,9 @@ impl App {
                 }
                 RepoDetailFocus::Prs => {
                     // No-op: PR selection deferred to a future ticket.
+                }
+                RepoDetailFocus::Gates => {
+                    // Handled by input.rs: Enter emits OpenGateModal when Gates pane is focused.
                 }
             },
             View::WorkflowRunDetail => {
