@@ -1937,6 +1937,22 @@ mod tests {
     }
 
     #[test]
+    fn test_get_workflow_run_ids_for_agent_runs_empty_slice_returns_empty_map() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let result = mgr.get_workflow_run_ids_for_agent_runs(&[]).unwrap();
+        assert!(result.is_empty(), "empty agent_run_ids must yield an empty map");
+    }
+
+    #[test]
+    fn test_get_step_summaries_for_runs_empty_slice_returns_empty_map() {
+        let conn = setup_db();
+        let mgr = WorkflowManager::new(&conn);
+        let result = mgr.get_step_summaries_for_runs(&[]).unwrap();
+        assert!(result.is_empty(), "empty run_ids must yield an empty map");
+    }
+
+    #[test]
     fn test_get_steps_for_runs_returns_all_steps_regardless_of_status() {
         // Verify that get_steps_for_runs returns ALL steps (pending, running,
         // completed) for multiple runs, grouped by run_id.
