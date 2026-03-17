@@ -1,0 +1,19 @@
+[feat/1004-feat-boolean-input-type-for de048d4] style: cargo fmt
+ 18 files changed, 62 insertions(+), 2 deletions(-)
+ create mode 100644 script-01KKWZ56YWEDE9V8A4RWEKD188.out
+ create mode 100644 script-01KKWZ582DH8H7XVDN4T0VTKFR.out
+ create mode 100644 script-01KKWZ5BADPARRVZE1MK14RKGK.out
+ create mode 100644 script-01KKWZ6A18FEPR9TBMSEM7BD4A.out
+ create mode 100644 script-01KKWZ6AFTEHKSPZH2X21PP4Z5.out
+ create mode 100644 script-01KKWZHTAKSYC4CMMQ9QSG4JWF.out
+ create mode 100644 script-01KKX08TBA0CTZG6APKCQR09YA.out
+ create mode 100644 script-01KKX09RQDTHPBG9854E0ZP76K.out
+ create mode 100644 script-01KKX0AJJV5ZAKTFQPFJY72HVV.out
+ create mode 100644 script-01KKX0AK1ESJT8G7HFER051M1G.out
+ create mode 100644 script-01KKX0J8PNADNRG73FK2QSKCB3.out
+ create mode 100644 script-01KKX0VE6AMEDWJW0KXBSM9W5R.out
+ create mode 100644 script-01KKX0WCGJFGMQBDBD9F6KWNZQ.out
+ create mode 100644 script-01KKX0X6CTJXGB0PBVHB0RXVAC.out
+ create mode 100644 script-01KKX0X6WE9GXHQ5DN8CQ8RSPP.out
+ create mode 100644 script-01KKX17ARGXY757GG45ASZ9WQJ.out
+ create mode 100644 script-01KKX1G26BAJJJH45ZXAA1PAM6.out
