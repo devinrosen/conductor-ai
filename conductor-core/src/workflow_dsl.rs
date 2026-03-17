@@ -1891,11 +1891,25 @@ where
     let mut errors = Vec::new();
     let mut produced: HashSet<String> = HashSet::new();
 
-    validate_nodes(&def.body, &mut produced, &mut errors, loader);
+    // Collect declared boolean input names for condition validation.
+    let bool_inputs: HashSet<String> = def
+        .inputs
+        .iter()
+        .filter(|i| i.input_type == InputType::Boolean)
+        .map(|i| i.name.clone())
+        .collect();
+
+    validate_nodes(&def.body, &mut produced, &mut errors, loader, &bool_inputs);
 
     // The `always` block sees every step key produced anywhere in the main body.
     let mut always_produced = produced.clone();
-    validate_nodes(&def.always, &mut always_produced, &mut errors, loader);
+    validate_nodes(
+        &def.always,
+        &mut always_produced,
+        &mut errors,
+        loader,
+        &bool_inputs,
+    );
 
     // Validate target values
     const VALID_TARGETS: &[&str] = &["worktree", "ticket", "repo", "pr", "workflow_run"];
@@ -1925,6 +1939,7 @@ fn validate_nodes<F>(
     produced: &mut HashSet<String>,
     errors: &mut Vec<ValidationError>,
     loader: &F,
+    bool_inputs: &HashSet<String>,
 ) where
     F: Fn(&str) -> std::result::Result<WorkflowDef, String>,
 {
@@ -1972,36 +1987,46 @@ fn validate_nodes<F>(
                 }
             }
             WorkflowNode::If(n) => {
-                if let Condition::StepMarker { step, .. } = &n.condition {
-                    check_condition_reachable(step, produced, errors);
+                match &n.condition {
+                    Condition::StepMarker { step, .. } => {
+                        check_condition_reachable(step, produced, errors);
+                    }
+                    Condition::BoolInput { input } => {
+                        check_bool_input_declared(input, bool_inputs, errors);
+                    }
                 }
                 let mut branch_produced = produced.clone();
-                validate_nodes(&n.body, &mut branch_produced, errors, loader);
+                validate_nodes(&n.body, &mut branch_produced, errors, loader, bool_inputs);
                 // Conservative union: optimistically assume branch steps are available downstream.
                 produced.extend(branch_produced);
             }
             WorkflowNode::Unless(n) => {
-                if let Condition::StepMarker { step, .. } = &n.condition {
-                    check_condition_reachable(step, produced, errors);
+                match &n.condition {
+                    Condition::StepMarker { step, .. } => {
+                        check_condition_reachable(step, produced, errors);
+                    }
+                    Condition::BoolInput { input } => {
+                        check_bool_input_declared(input, bool_inputs, errors);
+                    }
                 }
                 let mut branch_produced = produced.clone();
-                validate_nodes(&n.body, &mut branch_produced, errors, loader);
+                validate_nodes(&n.body, &mut branch_produced, errors, loader, bool_inputs);
                 produced.extend(branch_produced);
             }
             WorkflowNode::While(n) => {
                 // Condition is checked before the first iteration.
                 check_condition_reachable(&n.step, produced, errors);
                 let mut body_produced = produced.clone();
-                validate_nodes(&n.body, &mut body_produced, errors, loader);
+                validate_nodes(&n.body, &mut body_produced, errors, loader, bool_inputs);
                 produced.extend(body_produced);
             }
             WorkflowNode::DoWhile(n) => {
                 // Body always executes at least once before the condition is checked.
-                validate_nodes(&n.body, produced, errors, loader);
+                validate_nodes(&n.body, produced, errors, loader, bool_inputs);
                 check_condition_reachable(&n.step, produced, errors);
             }
             WorkflowNode::Do(n) => {
-                validate_nodes(&n.body, produced, errors, loader);
+                validate_nodes(&n.body, produced, errors, loader, bool_inputs);
             }
             WorkflowNode::Gate(_) => {}
             WorkflowNode::Script(n) => {
@@ -2009,7 +2034,7 @@ fn validate_nodes<F>(
             }
             WorkflowNode::Always(n) => {
                 // An Always node nested inside a body block sees the current produced set.
-                validate_nodes(&n.body, produced, errors, loader);
+                validate_nodes(&n.body, produced, errors, loader, bool_inputs);
             }
         }
     }
@@ -2032,6 +2057,26 @@ fn check_condition_reachable(
                  Use the sub-workflow's own name (the key produced by `call workflow`) as the condition step."
                     .to_string(),
             ),
+        });
+    }
+}
+
+/// Emit a validation error if `input` is not a declared boolean input.
+fn check_bool_input_declared(
+    input: &str,
+    bool_inputs: &HashSet<String>,
+    errors: &mut Vec<ValidationError>,
+) {
+    if !bool_inputs.contains(input) {
+        errors.push(ValidationError {
+            message: format!(
+                "Condition references '{}' which is not a declared boolean input",
+                input
+            ),
+            hint: Some(format!(
+                "Declare it in the workflow inputs block: `{} boolean`",
+                input
+            )),
         });
     }
 }
@@ -5162,5 +5207,187 @@ workflow test {{
             );
         };
         assert_eq!(input, "skip_tests");
+    }
+
+    // -----------------------------------------------------------------------
+    // Semantic validation — BoolInput condition checks
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_semantics_bool_input_condition_undeclared_rejected() {
+        // `my_flag` is used as a condition but not declared as a boolean input.
+        let input = r#"
+workflow test {
+    meta { targets = ["worktree"] }
+    if my_flag {
+        call do_something
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            !report.is_ok(),
+            "undeclared boolean input should produce a validation error"
+        );
+        assert_eq!(report.errors.len(), 1);
+        assert!(
+            report.errors[0].message.contains("my_flag"),
+            "error should mention the undeclared input, got: {}",
+            report.errors[0].message
+        );
+        assert!(report.errors[0].hint.is_some());
+    }
+
+    #[test]
+    fn test_semantics_bool_input_condition_declared_ok() {
+        // `my_flag` is declared as a boolean input — should pass validation.
+        let input = r#"
+workflow test {
+    meta { targets = ["worktree"] }
+    inputs {
+        my_flag boolean
+    }
+    if my_flag {
+        call do_something
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            report.is_ok(),
+            "declared boolean input should pass validation, got: {:?}",
+            report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_semantics_unless_bool_input_undeclared_rejected() {
+        let input = r#"
+workflow test {
+    meta { targets = ["worktree"] }
+    unless skip_lint {
+        call run_lint
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(!report.is_ok());
+        assert!(report.errors[0].message.contains("skip_lint"));
+    }
+
+    #[test]
+    fn test_semantics_unless_bool_input_declared_ok() {
+        let input = r#"
+workflow test {
+    meta { targets = ["worktree"] }
+    inputs {
+        skip_lint boolean
+    }
+    unless skip_lint {
+        call run_lint
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            report.is_ok(),
+            "declared boolean input in unless should pass, got: {:?}",
+            report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_semantics_string_input_not_usable_as_bool_condition() {
+        // A string input by the same name should NOT satisfy a BoolInput condition.
+        let input = r#"
+workflow test {
+    meta { targets = ["worktree"] }
+    inputs {
+        my_flag string
+    }
+    if my_flag {
+        call do_something
+    }
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        let report = validate_workflow_semantics(&def, &no_loader);
+        assert!(
+            !report.is_ok(),
+            "string input should not satisfy a boolean condition"
+        );
+        assert!(report.errors[0].message.contains("my_flag"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Parsing — boolean keyword in inputs block
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_boolean_input_declaration() {
+        let input = r#"
+workflow test {
+    meta { targets = ["worktree"] }
+    inputs {
+        dry_run boolean
+        label
+    }
+    call step
+}
+"#;
+        let def = parse_workflow_str(input, "test.wf").unwrap();
+        assert_eq!(def.inputs.len(), 2);
+        let dry_run = def.inputs.iter().find(|i| i.name == "dry_run").unwrap();
+        assert_eq!(dry_run.input_type, InputType::Boolean);
+        let label = def.inputs.iter().find(|i| i.name == "label").unwrap();
+        assert_eq!(label.input_type, InputType::String);
+    }
+
+    // -----------------------------------------------------------------------
+    // Parsing — while/do-while reject bare boolean identifier as condition
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_while_rejects_bare_identifier() {
+        let input = r#"
+workflow test {
+    meta { targets = ["worktree"] }
+    while my_flag {
+        max_iterations = 3
+        call step
+    }
+}
+"#;
+        let result = parse_workflow_str(input, "test.wf");
+        assert!(result.is_err(), "while with bare identifier should fail");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("my_flag") || err.contains("step.marker"),
+            "error should mention the bare identifier or step.marker requirement, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_do_while_rejects_bare_identifier() {
+        let input = r#"
+workflow test {
+    meta { targets = ["worktree"] }
+    do {
+        max_iterations = 3
+        call step
+    } while my_flag
+}
+"#;
+        let result = parse_workflow_str(input, "test.wf");
+        assert!(result.is_err(), "do-while with bare identifier should fail");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("my_flag") || err.contains("step.marker"),
+            "error should mention the bare identifier or step.marker requirement, got: {err}"
+        );
     }
 }
