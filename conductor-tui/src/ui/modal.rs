@@ -449,6 +449,21 @@ pub fn render_form(
     let mut lines = vec![Line::from("")];
 
     for (i, field) in fields.iter().enumerate() {
+        // Readonly fields: render as plain label: value display, no cursor or edit hints
+        if field.readonly {
+            let label_style = Style::default().fg(theme.label_secondary);
+            lines.push(Line::from(Span::styled(
+                format!("  {}", field.label),
+                label_style,
+            )));
+            lines.push(Line::from(Span::styled(
+                format!("    {}", field.value),
+                Style::default().fg(theme.label_secondary),
+            )));
+            lines.push(Line::from(""));
+            continue;
+        }
+
         let is_active = i == active_field;
         let label_style = if is_active {
             Style::default()
@@ -506,11 +521,14 @@ pub fn render_form(
 
     let has_boolean = fields
         .iter()
-        .any(|f| matches!(f.field_type, crate::state::FormFieldType::Boolean));
-    let hint = if has_boolean {
+        .any(|f| !f.readonly && matches!(f.field_type, crate::state::FormFieldType::Boolean));
+    let has_editable = fields.iter().any(|f| !f.readonly);
+    let hint = if has_editable && has_boolean {
         "  Tab next field  Space toggle  Enter submit  Esc cancel"
-    } else {
+    } else if has_editable {
         "  Tab next field  Enter submit  Esc cancel"
+    } else {
+        "  Enter submit  Esc cancel"
     };
     lines.push(Line::from(Span::styled(
         hint,

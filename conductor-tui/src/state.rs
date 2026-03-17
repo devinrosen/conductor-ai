@@ -618,6 +618,7 @@ pub struct FormField {
     pub placeholder: String,
     pub manually_edited: bool,
     pub required: bool,
+    pub readonly: bool,
     #[allow(dead_code)]
     pub field_type: FormFieldType,
 }

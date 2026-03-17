@@ -29,6 +29,16 @@ use crate::state::{
 use crate::theme::Theme;
 use crate::ui;
 
+const ENGINE_INJECTED_KEYS: &[&str] = &[
+    "ticket_id",
+    "ticket_source_id",
+    "ticket_title",
+    "ticket_url",
+    "repo_id",
+    "repo_path",
+    "repo_name",
+];
+
 /// Maximum scroll offset for a text body (total lines minus one visible line).
 fn max_scroll(line_count: usize) -> u16 {
     line_count.saturating_sub(1) as u16
@@ -200,6 +210,7 @@ fn build_form_fields(inputs: &[conductor_core::workflow::InputDecl]) -> Vec<Form
                 },
                 manually_edited: false,
                 required: inp.required,
+                readonly: false,
                 field_type,
             }
         })
@@ -2729,6 +2740,7 @@ impl App {
                     placeholder: "https://github.com/org/repo.git".to_string(),
                     manually_edited: true,
                     required: true,
+                    readonly: false,
                     field_type: FormFieldType::Text,
                 },
                 FormField {
@@ -2737,6 +2749,7 @@ impl App {
                     placeholder: "auto-derived from URL".to_string(),
                     manually_edited: false,
                     required: true,
+                    readonly: false,
                     field_type: FormFieldType::Text,
                 },
                 FormField {
@@ -2745,6 +2758,7 @@ impl App {
                     placeholder: "auto-derived from slug".to_string(),
                     manually_edited: false,
                     required: false,
+                    readonly: false,
                     field_type: FormFieldType::Text,
                 },
             ],
@@ -2763,8 +2777,10 @@ impl App {
         } = self.state.modal
         {
             if let Some(field) = fields.get_mut(active_field) {
-                field.value.push(c);
-                field.manually_edited = true;
+                if !field.readonly {
+                    field.value.push(c);
+                    field.manually_edited = true;
+                }
             }
             // Auto-derive dependent fields
             match on_submit {
@@ -2790,10 +2806,12 @@ impl App {
         } = self.state.modal
         {
             if let Some(field) = fields.get_mut(active_field) {
-                field.value.pop();
-                // If field emptied and it's a derived field, reset to auto-derive
-                if field.value.is_empty() && active_field > 0 {
-                    field.manually_edited = false;
+                if !field.readonly {
+                    field.value.pop();
+                    // If field emptied and it's a derived field, reset to auto-derive
+                    if field.value.is_empty() && active_field > 0 {
+                        field.manually_edited = false;
+                    }
                 }
             }
             match on_submit {
@@ -2816,7 +2834,19 @@ impl App {
             ..
         } = self.state.modal
         {
-            *active_field = (*active_field + 1) % fields.len();
+            let len = fields.len();
+            let start = *active_field;
+            let mut next = (start + 1) % len;
+            while next != start {
+                if !fields[next].readonly {
+                    break;
+                }
+                next = (next + 1) % len;
+            }
+            // Only update if we found a non-readonly field
+            if !fields[next].readonly {
+                *active_field = next;
+            }
         }
     }
 
@@ -2827,10 +2857,18 @@ impl App {
             ..
         } = self.state.modal
         {
-            if *active_field == 0 {
-                *active_field = fields.len() - 1;
-            } else {
-                *active_field -= 1;
+            let len = fields.len();
+            let start = *active_field;
+            let mut prev = if start == 0 { len - 1 } else { start - 1 };
+            while prev != start {
+                if !fields[prev].readonly {
+                    break;
+                }
+                prev = if prev == 0 { len - 1 } else { prev - 1 };
+            }
+            // Only update if we found a non-readonly field
+            if !fields[prev].readonly {
+                *active_field = prev;
             }
         }
     }
@@ -2878,6 +2916,7 @@ impl App {
                 placeholder: "e.g. project = PROJ AND status != Done".to_string(),
                 manually_edited: false,
                 required: true,
+                readonly: false,
                 field_type: FormFieldType::Text,
             });
             fields.push(FormField {
@@ -2886,6 +2925,7 @@ impl App {
                 placeholder: "e.g. https://mycompany.atlassian.net".to_string(),
                 manually_edited: false,
                 required: true,
+                readonly: false,
                 field_type: FormFieldType::Text,
             });
         } else if !is_jira && fields.len() > 1 {
@@ -2927,17 +2967,19 @@ impl App {
         } = self.state.modal
         {
             if let Some(field) = fields.get_mut(active_field) {
-                if matches!(field.field_type, FormFieldType::Boolean) {
-                    field.value = if field.value == "true" {
-                        "false".to_string()
+                if !field.readonly {
+                    if matches!(field.field_type, FormFieldType::Boolean) {
+                        field.value = if field.value == "true" {
+                            "false".to_string()
+                        } else {
+                            "true".to_string()
+                        };
+                        field.manually_edited = true;
                     } else {
-                        "true".to_string()
-                    };
-                    field.manually_edited = true;
-                } else {
-                    // For text fields, treat space as a regular character input
-                    field.value.push(' ');
-                    field.manually_edited = true;
+                        // For text fields, treat space as a regular character input
+                        field.value.push(' ');
+                        field.manually_edited = true;
+                    }
                 }
             }
         }
@@ -3080,10 +3122,24 @@ impl App {
                     field.manually_edited = true;
                 }
             }
+            // Mark engine-injected fields as readonly when they have been pre-populated
+            for field in &mut fields {
+                if ENGINE_INJECTED_KEYS.contains(&field.label.as_str())
+                    && !field.value.is_empty()
+                {
+                    field.readonly = true;
+                    field.manually_edited = false;
+                }
+            }
+            // Start cursor on the first editable field (or 0 as fallback)
+            let first_editable = fields
+                .iter()
+                .position(|f| !f.readonly)
+                .unwrap_or(0);
             self.state.modal = Modal::Form {
                 title: format!("Inputs for '{}'", def.name),
                 fields,
-                active_field: 0,
+                active_field: first_editable,
                 on_submit: crate::state::FormAction::RunWorkflow(Box::new(
                     crate::state::RunWorkflowAction {
                         target,
@@ -3312,6 +3368,7 @@ impl App {
                 placeholder: "github or jira (Tab to next field)".to_string(),
                 manually_edited: false,
                 required: true,
+                readonly: false,
                 field_type: FormFieldType::Text,
             }];
 
