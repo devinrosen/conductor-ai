@@ -98,3 +98,106 @@ pub(super) fn build_agent_prompt(
     }
     prompt
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow::types::{ContextEntry, WorkflowExecConfig};
+
+    fn make_state(conn: &rusqlite::Connection) -> ExecutionState<'_> {
+        let config = crate::config::Config::default();
+        // Use a leaked config so the borrow lives long enough for the test.
+        let config: &'static crate::config::Config = Box::leak(Box::new(config));
+        ExecutionState {
+            conn,
+            config,
+            workflow_run_id: String::new(),
+            workflow_name: "test-wf".into(),
+            worktree_id: None,
+            working_dir: String::new(),
+            worktree_slug: String::new(),
+            repo_path: String::new(),
+            ticket_id: None,
+            repo_id: None,
+            model: None,
+            exec_config: WorkflowExecConfig::default(),
+            inputs: std::collections::HashMap::new(),
+            agent_mgr: crate::agent::AgentManager::new(conn),
+            wf_mgr: crate::workflow::manager::WorkflowManager::new(conn),
+            parent_run_id: String::new(),
+            depth: 0,
+            target_label: None,
+            step_results: std::collections::HashMap::new(),
+            contexts: Vec::new(),
+            position: 0,
+            all_succeeded: true,
+            total_cost: 0.0,
+            total_turns: 0,
+            total_duration_ms: 0,
+            last_gate_feedback: None,
+            block_output: None,
+            block_with: Vec::new(),
+            resume_ctx: None,
+            default_bot_name: None,
+        }
+    }
+
+    fn make_entry(step: &str, output_file: Option<&str>) -> ContextEntry {
+        ContextEntry {
+            step: step.to_string(),
+            iteration: 0,
+            context: String::new(),
+            markers: Vec::new(),
+            structured_output: None,
+            output_file: output_file.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn test_prior_output_file_absent_when_no_entry_has_file() {
+        let conn = crate::test_helpers::create_test_conn();
+        let mut state = make_state(&conn);
+        state.contexts.push(make_entry("step-a", None));
+        state.contexts.push(make_entry("step-b", None));
+        let vars = build_variable_map(&state);
+        assert!(!vars.contains_key("prior_output_file"));
+    }
+
+    #[test]
+    fn test_prior_output_file_resolved_from_context_entry() {
+        let conn = crate::test_helpers::create_test_conn();
+        let mut state = make_state(&conn);
+        state
+            .contexts
+            .push(make_entry("script-step", Some("/tmp/out.txt")));
+        let vars = build_variable_map(&state);
+        assert_eq!(vars.get("prior_output_file").map(String::as_str), Some("/tmp/out.txt"));
+    }
+
+    #[test]
+    fn test_prior_output_file_picks_most_recent_entry() {
+        let conn = crate::test_helpers::create_test_conn();
+        let mut state = make_state(&conn);
+        state.contexts.push(make_entry("step-1", Some("/tmp/first.txt")));
+        state.contexts.push(make_entry("step-2", None));
+        state.contexts.push(make_entry("step-3", Some("/tmp/last.txt")));
+        let vars = build_variable_map(&state);
+        assert_eq!(
+            vars.get("prior_output_file").map(String::as_str),
+            Some("/tmp/last.txt"),
+        );
+    }
+
+    #[test]
+    fn test_prior_output_file_skips_none_entries_to_find_earlier_file() {
+        let conn = crate::test_helpers::create_test_conn();
+        let mut state = make_state(&conn);
+        state.contexts.push(make_entry("step-1", Some("/tmp/first.txt")));
+        state.contexts.push(make_entry("step-2", None));
+        let vars = build_variable_map(&state);
+        assert_eq!(
+            vars.get("prior_output_file").map(String::as_str),
+            Some("/tmp/first.txt"),
+        );
+    }
+}
