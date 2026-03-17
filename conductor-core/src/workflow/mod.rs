@@ -2976,12 +2976,12 @@ And here is my actual output:
     }
 
     #[test]
-    fn test_bubble_up_child_step_results_parent_wins() {
+    fn test_bubble_up_child_step_results_child_overwrites_parent() {
         let conn = setup_db();
         let config: &'static Config = Box::leak(Box::new(Config::default()));
         let (mut state, _run_id) = make_state_with_run(&conn, config);
 
-        // Parent already has a step result for "review-aggregator"
+        // Parent already has a step result for "review-aggregator" (stale from iteration 1)
         state.step_results.insert(
             "review-aggregator".to_string(),
             StepResult {
@@ -2999,7 +2999,7 @@ And here is my actual output:
             },
         );
 
-        // Child run with same step name but different marker
+        // Child run with same step name but different marker (fresh result from iteration 2)
         let (child_wf_mgr, child_run_id) = create_child_run(&conn);
         let step1 = child_wf_mgr
             .insert_step(&child_run_id, "review-aggregator", "reviewer", false, 0, 0)
@@ -3018,13 +3018,69 @@ And here is my actual output:
 
         let child_steps = bubble_up_child_step_results(&child_wf_mgr, &child_run_id);
         for (key, value) in child_steps {
-            state.step_results.entry(key).or_insert(value);
+            state.step_results.insert(key, value);
         }
 
-        // Parent's value should win
+        // Child's fresh value should overwrite the stale parent value
         let result = state.step_results.get("review-aggregator").unwrap();
-        assert!(result.markers.contains(&"parent_marker".to_string()));
-        assert!(!result.markers.contains(&"child_marker".to_string()));
+        assert!(result.markers.contains(&"child_marker".to_string()));
+        assert!(!result.markers.contains(&"parent_marker".to_string()));
+    }
+
+    #[test]
+    fn test_do_while_child_results_refreshed_between_iterations() {
+        let conn = setup_db();
+        let config: &'static Config = Box::leak(Box::new(Config::default()));
+        let (mut state, _run_id) = make_state_with_run(&conn, config);
+
+        // Simulate iteration 1: child produced has_blocking_findings
+        state.step_results.insert(
+            "review-aggregator".to_string(),
+            StepResult {
+                step_name: "review-aggregator".to_string(),
+                status: WorkflowStepStatus::Completed,
+                result_text: None,
+                cost_usd: None,
+                num_turns: None,
+                duration_ms: None,
+                markers: vec!["has_blocking_findings".to_string()],
+                context: "iteration 1 had blocking findings".to_string(),
+                child_run_id: None,
+                structured_output: None,
+                output_file: None,
+            },
+        );
+
+        // Simulate iteration 2: child completed cleanly — no markers
+        let (child_wf_mgr, child_run_id) = create_child_run(&conn);
+        let step1 = child_wf_mgr
+            .insert_step(&child_run_id, "review-aggregator", "reviewer", false, 0, 0)
+            .unwrap();
+        child_wf_mgr
+            .update_step_status(
+                &step1,
+                WorkflowStepStatus::Completed,
+                None,
+                Some("all clear"),
+                Some("no blocking findings"),
+                Some(r#"[]"#),
+                None,
+            )
+            .unwrap();
+
+        let child_steps = bubble_up_child_step_results(&child_wf_mgr, &child_run_id);
+        for (key, value) in child_steps {
+            state.step_results.insert(key, value);
+        }
+
+        // Stale marker must be gone — do-while condition would evaluate false and exit
+        let result = state.step_results.get("review-aggregator").unwrap();
+        assert!(
+            !result
+                .markers
+                .contains(&"has_blocking_findings".to_string()),
+            "stale has_blocking_findings marker must be cleared after iteration 2"
+        );
     }
 
     #[test]

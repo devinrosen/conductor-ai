@@ -469,7 +469,7 @@ pub(super) fn execute_call_workflow(
                 );
 
                 for (key, value) in child_steps {
-                    state.step_results.entry(key).or_insert(value);
+                    state.step_results.insert(key, value);
                 }
 
                 return Ok(());
@@ -638,7 +638,7 @@ pub(super) fn execute_call_workflow(
                     // Bubble up child step results so parent can reference internal
                     // sub-workflow markers (e.g. review-aggregator.has_review_issues).
                     for (key, value) in child_steps {
-                        state.step_results.entry(key).or_insert(value);
+                        state.step_results.insert(key, value);
                     }
 
                     return Ok(());
