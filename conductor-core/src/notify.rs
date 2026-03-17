@@ -132,7 +132,12 @@ pub fn fire_gate_notification(
         None => format!("{workflow_name}: {step_name}"),
     };
     if let Err(e) = show_desktop_notification("Conductor \u{2014} Approval Required", &body) {
-        tracing::warn!(step_id, step_name, workflow_name, "desktop notification failed: {e}");
+        tracing::warn!(
+            step_id,
+            step_name,
+            workflow_name,
+            "desktop notification failed: {e}"
+        );
     }
 }
 
