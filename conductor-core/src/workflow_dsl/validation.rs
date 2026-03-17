@@ -284,12 +284,7 @@ pub fn validate_script_steps(
             continue;
         }
 
-        match crate::workflow::executors::resolve_script_path(
-            run,
-            working_dir,
-            repo_path,
-            skills_dir.as_deref(),
-        ) {
+        match resolve_script_path(run, working_dir, repo_path, skills_dir.as_deref()) {
             None => {
                 let p = std::path::Path::new(run);
                 let searched = if p.is_absolute() {
@@ -416,4 +411,43 @@ mod tests {
             "error should include the path, got: {msg}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Script path resolution helpers
+// ---------------------------------------------------------------------------
+
+/// Returns the ordered list of candidate paths for a script name.
+///
+/// For absolute paths: single-element vec with the path as-is.
+/// For relative paths: `[working_dir/run, repo_path/run, skills_dir/run]`.
+pub(crate) fn script_search_paths(
+    run: &str,
+    working_dir: &str,
+    repo_path: &str,
+    skills_dir: Option<&std::path::Path>,
+) -> Vec<std::path::PathBuf> {
+    let p = std::path::Path::new(run);
+    if p.is_absolute() {
+        return vec![p.to_path_buf()];
+    }
+    let mut paths = vec![
+        std::path::Path::new(working_dir).join(run),
+        std::path::Path::new(repo_path).join(run),
+    ];
+    if let Some(skills) = skills_dir {
+        paths.push(skills.join(run));
+    }
+    paths
+}
+
+pub(crate) fn resolve_script_path(
+    run: &str,
+    working_dir: &str,
+    repo_path: &str,
+    skills_dir: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
+    script_search_paths(run, working_dir, repo_path, skills_dir)
+        .into_iter()
+        .find(|p| p.exists())
 }
