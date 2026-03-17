@@ -25,6 +25,7 @@ pub use crate::workflow_dsl::{
 
 // Re-export all public types and functions to preserve existing import paths.
 pub use constants::CONDUCTOR_OUTPUT_INSTRUCTION;
+pub use engine::ENGINE_INJECTED_KEYS;
 pub use engine::{
     apply_workflow_input_defaults, execute_workflow, execute_workflow_standalone, resume_workflow,
     resume_workflow_standalone, validate_resume_preconditions,

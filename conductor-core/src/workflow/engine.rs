@@ -18,6 +18,19 @@ use super::types::{
     WorkflowRunStep,
 };
 
+/// Input keys that the workflow engine injects automatically from the run context
+/// (ticket and repo metadata). Consumers can use this slice to identify inputs
+/// that are read-only from the user's perspective.
+pub const ENGINE_INJECTED_KEYS: &[&str] = &[
+    "ticket_id",
+    "ticket_source_id",
+    "ticket_title",
+    "ticket_url",
+    "repo_id",
+    "repo_path",
+    "repo_name",
+];
+
 /// Pre-loaded context for resuming a workflow run.
 ///
 /// Separated from [`ExecutionState`] so that fresh runs carry no resume

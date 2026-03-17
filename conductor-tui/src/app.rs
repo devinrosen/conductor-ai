@@ -14,7 +14,9 @@ use conductor_core::github;
 use conductor_core::issue_source::IssueSourceManager;
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager};
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
-use conductor_core::workflow::{parse_workflow_str, MetadataEntry, WorkflowWarning};
+use conductor_core::workflow::{
+    parse_workflow_str, MetadataEntry, WorkflowWarning, ENGINE_INJECTED_KEYS,
+};
 use conductor_core::worktree::WorktreeManager;
 
 use crate::action::{Action, GithubDiscoverPayload};
@@ -28,16 +30,6 @@ use crate::state::{
 };
 use crate::theme::Theme;
 use crate::ui;
-
-const ENGINE_INJECTED_KEYS: &[&str] = &[
-    "ticket_id",
-    "ticket_source_id",
-    "ticket_title",
-    "ticket_url",
-    "repo_id",
-    "repo_path",
-    "repo_name",
-];
 
 /// Maximum scroll offset for a text body (total lines minus one visible line).
 fn max_scroll(line_count: usize) -> u16 {
@@ -67,6 +59,39 @@ fn wrap_decrement(index: &mut usize, len: usize) {
         *index -= 1;
     } else {
         *index = len.saturating_sub(1);
+    }
+}
+
+/// Find the nearest non-readonly field by traversing `fields` from `start`.
+///
+/// `forward` selects the traversal direction.  Returns `None` when every
+/// field is readonly or the slice is empty, meaning no movement is possible.
+fn advance_form_field(fields: &[FormField], start: usize, forward: bool) -> Option<usize> {
+    let len = fields.len();
+    if len == 0 {
+        return None;
+    }
+    let step = |idx: usize| -> usize {
+        if forward {
+            (idx + 1) % len
+        } else if idx == 0 {
+            len - 1
+        } else {
+            idx - 1
+        }
+    };
+    let mut idx = step(start);
+    while idx != start {
+        if !fields[idx].readonly {
+            return Some(idx);
+        }
+        idx = step(idx);
+    }
+    // No non-readonly field found other than start; check start itself.
+    if !fields[start].readonly {
+        Some(start)
+    } else {
+        None
     }
 }
 
@@ -2834,17 +2859,7 @@ impl App {
             ..
         } = self.state.modal
         {
-            let len = fields.len();
-            let start = *active_field;
-            let mut next = (start + 1) % len;
-            while next != start {
-                if !fields[next].readonly {
-                    break;
-                }
-                next = (next + 1) % len;
-            }
-            // Only update if we found a non-readonly field
-            if !fields[next].readonly {
+            if let Some(next) = advance_form_field(fields, *active_field, true) {
                 *active_field = next;
             }
         }
@@ -2857,17 +2872,7 @@ impl App {
             ..
         } = self.state.modal
         {
-            let len = fields.len();
-            let start = *active_field;
-            let mut prev = if start == 0 { len - 1 } else { start - 1 };
-            while prev != start {
-                if !fields[prev].readonly {
-                    break;
-                }
-                prev = if prev == 0 { len - 1 } else { prev - 1 };
-            }
-            // Only update if we found a non-readonly field
-            if !fields[prev].readonly {
+            if let Some(prev) = advance_form_field(fields, *active_field, false) {
                 *active_field = prev;
             }
         }
@@ -6810,5 +6815,67 @@ workflow my-wf {
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].name, "pr_url");
         assert!(decls[0].required);
+    }
+
+    fn make_field(readonly: bool) -> FormField {
+        FormField {
+            label: String::new(),
+            value: String::new(),
+            placeholder: String::new(),
+            manually_edited: false,
+            required: false,
+            readonly,
+            field_type: crate::state::FormFieldType::Text,
+        }
+    }
+
+    #[test]
+    fn test_advance_form_field_forward_skips_readonly() {
+        // [editable, readonly, editable] — from 0 forward should land on 2
+        let fields = vec![make_field(false), make_field(true), make_field(false)];
+        assert_eq!(advance_form_field(&fields, 0, true), Some(2));
+    }
+
+    #[test]
+    fn test_advance_form_field_backward_skips_readonly() {
+        // [editable, readonly, editable] — from 2 backward should land on 0
+        let fields = vec![make_field(false), make_field(true), make_field(false)];
+        assert_eq!(advance_form_field(&fields, 2, false), Some(0));
+    }
+
+    #[test]
+    fn test_advance_form_field_wraps_forward() {
+        // [editable, editable, editable] — from last position wraps to 0
+        let fields = vec![make_field(false), make_field(false), make_field(false)];
+        assert_eq!(advance_form_field(&fields, 2, true), Some(0));
+    }
+
+    #[test]
+    fn test_advance_form_field_wraps_backward() {
+        // [editable, editable] — from 0 backward wraps to last
+        let fields = vec![make_field(false), make_field(false)];
+        assert_eq!(advance_form_field(&fields, 0, false), Some(1));
+    }
+
+    #[test]
+    fn test_advance_form_field_all_readonly_returns_none() {
+        let fields = vec![make_field(true), make_field(true), make_field(true)];
+        assert_eq!(advance_form_field(&fields, 0, true), None);
+        assert_eq!(advance_form_field(&fields, 0, false), None);
+    }
+
+    #[test]
+    fn test_advance_form_field_empty_returns_none() {
+        let fields: Vec<FormField> = vec![];
+        assert_eq!(advance_form_field(&fields, 0, true), None);
+        assert_eq!(advance_form_field(&fields, 0, false), None);
+    }
+
+    #[test]
+    fn test_advance_form_field_only_start_editable() {
+        // All others are readonly — should stay at start
+        let fields = vec![make_field(false), make_field(true), make_field(true)];
+        assert_eq!(advance_form_field(&fields, 0, true), Some(0));
+        assert_eq!(advance_form_field(&fields, 0, false), Some(0));
     }
 }
