@@ -820,6 +820,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn error_path_key_deduplicates() {
+        let db = empty_state().db;
+
+        let notifications = conductor_core::config::NotificationConfig {
+            enabled: true,
+            workflows: conductor_core::config::WorkflowNotificationConfig {
+                on_success: true,
+                on_failure: true,
+            },
+        };
+
+        let bucket = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            / 60;
+        let key = format!("wf-err:my-workflow:repo/wt:{bucket}");
+
+        // First call — simulates one web process observing the failure
+        let db1 = Arc::clone(&db);
+        let notifications1 = notifications.clone();
+        let key1 = key.clone();
+        tokio::task::spawn_blocking(move || {
+            notify_workflow(db1, &notifications1, &key1, "my-workflow", Some("repo/wt"), false);
+        })
+        .await
+        .unwrap();
+
+        // Second call — simulates a concurrent web process observing the same failure
+        let db2 = Arc::clone(&db);
+        let key2 = key.clone();
+        tokio::task::spawn_blocking(move || {
+            notify_workflow(db2, &notifications, &key2, "my-workflow", Some("repo/wt"), false);
+        })
+        .await
+        .unwrap();
+
+        // Dedup: only one row should exist despite two calls with the same key
+        let conn = db.lock().await;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = ?1 AND event_type = 'failed'",
+                [&key],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "duplicate error-path notifications must be deduped to a single log row");
+    }
+
+    #[tokio::test]
     async fn notify_workflow_with_notifications_enabled_claims_log_row() {
         let db = empty_state().db;
 
