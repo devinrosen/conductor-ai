@@ -28,7 +28,16 @@ pub fn load_workflow_defs(
         .map_err(|e| {
             ConductorError::Workflow(format!("Failed to read {}: {e}", workflows_dir.display()))
         })?
-        .filter_map(|e| e.ok())
+        .filter_map(|e| match e {
+            Ok(entry) => Some(entry),
+            Err(err) => {
+                tracing::warn!(
+                    "Failed to read directory entry in {}: {err}",
+                    workflows_dir.display()
+                );
+                None
+            }
+        })
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "wf"))
         .collect();
 

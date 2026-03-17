@@ -377,24 +377,6 @@ pub struct AlwaysNode {
     pub body: Vec<WorkflowNode>,
 }
 
-impl WorkflowNode {
-    /// Returns the child body for container variants, enabling generic tree traversal.
-    ///
-    /// Any new compound node variant must be added here so that all six tree-walking
-    /// functions automatically recurse into it without individual changes.
-    pub fn body_nodes(&self) -> Option<&[WorkflowNode]> {
-        match self {
-            WorkflowNode::If(n) => Some(&n.body),
-            WorkflowNode::Unless(n) => Some(&n.body),
-            WorkflowNode::While(n) => Some(&n.body),
-            WorkflowNode::DoWhile(n) => Some(&n.body),
-            WorkflowNode::Do(n) => Some(&n.body),
-            WorkflowNode::Always(n) => Some(&n.body),
-            _ => None,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Tree-walking helpers
 // ---------------------------------------------------------------------------

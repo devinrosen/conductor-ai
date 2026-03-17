@@ -106,6 +106,28 @@ fn test_detect_workflow_cycles_depth_limit() {
     assert!(err.contains("nesting depth exceeds"));
 }
 
+#[test]
+fn test_detect_workflow_cycles_via_always_block() {
+    // A cycle introduced through the `always { }` block (not the body) must be caught.
+    let result = detect_workflow_cycles("a", &|name| match name {
+        "a" => parse_workflow_str(
+            "workflow a { meta { targets = [\"worktree\"] } always { call workflow b } }",
+            "a.wf",
+        )
+        .map_err(|e| e.to_string()),
+        "b" => parse_workflow_str(
+            "workflow b { meta { targets = [\"worktree\"] } call workflow a }",
+            "b.wf",
+        )
+        .map_err(|e| e.to_string()),
+        other => Err(format!("Unknown workflow: {other}")),
+    });
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.contains("Circular workflow reference"));
+    assert!(err.contains("a -> b -> a"));
+}
+
 // Ensure the no_loader helper is used at least once to avoid dead_code warnings
 #[allow(dead_code)]
 fn _use_no_loader() {
