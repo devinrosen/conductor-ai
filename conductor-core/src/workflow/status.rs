@@ -41,6 +41,15 @@ impl std::str::FromStr for WorkflowRunStatus {
     }
 }
 
+impl WorkflowRunStatus {
+    /// Canonical set of statuses that constitute an "active" run.
+    pub const ACTIVE: [WorkflowRunStatus; 3] = [
+        WorkflowRunStatus::Pending,
+        WorkflowRunStatus::Running,
+        WorkflowRunStatus::Waiting,
+    ];
+}
+
 crate::impl_sql_enum!(WorkflowRunStatus);
 
 /// Status of a single workflow step execution.
