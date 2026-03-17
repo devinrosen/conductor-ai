@@ -153,34 +153,43 @@ impl App {
         }
 
         // 2 & 3. AppleScript for macOS terminal apps.
-        // Embed the path via an AppleScript variable so `quoted form of` handles
-        // all shell-special characters without manual escaping.
+        // Pass the path as an OS-level argv argument (after --) rather than
+        // interpolating it into the script source. The script receives it via
+        // `item 1 of argv`, so no AppleScript string escaping is needed at all.
         let term = std::env::var("TERM_PROGRAM").unwrap_or_default();
-        let script: Option<String> = match term.as_str() {
-            "Apple_Terminal" => Some(format!(
-                "set p to \"{path}\"\n\
+        let script: Option<&str> = match term.as_str() {
+            "Apple_Terminal" => Some(
+                "on run argv\n\
+                 set p to item 1 of argv\n\
                  tell application \"Terminal\"\n\
                  \tdo script \"cd \" & quoted form of p\n\
                  \tactivate\n\
-                 end tell",
-                path = path.replace('\\', "\\\\").replace('"', "\\\"")
-            )),
-            "iTerm.app" | "iTerm2" => Some(format!(
-                "set p to \"{path}\"\n\
+                 end tell\n\
+                 end run",
+            ),
+            "iTerm.app" | "iTerm2" => Some(
+                "on run argv\n\
+                 set p to item 1 of argv\n\
                  tell application \"iTerm\"\n\
                  \tactivate\n\
                  \tcreate window with default profile\n\
                  \ttell current session of current window\n\
                  \t\twrite text \"cd \" & quoted form of p\n\
                  \tend tell\n\
-                 end tell",
-                path = path.replace('\\', "\\\\").replace('"', "\\\"")
-            )),
+                 end tell\n\
+                 end run",
+            ),
             _ => None,
         };
 
         if let Some(script) = script {
-            match Command::new("osascript").arg("-e").arg(&script).output() {
+            match Command::new("osascript")
+                .arg("-e")
+                .arg(script)
+                .arg("--")
+                .arg(path)
+                .output()
+            {
                 Ok(out) if out.status.success() => {
                     self.state.status_message = Some(format!("Opened terminal at {path}"));
                 }
