@@ -252,10 +252,13 @@ impl<'a> WorktreeManager<'a> {
             .map(|(i, _)| format!("?{}", i + 1))
             .collect::<Vec<_>>()
             .join(", ");
-        let sql = format!(
-            "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE id IN ({placeholders})"
-        );
-        query_collect(self.conn, &sql, rusqlite::params_from_iter(ids.iter()), map_worktree_row)
+        let sql = format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE id IN ({placeholders})");
+        query_collect(
+            self.conn,
+            &sql,
+            rusqlite::params_from_iter(ids.iter()),
+            map_worktree_row,
+        )
     }
 
     pub fn get_by_slug(&self, repo_id: &str, slug: &str) -> Result<Worktree> {
