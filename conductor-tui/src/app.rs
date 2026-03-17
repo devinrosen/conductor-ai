@@ -3052,9 +3052,16 @@ impl App {
         &mut self,
         target: crate::state::WorkflowPickerTarget,
         def: conductor_core::workflow::WorkflowDef,
+        prefill: std::collections::HashMap<String, String>,
     ) {
         if !def.inputs.is_empty() {
-            let fields = build_form_fields(&def.inputs);
+            let mut fields = build_form_fields(&def.inputs);
+            for field in &mut fields {
+                if let Some(v) = prefill.get(&field.label) {
+                    field.value = v.clone();
+                    field.manually_edited = true;
+                }
+            }
             self.state.modal = Modal::Form {
                 title: format!("Inputs for '{}'", def.name),
                 fields,
@@ -3666,32 +3673,14 @@ impl App {
                 );
             }
             PostCreateChoice::RunWorkflow { def, .. } => {
-                let mut inputs = std::collections::HashMap::new();
-                inputs.insert("ticket_id".to_string(), ticket_id.clone());
-                let post_create_target_label = self
-                    .state
-                    .data
-                    .worktrees
-                    .iter()
-                    .find(|w| w.id == worktree_id)
-                    .and_then(|w| {
-                        self.state
-                            .data
-                            .repos
-                            .iter()
-                            .find(|r| r.id == w.repo_id)
-                            .map(|r| format!("{}/{}", r.slug, w.slug))
-                    })
-                    .unwrap_or_else(|| worktree_slug.clone());
-                self.spawn_workflow_in_background(
-                    def,
+                let mut prefill = std::collections::HashMap::new();
+                prefill.insert("ticket_id".to_string(), ticket_id.clone());
+                let target = crate::state::WorkflowPickerTarget::Worktree {
                     worktree_id,
                     worktree_path,
                     repo_path,
-                    Some(ticket_id),
-                    inputs,
-                    post_create_target_label,
-                );
+                };
+                self.show_workflow_inputs_or_run(target, def, prefill);
             }
             PostCreateChoice::Skip => {
                 // No-op — modal already dismissed
@@ -5617,7 +5606,7 @@ impl App {
 
         self.state.modal = Modal::None;
 
-        self.show_workflow_inputs_or_run(target, def);
+        self.show_workflow_inputs_or_run(target, def, std::collections::HashMap::new());
     }
 
     fn handle_run_workflow(&mut self) {
@@ -5647,15 +5636,6 @@ impl App {
             }
         };
 
-        let (repo_path, repo_slug) = self
-            .state
-            .data
-            .repos
-            .iter()
-            .find(|r| r.id == wt.repo_id)
-            .map(|r| (r.local_path.clone(), r.slug.clone()))
-            .unwrap_or_default();
-
         // Block if a workflow run is already active on this worktree
         {
             use conductor_core::workflow::WorkflowManager;
@@ -5677,16 +5657,11 @@ impl App {
             }
         }
 
-        let wt_target_label = format!("{repo_slug}/{}", wt.slug);
-        self.spawn_workflow_in_background(
-            def,
-            wt.id,
-            wt.path,
-            repo_path,
-            wt.ticket_id,
-            std::collections::HashMap::new(),
-            wt_target_label,
-        );
+        let Some(target) = self.worktree_picker_target(&wt) else {
+            self.state.status_message = Some("Repo not found for worktree".to_string());
+            return;
+        };
+        self.show_workflow_inputs_or_run(target, def, std::collections::HashMap::new());
     }
 
     /// Spawn a workflow execution in a background thread, reporting result via bg_tx.
@@ -5952,7 +5927,7 @@ impl App {
             pr_number,
             pr_title: String::new(),
         };
-        self.show_workflow_inputs_or_run(target, def);
+        self.show_workflow_inputs_or_run(target, def, std::collections::HashMap::new());
     }
 
     /// Spawn an ephemeral PR workflow execution in a background thread.
