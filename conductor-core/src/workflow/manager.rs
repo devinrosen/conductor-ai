@@ -182,12 +182,21 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
+    /// Update workflow run status.
+    ///
+    /// **Panics** if called with `Waiting` — use [`set_waiting_blocked_on`] instead
+    /// to atomically set both status and blocked_on context.
     pub fn update_workflow_status(
         &self,
         workflow_run_id: &str,
         status: WorkflowRunStatus,
         result_summary: Option<&str>,
     ) -> Result<()> {
+        assert!(
+            !matches!(status, WorkflowRunStatus::Waiting),
+            "Use set_waiting_blocked_on() to transition to Waiting status"
+        );
+
         let now = Utc::now().to_rfc3339();
         let is_terminal = matches!(
             status,
@@ -199,18 +208,12 @@ impl<'a> WorkflowManager<'a> {
             None
         };
 
-        // Auto-clear blocked_on when transitioning away from Waiting.
-        if !matches!(status, WorkflowRunStatus::Waiting) {
-            self.conn.execute(
-                "UPDATE workflow_runs SET status = ?1, result_summary = ?2, ended_at = ?3, blocked_on = NULL WHERE id = ?4",
-                params![status, result_summary, ended_at, workflow_run_id],
-            )?;
-        } else {
-            self.conn.execute(
-                "UPDATE workflow_runs SET status = ?1, result_summary = ?2, ended_at = ?3 WHERE id = ?4",
-                params![status, result_summary, ended_at, workflow_run_id],
-            )?;
-        }
+        // Always clear blocked_on — the only way to enter Waiting (which sets
+        // blocked_on) is through set_waiting_blocked_on().
+        self.conn.execute(
+            "UPDATE workflow_runs SET status = ?1, result_summary = ?2, ended_at = ?3, blocked_on = NULL WHERE id = ?4",
+            params![status, result_summary, ended_at, workflow_run_id],
+        )?;
         Ok(())
     }
 

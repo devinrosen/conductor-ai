@@ -85,7 +85,13 @@ pub(super) fn make_state_with_run<'a>(
         .create_workflow_run("test", Some("w1"), &parent.id, false, "manual", None)
         .unwrap();
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None)
+        .set_waiting_blocked_on(
+            &run.id,
+            &BlockedOn::HumanApproval {
+                gate_name: "test-gate".to_string(),
+                prompt: None,
+            },
+        )
         .unwrap();
     let run_id = run.id.clone();
     let state = ExecutionState {

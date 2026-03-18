@@ -1045,8 +1045,14 @@ fn test_cancel_run_waiting_status() {
     let (mgr, _parent, run) = make_workflow_run(&conn);
 
     // Advance run to Waiting (e.g. at a gate)
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None)
-        .unwrap();
+    mgr.set_waiting_blocked_on(
+        &run.id,
+        &BlockedOn::HumanApproval {
+            gate_name: "human-gate".to_string(),
+            prompt: None,
+        },
+    )
+    .unwrap();
 
     // Insert a Waiting step (no child run)
     let step_id = mgr
@@ -1804,4 +1810,15 @@ fn test_malformed_blocked_on_json_is_silently_dropped() {
         loaded.blocked_on.is_none(),
         "malformed blocked_on should deserialize as None"
     );
+}
+
+#[test]
+#[should_panic(expected = "Use set_waiting_blocked_on()")]
+fn test_update_workflow_status_rejects_waiting() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    // Calling update_workflow_status with Waiting must panic — callers should
+    // use set_waiting_blocked_on() to enforce the blocked_on invariant.
+    let _ = mgr.update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None);
 }
