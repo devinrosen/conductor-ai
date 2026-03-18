@@ -12,27 +12,6 @@ use super::helpers::{
 use super::App;
 
 impl App {
-    /// Try to auto-detect the feature for a workflow run using the unified
-    /// resolver. On error (e.g. ambiguous features) the message is shown in
-    /// the status bar and `None` is returned so the workflow can still proceed
-    /// without a feature.
-    fn try_detect_feature_id(
-        &mut self,
-        repo_slug: Option<&str>,
-        ticket_id: Option<&str>,
-        worktree_slug: Option<&str>,
-    ) -> Option<String> {
-        match conductor_core::feature::FeatureManager::new(&self.conn, &self.config)
-            .resolve_feature_id_for_run(None, repo_slug, ticket_id, worktree_slug)
-        {
-            Ok(opt) => opt,
-            Err(e) => {
-                self.state.status_message = Some(format!("Feature auto-detect failed: {e}"));
-                None
-            }
-        }
-    }
-
     /// Dispatch workflow data loading to a background thread. The result
     /// arrives as a `WorkflowDataRefreshed` action, avoiding synchronous
     /// FS + DB I/O on the main loop tick.
@@ -675,7 +654,7 @@ impl App {
                     return;
                 }
 
-                let (wt_target_label, wt_ticket_id) = self
+                let (wt_target_label, wt_ticket_id, repo_slug, wt_slug) = self
                     .state
                     .data
                     .worktrees
@@ -687,23 +666,19 @@ impl App {
                             .repos
                             .iter()
                             .find(|r| r.id == w.repo_id)
-                            .map(|r| (format!("{}/{}", r.slug, w.slug), w.ticket_id.clone()))
+                            .map(|r| {
+                                (
+                                    format!("{}/{}", r.slug, w.slug),
+                                    w.ticket_id.clone(),
+                                    Some(r.slug.clone()),
+                                    Some(w.slug.clone()),
+                                )
+                            })
                     })
                     .unwrap_or_default();
                 // Fall back to inputs["ticket_id"] when the worktree's in-memory state
                 // hasn't been refreshed yet (e.g. post-create flow).
                 let ticket_id = wt_ticket_id.or_else(|| inputs.get("ticket_id").cloned());
-                // Extract repo_slug and worktree_slug from the target label (repo/wt).
-                let (repo_slug, wt_slug) = wt_target_label
-                    .split_once('/')
-                    .map(|(r, w)| (Some(r.to_string()), Some(w.to_string())))
-                    .unwrap_or((None, None));
-                // Auto-detect feature via the unified resolver.
-                let feature_id = self.try_detect_feature_id(
-                    repo_slug.as_deref(),
-                    ticket_id.as_deref(),
-                    wt_slug.as_deref(),
-                );
                 self.spawn_workflow_in_background(
                     def,
                     worktree_id,
@@ -713,7 +688,8 @@ impl App {
                     inputs,
                     wt_target_label,
                     model,
-                    feature_id,
+                    repo_slug,
+                    wt_slug,
                 );
             }
             WorkflowPickerTarget::Pr { pr_number, .. } => {
@@ -757,8 +733,7 @@ impl App {
                 repo_path,
                 ..
             } => {
-                // Auto-detect feature via the unified resolver.
-                let feature_id = self.try_detect_feature_id(None, Some(&ticket_id), None);
+                // Feature resolution happens off-thread inside spawn_ticket_workflow_in_background.
                 self.spawn_ticket_workflow_in_background(
                     def,
                     ticket_id,
@@ -767,7 +742,6 @@ impl App {
                     ticket_title,
                     inputs,
                     model,
-                    feature_id,
                 );
             }
             WorkflowPickerTarget::Repo {
@@ -790,7 +764,7 @@ impl App {
                 run_inputs.insert("workflow_run_id".to_string(), workflow_run_id.clone());
                 let working_dir = worktree_path.unwrap_or_else(|| repo_path.clone());
                 if let Some(wt_id) = worktree_id {
-                    // Look up worktree data so we can auto-detect the feature.
+                    // Look up worktree data for feature auto-detection (resolved off-thread).
                     let (repo_slug, ticket_id, wt_slug) = self
                         .state
                         .data
@@ -806,11 +780,6 @@ impl App {
                             )
                         })
                         .unwrap_or((None, None, None));
-                    let feature_id = self.try_detect_feature_id(
-                        repo_slug.as_deref(),
-                        ticket_id.as_deref(),
-                        wt_slug.as_deref(),
-                    );
                     self.spawn_workflow_in_background(
                         def,
                         wt_id,
@@ -820,7 +789,8 @@ impl App {
                         run_inputs,
                         format!("workflow_run:{workflow_run_id}"),
                         model,
-                        feature_id,
+                        repo_slug,
+                        wt_slug,
                     );
                 } else {
                     self.spawn_workflow_run_target_in_background(
@@ -836,6 +806,10 @@ impl App {
     }
 
     /// Spawn a workflow execution in a background thread, reporting result via bg_tx.
+    ///
+    /// Feature auto-detection is performed off-thread using `repo_slug`,
+    /// `ticket_id`, and `wt_slug` to avoid blocking the TUI main thread with
+    /// synchronous DB queries.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn spawn_workflow_in_background(
         &mut self,
@@ -847,7 +821,8 @@ impl App {
         inputs: std::collections::HashMap<String, String>,
         target_label: String,
         model: Option<String>,
-        feature_id: Option<String>,
+        repo_slug: Option<String>,
+        wt_slug: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -857,6 +832,24 @@ impl App {
         let handle = std::thread::spawn(move || {
             use conductor_core::workflow::{
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
+            };
+
+            // Resolve feature_id off the main thread.
+            let feature_id = {
+                let db = conductor_core::config::db_path();
+                conductor_core::db::open_database(&db)
+                    .ok()
+                    .and_then(|conn| {
+                        conductor_core::feature::FeatureManager::new(&conn, &config)
+                            .resolve_feature_id_for_run(
+                                None,
+                                repo_slug.as_deref(),
+                                ticket_id.as_deref(),
+                                wt_slug.as_deref(),
+                            )
+                            .ok()
+                            .flatten()
+                    })
             };
 
             let params = WorkflowExecStandalone {
@@ -897,7 +890,6 @@ impl App {
         target_label: String,
         inputs: std::collections::HashMap<String, String>,
         model: Option<String>,
-        feature_id: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -907,6 +899,19 @@ impl App {
         let handle = std::thread::spawn(move || {
             use conductor_core::workflow::{
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
+            };
+
+            // Resolve feature_id off the main thread.
+            let feature_id = {
+                let db = conductor_core::config::db_path();
+                conductor_core::db::open_database(&db)
+                    .ok()
+                    .and_then(|conn| {
+                        conductor_core::feature::FeatureManager::new(&conn, &config)
+                            .resolve_feature_id_for_run(None, None, Some(&ticket_id), None)
+                            .ok()
+                            .flatten()
+                    })
             };
 
             let working_dir = repo_path.clone();
