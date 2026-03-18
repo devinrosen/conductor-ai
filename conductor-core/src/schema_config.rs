@@ -345,6 +345,11 @@ fn parse_single_field(name: &str, required: bool, raw: &RawFieldDef) -> Result<F
                 "array" => match &obj.items {
                     Some(RawArrayItems::Scalar(type_str)) => {
                         let scalar = parse_type_str(type_str)?;
+                        if matches!(scalar, FieldType::Array { .. } | FieldType::Object { .. }) {
+                            return Err(ConductorError::Schema(format!(
+                                "Field '{name}': array items type must be a scalar (string, number, boolean, enum), got '{type_str}'"
+                            )));
+                        }
                         FieldType::Array {
                             items: ArrayItems::Scalar(Box::new(scalar)),
                         }
@@ -2247,6 +2252,30 @@ fields:
         assert!(
             msg.contains("Unknown field type"),
             "expected 'Unknown field type' error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_parse_rejects_array_as_scalar_item_type() {
+        let yaml = "fields:\n  tags:\n    type: array\n    items: array\n";
+        let result = parse_schema_content(yaml, "test");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("must be a scalar"),
+            "expected 'must be a scalar' error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_parse_rejects_object_as_scalar_item_type() {
+        let yaml = "fields:\n  tags:\n    type: array\n    items: object\n";
+        let result = parse_schema_content(yaml, "test");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("must be a scalar"),
+            "expected 'must be a scalar' error, got: {msg}"
         );
     }
 
