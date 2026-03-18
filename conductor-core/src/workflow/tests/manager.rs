@@ -1785,3 +1785,23 @@ fn test_blocked_on_cleared_when_transitioning_away_from_waiting() {
         "blocked_on should be cleared when leaving Waiting"
     );
 }
+
+#[test]
+fn test_malformed_blocked_on_json_is_silently_dropped() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    // Directly inject malformed JSON into the blocked_on column
+    conn.execute(
+        "UPDATE workflow_runs SET blocked_on = ? WHERE id = ?",
+        params!["not-valid-json{{{", run.id],
+    )
+    .unwrap();
+
+    // Reading the run should succeed with blocked_on = None
+    let loaded = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert!(
+        loaded.blocked_on.is_none(),
+        "malformed blocked_on should deserialize as None"
+    );
+}

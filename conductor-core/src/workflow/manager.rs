@@ -1489,13 +1489,14 @@ fn purge_where_clause(statuses: &[&str], repo_id: Option<&str>) -> (String, Vec<
 }
 
 pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
+    let id: String = row.get(0)?;
     let dry_run_int: i64 = row.get(5)?;
     let inputs_json: Option<String> = row.get(11)?;
     let inputs: std::collections::HashMap<String, String> = inputs_json
         .as_deref()
         .map(|s| {
             serde_json::from_str(s).unwrap_or_else(|e| {
-                tracing::warn!("Malformed inputs JSON in workflow run: {e}");
+                tracing::warn!("Malformed inputs JSON in workflow run {id}: {e}");
                 std::collections::HashMap::new()
             })
         })
@@ -1509,12 +1510,12 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
     let blocked_on_json: Option<String> = row.get(18)?;
     let blocked_on: Option<super::types::BlockedOn> = blocked_on_json.as_deref().and_then(|s| {
         serde_json::from_str(s).unwrap_or_else(|e| {
-            tracing::warn!("Malformed blocked_on JSON in workflow run: {e}");
+            tracing::warn!("Malformed blocked_on JSON in workflow run {id}: {e}");
             None
         })
     });
     Ok(WorkflowRun {
-        id: row.get(0)?,
+        id,
         workflow_name: row.get(1)?,
         worktree_id: row.get::<_, Option<String>>(2)?,
         parent_run_id: row.get(3)?,
