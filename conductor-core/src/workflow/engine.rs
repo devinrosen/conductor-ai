@@ -6,7 +6,7 @@ use crate::agent::AgentManager;
 use crate::agent_config::AgentSpec;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
-use crate::schema_config::OutputSchema;
+use crate::schema_config::{OutputSchema, SchemaIssue};
 use crate::workflow_dsl::{self, WorkflowDef, WorkflowNode};
 use crate::worktree::WorktreeManager;
 
@@ -198,6 +198,32 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
             return Err(ConductorError::Workflow(format!(
                 "Missing prompt snippets: {}. Check .conductor/prompts/ directory.",
                 missing_snippets.join(", ")
+            )));
+        }
+    }
+
+    // Validate all referenced output schemas exist and parse correctly
+    let all_schemas = workflow.collect_all_schema_refs();
+    if !all_schemas.is_empty() {
+        let schema_issues = crate::schema_config::check_schemas(
+            input.working_dir,
+            input.repo_path,
+            &all_schemas,
+            Some(&workflow.name),
+        );
+        if !schema_issues.is_empty() {
+            let details: Vec<String> = schema_issues
+                .iter()
+                .map(|issue| match issue {
+                    SchemaIssue::Missing(name) => format!("missing: {name}"),
+                    SchemaIssue::Invalid { name, error } => {
+                        format!("invalid: {name}: {error}")
+                    }
+                })
+                .collect();
+            return Err(ConductorError::Workflow(format!(
+                "Schema validation failed: {}",
+                details.join(", ")
             )));
         }
     }

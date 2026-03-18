@@ -2644,3 +2644,67 @@ fn test_execute_workflow_iteration_persisted() {
         "iteration should be persisted on the workflow run"
     );
 }
+
+#[test]
+fn test_execute_workflow_fails_on_invalid_schema() {
+    let conn = setup_db();
+    let config = Config::default();
+    let exec_config = WorkflowExecConfig::default();
+
+    // Create a temp dir with a valid agent definition so the agent check passes
+    let tmp = tempfile::tempdir().unwrap();
+    let agents_dir = tmp.path().join(".conductor/agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+    std::fs::write(agents_dir.join("test-agent.md"), "You are a test agent.").unwrap();
+    let working_dir = tmp.path().to_str().unwrap();
+
+    // Build a workflow with a step referencing a schema that doesn't exist
+    let mut workflow = make_empty_workflow();
+    workflow.body.push(WorkflowNode::Call(CallNode {
+        agent: AgentRef::Name("test-agent".into()),
+        retries: 0,
+        on_fail: None,
+        output: Some("broken".into()),
+        with: vec![],
+        bot_name: None,
+    }));
+
+    let input = WorkflowExecInput {
+        conn: &conn,
+        config: &config,
+        workflow: &workflow,
+        worktree_id: None,
+        working_dir,
+        repo_path: "",
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: &exec_config,
+        inputs: HashMap::new(),
+        depth: 0,
+        parent_workflow_run_id: None,
+        target_label: None,
+        default_bot_name: None,
+        iteration: 0,
+        run_id_notify: None,
+    };
+
+    let err = execute_workflow(&input).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Schema validation failed"),
+        "expected schema validation error, got: {msg}"
+    );
+    assert!(
+        msg.contains("broken"),
+        "error should mention the bad schema name, got: {msg}"
+    );
+
+    // Verify no agent runs were created (zero tokens spent)
+    let agent_mgr = AgentManager::new(&conn);
+    let runs = agent_mgr.list_agent_runs(None, None, None, 100, 0).unwrap();
+    assert!(
+        runs.is_empty(),
+        "no agent runs should be created when schema validation fails"
+    );
+}
