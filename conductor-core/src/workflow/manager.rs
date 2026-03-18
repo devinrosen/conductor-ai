@@ -2736,4 +2736,79 @@ mod tests {
         let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.iteration, 0);
     }
+
+    // -----------------------------------------------------------------------
+    // validate_single tests
+    // -----------------------------------------------------------------------
+
+    /// Helper to build a minimal WorkflowDef for validation tests.
+    fn minimal_workflow(name: &str) -> crate::workflow_dsl::WorkflowDef {
+        crate::workflow_dsl::WorkflowDef {
+            name: name.to_string(),
+            description: "test workflow".to_string(),
+            trigger: crate::workflow_dsl::WorkflowTrigger::Manual,
+            targets: vec![],
+            inputs: vec![],
+            body: vec![],
+            always: vec![],
+            source_path: "test.wf".to_string(),
+        }
+    }
+
+    /// Create a temp dir with a `.conductor/workflows/<name>.wf` file so the
+    /// loader used by cycle detection can resolve the workflow by name.
+    fn write_wf_file(dir: &std::path::Path, name: &str, content: &str) {
+        let wf_dir = dir.join(".conductor/workflows");
+        std::fs::create_dir_all(&wf_dir).unwrap();
+        std::fs::write(wf_dir.join(format!("{name}.wf")), content).unwrap();
+    }
+
+    #[test]
+    fn test_validate_single_returns_entry_for_valid_workflow() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wf_src = "workflow good-wf {\n  meta {\n    description = \"test\"\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }\n}\n";
+        write_wf_file(tmp.path(), "good-wf", wf_src);
+
+        let wf = minimal_workflow("good-wf");
+        let known_bots = std::collections::HashSet::new();
+        let path = tmp.path().to_str().unwrap();
+
+        let entry = WorkflowManager::validate_single(path, path, &wf, &known_bots);
+
+        assert_eq!(entry.name, "good-wf");
+        assert!(
+            entry.errors.is_empty(),
+            "expected no errors: {:?}",
+            entry.errors
+        );
+    }
+
+    #[test]
+    fn test_validate_single_reports_errors_for_missing_agent() {
+        use crate::workflow_dsl::{AgentRef, CallNode, WorkflowNode};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let wf_src = "workflow bad-wf {\n  meta {\n    description = \"test\"\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }\n  call nonexistent-agent\n}\n";
+        write_wf_file(tmp.path(), "bad-wf", wf_src);
+
+        let mut wf = minimal_workflow("bad-wf");
+        wf.body.push(WorkflowNode::Call(CallNode {
+            agent: AgentRef::Name("nonexistent-agent".to_string()),
+            retries: 0,
+            on_fail: None,
+            output: None,
+            with: vec![],
+            bot_name: None,
+        }));
+        let known_bots = std::collections::HashSet::new();
+        let path = tmp.path().to_str().unwrap();
+
+        let entry = WorkflowManager::validate_single(path, path, &wf, &known_bots);
+
+        assert_eq!(entry.name, "bad-wf");
+        assert!(
+            !entry.errors.is_empty(),
+            "expected validation errors for missing agent"
+        );
+    }
 }
