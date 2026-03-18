@@ -134,6 +134,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             custom_input,
             custom_active,
             suggested,
+            allow_default,
             ..
         } => modal::render_model_picker(
             frame,
@@ -145,6 +146,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             custom_input,
             *custom_active,
             suggested.as_deref(),
+            *allow_default,
             &state.theme,
         ),
         Modal::GateAction {

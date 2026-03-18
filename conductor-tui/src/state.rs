@@ -430,6 +430,9 @@ pub enum Modal {
         suggested: Option<String>,
         /// What to do when a model is selected
         on_submit: InputAction,
+        /// When true, show a "Default (per-agent frontmatter)" row at index 0.
+        /// Used for run-time pickers (agent + workflow) where the user can opt out of overriding.
+        allow_default: bool,
     },
     /// Gate action modal for approving/rejecting a workflow gate step.
     GateAction {
@@ -722,6 +725,12 @@ pub enum InputAction {
     /// Submit a response to a pending feedback request.
     FeedbackResponse {
         feedback_id: String,
+    },
+    /// Second step: model picker for workflow runs.
+    /// Carries the workflow target + inputs through the modal roundtrip.
+    WorkflowModelOverride {
+        action: Box<RunWorkflowAction>,
+        inputs: std::collections::HashMap<String, String>,
     },
 }
 

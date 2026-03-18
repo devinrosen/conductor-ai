@@ -591,31 +591,67 @@ impl App {
     ) {
         use crate::state::WorkflowPickerTarget;
 
+        // Active-run check must happen before showing the model picker
+        if let WorkflowPickerTarget::Worktree {
+            ref worktree_id, ..
+        } = target
+        {
+            if self.active_run_blocks_dispatch(worktree_id) {
+                return;
+            }
+        }
+
+        // Resolve the effective model from the per-worktree → per-repo → global config chain
+        let (effective_default, effective_source) = match &target {
+            WorkflowPickerTarget::Worktree { worktree_id, .. } => {
+                self.resolve_model_for_worktree(worktree_id)
+            }
+            _ => match self.config.general.model.clone() {
+                Some(m) => (Some(m), "global config".to_string()),
+                None => (None, "not set".to_string()),
+            },
+        };
+
+        self.state.modal = Modal::ModelPicker {
+            context_label: format!("workflow: {}", def.name),
+            effective_default,
+            effective_source,
+            selected: 0, // "Default" row pre-selected
+            custom_input: String::new(),
+            custom_active: false,
+            suggested: None,
+            allow_default: true,
+            on_submit: crate::state::InputAction::WorkflowModelOverride {
+                action: Box::new(crate::state::RunWorkflowAction {
+                    target,
+                    workflow_def: def,
+                }),
+                inputs,
+            },
+        };
+    }
+
+    /// Dispatch a workflow to the appropriate spawn function based on the target type.
+    /// Called from the WorkflowModelOverride input handler after the model picker is submitted.
+    pub(super) fn do_dispatch_workflow(
+        &mut self,
+        target: crate::state::WorkflowPickerTarget,
+        def: conductor_core::workflow::WorkflowDef,
+        inputs: std::collections::HashMap<String, String>,
+        model: Option<String>,
+    ) {
+        use crate::state::WorkflowPickerTarget;
+
         match target {
             WorkflowPickerTarget::Worktree {
                 worktree_id,
                 worktree_path,
                 repo_path,
             } => {
-                // Block if a workflow run is already active on this worktree
-                {
-                    use conductor_core::workflow::WorkflowManager;
-                    let wf_mgr = WorkflowManager::new(&self.conn);
-                    match wf_mgr.get_active_run_for_worktree(&worktree_id) {
-                        Ok(Some(active)) => {
-                            self.state.status_message = Some(format!(
-                                "Workflow '{}' is already running — cancel it before starting another",
-                                active.workflow_name
-                            ));
-                            return;
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            self.state.status_message =
-                                Some(format!("Failed to check active workflow run: {e}"));
-                            return;
-                        }
-                    }
+                // Re-check active run at dispatch time to close the race window between
+                // the model picker being shown and the user submitting their selection.
+                if self.active_run_blocks_dispatch(&worktree_id) {
+                    return;
                 }
 
                 let (wt_target_label, wt_ticket_id) = self
@@ -644,6 +680,7 @@ impl App {
                     ticket_id,
                     inputs,
                     wt_target_label,
+                    model,
                 );
             }
             WorkflowPickerTarget::Pr { pr_number, .. } => {
@@ -678,7 +715,7 @@ impl App {
                     repo,
                     number: pr_number as u64,
                 };
-                self.spawn_pr_workflow_in_background(pr_ref, def, inputs);
+                self.spawn_pr_workflow_in_background(pr_ref, def, inputs, model);
             }
             WorkflowPickerTarget::Ticket {
                 ticket_id,
@@ -694,6 +731,7 @@ impl App {
                     repo_path,
                     ticket_title,
                     inputs,
+                    model,
                 );
             }
             WorkflowPickerTarget::Repo {
@@ -701,7 +739,9 @@ impl App {
                 repo_path,
                 repo_name,
             } => {
-                self.spawn_repo_workflow_in_background(def, repo_id, repo_path, repo_name, inputs);
+                self.spawn_repo_workflow_in_background(
+                    def, repo_id, repo_path, repo_name, inputs, model,
+                );
             }
             WorkflowPickerTarget::WorkflowRun {
                 workflow_run_id,
@@ -722,6 +762,7 @@ impl App {
                         None,
                         run_inputs,
                         format!("workflow_run:{workflow_run_id}"),
+                        model,
                     );
                 } else {
                     self.spawn_workflow_run_target_in_background(
@@ -729,6 +770,7 @@ impl App {
                         repo_path,
                         run_inputs,
                         workflow_run_id,
+                        model,
                     );
                 }
             }
@@ -746,6 +788,7 @@ impl App {
         ticket_id: Option<String>,
         inputs: std::collections::HashMap<String, String>,
         target_label: String,
+        model: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -765,7 +808,7 @@ impl App {
                 repo_path,
                 ticket_id,
                 repo_id: None,
-                model: None,
+                model,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
@@ -784,6 +827,7 @@ impl App {
         self.state.status_message = Some(format!("Starting workflow '{workflow_name}'…"));
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn spawn_ticket_workflow_in_background(
         &mut self,
         def: conductor_core::workflow::WorkflowDef,
@@ -792,6 +836,7 @@ impl App {
         repo_path: String,
         target_label: String,
         inputs: std::collections::HashMap<String, String>,
+        model: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -813,7 +858,7 @@ impl App {
                 repo_path,
                 ticket_id: Some(ticket_id),
                 repo_id: Some(repo_id),
-                model: None,
+                model,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
@@ -839,6 +884,7 @@ impl App {
         repo_path: String,
         repo_name: String,
         inputs: std::collections::HashMap<String, String>,
+        model: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -858,7 +904,7 @@ impl App {
                 repo_path,
                 ticket_id: None,
                 repo_id: Some(repo_id),
-                model: None,
+                model,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
@@ -883,6 +929,7 @@ impl App {
         repo_path: String,
         inputs: std::collections::HashMap<String, String>,
         target_label: String,
+        model: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -902,7 +949,7 @@ impl App {
                 repo_path,
                 ticket_id: None,
                 repo_id: None,
-                model: None,
+                model,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
@@ -1007,6 +1054,7 @@ impl App {
         pr_ref: conductor_core::workflow_ephemeral::PrRef,
         def: conductor_core::workflow::WorkflowDef,
         inputs: std::collections::HashMap<String, String>,
+        model: Option<String>,
     ) {
         use conductor_core::config::db_path;
         use conductor_core::db::open_database;
@@ -1048,7 +1096,7 @@ impl App {
                 &config,
                 &pr_ref,
                 &def.name,
-                None,
+                model.as_deref(),
                 exec_config,
                 inputs,
                 false,
@@ -1327,5 +1375,161 @@ impl App {
             repo_path: repo.local_path.clone(),
             repo_name: repo.slug.clone(),
         }
+    }
+
+    /// Check whether a workflow is already active for `worktree_id`.
+    ///
+    /// Returns `true` and sets `self.state.status_message` when the check detects
+    /// an active run (or fails), signalling the caller to abort the dispatch.
+    /// Returns `false` when no active run is found and dispatch may proceed.
+    fn active_run_blocks_dispatch(&mut self, worktree_id: &str) -> bool {
+        use conductor_core::workflow::WorkflowManager;
+        let wf_mgr = WorkflowManager::new(&self.conn);
+        match wf_mgr.get_active_run_for_worktree(worktree_id) {
+            Ok(Some(active)) => {
+                self.state.status_message = Some(format!(
+                    "Workflow '{}' is already running — cancel it before starting another",
+                    active.workflow_name
+                ));
+                true
+            }
+            Ok(None) => false,
+            Err(e) => {
+                self.state.status_message =
+                    Some(format!("Failed to check active workflow run: {e}"));
+                true
+            }
+        }
+    }
+
+    /// Resolve the effective model for `worktree_id` using the
+    /// per-worktree → per-repo → global config precedence chain.
+    ///
+    /// Returns `(model, source_label)` where `source_label` is one of
+    /// `"worktree"`, `"repo"`, `"global config"`, or `"not set"`.
+    pub(super) fn resolve_model_for_worktree(&self, worktree_id: &str) -> (Option<String>, String) {
+        let wt = self
+            .state
+            .data
+            .worktrees
+            .iter()
+            .find(|w| w.id == worktree_id);
+        let wt_model = wt.and_then(|w| w.model.clone());
+        let repo_model = wt
+            .and_then(|w| self.state.data.repos.iter().find(|r| r.id == w.repo_id))
+            .and_then(|r| r.model.clone());
+        let is_wt = wt_model.is_some();
+        let is_repo = !is_wt && repo_model.is_some();
+        match wt_model
+            .or(repo_model)
+            .or_else(|| self.config.general.model.clone())
+        {
+            Some(m) => {
+                let source = if is_wt {
+                    "worktree"
+                } else if is_repo {
+                    "repo"
+                } else {
+                    "global config"
+                };
+                (Some(m), source.to_string())
+            }
+            None => (None, "not set".to_string()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::Theme;
+    use conductor_core::{config::Config, repo::Repo, worktree::Worktree};
+
+    fn make_app() -> App {
+        let conn = conductor_core::test_helpers::create_test_conn();
+        App::new(conn, Config::default(), Theme::default())
+    }
+
+    fn make_worktree(id: &str, repo_id: &str, model: Option<&str>) -> Worktree {
+        Worktree {
+            id: id.to_string(),
+            repo_id: repo_id.to_string(),
+            slug: "feat-test".to_string(),
+            branch: "feat/test".to_string(),
+            path: "/tmp/wt".to_string(),
+            ticket_id: None,
+            status: conductor_core::worktree::WorktreeStatus::Active,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            completed_at: None,
+            model: model.map(String::from),
+            base_branch: None,
+        }
+    }
+
+    fn make_repo(id: &str, model: Option<&str>) -> Repo {
+        Repo {
+            id: id.to_string(),
+            slug: "test-repo".to_string(),
+            local_path: "/tmp/repo".to_string(),
+            remote_url: "https://github.com/test/repo.git".to_string(),
+            default_branch: "main".to_string(),
+            workspace_dir: "/tmp/ws".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            model: model.map(String::from),
+            allow_agent_issue_creation: false,
+        }
+    }
+
+    #[test]
+    fn resolve_model_worktree_level_wins_over_repo_and_global() {
+        let mut app = make_app();
+        app.config.general.model = Some("haiku".to_string());
+        app.state.data.repos = vec![make_repo("r1", Some("sonnet"))];
+        app.state.data.worktrees = vec![make_worktree("w1", "r1", Some("opus"))];
+        let (model, source) = app.resolve_model_for_worktree("w1");
+        assert_eq!(model.as_deref(), Some("opus"));
+        assert_eq!(source, "worktree");
+    }
+
+    #[test]
+    fn resolve_model_repo_level_when_no_worktree_model() {
+        let mut app = make_app();
+        app.config.general.model = Some("haiku".to_string());
+        app.state.data.repos = vec![make_repo("r1", Some("sonnet"))];
+        app.state.data.worktrees = vec![make_worktree("w1", "r1", None)];
+        let (model, source) = app.resolve_model_for_worktree("w1");
+        assert_eq!(model.as_deref(), Some("sonnet"));
+        assert_eq!(source, "repo");
+    }
+
+    #[test]
+    fn resolve_model_global_config_fallback_when_no_wt_or_repo_model() {
+        let mut app = make_app();
+        app.config.general.model = Some("haiku".to_string());
+        app.state.data.repos = vec![make_repo("r1", None)];
+        app.state.data.worktrees = vec![make_worktree("w1", "r1", None)];
+        let (model, source) = app.resolve_model_for_worktree("w1");
+        assert_eq!(model.as_deref(), Some("haiku"));
+        assert_eq!(source, "global config");
+    }
+
+    #[test]
+    fn resolve_model_not_set_when_nothing_configured() {
+        let mut app = make_app();
+        app.state.data.repos = vec![make_repo("r1", None)];
+        app.state.data.worktrees = vec![make_worktree("w1", "r1", None)];
+        let (model, source) = app.resolve_model_for_worktree("w1");
+        assert!(model.is_none());
+        assert_eq!(source, "not set");
+    }
+
+    #[test]
+    fn resolve_model_unknown_worktree_id_returns_not_set() {
+        let mut app = make_app();
+        app.state.data.repos = vec![make_repo("r1", Some("opus"))];
+        app.state.data.worktrees = vec![make_worktree("w1", "r1", Some("sonnet"))];
+        let (model, source) = app.resolve_model_for_worktree("nonexistent");
+        assert!(model.is_none());
+        assert_eq!(source, "not set");
     }
 }

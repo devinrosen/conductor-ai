@@ -336,10 +336,13 @@ impl App {
             Modal::ModelPicker {
                 ref mut selected,
                 ref mut custom_active,
+                allow_default,
                 ..
             } => {
                 *custom_active = false;
-                let total = conductor_core::models::KNOWN_MODELS.len() + 1; // +1 for custom
+                // +1 for custom, +1 if allow_default adds a "Default" row
+                let total =
+                    conductor_core::models::KNOWN_MODELS.len() + 1 + usize::from(allow_default);
                 wrap_decrement(selected, total);
                 return;
             }
@@ -456,10 +459,13 @@ impl App {
             Modal::ModelPicker {
                 ref mut selected,
                 ref mut custom_active,
+                allow_default,
                 ..
             } => {
                 *custom_active = false;
-                let total = conductor_core::models::KNOWN_MODELS.len() + 1; // +1 for custom
+                // +1 for custom, +1 if allow_default adds a "Default" row
+                let total =
+                    conductor_core::models::KNOWN_MODELS.len() + 1 + usize::from(allow_default);
                 wrap_increment(selected, total);
                 return;
             }
