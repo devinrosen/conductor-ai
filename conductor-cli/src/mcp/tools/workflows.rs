@@ -77,7 +77,11 @@ pub(super) fn tool_validate_workflow(
 
     let entry = match WorkflowManager::validate_single(wt_path, repo_path, &workflow, &known_bots) {
         Some(e) => e,
-        None => return tool_err(format!("validation produced no result for workflow '{workflow_name}'")),
+        None => {
+            return tool_err(format!(
+                "validation produced no result for workflow '{workflow_name}'"
+            ))
+        }
     };
 
     let mut errors: Vec<String> = Vec::new();
