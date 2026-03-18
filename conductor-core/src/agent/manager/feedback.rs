@@ -2,7 +2,7 @@ use chrono::Utc;
 use rusqlite::params;
 
 use crate::db::query_collect;
-use crate::error::Result;
+use crate::error::{ConductorError, Result};
 
 use super::super::db::{optional_row, row_to_feedback_request, FEEDBACK_SELECT};
 use super::super::status::truncate_utf8;
@@ -48,11 +48,15 @@ impl<'a> AgentManager<'a> {
         let now = Utc::now().to_rfc3339();
 
         // Update feedback request
-        self.conn.execute(
+        let rows_affected = self.conn.execute(
             "UPDATE feedback_requests SET status = 'responded', response = ?1, responded_at = ?2 \
              WHERE id = ?3 AND status = 'pending'",
             params![response, now, feedback_id],
         )?;
+
+        if rows_affected == 0 {
+            return Err(self.feedback_not_pending_error(feedback_id));
+        }
 
         self.resume_run_after_feedback(feedback_id)?;
 
@@ -70,15 +74,33 @@ impl<'a> AgentManager<'a> {
     pub fn dismiss_feedback(&self, feedback_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
 
-        self.conn.execute(
+        let rows_affected = self.conn.execute(
             "UPDATE feedback_requests SET status = 'dismissed', responded_at = ?1 \
              WHERE id = ?2 AND status = 'pending'",
             params![now, feedback_id],
         )?;
 
+        if rows_affected == 0 {
+            return Err(self.feedback_not_pending_error(feedback_id));
+        }
+
         self.resume_run_after_feedback(feedback_id)?;
 
         Ok(())
+    }
+
+    /// Build a `FeedbackNotPending` error by looking up the current status (or noting not found).
+    fn feedback_not_pending_error(&self, feedback_id: &str) -> ConductorError {
+        let status = self
+            .get_feedback(feedback_id)
+            .ok()
+            .flatten()
+            .map(|fb| fb.status.to_string())
+            .unwrap_or_else(|| "not found".to_string());
+        ConductorError::FeedbackNotPending {
+            id: feedback_id.to_string(),
+            status,
+        }
     }
 
     /// Transition a run back to "running" after feedback is resolved.
@@ -309,6 +331,54 @@ mod tests {
         .unwrap();
 
         assert!(mgr.get_feedback(&fb.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_submit_feedback_already_responded() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+        let fb = mgr.request_feedback(&run.id, "Proceed?").unwrap();
+
+        mgr.submit_feedback(&fb.id, "Yes").unwrap();
+
+        let err = mgr.submit_feedback(&fb.id, "Yes again").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not pending"),
+            "expected not-pending error, got: {msg}"
+        );
+        assert!(
+            msg.contains("responded"),
+            "expected status 'responded' in error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_dismiss_feedback_already_dismissed() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+        let fb = mgr.request_feedback(&run.id, "Approve?").unwrap();
+
+        mgr.dismiss_feedback(&fb.id).unwrap();
+
+        let err = mgr.dismiss_feedback(&fb.id).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not pending"),
+            "expected not-pending error, got: {msg}"
+        );
+        assert!(
+            msg.contains("dismissed"),
+            "expected status 'dismissed' in error, got: {msg}"
+        );
     }
 
     #[test]
