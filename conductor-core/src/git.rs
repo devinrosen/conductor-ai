@@ -27,6 +27,24 @@ pub(crate) fn check_output(cmd: &mut Command) -> Result<std::process::Output> {
     Ok(output)
 }
 
+/// Run `cmd`, returning its `Output` on success or a `ConductorError::GhCli` on non-zero exit.
+pub(crate) fn check_gh_output(cmd: &mut Command) -> Result<std::process::Output> {
+    let program = cmd.get_program().to_string_lossy().to_string();
+    let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into()).collect();
+    let output = cmd.output().map_err(|e| {
+        ConductorError::GhCli(format!(
+            "failed to spawn `{program} {}`: {e}",
+            args.join(" ")
+        ))
+    })?;
+    if !output.status.success() {
+        return Err(ConductorError::GhCli(
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ));
+    }
+    Ok(output)
+}
+
 /// Check if `branch` has been merged into `default_branch` using local refs
 /// (`git branch --merged`). Fast but may be stale if the remote has advanced.
 pub(crate) fn is_branch_merged_local(repo_path: &str, branch: &str, default_branch: &str) -> bool {

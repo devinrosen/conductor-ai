@@ -8,7 +8,7 @@ use std::process::Command;
 use crate::config::Config;
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
-use crate::git::{check_output, git_in};
+use crate::git::{check_gh_output, check_output, git_in};
 use crate::repo::RepoManager;
 
 /// Typed representation of the three worktree lifecycle states stored in the DB.
@@ -543,7 +543,7 @@ impl<'a> WorktreeManager<'a> {
             args.push("--draft");
         }
 
-        let output = check_output(Command::new("gh").args(&args).current_dir(&worktree.path))?;
+        let output = check_gh_output(Command::new("gh").args(&args).current_dir(&worktree.path))?;
 
         let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(url)
@@ -895,7 +895,7 @@ fn parse_pr_view_output(raw: &str) -> Result<(String, String, String, bool)> {
     let raw = raw.trim();
     let parts: Vec<&str> = raw.splitn(4, '|').collect();
     if parts.len() < 4 {
-        return Err(ConductorError::Git(format!(
+        return Err(ConductorError::GhCli(format!(
             "unexpected gh pr view output: {raw}"
         )));
     }
@@ -928,7 +928,7 @@ fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String, String)> 
         .output()?;
 
     if !output.status.success() {
-        return Err(ConductorError::Git(format!(
+        return Err(ConductorError::GhCli(format!(
             "gh pr view #{pr_number} failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
@@ -949,7 +949,7 @@ fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String, String)> 
             .output()?;
 
         if !url_output.status.success() {
-            return Err(ConductorError::Git(format!(
+            return Err(ConductorError::GhCli(format!(
                 "Could not get clone URL for fork {head_repo}: {}",
                 String::from_utf8_lossy(&url_output.stderr).trim()
             )));
