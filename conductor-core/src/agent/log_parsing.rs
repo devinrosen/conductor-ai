@@ -529,6 +529,49 @@ mod tests {
         assert_eq!(count, 0);
     }
 
+    #[test]
+    fn test_count_turns_incremental_partial_line_skipped() {
+        // Write a complete line followed by a partial (no trailing newline).
+        let complete = r#"{"type":"assistant","message":{"content":[]}}"#;
+        let partial = r#"{"type":"assistant","message":{"content":[]"#; // incomplete JSON, no newline
+        let content = format!("{complete}\n{partial}");
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), &content).unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+
+        // Should only count the complete line; offset stops after the '\n'.
+        let (offset, count) = count_turns_incremental(&path, 0, 0);
+        assert_eq!(
+            count, 1,
+            "partial line without trailing newline must be skipped"
+        );
+        let expected_offset = complete.len() as u64 + 1; // +1 for '\n'
+        assert_eq!(offset, expected_offset);
+
+        // Once the partial line is completed with a newline, the next call picks it up.
+        let finished_line = r#"{"type":"assistant","message":{"content":[]}}"#;
+        let finished = format!("{complete}\n{finished_line}\n");
+        std::fs::write(tmp.path(), &finished).unwrap();
+        let (offset2, count2) = count_turns_incremental(&path, offset, count);
+        assert_eq!(count2, 2, "completed line should now be counted");
+        assert_eq!(offset2, finished.len() as u64);
+    }
+
+    #[test]
+    fn test_count_turns_incremental_only_partial_line() {
+        // File contains only a partial line (no newline at all).
+        let partial = r#"{"type":"assistant","message":{"content":[]}}"#; // no trailing newline
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), partial).unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+
+        // No complete lines → count stays at 0, offset stays at 0.
+        let (offset, count) = count_turns_incremental(&path, 0, 0);
+        assert_eq!(count, 0, "no complete line should yield zero turns");
+        assert_eq!(offset, 0, "offset should not advance past partial data");
+    }
+
     // ---- try_recover_from_log_at tests ----
 
     use crate::agent::manager::AgentManager;
