@@ -123,6 +123,7 @@ pub struct RunWorkflowRequest {
     pub model: Option<String>,
     pub dry_run: Option<bool>,
     pub inputs: Option<HashMap<String, String>>,
+    pub feature: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -197,7 +198,7 @@ pub async fn run_workflow(
         // Resolve feature_id synchronously so user-facing errors (e.g. ambiguous
         // features) are returned as HTTP errors before the 202 Accepted.
         let feature_id = FeatureManager::new(&db, &config).resolve_feature_id_for_run(
-            None,
+            req.feature.as_deref(),
             Some(&repo.slug),
             wt.ticket_id.as_deref(),
             Some(&wt.slug),

@@ -13,37 +13,23 @@ use super::App;
 
 /// Resolve a feature ID for a workflow run in a background thread.
 ///
-/// Opens a fresh DB connection, calls `resolve_feature_id_for_run`, and logs
-/// any errors via `eprintln!` so they appear in the TUI debug output instead
-/// of being silently discarded.  Returns `None` on failure so the workflow
-/// proceeds without feature context rather than aborting entirely.
-fn resolve_feature_id_logged(
+/// Opens a fresh DB connection and calls `resolve_feature_id_for_run`.
+/// Returns an error string on failure so the caller can surface it to the
+/// user (e.g. via `bg_tx`) instead of silently proceeding without feature
+/// context.
+fn resolve_feature_id_for_bg(
     config: &conductor_core::config::Config,
     feature_name: Option<&str>,
     repo_slug: Option<&str>,
     ticket_id: Option<&str>,
     worktree_slug: Option<&str>,
-) -> Option<String> {
+) -> Result<Option<String>, String> {
     let db_path = conductor_core::config::db_path();
-    let conn = match conductor_core::db::open_database(&db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("[conductor] feature resolution: failed to open database: {e}");
-            return None;
-        }
-    };
-    match conductor_core::feature::FeatureManager::new(&conn, config).resolve_feature_id_for_run(
-        feature_name,
-        repo_slug,
-        ticket_id,
-        worktree_slug,
-    ) {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("[conductor] feature resolution failed: {e}");
-            None
-        }
-    }
+    let conn = conductor_core::db::open_database(&db_path)
+        .map_err(|e| format!("feature resolution: failed to open database: {e}"))?;
+    conductor_core::feature::FeatureManager::new(&conn, config)
+        .resolve_feature_id_for_run(feature_name, repo_slug, ticket_id, worktree_slug)
+        .map_err(|e| format!("Feature resolution failed: {e}"))
 }
 
 impl App {
@@ -869,13 +855,21 @@ impl App {
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
             };
 
-            let feature_id = resolve_feature_id_logged(
+            let feature_id = match resolve_feature_id_for_bg(
                 &config,
                 None,
                 repo_slug.as_deref(),
                 ticket_id.as_deref(),
                 wt_slug.as_deref(),
-            );
+            ) {
+                Ok(id) => id,
+                Err(e) => {
+                    if let Some(ref tx) = bg_tx {
+                        tx.send(crate::action::Action::BackgroundError { message: e });
+                    }
+                    return;
+                }
+            };
 
             let params = WorkflowExecStandalone {
                 config,
@@ -926,7 +920,16 @@ impl App {
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
             };
 
-            let feature_id = resolve_feature_id_logged(&config, None, None, Some(&ticket_id), None);
+            let feature_id =
+                match resolve_feature_id_for_bg(&config, None, None, Some(&ticket_id), None) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        if let Some(ref tx) = bg_tx {
+                            tx.send(crate::action::Action::BackgroundError { message: e });
+                        }
+                        return;
+                    }
+                };
 
             let working_dir = repo_path.clone();
 
