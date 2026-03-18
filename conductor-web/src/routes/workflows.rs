@@ -244,18 +244,25 @@ pub async fn run_workflow(
                 ..Default::default()
             };
 
-            // Resolve feature_id from worktree/ticket context (mirrors CLI + TUI paths).
-            let feature_id = FeatureManager::new(&db, &config)
-                .resolve_feature_id_for_run(
-                    None,
-                    Some(&repo_slug),
-                    wt_ticket_id.as_deref(),
-                    Some(&wt_slug),
-                )
-                .unwrap_or_else(|e| {
+            // Resolve feature_id from worktree/ticket context.
+            // User-facing errors (e.g. ambiguous features) abort the run;
+            // transient DB errors degrade gracefully (run proceeds without a feature).
+            let feature_id = match FeatureManager::new(&db, &config).resolve_feature_id_for_run(
+                None,
+                Some(&repo_slug),
+                wt_ticket_id.as_deref(),
+                Some(&wt_slug),
+            ) {
+                Ok(id) => id,
+                Err(ConductorError::Workflow(msg)) => {
+                    tracing::error!("Feature resolution failed: {msg}");
+                    return;
+                }
+                Err(e) => {
                     tracing::warn!("Failed to resolve feature for workflow run: {e}");
                     None
-                });
+                }
+            };
 
             let input = WorkflowExecInput {
                 conn: &db,
