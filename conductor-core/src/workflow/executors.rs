@@ -1377,7 +1377,7 @@ pub(super) fn execute_gate(
 
     state.wf_mgr.set_step_gate_info(
         &step_id,
-        &node.gate_type.to_string(),
+        node.gate_type.clone(),
         node.prompt.as_deref(),
         &format!("{}s", node.timeout_secs),
     )?;

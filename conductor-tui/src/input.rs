@@ -789,7 +789,7 @@ mod tests {
     // --- WorkflowRunDetail: y/Y fires ApproveGate when a gate step is waiting ---
 
     fn workflow_run_detail_state_with_waiting_gate() -> AppState {
-        use conductor_core::workflow::{WorkflowRunStep, WorkflowStepStatus};
+        use conductor_core::workflow::{GateType, WorkflowRunStep, WorkflowStepStatus};
         let mut state = AppState::new();
         state.view = View::WorkflowRunDetail;
         state.data.workflow_steps = vec![WorkflowRunStep {
@@ -811,7 +811,7 @@ mod tests {
             context_out: None,
             markers_out: None,
             retry_count: 0,
-            gate_type: Some("approval".into()),
+            gate_type: Some(GateType::HumanApproval),
             gate_prompt: None,
             gate_timeout: None,
             gate_approved_by: None,

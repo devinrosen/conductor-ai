@@ -18,7 +18,7 @@ fn test_gate_approve() {
     let step_id = mgr
         .insert_step(&run.id, "human_review", "reviewer", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, "human_review", Some("Review?"), "48h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanReview, Some("Review?"), "48h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -54,7 +54,7 @@ fn test_gate_reject() {
     let step_id = mgr
         .insert_step(&run.id, "human_approval", "reviewer", false, 0, 0)
         .unwrap();
-    mgr.set_step_gate_info(&step_id, "human_approval", Some("Approve?"), "24h")
+    mgr.set_step_gate_info(&step_id, GateType::HumanApproval, Some("Approve?"), "24h")
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 

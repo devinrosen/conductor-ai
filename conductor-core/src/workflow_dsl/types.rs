@@ -365,6 +365,21 @@ impl std::fmt::Display for GateType {
     }
 }
 
+impl std::str::FromStr for GateType {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "human_approval" => Ok(Self::HumanApproval),
+            "human_review" => Ok(Self::HumanReview),
+            "pr_approval" => Ok(Self::PrApproval),
+            "pr_checks" => Ok(Self::PrChecks),
+            _ => Err(format!("unknown gate type: {s}")),
+        }
+    }
+}
+
+crate::impl_sql_enum!(GateType);
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnTimeout {

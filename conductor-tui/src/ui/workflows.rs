@@ -9,7 +9,7 @@ use ratatui::Frame;
 use conductor_core::workflow::InputType;
 use conductor_core::workflow::WorkflowNode;
 use conductor_core::workflow::{
-    WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
+    GateType, WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
 };
 
 use super::common::truncate;
@@ -1721,11 +1721,13 @@ fn run_status_icon(
     let gate_type = steps.get(&run.id).and_then(|ss| {
         ss.iter()
             .find(|s| s.status == WorkflowStepStatus::Waiting && s.gate_type.is_some())
-            .and_then(|s| s.gate_type.as_deref())
+            .and_then(|s| s.gate_type.as_ref())
     });
     match gate_type {
-        Some("pr_checks") => ("⏳", theme.status_waiting),
-        Some("pr_approval" | "human_approval" | "human_review") => ("👤", theme.label_warning),
+        Some(GateType::PrChecks) => ("⏳", theme.status_waiting),
+        Some(GateType::PrApproval | GateType::HumanApproval | GateType::HumanReview) => {
+            ("👤", theme.label_warning)
+        }
         _ => ("⏸", theme.status_waiting),
     }
 }

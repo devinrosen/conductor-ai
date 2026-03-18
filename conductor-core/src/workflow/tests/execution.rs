@@ -1623,7 +1623,7 @@ fn test_metadata_fields_optional_sections() {
         context_out: Some("ctx data".into()),
         markers_out: Some("marker1".into()),
         retry_count: 0,
-        gate_type: Some("approval".into()),
+        gate_type: Some(GateType::HumanApproval),
         gate_prompt: Some("Please approve".into()),
         gate_timeout: None,
         gate_approved_by: None,
@@ -1635,7 +1635,7 @@ fn test_metadata_fields_optional_sections() {
     let entries = step.metadata_fields();
     assert!(entries.contains(&MetadataEntry::Field {
         label: "Gate type",
-        value: "approval".into()
+        value: "human_approval".into()
     }));
     assert!(entries.contains(&MetadataEntry::Section {
         heading: "Gate Prompt",

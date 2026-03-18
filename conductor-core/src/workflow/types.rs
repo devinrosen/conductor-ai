@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::workflow_dsl::GateType;
+
 use super::status::{WorkflowRunStatus, WorkflowStepStatus};
 
 /// A step key is a `(name, iteration)` pair used for skip-set and step-map lookups.
@@ -60,7 +62,7 @@ pub struct WorkflowRunStep {
     pub context_out: Option<String>,
     pub markers_out: Option<String>,
     pub retry_count: i64,
-    pub gate_type: Option<String>,
+    pub gate_type: Option<GateType>,
     pub gate_prompt: Option<String>,
     pub gate_timeout: Option<String>,
     pub gate_approved_by: Option<String>,
@@ -148,7 +150,7 @@ impl WorkflowRunStep {
         if let Some(ref gt) = self.gate_type {
             entries.push(MetadataEntry::Field {
                 label: "Gate type",
-                value: gt.clone(),
+                value: gt.to_string(),
             });
         }
         if let Some(ref gp) = self.gate_prompt {
