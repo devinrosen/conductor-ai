@@ -1843,8 +1843,13 @@ mod tests {
         let step_id = mgr
             .insert_step(&run.id, "approval-gate", "gate", false, 0, 0)
             .unwrap();
-        mgr.set_step_gate_info(&step_id, GateType::HumanApproval, Some("Please approve"), "1h")
-            .unwrap();
+        mgr.set_step_gate_info(
+            &step_id,
+            GateType::HumanApproval,
+            Some("Please approve"),
+            "1h",
+        )
+        .unwrap();
         // Mark step as waiting so it appears in the query.
         set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
@@ -2429,8 +2434,13 @@ mod tests {
         let step_id = mgr
             .insert_step(&run.id, "approval-gate", "gate", false, 0, 0)
             .unwrap();
-        mgr.set_step_gate_info(&step_id, GateType::HumanApproval, Some("Please approve"), "1h")
-            .unwrap();
+        mgr.set_step_gate_info(
+            &step_id,
+            GateType::HumanApproval,
+            Some("Please approve"),
+            "1h",
+        )
+        .unwrap();
         set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
         let steps = mgr.list_waiting_gate_steps_for_repo("r1").unwrap();
