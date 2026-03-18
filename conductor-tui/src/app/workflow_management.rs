@@ -11,6 +11,27 @@ use super::helpers::{
 };
 use super::App;
 
+/// Resolve a feature ID for a workflow run in a background thread.
+///
+/// Opens a fresh DB connection and calls `resolve_feature_id_for_run`.
+/// Returns an error string on failure so the caller can surface it to the
+/// user (e.g. via `bg_tx`) instead of silently proceeding without feature
+/// context.
+fn resolve_feature_id_for_bg(
+    config: &conductor_core::config::Config,
+    feature_name: Option<&str>,
+    repo_slug: Option<&str>,
+    ticket_id: Option<&str>,
+    worktree_slug: Option<&str>,
+) -> Result<Option<String>, String> {
+    let db_path = conductor_core::config::db_path();
+    let conn = conductor_core::db::open_database(&db_path)
+        .map_err(|e| format!("feature resolution: failed to open database: {e}"))?;
+    conductor_core::feature::FeatureManager::new(&conn, config)
+        .resolve_feature_id_for_run(feature_name, repo_slug, ticket_id, worktree_slug)
+        .map_err(|e| format!("Feature resolution failed: {e}"))
+}
+
 impl App {
     /// Dispatch workflow data loading to a background thread. The result
     /// arrives as a `WorkflowDataRefreshed` action, avoiding synchronous
@@ -654,7 +675,7 @@ impl App {
                     return;
                 }
 
-                let (wt_target_label, wt_ticket_id) = self
+                let (wt_target_label, wt_ticket_id, repo_slug, wt_slug) = self
                     .state
                     .data
                     .worktrees
@@ -666,7 +687,14 @@ impl App {
                             .repos
                             .iter()
                             .find(|r| r.id == w.repo_id)
-                            .map(|r| (format!("{}/{}", r.slug, w.slug), w.ticket_id.clone()))
+                            .map(|r| {
+                                (
+                                    format!("{}/{}", r.slug, w.slug),
+                                    w.ticket_id.clone(),
+                                    Some(r.slug.clone()),
+                                    Some(w.slug.clone()),
+                                )
+                            })
                     })
                     .unwrap_or_default();
                 // Fall back to inputs["ticket_id"] when the worktree's in-memory state
@@ -681,6 +709,8 @@ impl App {
                     inputs,
                     wt_target_label,
                     model,
+                    repo_slug,
+                    wt_slug,
                 );
             }
             WorkflowPickerTarget::Pr { pr_number, .. } => {
@@ -724,6 +754,7 @@ impl App {
                 repo_path,
                 ..
             } => {
+                // Feature resolution happens off-thread inside spawn_ticket_workflow_in_background.
                 self.spawn_ticket_workflow_in_background(
                     def,
                     ticket_id,
@@ -754,15 +785,33 @@ impl App {
                 run_inputs.insert("workflow_run_id".to_string(), workflow_run_id.clone());
                 let working_dir = worktree_path.unwrap_or_else(|| repo_path.clone());
                 if let Some(wt_id) = worktree_id {
+                    // Look up worktree data for feature auto-detection (resolved off-thread).
+                    let (repo_slug, ticket_id, wt_slug) = self
+                        .state
+                        .data
+                        .worktrees
+                        .iter()
+                        .find(|w| w.id == wt_id)
+                        .map(|w| {
+                            let repo = self.state.data.repos.iter().find(|r| r.id == w.repo_id);
+                            (
+                                repo.map(|r| r.slug.clone()),
+                                w.ticket_id.clone(),
+                                Some(w.slug.clone()),
+                            )
+                        })
+                        .unwrap_or((None, None, None));
                     self.spawn_workflow_in_background(
                         def,
                         wt_id,
                         working_dir,
                         repo_path,
-                        None,
+                        ticket_id,
                         run_inputs,
                         format!("workflow_run:{workflow_run_id}"),
                         model,
+                        repo_slug,
+                        wt_slug,
                     );
                 } else {
                     self.spawn_workflow_run_target_in_background(
@@ -778,6 +827,10 @@ impl App {
     }
 
     /// Spawn a workflow execution in a background thread, reporting result via bg_tx.
+    ///
+    /// Feature auto-detection is performed off-thread using `repo_slug`,
+    /// `ticket_id`, and `wt_slug` to avoid blocking the TUI main thread with
+    /// synchronous DB queries.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn spawn_workflow_in_background(
         &mut self,
@@ -789,6 +842,8 @@ impl App {
         inputs: std::collections::HashMap<String, String>,
         target_label: String,
         model: Option<String>,
+        repo_slug: Option<String>,
+        wt_slug: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -798,6 +853,22 @@ impl App {
         let handle = std::thread::spawn(move || {
             use conductor_core::workflow::{
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
+            };
+
+            let feature_id = match resolve_feature_id_for_bg(
+                &config,
+                None,
+                repo_slug.as_deref(),
+                ticket_id.as_deref(),
+                wt_slug.as_deref(),
+            ) {
+                Ok(id) => id,
+                Err(e) => {
+                    if let Some(ref tx) = bg_tx {
+                        tx.send(crate::action::Action::BackgroundError { message: e });
+                    }
+                    return;
+                }
             };
 
             let params = WorkflowExecStandalone {
@@ -815,6 +886,7 @@ impl App {
                 },
                 inputs,
                 target_label: Some(target_label),
+                feature_id,
                 run_id_notify: None,
             };
 
@@ -848,6 +920,17 @@ impl App {
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
             };
 
+            let feature_id =
+                match resolve_feature_id_for_bg(&config, None, None, Some(&ticket_id), None) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        if let Some(ref tx) = bg_tx {
+                            tx.send(crate::action::Action::BackgroundError { message: e });
+                        }
+                        return;
+                    }
+                };
+
             let working_dir = repo_path.clone();
 
             let params = WorkflowExecStandalone {
@@ -865,6 +948,7 @@ impl App {
                 },
                 inputs,
                 target_label: Some(target_label),
+                feature_id,
                 run_id_notify: None,
             };
 
@@ -911,6 +995,7 @@ impl App {
                 },
                 inputs,
                 target_label: Some(repo_name),
+                feature_id: None,
                 run_id_notify: None,
             };
 
@@ -956,6 +1041,7 @@ impl App {
                 },
                 inputs,
                 target_label: Some(target_label),
+                feature_id: None,
                 run_id_notify: None,
             };
 

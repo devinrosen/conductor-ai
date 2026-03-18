@@ -172,6 +172,7 @@ pub(super) fn tool_run_workflow(
     let repo_slug = require_arg!(args, "repo");
     let worktree_slug = get_arg(args, "worktree");
     let pr_arg = get_arg(args, "pr");
+    let feature_arg = get_arg(args, "feature");
     let dry_run = args
         .get("dry_run")
         .and_then(|v| v.as_bool())
@@ -224,6 +225,16 @@ pub(super) fn tool_run_workflow(
     let repo = match repo_mgr.get_by_slug(repo_slug) {
         Ok(r) => r,
         Err(e) => return tool_err(e),
+    };
+
+    // Resolve optional --feature to a feature_id via the unified resolver
+    let feature_id: Option<String> = {
+        use conductor_core::feature::FeatureManager;
+        let fm = FeatureManager::new(&conn, &config);
+        match fm.resolve_feature_id_for_run(feature_arg, Some(repo_slug), None, worktree_slug) {
+            Ok(id) => id,
+            Err(e) => return tool_err(e),
+        }
     };
 
     // Load the workflow definition
@@ -289,6 +300,7 @@ pub(super) fn tool_run_workflow(
         },
         inputs,
         target_label: Some(target_label),
+        feature_id,
         run_id_notify: Some(Arc::clone(&notify_pair)),
     };
 

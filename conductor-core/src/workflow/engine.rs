@@ -6,6 +6,7 @@ use crate::agent::AgentManager;
 use crate::agent_config::AgentSpec;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
+use crate::feature::{Feature, FeatureManager};
 use crate::schema_config::{OutputSchema, SchemaIssue};
 use crate::workflow_dsl::{self, WorkflowDef, WorkflowNode};
 use crate::worktree::WorktreeManager;
@@ -29,6 +30,9 @@ pub const ENGINE_INJECTED_KEYS: &[&str] = &[
     "repo_id",
     "repo_path",
     "repo_name",
+    "feature_id",
+    "feature_name",
+    "feature_branch",
 ];
 
 /// Pre-loaded context for resuming a workflow run.
@@ -85,6 +89,8 @@ pub(super) struct ExecutionState<'a> {
     pub resume_ctx: Option<ResumeContext>,
     /// Default named GitHub App bot identity inherited from a parent `call workflow { as = "..." }`.
     pub default_bot_name: Option<String>,
+    /// Optional feature ID linking this run to a feature branch.
+    pub feature_id: Option<String>,
 }
 
 /// Resolve a schema by name using the standard search order.
@@ -138,6 +144,22 @@ pub fn apply_workflow_input_defaults(
         }
     }
     Ok(())
+}
+
+/// Inject feature metadata variables into the merged inputs map.
+///
+/// Inserts `feature_id`, `feature_name`, and `feature_branch` from the given
+/// `Feature` (using `or_insert_with` so caller-provided values win).
+fn inject_feature_variables(feature: &Feature, merged_inputs: &mut HashMap<String, String>) {
+    merged_inputs
+        .entry("feature_id".to_string())
+        .or_insert_with(|| feature.id.clone());
+    merged_inputs
+        .entry("feature_name".to_string())
+        .or_insert_with(|| feature.name.clone());
+    merged_inputs
+        .entry("feature_branch".to_string())
+        .or_insert_with(|| feature.branch.clone());
 }
 
 /// Execute a workflow definition against a worktree.
@@ -270,6 +292,18 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         cvar.notify_one();
     }
 
+    // Resolve feature up front so we only hit the DB once.
+    let feature = if let Some(fid) = input.feature_id {
+        Some(FeatureManager::new(conn, config).get_by_id(fid)?)
+    } else {
+        None
+    };
+
+    // Persist feature_id on the workflow run record.
+    if let Some(ref f) = feature {
+        wf_mgr.set_workflow_run_feature_id(&wf_run.id, &f.id)?;
+    }
+
     // Persist default_bot_name so it can be restored on resume.
     if let Some(ref bot_name) = input.default_bot_name {
         wf_mgr.set_workflow_run_default_bot_name(&wf_run.id, bot_name)?;
@@ -308,6 +342,11 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         merged_inputs
             .entry("repo_name".to_string())
             .or_insert_with(|| repo.slug.clone());
+    }
+
+    // Inject feature metadata when a feature is provided.
+    if let Some(ref f) = feature {
+        inject_feature_variables(f, &mut merged_inputs);
     }
 
     // Persist inputs so they can be restored on resume
@@ -349,6 +388,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         block_with: Vec::new(),
         resume_ctx: None,
         default_bot_name: input.default_bot_name.clone(),
+        feature_id: input.feature_id.map(String::from),
     };
 
     run_workflow_engine(&mut state, workflow)
@@ -469,6 +509,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         parent_workflow_run_id: None,
         target_label: params.target_label.as_deref(),
         default_bot_name: None,
+        feature_id: params.feature_id.as_deref(),
         iteration: 0,
         run_id_notify: params.run_id_notify.clone(),
     };
@@ -739,6 +780,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         block_with: Vec::new(),
         resume_ctx,
         default_bot_name: wf_run.default_bot_name.clone(),
+        feature_id: wf_run.feature_id.clone(),
     };
 
     run_workflow_engine(&mut state, &workflow)
@@ -1366,5 +1408,43 @@ mod tests {
         // Required but not provided — should return an error before defaulting.
         let result = apply_workflow_input_defaults(&workflow, &mut inputs);
         assert!(result.is_err(), "expected error for missing required input");
+    }
+
+    fn make_test_feature() -> crate::feature::Feature {
+        crate::feature::Feature {
+            id: "f1".to_string(),
+            repo_id: "r1".to_string(),
+            name: "my-feature".to_string(),
+            branch: "feat/my-feature".to_string(),
+            base_branch: "main".to_string(),
+            status: crate::feature::FeatureStatus::Active,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            merged_at: None,
+        }
+    }
+
+    #[test]
+    fn test_inject_feature_variables() {
+        let feature = make_test_feature();
+        let mut inputs = HashMap::new();
+        inject_feature_variables(&feature, &mut inputs);
+
+        assert_eq!(inputs.get("feature_id").unwrap(), "f1");
+        assert_eq!(inputs.get("feature_name").unwrap(), "my-feature");
+        assert_eq!(inputs.get("feature_branch").unwrap(), "feat/my-feature");
+    }
+
+    #[test]
+    fn test_inject_feature_variables_does_not_overwrite_caller() {
+        let feature = make_test_feature();
+        let mut inputs = HashMap::new();
+        inputs.insert("feature_name".to_string(), "caller-override".to_string());
+        inject_feature_variables(&feature, &mut inputs);
+
+        // Caller's value should win
+        assert_eq!(inputs.get("feature_name").unwrap(), "caller-override");
+        // Other keys populated from Feature
+        assert_eq!(inputs.get("feature_id").unwrap(), "f1");
+        assert_eq!(inputs.get("feature_branch").unwrap(), "feat/my-feature");
     }
 }

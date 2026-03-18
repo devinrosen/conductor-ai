@@ -1180,6 +1180,7 @@ mod tests {
             default_bot_name: None,
             iteration: 0,
             blocked_on: None,
+            feature_id: None,
         }
     }
 
@@ -1499,6 +1500,7 @@ workflow my-wf {
             default_bot_name: None,
             iteration: 0,
             blocked_on: None,
+            feature_id: None,
         };
         run.inputs
             .insert("pr_url".to_string(), "https://example.com".to_string());

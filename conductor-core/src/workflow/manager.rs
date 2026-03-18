@@ -145,6 +145,7 @@ impl<'a> WorkflowManager<'a> {
             default_bot_name: None,
             iteration: 0,
             blocked_on: None,
+            feature_id: None,
         })
     }
 
@@ -153,6 +154,15 @@ impl<'a> WorkflowManager<'a> {
         self.conn.execute(
             "UPDATE workflow_runs SET iteration = ?1 WHERE id = ?2",
             params![iteration, run_id],
+        )?;
+        Ok(())
+    }
+
+    /// Persist the feature_id for a workflow run.
+    pub fn set_workflow_run_feature_id(&self, run_id: &str, feature_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workflow_runs SET feature_id = ?1 WHERE id = ?2",
+            params![feature_id, run_id],
         )?;
         Ok(())
     }
@@ -1498,6 +1508,7 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
             None
         })
     });
+    let feature_id: Option<String> = row.get(19)?;
     Ok(WorkflowRun {
         id,
         workflow_name: row.get(1)?,
@@ -1518,6 +1529,7 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
         default_bot_name,
         iteration,
         blocked_on,
+        feature_id,
     })
 }
 
@@ -2693,5 +2705,29 @@ mod tests {
         mgr.set_workflow_run_iteration(&run.id, 0).unwrap();
         let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.iteration, 0);
+    }
+
+    #[test]
+    fn test_set_workflow_run_feature_id_round_trip() {
+        let conn = setup_db();
+        // Insert a feature record for FK constraint
+        conn.execute(
+            "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
+             VALUES ('feat-123', 'r1', 'test-feature', 'feat/test-feature', 'main', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        let run = create_worktree_run(&conn, "w1");
+        let mgr = WorkflowManager::new(&conn);
+
+        // Initially no feature_id
+        let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert!(fetched.feature_id.is_none());
+
+        // Set feature_id and read back
+        mgr.set_workflow_run_feature_id(&run.id, "feat-123")
+            .unwrap();
+        let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.feature_id.as_deref(), Some("feat-123"));
     }
 }

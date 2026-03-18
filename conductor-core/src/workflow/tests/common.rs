@@ -69,6 +69,7 @@ fn base_execution_state<'a>(
         block_with: Vec::new(),
         resume_ctx: None,
         default_bot_name: None,
+        feature_id: None,
     }
 }
 

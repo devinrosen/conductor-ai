@@ -212,6 +212,11 @@ enum WorkflowCommands {
         /// Input variables (key=value pairs)
         #[arg(long = "input", value_name = "KEY=VALUE")]
         inputs: Vec<String>,
+        /// Feature name — sets the feature context for the workflow run.
+        /// When provided, feature_name and feature_branch become available as
+        /// template variables. Auto-detected from the ticket when omitted.
+        #[arg(long)]
+        feature: Option<String>,
     },
     /// Show details of a workflow run
     #[command(name = "run-show", alias = "show")]
@@ -1359,6 +1364,7 @@ fn main() -> Result<()> {
                 no_fail_fast,
                 step_timeout_secs,
                 inputs,
+                feature,
             } => {
                 // Parse input key=value pairs (shared by both paths)
                 let mut input_map = std::collections::HashMap::new();
@@ -1380,6 +1386,15 @@ fn main() -> Result<()> {
                 if dry_run {
                     println!("DRY RUN: Actor steps will show intended changes without committing.");
                 }
+
+                // Resolve --feature to a feature_id. When --feature is absent and
+                // --ticket is provided, auto-detect from the feature_tickets table.
+                let feature_id = FeatureManager::new(&conn, &config).resolve_feature_id_for_run(
+                    feature.as_deref(),
+                    repo.as_deref().or(repo_flag.as_deref()),
+                    ticket.as_deref(),
+                    worktree.as_deref(),
+                )?;
 
                 if let Some(pr_url) = pr {
                     // Ephemeral PR run
@@ -1451,6 +1466,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(r.slug.as_str()),
                             default_bot_name: None,
+                            feature_id: feature_id.as_deref(),
                             iteration: 0,
                             run_id_notify: None,
                         },
@@ -1502,6 +1518,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(run_id.as_str()),
                             default_bot_name: None,
+                            feature_id: feature_id.as_deref(),
                             iteration: 0,
                             run_id_notify: None,
                         },
@@ -1553,6 +1570,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(repo.slug.as_str()),
                             default_bot_name: None,
+                            feature_id: feature_id.as_deref(),
                             iteration: 0,
                             run_id_notify: None,
                         },
@@ -1607,6 +1625,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(&wt_label),
                             default_bot_name: None,
+                            feature_id: feature_id.as_deref(),
                             iteration: 0,
                             run_id_notify: None,
                         },

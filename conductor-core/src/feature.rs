@@ -11,6 +11,8 @@ use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::git::{check_output, git_in};
 use crate::repo::RepoManager;
+use crate::tickets::TicketSyncer;
+use crate::worktree::WorktreeManager;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -257,6 +259,123 @@ impl<'a> FeatureManager<'a> {
         let feature = self.get_feature_by_repo_id(&repo.id, feature_name)?;
         let ticket_ids = self.resolve_ticket_ids(&repo.id, ticket_source_ids)?;
         self.link_tickets_internal(&feature.id, &ticket_ids)
+    }
+
+    /// Look up a single feature by its internal ULID ID.
+    pub fn get_by_id(&self, id: &str) -> Result<Feature> {
+        self.conn
+            .query_row(
+                "SELECT id, repo_id, name, branch, base_branch, status, created_at, merged_at
+                 FROM features WHERE id = ?1",
+                params![id],
+                map_feature_row,
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ConductorError::FeatureNotFound {
+                    name: id.to_string(),
+                },
+                _ => ConductorError::Database(e),
+            })
+    }
+
+    /// Look up a feature by repo slug + name and verify it is active.
+    ///
+    /// Returns `ConductorError::Workflow` if the feature exists but is not active.
+    pub fn resolve_active_feature(&self, repo_slug: &str, name: &str) -> Result<Feature> {
+        let f = self.get_by_name(repo_slug, name)?;
+        if f.status != FeatureStatus::Active {
+            return Err(ConductorError::Workflow(format!(
+                "Feature '{}' is {} — only active features can be used.",
+                name, f.status
+            )));
+        }
+        Ok(f)
+    }
+
+    /// Find the active feature linked to a ticket, if any.
+    ///
+    /// Returns `None` when the ticket is not linked to any feature or when all
+    /// linked features are closed/merged. Returns an error if the ticket is linked
+    /// to multiple *active* features (ambiguous).
+    pub fn find_feature_for_ticket(&self, ticket_id: &str) -> Result<Option<Feature>> {
+        let features: Vec<Feature> = query_collect(
+            self.conn,
+            "SELECT f.id, f.repo_id, f.name, f.branch, f.base_branch, f.status, f.created_at, f.merged_at
+             FROM features f
+             INNER JOIN feature_tickets ft ON ft.feature_id = f.id
+             WHERE ft.ticket_id = ?1 AND f.status = 'active'",
+            params![ticket_id],
+            map_feature_row,
+        )?;
+        match features.len() {
+            0 => Ok(None),
+            1 => Ok(Some(features.into_iter().next().unwrap())),
+            n => Err(ConductorError::Workflow(format!(
+                "Ticket is linked to {n} active features ({}) — specify which feature to use.",
+                features
+                    .iter()
+                    .map(|f| f.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))),
+        }
+    }
+
+    /// Resolve a feature ID for a workflow run.
+    ///
+    /// This is an intentional cross-domain convenience orchestrator: it touches
+    /// `TicketSyncer` and `WorktreeManager` so that callers (CLI, TUI, web, MCP)
+    /// share a single resolution path instead of each re-implementing the lookup
+    /// chain. The coupling is accepted because feature resolution inherently
+    /// requires ticket and worktree context.
+    ///
+    /// Resolution order:
+    /// 1. Explicit feature name → look up by repo slug + name, verify active.
+    /// 2. Ticket ID provided → auto-detect from feature_tickets table.
+    /// 3. Repo + worktree slugs provided → look up worktree's linked ticket, then auto-detect.
+    /// 4. None of the above → `Ok(None)`.
+    ///
+    /// When `feature_name` is `Some`, a repo slug is required — it is derived from
+    /// `repo_slug`, or by looking up the ticket's repo when only `ticket_id` is given.
+    /// Returns an error if no repo context can be determined.
+    pub fn resolve_feature_id_for_run(
+        &self,
+        feature_name: Option<&str>,
+        repo_slug: Option<&str>,
+        ticket_id: Option<&str>,
+        worktree_slug: Option<&str>,
+    ) -> Result<Option<String>> {
+        if let Some(feat_name) = feature_name {
+            // Explicit feature — need a repo slug.
+            let slug = if let Some(s) = repo_slug {
+                s.to_string()
+            } else if let Some(tid) = ticket_id {
+                let t = TicketSyncer::new(self.conn).get_by_id(tid)?;
+                let r = RepoManager::new(self.conn, self.config).get_by_id(&t.repo_id)?;
+                r.slug
+            } else {
+                return Err(ConductorError::Workflow(
+                    "Feature resolution requires a repo context (provide a repo, ticket, or worktree)"
+                        .to_string(),
+                ));
+            };
+            let f = self.resolve_active_feature(&slug, feat_name)?;
+            return Ok(Some(f.id));
+        }
+
+        if let Some(tid) = ticket_id {
+            return Ok(self.find_feature_for_ticket(tid)?.map(|f| f.id));
+        }
+
+        if let (Some(rs), Some(ws)) = (repo_slug, worktree_slug) {
+            let r = RepoManager::new(self.conn, self.config).get_by_slug(rs)?;
+            let wt = WorktreeManager::new(self.conn, self.config).get_by_slug(&r.id, ws)?;
+            if let Some(ref tid) = wt.ticket_id {
+                return Ok(self.find_feature_for_ticket(tid)?.map(|f| f.id));
+            }
+        }
+
+        Ok(None)
     }
 
     /// Unlink tickets (by source_id) from a feature.
@@ -1146,5 +1265,283 @@ mod tests {
 
         // Name with slash is used as-is
         assert_eq!(derive_branch_name("release/2.0"), "release/2.0");
+    }
+
+    #[test]
+    fn test_find_feature_for_ticket_none() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let ticket_id = insert_ticket(&conn, &repo_id, "100");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let result = mgr.find_feature_for_ticket(&ticket_id).unwrap();
+        assert!(result.is_none(), "no feature linked to ticket");
+    }
+
+    #[test]
+    fn test_find_feature_for_ticket_found() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let ticket_id = insert_ticket(&conn, &repo_id, "200");
+        let feature_id = insert_feature(&conn, &repo_id, "notif", "feat/notif");
+
+        // Link ticket to feature
+        conn.execute(
+            "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+            params![feature_id, ticket_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let result = mgr.find_feature_for_ticket(&ticket_id).unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().name, "notif");
+    }
+
+    #[test]
+    fn test_find_feature_for_ticket_skips_closed() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let ticket_id = insert_ticket(&conn, &repo_id, "300");
+        let feature_id = insert_feature(&conn, &repo_id, "closed-feat", "feat/closed-feat");
+
+        // Close the feature
+        conn.execute(
+            "UPDATE features SET status = 'closed' WHERE id = ?1",
+            params![feature_id],
+        )
+        .unwrap();
+
+        // Link ticket
+        conn.execute(
+            "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+            params![feature_id, ticket_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let result = mgr.find_feature_for_ticket(&ticket_id).unwrap();
+        assert!(result.is_none(), "closed feature should not be returned");
+    }
+
+    #[test]
+    fn test_find_feature_for_ticket_ambiguous() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let ticket_id = insert_ticket(&conn, &repo_id, "400");
+        let feat_a = insert_feature(&conn, &repo_id, "feat-a", "feat/feat-a");
+        let feat_b = insert_feature(&conn, &repo_id, "feat-b", "feat/feat-b");
+
+        // Link ticket to both features
+        conn.execute(
+            "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+            params![feat_a, ticket_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+            params![feat_b, ticket_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let result = mgr.find_feature_for_ticket(&ticket_id);
+        assert!(result.is_err(), "should error when ambiguous");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("specify which feature"),
+            "error should mention disambiguation: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_get_by_id() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let result = mgr.get_by_id(&feature_id).unwrap();
+        assert_eq!(result.name, "my-feat");
+        assert_eq!(result.id, feature_id);
+    }
+
+    #[test]
+    fn test_resolve_active_feature_returns_active() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let f = mgr.resolve_active_feature("test-repo", "my-feat").unwrap();
+        assert_eq!(f.name, "my-feat");
+        assert_eq!(f.status, FeatureStatus::Active);
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_feature_id_for_run tests (4 code paths)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_feature_id_for_run_none_inputs() {
+        let conn = setup_db();
+        let _repo_id = insert_repo(&conn);
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        // No feature name, no ticket, no worktree → Ok(None)
+        let result = mgr
+            .resolve_feature_id_for_run(None, None, None, None)
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_feature_id_for_run_explicit_name() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .resolve_feature_id_for_run(Some("my-feat"), Some("test-repo"), None, None)
+            .unwrap();
+        assert_eq!(result, Some(feature_id));
+    }
+
+    #[test]
+    fn test_resolve_feature_id_for_run_explicit_name_no_repo_errors() {
+        let conn = setup_db();
+        let _repo_id = insert_repo(&conn);
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        // Feature name without repo context should error
+        let err = mgr
+            .resolve_feature_id_for_run(Some("my-feat"), None, None, None)
+            .unwrap_err();
+        assert!(
+            matches!(err, ConductorError::Workflow(ref msg) if msg.contains("requires a repo context")),
+            "expected Workflow error about repo context, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_feature_id_for_run_explicit_name_via_ticket_repo() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+        let ticket_id = insert_ticket(&conn, &repo_id, "77");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        // feature_name provided, repo_slug absent, ticket_id used to derive the repo
+        let result = mgr
+            .resolve_feature_id_for_run(Some("my-feat"), None, Some(&ticket_id), None)
+            .unwrap();
+        assert_eq!(result, Some(feature_id));
+    }
+
+    #[test]
+    fn test_resolve_feature_id_for_run_via_ticket() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+        let ticket_id = insert_ticket(&conn, &repo_id, "42");
+        conn.execute(
+            "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+            params![feature_id, ticket_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .resolve_feature_id_for_run(None, None, Some(&ticket_id), None)
+            .unwrap();
+        assert_eq!(result, Some(feature_id));
+    }
+
+    #[test]
+    fn test_resolve_feature_id_for_run_via_worktree() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+        let ticket_id = insert_ticket(&conn, &repo_id, "99");
+        conn.execute(
+            "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+            params![feature_id, ticket_id],
+        )
+        .unwrap();
+        // Create a worktree linked to the ticket
+        let wt_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, ticket_id, created_at)
+             VALUES (?1, ?2, 'wt-slug', 'wt-branch', 'main', '/tmp/wt', ?3, '2024-01-01T00:00:00Z')",
+            params![wt_id, repo_id, ticket_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .resolve_feature_id_for_run(None, Some("test-repo"), None, Some("wt-slug"))
+            .unwrap();
+        assert_eq!(result, Some(feature_id));
+    }
+
+    #[test]
+    fn test_resolve_feature_id_for_run_worktree_no_ticket() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        // Create a worktree with no linked ticket (ticket_id is NULL)
+        let wt_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, created_at)
+             VALUES (?1, ?2, 'wt-no-ticket', 'feat/no-ticket', 'main', '/tmp/wt', '2024-01-01T00:00:00Z')",
+            params![wt_id, repo_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        // Should return Ok(None) — no ticket means no feature can be resolved
+        let result = mgr
+            .resolve_feature_id_for_run(None, Some("test-repo"), None, Some("wt-no-ticket"))
+            .unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_resolve_active_feature_rejects_closed() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let fid = insert_feature(&conn, &repo_id, "done-feat", "feat/done-feat");
+        conn.execute(
+            "UPDATE features SET status = 'closed' WHERE id = ?1",
+            params![fid],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let err = mgr
+            .resolve_active_feature("test-repo", "done-feat")
+            .unwrap_err();
+        assert!(
+            matches!(err, ConductorError::Workflow(ref msg) if msg.contains("only active features")),
+            "expected Workflow error about active features, got: {err:?}"
+        );
     }
 }

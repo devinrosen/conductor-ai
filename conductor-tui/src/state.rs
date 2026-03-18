@@ -2350,6 +2350,7 @@ pub(crate) mod tests {
             default_bot_name: None,
             iteration: 0,
             blocked_on: None,
+            feature_id: None,
         }
     }
 
@@ -2467,6 +2468,7 @@ pub(crate) mod tests {
             default_bot_name: None,
             iteration: 0,
             blocked_on: None,
+            feature_id: None,
         }
     }
 
