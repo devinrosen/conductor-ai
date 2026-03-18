@@ -6,7 +6,7 @@ use crate::db::query_collect;
 use crate::error::Result;
 
 use super::super::db::{
-    row_to_agent_run, AGENT_RUN_COLS_A, AGENT_RUN_COLS_A_NULL_PLAN, AGENT_RUN_COLS_AR,
+    row_to_agent_run, AGENT_RUN_COLS_A, AGENT_RUN_COLS_AR, AGENT_RUN_COLS_A_NULL_PLAN,
     AGENT_RUN_SELECT,
 };
 use super::super::status::AgentRunStatus;
