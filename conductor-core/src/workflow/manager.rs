@@ -2703,5 +2703,4 @@ mod tests {
         let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.iteration, 0);
     }
-
 }
