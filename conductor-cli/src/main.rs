@@ -22,7 +22,8 @@ use conductor_core::schema_config;
 use conductor_core::tickets::{build_agent_prompt, TicketInput, TicketSyncer};
 use conductor_core::workflow::{
     collect_agent_names, default_skills_dir, detect_workflow_cycles, make_script_resolver,
-    validate_script_steps, validate_workflow_semantics, WorkflowExecConfig, WorkflowManager,
+    validate_script_steps, validate_workflow_semantics, AgentRef, WorkflowExecConfig,
+    WorkflowManager,
 };
 use conductor_core::workflow_config;
 use conductor_core::worktree::WorktreeManager;
@@ -1797,6 +1798,82 @@ fn main() -> Result<()> {
                     total_errors += 1;
                 }
 
+                // Hoist script resolver outside the loop — it only depends on
+                // paths that are constant across all workflows.
+                let script_resolver =
+                    make_script_resolver(wt_path.clone(), repo_path.clone(), default_skills_dir());
+
+                // Pre-collect unique refs across all workflows and batch-check
+                // against global directories once, avoiding O(N) redundant
+                // filesystem probes when multiple workflows share agents,
+                // snippets, or schemas.
+                let mut all_agent_refs: Vec<AgentRef> = Vec::new();
+                let mut all_snippet_names: Vec<String> = Vec::new();
+                let mut all_schema_names: Vec<String> = Vec::new();
+                for wf in &workflows {
+                    all_agent_refs.extend(collect_agent_names(&wf.body));
+                    all_agent_refs.extend(collect_agent_names(&wf.always));
+                    all_snippet_names.extend(wf.collect_all_snippet_refs());
+                    all_schema_names.extend(wf.collect_all_schema_refs());
+                }
+                all_agent_refs.sort();
+                all_agent_refs.dedup();
+                all_snippet_names.sort();
+                all_snippet_names.dedup();
+                all_schema_names.sort();
+                all_schema_names.dedup();
+
+                let global_agent_specs: Vec<AgentSpec> =
+                    all_agent_refs.iter().map(AgentSpec::from).collect();
+                let globally_found_agents: std::collections::HashSet<String> = {
+                    let missing: std::collections::HashSet<String> =
+                        conductor_core::agent_config::find_missing_agents(
+                            &wt_path,
+                            &repo_path,
+                            &global_agent_specs,
+                            None,
+                        )
+                        .into_iter()
+                        .collect();
+                    global_agent_specs
+                        .iter()
+                        .map(|s| s.label().to_string())
+                        .filter(|l| !missing.contains(l))
+                        .collect()
+                };
+                let globally_found_snippets: std::collections::HashSet<String> = {
+                    let missing: std::collections::HashSet<String> =
+                        conductor_core::prompt_config::find_missing_snippets(
+                            &wt_path,
+                            &repo_path,
+                            &all_snippet_names,
+                            None,
+                        )
+                        .into_iter()
+                        .collect();
+                    all_snippet_names
+                        .iter()
+                        .filter(|s| !missing.contains(*s))
+                        .cloned()
+                        .collect()
+                };
+                let globally_ok_schemas: std::collections::HashSet<String> = {
+                    let issues =
+                        schema_config::check_schemas(&wt_path, &repo_path, &all_schema_names, None);
+                    let problematic: std::collections::HashSet<String> = issues
+                        .iter()
+                        .map(|i| match i {
+                            schema_config::SchemaIssue::Missing(n) => n.clone(),
+                            schema_config::SchemaIssue::Invalid { name, .. } => name.clone(),
+                        })
+                        .collect();
+                    all_schema_names
+                        .iter()
+                        .filter(|s| !problematic.contains(*s))
+                        .cloned()
+                        .collect()
+                };
+
                 for workflow in &workflows {
                     let wf_name = &workflow.name;
                     let mut wf_errors: Vec<String> = Vec::new();
@@ -1806,47 +1883,61 @@ fn main() -> Result<()> {
                     agent_refs.sort();
                     agent_refs.dedup();
 
-                    let specs: Vec<AgentSpec> = agent_refs.iter().map(AgentSpec::from).collect();
-                    let missing = conductor_core::agent_config::find_missing_agents(
-                        &wt_path,
-                        &repo_path,
-                        &specs,
-                        Some(wf_name),
-                    );
-
-                    if !missing.is_empty() {
-                        for agent in &missing {
+                    // Only probe per-workflow paths for agents not found globally.
+                    let uncached_refs: Vec<_> = agent_refs
+                        .iter()
+                        .filter(|r| !globally_found_agents.contains(r.label()))
+                        .collect();
+                    if !uncached_refs.is_empty() {
+                        let specs: Vec<AgentSpec> =
+                            uncached_refs.iter().map(|r| AgentSpec::from(*r)).collect();
+                        for agent in conductor_core::agent_config::find_missing_agents(
+                            &wt_path,
+                            &repo_path,
+                            &specs,
+                            Some(wf_name),
+                        ) {
                             wf_errors.push(format!("missing agent: {agent}"));
                         }
                     }
 
-                    // Prompt snippets.
-                    let all_snippets = workflow.collect_all_snippet_refs();
-                    let missing_snippets = conductor_core::prompt_config::find_missing_snippets(
-                        &wt_path,
-                        &repo_path,
-                        &all_snippets,
-                        Some(wf_name),
-                    );
-                    for snippet in &missing_snippets {
-                        wf_errors.push(format!("missing prompt snippet: {snippet}"));
+                    // Prompt snippets — only check globally-missing ones per workflow.
+                    let wf_snippets = workflow.collect_all_snippet_refs();
+                    let uncached_snippets: Vec<String> = wf_snippets
+                        .into_iter()
+                        .filter(|s| !globally_found_snippets.contains(s))
+                        .collect();
+                    if !uncached_snippets.is_empty() {
+                        for snippet in conductor_core::prompt_config::find_missing_snippets(
+                            &wt_path,
+                            &repo_path,
+                            &uncached_snippets,
+                            Some(wf_name),
+                        ) {
+                            wf_errors.push(format!("missing prompt snippet: {snippet}"));
+                        }
                     }
 
-                    // Schemas.
-                    let all_schemas = workflow.collect_all_schema_refs();
-                    let schema_issues = schema_config::check_schemas(
-                        &wt_path,
-                        &repo_path,
-                        &all_schemas,
-                        Some(wf_name),
-                    );
-                    for issue in &schema_issues {
-                        match issue {
-                            schema_config::SchemaIssue::Missing(s) => {
-                                wf_errors.push(format!("missing schema: {s}"));
-                            }
-                            schema_config::SchemaIssue::Invalid { name: s, error } => {
-                                wf_errors.push(format!("invalid schema: {s} — {error}"));
+                    // Schemas — only re-check globally-problematic ones per workflow.
+                    let wf_schemas = workflow.collect_all_schema_refs();
+                    let uncached_schemas: Vec<String> = wf_schemas
+                        .into_iter()
+                        .filter(|s| !globally_ok_schemas.contains(s))
+                        .collect();
+                    if !uncached_schemas.is_empty() {
+                        for issue in schema_config::check_schemas(
+                            &wt_path,
+                            &repo_path,
+                            &uncached_schemas,
+                            Some(wf_name),
+                        ) {
+                            match issue {
+                                schema_config::SchemaIssue::Missing(s) => {
+                                    wf_errors.push(format!("missing schema: {s}"));
+                                }
+                                schema_config::SchemaIssue::Invalid { name: s, error } => {
+                                    wf_errors.push(format!("invalid schema: {s} — {error}"));
+                                }
                             }
                         }
                     }
@@ -1884,14 +1975,7 @@ fn main() -> Result<()> {
                     }
 
                     // Script step validation.
-                    let script_errors = validate_script_steps(
-                        workflow,
-                        &make_script_resolver(
-                            wt_path.clone(),
-                            repo_path.clone(),
-                            default_skills_dir(),
-                        ),
-                    );
+                    let script_errors = validate_script_steps(workflow, &script_resolver);
                     for err in &script_errors {
                         wf_errors.push(format_hint_error(&err.message, &err.hint));
                     }
