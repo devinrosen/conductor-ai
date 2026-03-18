@@ -702,9 +702,9 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conductor_core::{config::Config, models::KNOWN_MODELS};
     use crate::state::{InputAction, Modal};
     use crate::theme::Theme;
+    use conductor_core::{config::Config, models::KNOWN_MODELS};
 
     /// Creates an App backed by an in-memory DB that already contains:
     /// - repo `r1` (slug `test-repo`)
@@ -788,7 +788,13 @@ mod tests {
         app.state.modal = model_picker(custom_row_index, true);
         app.handle_input_submit();
         assert!(
-            matches!(app.state.modal, Modal::ModelPicker { custom_active: true, .. }),
+            matches!(
+                app.state.modal,
+                Modal::ModelPicker {
+                    custom_active: true,
+                    ..
+                }
+            ),
             "expected picker to re-open with custom_active=true, got {:?}",
             app.state.modal
         );

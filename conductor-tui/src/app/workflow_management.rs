@@ -1421,8 +1421,8 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use conductor_core::{config::Config, repo::Repo, worktree::Worktree};
     use crate::theme::Theme;
+    use conductor_core::{config::Config, repo::Repo, worktree::Worktree};
 
     fn make_app() -> App {
         let conn = conductor_core::test_helpers::create_test_conn();
