@@ -6,14 +6,6 @@ use std::sync::OnceLock;
 
 use crate::error::{ConductorError, Result};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct WorkTarget {
-    pub name: String,
-    pub command: String,
-    #[serde(rename = "type")]
-    pub target_type: String,
-}
-
 /// Controls whether an agent is auto-started after creating a worktree from a ticket.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -25,14 +17,6 @@ pub enum AutoStartAgent {
     Always,
     /// Never auto-start
     Never,
-}
-
-fn default_work_targets() -> Vec<WorkTarget> {
-    vec![WorkTarget {
-        name: "VS Code".to_string(),
-        command: "code".to_string(),
-        target_type: "editor".to_string(),
-    }]
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -117,11 +101,6 @@ pub struct GeneralConfig {
     pub workspace_root: PathBuf,
     #[serde(default = "default_sync_interval")]
     pub sync_interval_minutes: u32,
-    /// Deprecated: use `work_targets` instead. Kept for backward compatibility.
-    #[serde(default, skip_serializing)]
-    pub editor: Option<String>,
-    #[serde(default = "default_work_targets")]
-    pub work_targets: Vec<WorkTarget>,
     #[serde(default)]
     pub auto_start_agent: AutoStartAgent,
     /// Global default model for Claude agent runs (e.g. "sonnet", "claude-opus-4-6").
@@ -177,8 +156,6 @@ impl Default for GeneralConfig {
         Self {
             workspace_root: default_workspace_root(),
             sync_interval_minutes: default_sync_interval(),
-            editor: None,
-            work_targets: default_work_targets(),
             auto_start_agent: AutoStartAgent::default(),
             model: None,
             inject_startup_context: true,
@@ -246,9 +223,6 @@ pub fn agent_log_path(run_id: &str) -> PathBuf {
 }
 
 /// Load config from disk, returning defaults if the file doesn't exist.
-/// Handles backward compatibility: if the old `editor` field is present
-/// and `work_targets` was not explicitly set, migrates the editor value
-/// into a single work target.
 pub fn load_config() -> Result<Config> {
     load_config_from(&config_path())
 }
@@ -258,7 +232,7 @@ fn load_config_from(path: &std::path::Path) -> Result<Config> {
         return Ok(Config::default());
     }
     let contents = std::fs::read_to_string(path)?;
-    let mut config: Config =
+    let config: Config =
         toml::from_str(&contents).map_err(|e| ConductorError::Config(e.to_string()))?;
 
     // Parse raw TOML once for migration checks and github.app validation.
@@ -292,24 +266,6 @@ fn load_config_from(path: &std::path::Path) -> Result<Config> {
             }
         }
     }
-
-    // Backward compat: migrate old `editor` field to `work_targets`
-    if let Some(ref editor) = config.general.editor {
-        // Check if the raw TOML has work_targets explicitly set
-        let has_work_targets = raw
-            .get("general")
-            .and_then(|g| g.get("work_targets"))
-            .is_some();
-
-        if !has_work_targets {
-            config.general.work_targets = vec![WorkTarget {
-                name: editor.clone(),
-                command: editor.clone(),
-                target_type: "editor".to_string(),
-            }];
-        }
-    }
-    config.general.editor = None;
 
     Ok(config)
 }

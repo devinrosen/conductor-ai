@@ -33,8 +33,6 @@ pub enum ConductorEvent {
         worktree_id: String,
         feedback_id: String,
     },
-    #[serde(rename = "work_targets_changed")]
-    WorkTargetsChanged,
     #[serde(rename = "issue_sources_changed")]
     IssueSourcesChanged { repo_id: String },
     #[serde(rename = "workflow_run_status_changed")]
@@ -67,7 +65,6 @@ impl ConductorEvent {
             Self::AgentEvent { .. } => "agent_event",
             Self::FeedbackRequested { .. } => "feedback_requested",
             Self::FeedbackSubmitted { .. } => "feedback_submitted",
-            Self::WorkTargetsChanged => "work_targets_changed",
             Self::IssueSourcesChanged { .. } => "issue_sources_changed",
             Self::WorkflowRunStatusChanged { .. } => "workflow_run_status_changed",
             Self::WorkflowStepStatusChanged { .. } => "workflow_step_status_changed",
@@ -198,7 +195,6 @@ mod tests {
                 },
                 "feedback_submitted",
             ),
-            (ConductorEvent::WorkTargetsChanged, "work_targets_changed"),
             (
                 ConductorEvent::IssueSourcesChanged { repo_id: "".into() },
                 "issue_sources_changed",

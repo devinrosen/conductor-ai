@@ -176,14 +176,4 @@ pub fn api_router() -> Router<AppState> {
             "/api/config/suggest-model",
             post(work_targets::suggest_model),
         )
-        .route(
-            "/api/config/work-targets",
-            get(work_targets::list_work_targets)
-                .post(work_targets::create_work_target)
-                .put(work_targets::replace_work_targets),
-        )
-        .route(
-            "/api/config/work-targets/{index}",
-            delete(work_targets::delete_work_target),
-        )
 }

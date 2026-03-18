@@ -142,18 +142,6 @@ export interface AgentCreatedIssue {
   created_at: string;
 }
 
-export interface WorkTarget {
-  name: string;
-  command: string;
-  type: string;
-}
-
-export interface CreateWorkTargetRequest {
-  name: string;
-  command: string;
-  type: string;
-}
-
 export interface PushResult {
   message: string;
 }

@@ -13,8 +13,6 @@ import type {
   AgentPromptInfo,
   RunTreeTotals,
   AgentCreatedIssue,
-  WorkTarget,
-  CreateWorkTargetRequest,
   PushResult,
   CreatePrResult,
   IssueSource,
@@ -181,23 +179,6 @@ export const api = {
     request<{ suggested: string }>("/config/suggest-model", {
       method: "POST",
       body: JSON.stringify({ prompt }),
-    }),
-
-  // Work Targets
-  listWorkTargets: () => request<WorkTarget[]>("/config/work-targets"),
-  createWorkTarget: (data: CreateWorkTargetRequest) =>
-    request<WorkTarget[]>("/config/work-targets", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  deleteWorkTarget: (index: number) =>
-    request<WorkTarget[]>(`/config/work-targets/${index}`, {
-      method: "DELETE",
-    }),
-  replaceWorkTargets: (targets: CreateWorkTargetRequest[]) =>
-    request<WorkTarget[]>("/config/work-targets", {
-      method: "PUT",
-      body: JSON.stringify(targets),
     }),
 
   // Issue Sources
