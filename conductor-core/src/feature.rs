@@ -1379,6 +1379,23 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_feature_id_for_run_explicit_name_via_ticket_repo() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+        let ticket_id = insert_ticket(&conn, &repo_id, "77");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        // feature_name provided, repo_slug absent, ticket_id used to derive the repo
+        let result = mgr
+            .resolve_feature_id_for_run(Some("my-feat"), None, Some(&ticket_id), None)
+            .unwrap();
+        assert_eq!(result, Some(feature_id));
+    }
+
+    #[test]
     fn test_resolve_feature_id_for_run_via_ticket() {
         let conn = setup_db();
         let repo_id = insert_repo(&conn);

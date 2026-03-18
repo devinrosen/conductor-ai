@@ -6,6 +6,7 @@ use crate::agent::AgentManager;
 use crate::agent_config::AgentSpec;
 use crate::config::Config;
 use crate::error::{ConductorError, Result};
+use crate::feature::{Feature, FeatureManager};
 use crate::schema_config::{OutputSchema, SchemaIssue};
 use crate::workflow_dsl::{self, WorkflowDef, WorkflowNode};
 use crate::worktree::WorktreeManager;
@@ -147,25 +148,18 @@ pub fn apply_workflow_input_defaults(
 
 /// Inject feature metadata variables into the merged inputs map.
 ///
-/// Looks up the feature by ID and inserts `feature_id`, `feature_name`, and
-/// `feature_branch` (using `or_insert_with` so caller-provided values win).
-fn inject_feature_variables(
-    conn: &Connection,
-    config: &crate::config::Config,
-    feature_id: &str,
-    merged_inputs: &mut HashMap<String, String>,
-) -> Result<()> {
-    let feature = crate::feature::FeatureManager::new(conn, config).get_by_id(feature_id)?;
+/// Inserts `feature_id`, `feature_name`, and `feature_branch` from the given
+/// `Feature` (using `or_insert_with` so caller-provided values win).
+fn inject_feature_variables(feature: &Feature, merged_inputs: &mut HashMap<String, String>) {
     merged_inputs
         .entry("feature_id".to_string())
-        .or_insert_with(|| feature.id);
+        .or_insert_with(|| feature.id.clone());
     merged_inputs
         .entry("feature_name".to_string())
-        .or_insert_with(|| feature.name);
+        .or_insert_with(|| feature.name.clone());
     merged_inputs
         .entry("feature_branch".to_string())
-        .or_insert_with(|| feature.branch);
-    Ok(())
+        .or_insert_with(|| feature.branch.clone());
 }
 
 /// Execute a workflow definition against a worktree.
@@ -298,9 +292,16 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         cvar.notify_one();
     }
 
+    // Resolve feature up front so we only hit the DB once.
+    let feature = if let Some(fid) = input.feature_id {
+        Some(FeatureManager::new(conn, config).get_by_id(fid)?)
+    } else {
+        None
+    };
+
     // Persist feature_id on the workflow run record.
-    if let Some(fid) = input.feature_id {
-        wf_mgr.set_workflow_run_feature_id(&wf_run.id, fid)?;
+    if let Some(ref f) = feature {
+        wf_mgr.set_workflow_run_feature_id(&wf_run.id, &f.id)?;
     }
 
     // Persist default_bot_name so it can be restored on resume.
@@ -343,9 +344,9 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
             .or_insert_with(|| repo.slug.clone());
     }
 
-    // Inject feature metadata when a feature_id is provided.
-    if let Some(fid) = input.feature_id {
-        inject_feature_variables(conn, config, fid, &mut merged_inputs)?;
+    // Inject feature metadata when a feature is provided.
+    if let Some(ref f) = feature {
+        inject_feature_variables(f, &mut merged_inputs);
     }
 
     // Persist inputs so they can be restored on resume
@@ -1409,22 +1410,24 @@ mod tests {
         assert!(result.is_err(), "expected error for missing required input");
     }
 
-    fn insert_feature(conn: &rusqlite::Connection) {
-        conn.execute(
-            "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
-             VALUES ('f1', 'r1', 'my-feature', 'feat/my-feature', 'main', 'active', '2024-01-01T00:00:00Z')",
-            [],
-        ).unwrap();
+    fn make_test_feature() -> crate::feature::Feature {
+        crate::feature::Feature {
+            id: "f1".to_string(),
+            repo_id: "r1".to_string(),
+            name: "my-feature".to_string(),
+            branch: "feat/my-feature".to_string(),
+            base_branch: "main".to_string(),
+            status: crate::feature::FeatureStatus::Active,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            merged_at: None,
+        }
     }
 
     #[test]
     fn test_inject_feature_variables() {
-        let conn = crate::test_helpers::setup_db();
-        insert_feature(&conn);
-
-        let config = crate::config::Config::default();
+        let feature = make_test_feature();
         let mut inputs = HashMap::new();
-        inject_feature_variables(&conn, &config, "f1", &mut inputs).unwrap();
+        inject_feature_variables(&feature, &mut inputs);
 
         assert_eq!(inputs.get("feature_id").unwrap(), "f1");
         assert_eq!(inputs.get("feature_name").unwrap(), "my-feature");
@@ -1432,27 +1435,15 @@ mod tests {
     }
 
     #[test]
-    fn test_inject_feature_variables_missing_feature() {
-        let conn = crate::test_helpers::setup_db();
-        let config = crate::config::Config::default();
-        let mut inputs = HashMap::new();
-        let result = inject_feature_variables(&conn, &config, "nonexistent", &mut inputs);
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_inject_feature_variables_does_not_overwrite_caller() {
-        let conn = crate::test_helpers::setup_db();
-        insert_feature(&conn);
-
-        let config = crate::config::Config::default();
+        let feature = make_test_feature();
         let mut inputs = HashMap::new();
         inputs.insert("feature_name".to_string(), "caller-override".to_string());
-        inject_feature_variables(&conn, &config, "f1", &mut inputs).unwrap();
+        inject_feature_variables(&feature, &mut inputs);
 
         // Caller's value should win
         assert_eq!(inputs.get("feature_name").unwrap(), "caller-override");
-        // Other keys populated from DB
+        // Other keys populated from Feature
         assert_eq!(inputs.get("feature_id").unwrap(), "f1");
         assert_eq!(inputs.get("feature_branch").unwrap(), "feat/my-feature");
     }
