@@ -2868,3 +2868,60 @@ fn test_execute_workflow_passes_preflight_with_valid_schema() {
         }
     }
 }
+
+#[test]
+fn test_execute_workflow_injects_feature_variables() {
+    let conn = setup_db();
+    let config = Config::default();
+    let exec_config = WorkflowExecConfig::default();
+    let workflow = make_empty_workflow();
+
+    // Insert a feature for repo r1 (created by setup_db).
+    conn.execute(
+        "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at) \
+         VALUES ('f1', 'r1', 'my-feature', 'feat/my-feature', 'main', 'active', '2025-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    let input = WorkflowExecInput {
+        conn: &conn,
+        config: &config,
+        workflow: &workflow,
+        worktree_id: None,
+        working_dir: "/tmp/repo",
+        repo_path: "/tmp/repo",
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: &exec_config,
+        inputs: HashMap::new(),
+        depth: 0,
+        parent_workflow_run_id: None,
+        target_label: None,
+        default_bot_name: None,
+        feature_id: Some("f1"),
+        iteration: 0,
+        run_id_notify: None,
+    };
+    let result = execute_workflow(&input).unwrap();
+
+    let wf_mgr = WorkflowManager::new(&conn);
+    let run = wf_mgr
+        .get_workflow_run(&result.workflow_run_id)
+        .unwrap()
+        .unwrap();
+
+    // Feature variables should be injected into persisted inputs.
+    assert_eq!(run.inputs.get("feature_id").map(String::as_str), Some("f1"));
+    assert_eq!(
+        run.inputs.get("feature_name").map(String::as_str),
+        Some("my-feature")
+    );
+    assert_eq!(
+        run.inputs.get("feature_branch").map(String::as_str),
+        Some("feat/my-feature")
+    );
+    // feature_id should also be persisted on the workflow run record.
+    assert_eq!(run.feature_id.as_deref(), Some("f1"));
+}

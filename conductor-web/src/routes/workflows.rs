@@ -6,6 +6,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use conductor_core::error::ConductorError;
+use conductor_core::feature::FeatureManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::workflow::{
     apply_workflow_input_defaults, execute_workflow, validate_resume_preconditions, InputDecl,
@@ -243,6 +244,19 @@ pub async fn run_workflow(
                 ..Default::default()
             };
 
+            // Resolve feature_id from worktree/ticket context (mirrors CLI + TUI paths).
+            let feature_id = FeatureManager::new(&db, &config)
+                .resolve_feature_id_for_run(
+                    None,
+                    Some(&repo_slug),
+                    wt_ticket_id.as_deref(),
+                    Some(&wt_slug),
+                )
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Failed to resolve feature for workflow run: {e}");
+                    None
+                });
+
             let input = WorkflowExecInput {
                 conn: &db,
                 config: &config,
@@ -259,7 +273,7 @@ pub async fn run_workflow(
                 parent_workflow_run_id: None,
                 target_label: Some(&wt_target_label),
                 default_bot_name: None,
-                feature_id: None,
+                feature_id: feature_id.as_deref(),
                 iteration: 0,
                 run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
             };
