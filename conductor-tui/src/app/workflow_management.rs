@@ -790,16 +790,37 @@ impl App {
                 run_inputs.insert("workflow_run_id".to_string(), workflow_run_id.clone());
                 let working_dir = worktree_path.unwrap_or_else(|| repo_path.clone());
                 if let Some(wt_id) = worktree_id {
+                    // Look up worktree data so we can auto-detect the feature.
+                    let (repo_slug, ticket_id, wt_slug) = self
+                        .state
+                        .data
+                        .worktrees
+                        .iter()
+                        .find(|w| w.id == wt_id)
+                        .map(|w| {
+                            let repo = self.state.data.repos.iter().find(|r| r.id == w.repo_id);
+                            (
+                                repo.map(|r| r.slug.clone()),
+                                w.ticket_id.clone(),
+                                Some(w.slug.clone()),
+                            )
+                        })
+                        .unwrap_or((None, None, None));
+                    let feature_id = self.try_detect_feature_id(
+                        repo_slug.as_deref(),
+                        ticket_id.as_deref(),
+                        wt_slug.as_deref(),
+                    );
                     self.spawn_workflow_in_background(
                         def,
                         wt_id,
                         working_dir,
                         repo_path,
-                        None,
+                        ticket_id,
                         run_inputs,
                         format!("workflow_run:{workflow_run_id}"),
                         model,
-                        None,
+                        feature_id,
                     );
                 } else {
                     self.spawn_workflow_run_target_in_background(

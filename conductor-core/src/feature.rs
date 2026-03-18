@@ -288,7 +288,7 @@ impl<'a> FeatureManager<'a> {
             0 => Ok(None),
             1 => Ok(Some(features.into_iter().next().unwrap())),
             n => Err(ConductorError::Workflow(format!(
-                "Ticket is linked to {n} active features ({}). Use --feature to disambiguate.",
+                "Ticket is linked to {n} active features ({}). Specify a feature to disambiguate.",
                 features
                     .iter()
                     .map(|f| f.name.as_str())
@@ -326,7 +326,7 @@ impl<'a> FeatureManager<'a> {
                 r.slug
             } else {
                 return Err(ConductorError::Workflow(
-                    "--feature requires a repo context (--repo, positional repo, or --ticket)"
+                    "Feature resolution requires a repo context (provide a repo, ticket, or worktree)"
                         .to_string(),
                 ));
             };
@@ -1373,7 +1373,7 @@ mod tests {
             .resolve_feature_id_for_run(Some("my-feat"), None, None, None)
             .unwrap_err();
         assert!(
-            matches!(err, ConductorError::Workflow(ref msg) if msg.contains("--feature requires a repo context")),
+            matches!(err, ConductorError::Workflow(ref msg) if msg.contains("requires a repo context")),
             "expected Workflow error about repo context, got: {err:?}"
         );
     }
