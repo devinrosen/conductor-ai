@@ -88,3 +88,51 @@ impl<'a> AgentManager<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::setup_db;
+    use super::*;
+
+    #[test]
+    fn test_attach_agent_window_no_tmux_returns_error() {
+        // When tmux is not running (no server), attach_agent_window must return
+        // a ConductorError::Agent rather than panicking.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let result = mgr.attach_agent_window("nonexistent-window-xyz");
+        assert!(
+            result.is_err(),
+            "expected error when tmux server is not running"
+        );
+        match result.unwrap_err() {
+            ConductorError::Agent(_) => {}
+            other => panic!("expected ConductorError::Agent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_capture_agent_log_no_tmux_does_not_panic() {
+        // capture_agent_log is best-effort (returns void); it must not panic
+        // when tmux is unavailable or the window does not exist.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        // Should complete without panicking even when tmux is not available.
+        mgr.capture_agent_log("test-run-id-no-tmux", "nonexistent-window-xyz");
+    }
+
+    #[test]
+    fn test_capture_agent_log_no_log_file_without_tmux() {
+        // After capture_agent_log with no tmux, no log file is written.
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run_id = "test-run-no-log-file";
+        mgr.capture_agent_log(run_id, "window-does-not-exist");
+        // No log file should be created when tmux capture-pane fails.
+        let log_path = crate::config::agent_log_path(run_id);
+        assert!(
+            !log_path.exists(),
+            "expected no log file when tmux is unavailable"
+        );
+    }
+}

@@ -1,11 +1,11 @@
-pub mod aggregation;
-pub mod events;
-pub mod feedback;
-pub mod lifecycle;
-pub mod orphans;
-pub mod plan_steps;
-pub mod queries;
-pub mod tmux;
+pub(crate) mod aggregation;
+pub(crate) mod events;
+pub(crate) mod feedback;
+pub(crate) mod lifecycle;
+pub(crate) mod orphans;
+pub(crate) mod plan_steps;
+pub(crate) mod queries;
+pub(crate) mod tmux;
 
 use rusqlite::Connection;
 

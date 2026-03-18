@@ -1,10 +1,10 @@
-pub mod context;
-pub mod db;
-pub mod log_parsing;
-pub mod manager;
-pub mod status;
-pub mod tmux;
-pub mod types;
+pub(crate) mod context;
+pub(crate) mod db;
+pub(crate) mod log_parsing;
+pub(crate) mod manager;
+pub(crate) mod status;
+pub(crate) mod tmux;
+pub(crate) mod types;
 
 // Re-export everything that was public in the old agent.rs
 
