@@ -1166,14 +1166,26 @@ fn push_children(
         return;
     };
 
+    // Build a set of known child workflow run IDs from children_map. This is used to
+    // distinguish sub-workflow steps (child_run_id is a workflow_runs.id) from direct
+    // agent-call steps (child_run_id is an agent_runs.id). Both set child_run_id, but
+    // only sub-workflow IDs appear in children_map.
+    let child_workflow_run_ids: std::collections::HashSet<&str> =
+        children.iter().map(|c| c.id.as_str()).collect();
+
     // Build the set of child run IDs that belong to the latest loop iteration.
     // Steps at the max iteration (per step name) for the parent run identify which
     // child runs are current. An empty set means no filtering (safe fallback when
-    // the parent's step data hasn't been loaded yet, or steps have no child_run_id).
+    // the parent's step data hasn't been loaded yet, or no sub-workflow steps found).
+    //
+    // IMPORTANT: only steps whose child_run_id is a known workflow run ID are counted
+    // here. Direct agent-call steps also have child_run_id (pointing to agent_runs.id),
+    // and including those would cause all workflow children to be filtered out when a
+    // sub-workflow step hasn't set its child_run_id yet (still in progress).
     //
     // At the same time, collect:
     //   - child_run_position: child_run_id → position in parent's step list
-    //   - direct_steps: parent's own steps that have no child_run_id (latest iteration only)
+    //   - direct_steps: steps that are NOT sub-workflow calls (latest iteration only)
     let (latest_child_ids, child_run_position, direct_steps): (
         std::collections::HashSet<&str>,
         std::collections::HashMap<&str, i64>,
@@ -1183,19 +1195,34 @@ fn push_children(
         let latest_child_ids = steps
             .iter()
             .filter(|s| {
-                s.child_run_id.is_some()
+                s.child_run_id
+                    .as_deref()
+                    .map(|cid| child_workflow_run_ids.contains(cid))
+                    .unwrap_or(false)
                     && s.iteration == *max_iter_by_name.get(&s.step_name).unwrap_or(&0)
             })
             .filter_map(|s| s.child_run_id.as_deref())
             .collect();
         let child_run_position: std::collections::HashMap<&str, i64> = steps
             .iter()
+            .filter(|s| {
+                s.child_run_id
+                    .as_deref()
+                    .map(|cid| child_workflow_run_ids.contains(cid))
+                    .unwrap_or(false)
+            })
             .filter_map(|s| s.child_run_id.as_deref().map(|cid| (cid, s.position)))
             .collect();
         let direct_steps: Vec<&conductor_core::workflow::WorkflowRunStep> = steps
             .iter()
             .filter(|s| {
-                s.child_run_id.is_none()
+                // A "direct step" is one that is NOT a sub-workflow call.
+                // This includes agent calls (child_run_id = agent_runs.id) and
+                // script steps (child_run_id = None).
+                !s.child_run_id
+                    .as_deref()
+                    .map(|cid| child_workflow_run_ids.contains(cid))
+                    .unwrap_or(false)
                     && s.iteration == *max_iter_by_name.get(&s.step_name).unwrap_or(&0)
             })
             .collect();
