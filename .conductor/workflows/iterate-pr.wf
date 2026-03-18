@@ -26,6 +26,7 @@ workflow iterate-pr {
       }
       script push {
         run = ".conductor/scripts/push.sh"
+        as  = "developer"
       }
       call workflow lint-fix
     }
