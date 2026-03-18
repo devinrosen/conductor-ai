@@ -3989,6 +3989,47 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn dashboard_rows_cache_invalidation_round_trip() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        state.data.worktrees = vec![make_worktree(
+            "wt1",
+            "r1",
+            None,
+            conductor_core::worktree::WorktreeStatus::Active,
+        )];
+
+        // First call populates the cache
+        let rows1 = state.dashboard_rows();
+        assert_eq!(rows1.len(), 2); // Repo + Worktree
+
+        // Mutate underlying data (add a second worktree)
+        state.data.worktrees.push(make_worktree(
+            "wt2",
+            "r1",
+            None,
+            conductor_core::worktree::WorktreeStatus::Active,
+        ));
+
+        // Without invalidation, cache returns stale data
+        let stale = state.dashboard_rows();
+        assert_eq!(
+            stale.len(),
+            2,
+            "cache should still return stale 2-row result"
+        );
+
+        // After invalidation, fresh data is returned
+        state.invalidate_dashboard_rows();
+        let rows2 = state.dashboard_rows();
+        assert_eq!(
+            rows2.len(),
+            3,
+            "after invalidation should see Repo + 2 Worktrees"
+        );
+    }
+
+    #[test]
     fn dashboard_rows_feature_stats_count_correctly() {
         let mut state = AppState::new();
         state.data.repos = vec![make_repo("r1", "repo-a")];

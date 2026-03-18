@@ -4,6 +4,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
+use tracing::warn;
+
 use crate::state::{AppState, ColumnFocus, DashboardRow};
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -25,6 +27,10 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         .map(|row| match row {
             DashboardRow::Repo(idx) => {
                 let Some(repo) = state.data.repos.get(*idx) else {
+                    warn!(
+                        "dashboard: repo index {idx} out of bounds (len={})",
+                        state.data.repos.len()
+                    );
                     return ListItem::new(Line::from(""));
                 };
                 let active = state
@@ -53,6 +59,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                 merged,
             } => {
                 let Some(feature) = state.feature_at(*repo_idx, *feature_idx) else {
+                    warn!("dashboard: feature_at({repo_idx}, {feature_idx}) returned None");
                     return ListItem::new(Line::from(""));
                 };
                 let collapsed = state.collapsed_features.contains(&feature.id);
@@ -79,6 +86,10 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                 is_feature_child,
             } => {
                 let Some(wt) = state.data.worktrees.get(*idx) else {
+                    warn!(
+                        "dashboard: worktree index {idx} out of bounds (len={})",
+                        state.data.worktrees.len()
+                    );
                     return ListItem::new(Line::from(""));
                 };
                 let prefix = if *is_feature_child {
