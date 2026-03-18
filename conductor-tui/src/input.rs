@@ -663,6 +663,114 @@ mod tests {
         ));
     }
 
+    // --- BranchPicker tests ---
+
+    use crate::state::BranchPickerItem;
+
+    fn branch_picker_state(item_count: usize) -> AppState {
+        let mut items = Vec::with_capacity(item_count);
+        // First item: default branch (branch = None)
+        if item_count > 0 {
+            items.push(BranchPickerItem {
+                label: "main (default)".into(),
+                branch: None,
+            });
+        }
+        for i in 1..item_count {
+            items.push(BranchPickerItem {
+                label: format!("feat/branch-{i}"),
+                branch: Some(format!("feat/branch-{i}")),
+            });
+        }
+        let mut state = AppState::new();
+        state.modal = Modal::BranchPicker {
+            repo_slug: "test-repo".into(),
+            wt_name: "wt-name".into(),
+            ticket_id: None,
+            items,
+            selected: 0,
+        };
+        state
+    }
+
+    #[test]
+    fn branch_picker_esc_dismisses_modal() {
+        let state = branch_picker_state(3);
+        assert!(matches!(
+            map_key(key(KeyCode::Esc), &state),
+            Action::DismissModal
+        ));
+    }
+
+    #[test]
+    fn branch_picker_up_down_navigation() {
+        let state = branch_picker_state(3);
+        assert!(matches!(map_key(key(KeyCode::Up), &state), Action::MoveUp));
+        assert!(matches!(
+            map_key(key(KeyCode::Down), &state),
+            Action::MoveDown
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('k')), &state),
+            Action::MoveUp
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('j')), &state),
+            Action::MoveDown
+        ));
+    }
+
+    #[test]
+    fn branch_picker_enter_selects_with_none() {
+        let state = branch_picker_state(3);
+        assert!(matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::SelectBranch(None)
+        ));
+    }
+
+    #[test]
+    fn branch_picker_valid_digit_selects_item() {
+        let state = branch_picker_state(3);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('1')), &state),
+            Action::SelectBranch(Some(0))
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('3')), &state),
+            Action::SelectBranch(Some(2))
+        ));
+    }
+
+    #[test]
+    fn branch_picker_out_of_range_digit_is_none() {
+        let state = branch_picker_state(3);
+        // '0' is out of range (valid is 1..=3)
+        assert!(matches!(
+            map_key(key(KeyCode::Char('0')), &state),
+            Action::None
+        ));
+        // '4' exceeds item count
+        assert!(matches!(
+            map_key(key(KeyCode::Char('4')), &state),
+            Action::None
+        ));
+        // '9' exceeds item count
+        assert!(matches!(
+            map_key(key(KeyCode::Char('9')), &state),
+            Action::None
+        ));
+    }
+
+    #[test]
+    fn branch_picker_unhandled_key_is_none() {
+        let state = branch_picker_state(3);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('x')), &state),
+            Action::None
+        ));
+    }
+
     // --- WorktreeDetail focus-conditional j/k routing ---
 
     fn worktree_detail_state_with_focus(focus: WorktreeDetailFocus) -> AppState {
