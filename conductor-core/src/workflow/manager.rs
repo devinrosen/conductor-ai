@@ -1302,11 +1302,17 @@ impl<'a> WorkflowManager<'a> {
         );
         // validate_workflows_batch produces exactly one entry per input workflow,
         // so with a single-item slice this always yields one element.
-        result
-            .entries
-            .into_iter()
-            .next()
-            .expect("batch produced one entry per input workflow")
+        // Use unwrap_or_else to avoid a bare expect() in library code.
+        result.entries.into_iter().next().unwrap_or_else(|| {
+            super::batch_validate::WorkflowValidationEntry {
+                name: workflow.name.clone(),
+                errors: vec![crate::workflow_dsl::ValidationError {
+                    message: "internal error: batch validation returned no entries".to_string(),
+                    hint: None,
+                }],
+                warnings: vec![],
+            }
+        })
     }
 
     const SQL_RESET_FAILED: &'static str = "UPDATE workflow_run_steps \
@@ -2780,6 +2786,41 @@ mod tests {
             entry.errors.is_empty(),
             "expected no errors: {:?}",
             entry.errors
+        );
+    }
+
+    #[test]
+    fn test_validate_single_surfaces_warnings_for_unknown_bot() {
+        use crate::workflow_dsl::{AgentRef, CallNode, WorkflowNode};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let wf_src = "workflow bot-wf {\n  meta {\n    description = \"test\"\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }\n  call some-step { as = \"unknown-bot\" }\n}\n";
+        write_wf_file(tmp.path(), "bot-wf", wf_src);
+
+        let mut wf = minimal_workflow("bot-wf");
+        wf.body.push(WorkflowNode::Call(CallNode {
+            agent: AgentRef::Name("some-step".to_string()),
+            retries: 0,
+            on_fail: None,
+            output: None,
+            with: vec![],
+            bot_name: Some("unknown-bot".to_string()),
+        }));
+        // known_bots is empty, so "unknown-bot" should produce a warning
+        let known_bots = std::collections::HashSet::new();
+        let path = tmp.path().to_str().unwrap();
+
+        let entry = WorkflowManager::validate_single(path, path, &wf, &known_bots);
+
+        assert_eq!(entry.name, "bot-wf");
+        assert!(
+            !entry.warnings.is_empty(),
+            "expected warning for unknown bot name, got none"
+        );
+        assert!(
+            entry.warnings[0].message.contains("unknown-bot"),
+            "warning should mention the unknown bot name: {}",
+            entry.warnings[0].message
         );
     }
 

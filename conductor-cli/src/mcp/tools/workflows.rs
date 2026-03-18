@@ -102,18 +102,20 @@ fn format_validation_result(
         warnings.push(w.message.to_string());
     }
 
-    if errors.is_empty() && warnings.is_empty() {
-        tool_ok(format!(
-            "status: PASS\n\nWorkflow '{workflow_name}' is valid."
-        ))
-    } else if errors.is_empty() {
+    let warning_section = if warnings.is_empty() {
+        String::new()
+    } else {
         let warning_list = warnings
             .iter()
             .map(|w| format!("- {w}"))
             .collect::<Vec<_>>()
             .join("\n");
+        format!("\n\nWarnings:\n{warning_list}")
+    };
+
+    if errors.is_empty() {
         tool_ok(format!(
-            "status: PASS\n\nWorkflow '{workflow_name}' is valid.\n\nWarnings:\n{warning_list}"
+            "status: PASS\n\nWorkflow '{workflow_name}' is valid.{warning_section}"
         ))
     } else {
         let error_list = errors
@@ -121,16 +123,9 @@ fn format_validation_result(
             .map(|e| format!("- {e}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let mut output = format!("status: FAIL\n\nErrors:\n{error_list}");
-        if !warnings.is_empty() {
-            let warning_list = warnings
-                .iter()
-                .map(|w| format!("- {w}"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            output.push_str(&format!("\n\nWarnings:\n{warning_list}"));
-        }
-        tool_ok(output)
+        tool_ok(format!(
+            "status: FAIL\n\nErrors:\n{error_list}{warning_section}"
+        ))
     }
 }
 
