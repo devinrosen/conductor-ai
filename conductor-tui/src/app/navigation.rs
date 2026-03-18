@@ -658,6 +658,12 @@ impl App {
                                 self.state.collapsed_features.insert(fid);
                             }
                             self.state.invalidate_dashboard_rows();
+                        } else {
+                            tracing::warn!(
+                                repo_idx,
+                                feature_idx,
+                                "Enter on Feature row: feature_at() returned None — stale dashboard row"
+                            );
                         }
                     }
                     Some(&DashboardRow::Worktree { idx: wt_idx, .. }) => {

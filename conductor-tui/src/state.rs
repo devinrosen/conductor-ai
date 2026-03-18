@@ -768,7 +768,9 @@ pub enum InputAction {
 
 #[derive(Debug, Clone, Default)]
 pub struct DataCache {
+    /// Changing this field requires calling `AppState::invalidate_dashboard_rows()`.
     pub repos: Vec<Repo>,
+    /// Changing this field requires calling `AppState::invalidate_dashboard_rows()`.
     pub worktrees: Vec<Worktree>,
     pub tickets: Vec<Ticket>,
     /// ticket_id -> labels with colors (populated by DB poller)
@@ -828,6 +830,7 @@ pub struct DataCache {
     pub live_turns_by_worktree: HashMap<String, i64>,
     /// Active features per repo (repo_id → active FeatureRows).
     /// Populated by the background poller each tick.
+    /// Changing this field requires calling `AppState::invalidate_dashboard_rows()`.
     pub features_by_repo: HashMap<String, Vec<FeatureRow>>,
 }
 
@@ -1027,6 +1030,7 @@ pub struct AppState {
     /// Set of parent workflow run IDs that are currently collapsed in the runs pane.
     pub collapsed_workflow_run_ids: HashSet<String>,
     /// Set of feature IDs that are currently collapsed in the dashboard view.
+    /// Changing this field requires calling `invalidate_dashboard_rows()`.
     pub collapsed_features: HashSet<String>,
     /// Set of repo slugs whose group header is collapsed in global mode.
     pub collapsed_repo_headers: HashSet<String>,
@@ -4086,5 +4090,26 @@ pub(crate) mod tests {
             }
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn selected_repo_returns_repo_for_feature_row() {
+        let mut state = AppState::new();
+        let repo = make_repo("r1", "my-repo");
+        state.data.repos = vec![repo];
+        state.data.features_by_repo.insert(
+            "r1".into(),
+            vec![make_feature_row("f1", "feat/thing")],
+        );
+        // Build dashboard rows and select the feature row
+        let rows = state.dashboard_rows();
+        let feature_pos = rows
+            .iter()
+            .position(|r| matches!(r, DashboardRow::Feature { .. }))
+            .expect("should have a Feature row");
+        state.dashboard_index = feature_pos;
+        let selected = state.selected_repo().expect("should resolve owning repo");
+        assert_eq!(selected.id, "r1");
+        assert_eq!(selected.slug, "my-repo");
     }
 }

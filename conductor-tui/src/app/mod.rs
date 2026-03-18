@@ -728,6 +728,12 @@ impl App {
                         scroll_offset: 0,
                         horizontal_offset: 0,
                     };
+                } else {
+                    tracing::warn!(
+                        repo_idx,
+                        feature_idx,
+                        "FeatureDetail: feature_at() returned None — stale dashboard row"
+                    );
                 }
             }
             // Background results
