@@ -4,6 +4,7 @@
 //! Builds on top of the existing `AgentManager` and orchestrator infrastructure,
 //! adding workflow-level tracking in `workflow_runs` / `workflow_run_steps`.
 
+mod batch_validate;
 pub(crate) mod constants;
 pub(crate) mod engine;
 pub(crate) mod executors;
@@ -18,11 +19,15 @@ pub(crate) mod types;
 pub use crate::workflow_dsl::{
     collect_agent_names, collect_workflow_refs, default_skills_dir, detect_workflow_cycles,
     load_workflow_by_name, make_script_resolver, parse_workflow_str, resolve_script_path,
-    validate_script_steps, validate_workflow_semantics, validate_workflows_batch, AgentRef,
-    AlwaysNode, BatchValidationResult, CallNode, CallWorkflowNode, Condition, DoNode, DoWhileNode,
-    GateNode, GateType, IfNode, InputDecl, InputType, ParallelNode, UnlessNode, ValidationError,
-    ValidationReport, WhileNode, WorkflowDef, WorkflowNode, WorkflowTrigger,
-    WorkflowValidationEntry, WorkflowWarning, MAX_WORKFLOW_DEPTH,
+    validate_script_steps, validate_workflow_semantics, AgentRef, AlwaysNode, CallNode,
+    CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode, GateType, IfNode, InputDecl,
+    InputType, ParallelNode, UnlessNode, ValidationError, ValidationReport, WhileNode, WorkflowDef,
+    WorkflowNode, WorkflowTrigger, WorkflowWarning, MAX_WORKFLOW_DEPTH,
+};
+
+// Re-export batch validation from the workflow layer (not DSL).
+pub use batch_validate::{
+    validate_workflows_batch, BatchValidationResult, WorkflowValidationEntry,
 };
 
 // Re-export all public types and functions to preserve existing import paths.

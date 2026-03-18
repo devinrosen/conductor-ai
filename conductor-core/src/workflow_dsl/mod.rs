@@ -52,8 +52,7 @@ pub use script_utils::{default_skills_dir, make_script_resolver, resolve_script_
 #[cfg(test)]
 pub(crate) use types::{collect_bot_names, collect_schema_refs, collect_snippet_refs, count_nodes};
 pub use validation::{
-    validate_script_steps, validate_workflow_semantics, validate_workflows_batch,
-    BatchValidationResult, ValidationError, ValidationReport, WorkflowValidationEntry,
+    validate_script_steps, validate_workflow_semantics, ValidationError, ValidationReport,
 };
 
 #[cfg(test)]

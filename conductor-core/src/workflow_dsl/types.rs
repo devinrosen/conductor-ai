@@ -45,6 +45,15 @@ impl WorkflowDef {
         refs
     }
 
+    /// Collect all agent references across body and always blocks, sorted and deduplicated.
+    pub fn collect_all_agent_refs(&self) -> Vec<AgentRef> {
+        let mut refs = collect_agent_names(&self.body);
+        refs.extend(collect_agent_names(&self.always));
+        refs.sort();
+        refs.dedup();
+        refs
+    }
+
     /// Collect all bot names referenced across body and always blocks, sorted and deduplicated.
     pub fn collect_all_bot_names(&self) -> Vec<String> {
         let mut names = collect_bot_names(&self.body);
