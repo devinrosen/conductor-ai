@@ -709,6 +709,24 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 40)?;
     }
 
+    // --- Migration 41: workflow_runs.blocked_on ---
+    let has_blocked_on: bool = conn
+        .prepare("SELECT blocked_on FROM workflow_runs LIMIT 0")
+        .is_ok();
+    if !has_blocked_on {
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='workflow_runs'",
+            [],
+            |row| row.get(0),
+        )?;
+        if table_exists {
+            conn.execute_batch(include_str!("migrations/041_workflow_run_blocked_on.sql"))?;
+        }
+    }
+    if version < 41 {
+        bump_version(conn, 41)?;
+    }
+
     Ok(())
 }
 

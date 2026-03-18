@@ -1165,6 +1165,7 @@ mod tests {
             target_label: None,
             default_bot_name: None,
             iteration: 0,
+            blocked_on: None,
         }
     }
 
@@ -1483,6 +1484,7 @@ workflow my-wf {
             target_label: None,
             default_bot_name: None,
             iteration: 0,
+            blocked_on: None,
         };
         run.inputs
             .insert("pr_url".to_string(), "https://example.com".to_string());

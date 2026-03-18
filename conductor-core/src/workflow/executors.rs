@@ -1400,6 +1400,28 @@ pub(super) fn execute_gate(
         None,
     )?;
 
+    // Record what this gate is blocked on so the TUI/web/MCP can display it.
+    let blocked_on = match node.gate_type {
+        GateType::HumanApproval => super::types::BlockedOn::HumanApproval {
+            gate_name: node.name.clone(),
+            prompt: node.prompt.clone(),
+        },
+        GateType::HumanReview => super::types::BlockedOn::HumanReview {
+            gate_name: node.name.clone(),
+            prompt: node.prompt.clone(),
+        },
+        GateType::PrApproval => super::types::BlockedOn::PrApproval {
+            gate_name: node.name.clone(),
+            approvals_needed: node.min_approvals,
+        },
+        GateType::PrChecks => super::types::BlockedOn::PrChecks {
+            gate_name: node.name.clone(),
+        },
+    };
+    state
+        .wf_mgr
+        .set_blocked_on(&state.workflow_run_id, &blocked_on)?;
+
     // Capture the bot name used for this gate (resolved fresh on each poll to avoid
     // using an expired installation token in long-running gate loops).
     let gate_effective_bot: Option<String> = node

@@ -7,6 +7,30 @@ use crate::workflow_dsl::GateType;
 
 use super::status::{WorkflowRunStatus, WorkflowStepStatus};
 
+/// Describes what a workflow run is currently blocked on when in `Waiting` status.
+///
+/// Uses internally-tagged JSON (`{"type":"human_approval",...}`) for forward-compatibility
+/// with future blocker types and easy consumption by non-Rust consumers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum BlockedOn {
+    HumanApproval {
+        gate_name: String,
+        prompt: Option<String>,
+    },
+    HumanReview {
+        gate_name: String,
+        prompt: Option<String>,
+    },
+    PrApproval {
+        gate_name: String,
+        approvals_needed: u32,
+    },
+    PrChecks {
+        gate_name: String,
+    },
+}
+
 /// A step key is a `(name, iteration)` pair used for skip-set and step-map lookups.
 pub(super) type StepKey = (String, u32);
 
@@ -42,6 +66,8 @@ pub struct WorkflowRun {
     /// Loop iteration number (0-indexed). Used by the TUI to filter
     /// children of a parent run to show only the latest loop iteration.
     pub iteration: i64,
+    /// What the workflow is currently blocked on (only set when status is `Waiting`).
+    pub blocked_on: Option<BlockedOn>,
 }
 
 /// A workflow step execution record from the database.

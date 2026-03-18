@@ -144,6 +144,7 @@ impl<'a> WorkflowManager<'a> {
             target_label: target_label.map(String::from),
             default_bot_name: None,
             iteration: 0,
+            blocked_on: None,
         })
     }
 
@@ -198,9 +199,33 @@ impl<'a> WorkflowManager<'a> {
             None
         };
 
+        // Auto-clear blocked_on when transitioning away from Waiting.
+        if !matches!(status, WorkflowRunStatus::Waiting) {
+            self.conn.execute(
+                "UPDATE workflow_runs SET status = ?1, result_summary = ?2, ended_at = ?3, blocked_on = NULL WHERE id = ?4",
+                params![status, result_summary, ended_at, workflow_run_id],
+            )?;
+        } else {
+            self.conn.execute(
+                "UPDATE workflow_runs SET status = ?1, result_summary = ?2, ended_at = ?3 WHERE id = ?4",
+                params![status, result_summary, ended_at, workflow_run_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Set the `blocked_on` field on a workflow run to describe what the run is waiting on.
+    pub fn set_blocked_on(
+        &self,
+        workflow_run_id: &str,
+        blocked_on: &super::types::BlockedOn,
+    ) -> Result<()> {
+        let json = serde_json::to_string(blocked_on).map_err(|e| {
+            ConductorError::Workflow(format!("Failed to serialize blocked_on: {e}"))
+        })?;
         self.conn.execute(
-            "UPDATE workflow_runs SET status = ?1, result_summary = ?2, ended_at = ?3 WHERE id = ?4",
-            params![status, result_summary, ended_at, workflow_run_id],
+            "UPDATE workflow_runs SET blocked_on = ?1 WHERE id = ?2",
+            params![json, workflow_run_id],
         )?;
         Ok(())
     }
@@ -1479,6 +1504,13 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
     let target_label: Option<String> = row.get(15)?;
     let default_bot_name: Option<String> = row.get(16)?;
     let iteration: i64 = row.get(17)?;
+    let blocked_on_json: Option<String> = row.get(18)?;
+    let blocked_on: Option<super::types::BlockedOn> = blocked_on_json.as_deref().and_then(|s| {
+        serde_json::from_str(s).unwrap_or_else(|e| {
+            tracing::warn!("Malformed blocked_on JSON in workflow run: {e}");
+            None
+        })
+    });
     Ok(WorkflowRun {
         id: row.get(0)?,
         workflow_name: row.get(1)?,
@@ -1498,6 +1530,7 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
         target_label,
         default_bot_name,
         iteration,
+        blocked_on,
     })
 }
 
