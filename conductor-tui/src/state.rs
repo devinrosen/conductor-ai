@@ -1224,9 +1224,10 @@ fn push_children(
         })
         .unwrap_or_default();
 
-    // Collect direct steps (non-sub-workflow steps) from the parent if it's expanded.
-    let show_direct_steps = expanded_step_run_ids.contains(parent_id);
-    let direct_steps: Vec<&conductor_core::workflow::WorkflowRunStep> = if show_direct_steps {
+    // Collect direct steps (non-sub-workflow steps) from the parent.
+    // push_children is only called when the parent is not collapsed, so direct steps
+    // should always be visible alongside child runs — no expanded_step_run_ids gate.
+    let direct_steps: Vec<&conductor_core::workflow::WorkflowRunStep> =
         if let Some(steps) = parent_steps {
             let max_iter = max_iter_by_step_name(steps);
             steps
@@ -1243,10 +1244,7 @@ fn push_children(
                 .collect()
         } else {
             Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
+        };
 
     // Build a merged, position-sorted list of items (children + direct steps).
     enum TreeItem<'a> {
