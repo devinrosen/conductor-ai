@@ -1329,6 +1329,105 @@ mod tests {
         assert_eq!(f.status, FeatureStatus::Active);
     }
 
+    // -----------------------------------------------------------------------
+    // resolve_feature_id_for_run tests (4 code paths)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_feature_id_for_run_none_inputs() {
+        let conn = setup_db();
+        let _repo_id = insert_repo(&conn);
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        // No feature name, no ticket, no worktree → Ok(None)
+        let result = mgr
+            .resolve_feature_id_for_run(None, None, None, None)
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_feature_id_for_run_explicit_name() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .resolve_feature_id_for_run(Some("my-feat"), Some("test-repo"), None, None)
+            .unwrap();
+        assert_eq!(result, Some(feature_id));
+    }
+
+    #[test]
+    fn test_resolve_feature_id_for_run_explicit_name_no_repo_errors() {
+        let conn = setup_db();
+        let _repo_id = insert_repo(&conn);
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        // Feature name without repo context should error
+        let err = mgr
+            .resolve_feature_id_for_run(Some("my-feat"), None, None, None)
+            .unwrap_err();
+        assert!(
+            matches!(err, ConductorError::Workflow(ref msg) if msg.contains("--feature requires a repo context")),
+            "expected Workflow error about repo context, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_feature_id_for_run_via_ticket() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+        let ticket_id = insert_ticket(&conn, &repo_id, "42");
+        conn.execute(
+            "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+            params![feature_id, ticket_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .resolve_feature_id_for_run(None, None, Some(&ticket_id), None)
+            .unwrap();
+        assert_eq!(result, Some(feature_id));
+    }
+
+    #[test]
+    fn test_resolve_feature_id_for_run_via_worktree() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+        let ticket_id = insert_ticket(&conn, &repo_id, "99");
+        conn.execute(
+            "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+            params![feature_id, ticket_id],
+        )
+        .unwrap();
+        // Create a worktree linked to the ticket
+        let wt_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, ticket_id, created_at)
+             VALUES (?1, ?2, 'wt-slug', 'wt-branch', 'main', '/tmp/wt', ?3, '2024-01-01T00:00:00Z')",
+            params![wt_id, repo_id, ticket_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .resolve_feature_id_for_run(None, Some("test-repo"), None, Some("wt-slug"))
+            .unwrap();
+        assert_eq!(result, Some(feature_id));
+    }
+
     #[test]
     fn test_resolve_active_feature_rejects_closed() {
         let conn = setup_db();

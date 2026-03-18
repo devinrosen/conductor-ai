@@ -227,16 +227,14 @@ pub(super) fn tool_run_workflow(
         Err(e) => return tool_err(e),
     };
 
-    // Resolve optional --feature to a feature_id
-    let feature_id: Option<String> = if let Some(feat_name) = feature_arg {
+    // Resolve optional --feature to a feature_id via the unified resolver
+    let feature_id: Option<String> = {
         use conductor_core::feature::FeatureManager;
         let fm = FeatureManager::new(&conn, &config);
-        match fm.resolve_active_feature(repo_slug, feat_name) {
-            Ok(f) => Some(f.id),
+        match fm.resolve_feature_id_for_run(feature_arg, Some(repo_slug), None, worktree_slug) {
+            Ok(id) => id,
             Err(e) => return tool_err(e),
         }
-    } else {
-        None
     };
 
     // Load the workflow definition
