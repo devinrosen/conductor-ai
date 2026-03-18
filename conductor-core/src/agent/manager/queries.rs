@@ -49,22 +49,10 @@ impl<'a> AgentManager<'a> {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
-        // Build "?1, ?2, …" in a single allocation sized up-front.
-        let mut placeholders = String::with_capacity(ids.len() * 4);
-        for i in 1..=ids.len() {
-            if i > 1 {
-                placeholders.push_str(", ");
-            }
-            placeholders.push('?');
-            placeholders.push_str(&i.to_string());
-        }
+        let placeholders: String = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
         let sql = format!("{AGENT_RUN_SELECT} WHERE id IN ({placeholders})");
-        let params: Vec<&dyn rusqlite::types::ToSql> = ids
-            .iter()
-            .map(|id| id as &dyn rusqlite::types::ToSql)
-            .collect();
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(&*params, row_to_agent_run)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), row_to_agent_run)?;
         let mut map = HashMap::new();
         for row in rows {
             let run = row?;
@@ -239,81 +227,55 @@ impl<'a> AgentManager<'a> {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<AgentRun>> {
-        let mut runs = match (worktree_id, repo_id, status) {
-            // 1. worktree_id + status
-            (Some(wt_id), _, Some(s)) => {
-                let status_str = s.to_string();
-                query_collect(
-                    self.conn,
-                    &format!(
-                        "{AGENT_RUN_SELECT} WHERE worktree_id = ?1 AND status = ?2 \
-                         ORDER BY started_at DESC LIMIT {limit} OFFSET {offset}"
-                    ),
-                    params![wt_id, status_str],
-                    row_to_agent_run,
-                )?
-            }
-            // 2. worktree_id only
-            (Some(wt_id), _, None) => query_collect(
-                self.conn,
-                &format!(
-                    "{AGENT_RUN_SELECT} WHERE worktree_id = ?1 \
-                     ORDER BY started_at DESC LIMIT {limit} OFFSET {offset}"
-                ),
-                params![wt_id],
-                row_to_agent_run,
-            )?,
-            // 3. repo_id + status
-            (None, Some(r_id), Some(s)) => {
-                let status_str = s.to_string();
-                query_collect(
-                    self.conn,
-                    &format!(
-                        "SELECT {AGENT_RUN_COLS_AR} FROM agent_runs ar \
-                         JOIN worktrees w ON w.id = ar.worktree_id \
-                         WHERE w.repo_id = ?1 AND ar.status = ?2 \
-                         ORDER BY ar.started_at DESC LIMIT {limit} OFFSET {offset}"
-                    ),
-                    params![r_id, status_str],
-                    row_to_agent_run,
-                )?
-            }
-            // 4. repo_id only
-            (None, Some(r_id), None) => query_collect(
-                self.conn,
-                &format!(
-                    "SELECT {AGENT_RUN_COLS_AR} FROM agent_runs ar \
-                     JOIN worktrees w ON w.id = ar.worktree_id \
-                     WHERE w.repo_id = ?1 \
-                     ORDER BY ar.started_at DESC LIMIT {limit} OFFSET {offset}"
-                ),
-                params![r_id],
-                row_to_agent_run,
-            )?,
-            // 5. status only
-            (None, None, Some(s)) => {
-                let status_str = s.to_string();
-                query_collect(
-                    self.conn,
-                    &format!(
-                        "{AGENT_RUN_SELECT} WHERE status = ?1 \
-                         ORDER BY started_at DESC LIMIT {limit} OFFSET {offset}"
-                    ),
-                    params![status_str],
-                    row_to_agent_run,
-                )?
-            }
-            // 6. no filter
-            (None, None, None) => query_collect(
-                self.conn,
-                &format!(
-                    "{AGENT_RUN_SELECT} \
-                     ORDER BY started_at DESC LIMIT {limit} OFFSET {offset}"
-                ),
-                params![],
-                row_to_agent_run,
-            )?,
+        // repo_id filter requires a JOIN; worktree_id/status use the plain SELECT.
+        let use_join = repo_id.is_some();
+        let sql_base = if use_join {
+            format!(
+                "SELECT {AGENT_RUN_COLS_AR} FROM agent_runs ar \
+                 JOIN worktrees w ON w.id = ar.worktree_id"
+            )
+        } else {
+            AGENT_RUN_SELECT.to_string()
         };
+
+        // Accumulate WHERE conditions and parameter values in lock-step.
+        let mut where_parts: Vec<String> = Vec::new();
+        let mut param_values: Vec<String> = Vec::new();
+
+        if let Some(wt_id) = worktree_id {
+            param_values.push(wt_id.to_owned());
+            where_parts.push("worktree_id = ?".to_string());
+        } else if let Some(r_id) = repo_id {
+            param_values.push(r_id.to_owned());
+            where_parts.push("w.repo_id = ?".to_string());
+        }
+
+        if let Some(s) = status {
+            param_values.push(s.to_string());
+            let col = if use_join { "ar.status" } else { "status" };
+            where_parts.push(format!("{col} = ?"));
+        }
+
+        let where_clause = if where_parts.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", where_parts.join(" AND "))
+        };
+        let order_col = if use_join {
+            "ar.started_at"
+        } else {
+            "started_at"
+        };
+
+        let sql = format!(
+            "{sql_base}{where_clause} ORDER BY {order_col} DESC LIMIT {limit} OFFSET {offset}"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(param_values.iter()),
+            row_to_agent_run,
+        )?;
+        let mut runs: Vec<AgentRun> = rows.collect::<rusqlite::Result<_>>()?;
         self.populate_plans(&mut runs)?;
         Ok(runs)
     }
