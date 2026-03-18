@@ -3,7 +3,7 @@ pub mod events;
 pub mod issue_sources;
 pub mod repos;
 pub mod tickets;
-pub mod work_targets;
+pub mod model_config;
 pub mod workflows;
 pub mod worktrees;
 
@@ -163,17 +163,17 @@ pub fn api_router() -> Router<AppState> {
             "/api/repos/{id}/sources/{source_id}",
             delete(issue_sources::delete_issue_source),
         )
-        // Work Targets
+        // Model Config
         .route(
             "/api/config/model",
-            get(work_targets::get_global_model).patch(work_targets::patch_global_model),
+            get(model_config::get_global_model).patch(model_config::patch_global_model),
         )
         .route(
             "/api/config/known-models",
-            get(work_targets::list_known_models),
+            get(model_config::list_known_models),
         )
         .route(
             "/api/config/suggest-model",
-            post(work_targets::suggest_model),
+            post(model_config::suggest_model),
         )
 }
