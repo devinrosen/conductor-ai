@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use conductor_core::agent::{AgentRun, AgentRunEvent, FeedbackRequest, TicketAgentTotals};
+use conductor_core::feature::FeatureRow;
 use conductor_core::github::DiscoveredRepo;
 use conductor_core::repo::Repo;
 use conductor_core::tickets::{Ticket, TicketLabel};
@@ -61,6 +62,8 @@ pub struct DataRefreshedPayload {
     /// Live turn count for currently running agents, keyed by worktree_id.
     /// Computed in the background poller to avoid blocking the main thread.
     pub live_turns_by_worktree: HashMap<String, i64>,
+    /// Active features per repo (repo_id → active FeatureRows).
+    pub features_by_repo: HashMap<String, Vec<FeatureRow>>,
 }
 
 /// Every user intent or background result flows through this enum.
@@ -321,6 +324,15 @@ pub enum Action {
     GateInputChar(char),
     GateInputBackspace,
     WorkflowDataRefreshed(Box<WorkflowDataPayload>),
+
+    // Feature actions (dashboard feature header rows)
+    #[allow(dead_code)]
+    ToggleFeatureCollapse,
+    FeatureDetail,
+    #[allow(dead_code)]
+    FeaturePrComplete {
+        result: Result<String, String>,
+    },
 
     // Timer tick — also triggers workflow data refresh on workflow views
     Tick,

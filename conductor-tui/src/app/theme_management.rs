@@ -217,6 +217,9 @@ impl App {
                             },
                         };
                     }
+                    Some(DashboardRow::Feature { .. }) => {
+                        // Features don't have a model setting — no-op.
+                    }
                     None => (),
                 }
             }

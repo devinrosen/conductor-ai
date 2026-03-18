@@ -47,6 +47,7 @@ use conductor_core::workflow::{
 
 use crate::theme::Theme;
 
+use conductor_core::feature::FeatureRow;
 use conductor_core::worktree::Worktree;
 use ratatui::widgets::ListState;
 use tui_textarea::TextArea;
@@ -60,11 +61,14 @@ pub enum View {
     WorkflowDefDetail,
 }
 
-/// A row in the unified dashboard list — either a repo header or a worktree entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A row in the unified dashboard list — repo header, feature header, or worktree entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DashboardRow {
     /// Index into `AppState::data.repos`.
     Repo(usize),
+    /// A feature header row. `repo_idx` indexes `data.repos`, `feature_idx` indexes
+    /// `data.features_by_repo[&repo.id]`.
+    Feature { repo_idx: usize, feature_idx: usize },
     /// Index into `AppState::data.worktrees`.
     Worktree(usize),
 }
@@ -816,6 +820,9 @@ pub struct DataCache {
     /// Live turn counts for running agents, keyed by worktree_id.
     /// Populated by the background poller each tick.
     pub live_turns_by_worktree: HashMap<String, i64>,
+    /// Active features per repo (repo_id → active FeatureRows).
+    /// Populated by the background poller each tick.
+    pub features_by_repo: HashMap<String, Vec<FeatureRow>>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.
@@ -1013,6 +1020,8 @@ pub struct AppState {
     pub selected_workflow_run_id: Option<String>,
     /// Set of parent workflow run IDs that are currently collapsed in the runs pane.
     pub collapsed_workflow_run_ids: HashSet<String>,
+    /// Set of feature IDs that are currently collapsed in the dashboard view.
+    pub collapsed_features: HashSet<String>,
     /// Set of repo slugs whose group header is collapsed in global mode.
     pub collapsed_repo_headers: HashSet<String>,
     /// Set of composite `"repo_slug/target_key"` strings whose target header is collapsed in global mode.
@@ -1401,6 +1410,7 @@ impl AppState {
             step_agent_event_index: 0,
             selected_workflow_run_id: None,
             collapsed_workflow_run_ids: HashSet::new(),
+            collapsed_features: HashSet::new(),
             collapsed_repo_headers: HashSet::new(),
             collapsed_target_headers: HashSet::new(),
             collapse_initialized: HashSet::new(),
@@ -1911,13 +1921,52 @@ impl AppState {
     }
 
     /// Ordered list of rows for the unified dashboard panel.
-    /// Each repo appears first, followed immediately by its worktrees.
+    /// Each repo appears first, then feature groups with their child worktrees,
+    /// then ungrouped worktrees.
     pub fn dashboard_rows(&self) -> Vec<DashboardRow> {
         let mut rows = Vec::new();
         for (repo_idx, repo) in self.data.repos.iter().enumerate() {
             rows.push(DashboardRow::Repo(repo_idx));
+
+            let empty_features = Vec::new();
+            let features = self
+                .data
+                .features_by_repo
+                .get(&repo.id)
+                .unwrap_or(&empty_features);
+
+            // Track which worktrees are grouped under a feature
+            let mut grouped_wt_indices: HashSet<usize> = HashSet::new();
+
+            for (fi, feature) in features.iter().enumerate() {
+                rows.push(DashboardRow::Feature {
+                    repo_idx,
+                    feature_idx: fi,
+                });
+                if !self.collapsed_features.contains(&feature.id) {
+                    for (wt_idx, wt) in self.data.worktrees.iter().enumerate() {
+                        if wt.repo_id == repo.id
+                            && wt.base_branch.as_deref() == Some(feature.branch.as_str())
+                        {
+                            rows.push(DashboardRow::Worktree(wt_idx));
+                            grouped_wt_indices.insert(wt_idx);
+                        }
+                    }
+                } else {
+                    // Still track grouped worktrees even when collapsed
+                    for (wt_idx, wt) in self.data.worktrees.iter().enumerate() {
+                        if wt.repo_id == repo.id
+                            && wt.base_branch.as_deref() == Some(feature.branch.as_str())
+                        {
+                            grouped_wt_indices.insert(wt_idx);
+                        }
+                    }
+                }
+            }
+
+            // Ungrouped worktrees (not under any feature)
             for (wt_idx, wt) in self.data.worktrees.iter().enumerate() {
-                if wt.repo_id == repo.id {
+                if wt.repo_id == repo.id && !grouped_wt_indices.contains(&wt_idx) {
                     rows.push(DashboardRow::Worktree(wt_idx));
                 }
             }
@@ -1926,10 +1975,11 @@ impl AppState {
     }
 
     /// Get the currently selected repo, if any.
-    /// When the cursor is on a worktree row, returns that worktree's owning repo.
+    /// When the cursor is on a worktree or feature row, returns that item's owning repo.
     pub fn selected_repo(&self) -> Option<&Repo> {
         match self.dashboard_rows().get(self.dashboard_index)? {
             DashboardRow::Repo(idx) => self.data.repos.get(*idx),
+            DashboardRow::Feature { repo_idx, .. } => self.data.repos.get(*repo_idx),
             DashboardRow::Worktree(idx) => {
                 let wt = self.data.worktrees.get(*idx)?;
                 self.data.repos.iter().find(|r| r.id == wt.repo_id)

@@ -699,6 +699,88 @@ impl App {
                 }
             }
 
+            // Feature actions
+            Action::ToggleFeatureCollapse => {
+                let rows = self.state.dashboard_rows();
+                if let Some(crate::state::DashboardRow::Feature {
+                    repo_idx,
+                    feature_idx,
+                }) = rows.get(self.state.dashboard_index)
+                {
+                    if let Some(repo) = self.state.data.repos.get(*repo_idx) {
+                        if let Some(features) = self.state.data.features_by_repo.get(&repo.id) {
+                            if let Some(feature) = features.get(*feature_idx) {
+                                let fid = feature.id.clone();
+                                if !self.state.collapsed_features.remove(&fid) {
+                                    self.state.collapsed_features.insert(fid);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Action::FeatureDetail => {
+                let rows = self.state.dashboard_rows();
+                if let Some(crate::state::DashboardRow::Feature {
+                    repo_idx,
+                    feature_idx,
+                }) = rows.get(self.state.dashboard_index)
+                {
+                    if let Some(repo) = self.state.data.repos.get(*repo_idx) {
+                        if let Some(features) = self.state.data.features_by_repo.get(&repo.id) {
+                            if let Some(feature) = features.get(*feature_idx) {
+                                // Count child worktrees and merged status
+                                let child_wts: Vec<_> = self
+                                    .state
+                                    .data
+                                    .worktrees
+                                    .iter()
+                                    .filter(|wt| {
+                                        wt.repo_id == repo.id
+                                            && wt.base_branch.as_deref()
+                                                == Some(feature.branch.as_str())
+                                    })
+                                    .collect();
+                                let merged = child_wts
+                                    .iter()
+                                    .filter(|wt| matches!(wt.status, conductor_core::worktree::WorktreeStatus::Merged | conductor_core::worktree::WorktreeStatus::Abandoned))
+                                    .count();
+                                let total = child_wts.len();
+
+                                let body = format!(
+                                    "Name:        {}\n\
+                                     Branch:      {}\n\
+                                     Base:        {}\n\
+                                     Status:      {:?}\n\
+                                     Worktrees:   {total} ({merged} merged)\n\
+                                     Tickets:     {}",
+                                    feature.name,
+                                    feature.branch,
+                                    feature.base_branch,
+                                    feature.status,
+                                    feature.ticket_count
+                                );
+                                let line_count = body.lines().count();
+                                self.state.modal = Modal::EventDetail {
+                                    title: format!("Feature: {}", feature.name),
+                                    body,
+                                    line_count,
+                                    scroll_offset: 0,
+                                    horizontal_offset: 0,
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+            Action::FeaturePrComplete { result } => {
+                self.state.modal = Modal::None;
+                match result {
+                    Ok(msg) => self.state.status_message = Some(msg),
+                    Err(e) => self.state.modal = Modal::Error { message: e },
+                }
+            }
+
             // Background results
             Action::PrsRefreshed { repo_id, mut prs } => {
                 if self.state.selected_repo_id.as_deref() == Some(&repo_id) {
@@ -731,6 +813,7 @@ impl App {
                 self.state.data.active_non_worktree_workflow_runs =
                     payload.active_non_worktree_workflow_runs;
                 self.state.data.live_turns_by_worktree = payload.live_turns_by_worktree;
+                self.state.data.features_by_repo = payload.features_by_repo;
                 self.refresh_pending_feedback();
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();
@@ -1442,6 +1525,7 @@ mod action_handler_tests {
                 pending_feedback_requests: vec![],
                 waiting_gate_steps: vec![],
                 live_turns_by_worktree: std::collections::HashMap::new(),
+                features_by_repo: std::collections::HashMap::new(),
             },
         )));
 

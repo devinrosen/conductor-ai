@@ -265,6 +265,16 @@ impl App {
                     };
                     self.repo_picker_target(&repo)
                 }
+                Some(DashboardRow::Feature { repo_idx, .. }) => {
+                    let repo = match self.state.data.repos.get(*repo_idx) {
+                        Some(r) => r.clone(),
+                        None => {
+                            self.state.status_message = Some("No repo selected".to_string());
+                            return;
+                        }
+                    };
+                    self.repo_picker_target(&repo)
+                }
                 Some(&DashboardRow::Worktree(wt_idx)) => {
                     let wt = match self.state.data.worktrees.get(wt_idx) {
                         Some(w) => w.clone(),

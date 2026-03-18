@@ -6,6 +6,7 @@ use conductor_core::agent::AgentManager;
 use conductor_core::config::{db_path, load_config};
 use conductor_core::db::open_database;
 use conductor_core::error::ConductorError;
+use conductor_core::feature::FeatureManager;
 use conductor_core::github;
 use conductor_core::github_app;
 use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
@@ -325,6 +326,17 @@ pub fn poll_data() -> Option<PollResult> {
     // Return an empty map here; the loop merges in the incremental state.
     let live_turns_by_worktree = std::collections::HashMap::new();
 
+    // Load active features per repo for dashboard grouping.
+    let feat_mgr = FeatureManager::new(&conn, &config);
+    let mut features_by_repo = std::collections::HashMap::new();
+    for repo in &repos {
+        if let Ok(features) = feat_mgr.list_active(&repo.slug) {
+            if !features.is_empty() {
+                features_by_repo.insert(repo.id.clone(), features);
+            }
+        }
+    }
+
     let action = Action::DataRefreshed(Box::new(DataRefreshedPayload {
         repos,
         worktrees,
@@ -338,6 +350,7 @@ pub fn poll_data() -> Option<PollResult> {
         pending_feedback_requests,
         waiting_gate_steps,
         live_turns_by_worktree,
+        features_by_repo,
     }));
     Some(PollResult {
         action,

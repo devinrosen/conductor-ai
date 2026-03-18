@@ -44,13 +44,75 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                     ),
                 ]))
             }
-            DashboardRow::Worktree(idx) => super::common::worktree_list_item_with_prefix(
-                &state.data.worktrees[*idx],
-                state,
-                None,
-                false,
-                "  \u{2514} ",
-            ),
+            DashboardRow::Feature {
+                repo_idx,
+                feature_idx,
+            } => {
+                let repo = &state.data.repos[*repo_idx];
+                let empty = Vec::new();
+                let features = state.data.features_by_repo.get(&repo.id).unwrap_or(&empty);
+                let feature = &features[*feature_idx];
+                let collapsed = state.collapsed_features.contains(&feature.id);
+
+                // Count child worktrees and how many are merged
+                let child_wts: Vec<_> = state
+                    .data
+                    .worktrees
+                    .iter()
+                    .filter(|wt| {
+                        wt.repo_id == repo.id
+                            && wt.base_branch.as_deref() == Some(feature.branch.as_str())
+                    })
+                    .collect();
+                let merged = child_wts
+                    .iter()
+                    .filter(|wt| {
+                        matches!(
+                            wt.status,
+                            conductor_core::worktree::WorktreeStatus::Merged
+                                | conductor_core::worktree::WorktreeStatus::Abandoned
+                        )
+                    })
+                    .count();
+                let total = child_wts.len();
+
+                let arrow = if collapsed { "▸" } else { "▾" };
+                let progress = format!(" ({merged}/{total} merged)");
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("  {arrow} "),
+                        Style::default().fg(state.theme.label_secondary),
+                    ),
+                    Span::styled(
+                        feature.name.clone(),
+                        Style::default()
+                            .fg(state.theme.status_running)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(progress, Style::default().fg(state.theme.label_secondary)),
+                ]))
+            }
+            DashboardRow::Worktree(idx) => {
+                let wt = &state.data.worktrees[*idx];
+                // Check if this worktree is under a feature (deeper indent with tree line)
+                let is_under_feature = state
+                    .data
+                    .features_by_repo
+                    .get(&wt.repo_id)
+                    .map(|features| {
+                        features
+                            .iter()
+                            .any(|f| wt.base_branch.as_deref() == Some(f.branch.as_str()))
+                    })
+                    .unwrap_or(false);
+                let prefix = if is_under_feature {
+                    "    \u{2514} "
+                } else {
+                    "  \u{2514} "
+                };
+                super::common::worktree_list_item_with_prefix(wt, state, None, false, prefix)
+            }
         })
         .collect();
 
