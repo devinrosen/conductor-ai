@@ -724,4 +724,57 @@ mod tests {
             "bot_name should round-trip through the DB unchanged"
         );
     }
+
+    #[test]
+    fn test_latest_run_for_worktree_excludes_child_runs() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a top-level parent run
+        let parent = mgr
+            .create_run(Some("w1"), "Parent task", None, None)
+            .unwrap();
+
+        // Create a child run on the same worktree (simulates a sub-agent)
+        let child = mgr
+            .create_child_run(Some("w1"), "Child task", None, None, &parent.id, None)
+            .unwrap();
+
+        // latest_run_for_worktree should return only the parent (top-level) run,
+        // not the child, because it filters with `parent_run_id IS NULL`.
+        let latest = mgr.latest_run_for_worktree("w1").unwrap().unwrap();
+        assert_eq!(
+            latest.id, parent.id,
+            "should return the top-level run, not the child run"
+        );
+        assert_ne!(
+            latest.id, child.id,
+            "child run must be excluded by the parent_run_id IS NULL filter"
+        );
+    }
+
+    #[test]
+    fn test_latest_run_for_worktree_returns_newest_top_level() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create two top-level runs for the same worktree
+        let _older = mgr
+            .create_run(Some("w1"), "Older task", None, None)
+            .unwrap();
+        let newer = mgr
+            .create_run(Some("w1"), "Newer task", None, None)
+            .unwrap();
+
+        // Also create a child of the newer run
+        let _child = mgr
+            .create_child_run(Some("w1"), "Child of newer", None, None, &newer.id, None)
+            .unwrap();
+
+        let latest = mgr.latest_run_for_worktree("w1").unwrap().unwrap();
+        assert_eq!(
+            latest.id, newer.id,
+            "should return the newest top-level run"
+        );
+    }
 }
