@@ -4097,10 +4097,10 @@ pub(crate) mod tests {
         let mut state = AppState::new();
         let repo = make_repo("r1", "my-repo");
         state.data.repos = vec![repo];
-        state.data.features_by_repo.insert(
-            "r1".into(),
-            vec![make_feature_row("f1", "feat/thing")],
-        );
+        state
+            .data
+            .features_by_repo
+            .insert("r1".into(), vec![make_feature_row("f1", "feat/thing")]);
         // Build dashboard rows and select the feature row
         let rows = state.dashboard_rows();
         let feature_pos = rows
