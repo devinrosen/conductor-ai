@@ -11,18 +11,33 @@ pub(crate) fn git_in(dir: impl AsRef<std::path::Path>) -> Command {
 
 /// Run `cmd`, returning its `Output` on success or a `ConductorError::Git` on non-zero exit.
 pub(crate) fn check_output(cmd: &mut Command) -> Result<std::process::Output> {
+    run_command(cmd, ConductorError::Git)
+}
+
+/// Run `cmd`, returning its `Output` on success or a `ConductorError::GhCli` on non-zero exit.
+pub(crate) fn check_gh_output(cmd: &mut Command) -> Result<std::process::Output> {
+    run_command(cmd, ConductorError::GhCli)
+}
+
+/// Shared implementation: run a command and map failures using the given error constructor.
+fn run_command(
+    cmd: &mut Command,
+    make_err: fn(String) -> ConductorError,
+) -> Result<std::process::Output> {
     let program = cmd.get_program().to_string_lossy().to_string();
     let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into()).collect();
-    let output = cmd.output().map_err(|e| {
-        ConductorError::Git(format!(
-            "failed to spawn `{program} {}`: {e}",
-            args.join(" ")
-        ))
-    })?;
+    let cmd_str = format!("`{program} {}`", args.join(" "));
+    let output = cmd
+        .output()
+        .map_err(|e| make_err(format!("failed to spawn {cmd_str}: {e}")))?;
     if !output.status.success() {
-        return Err(ConductorError::Git(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let detail = if stderr.is_empty() {
+            format!("{cmd_str} exited with {}", output.status)
+        } else {
+            format!("{cmd_str} failed: {stderr}")
+        };
+        return Err(make_err(detail));
     }
     Ok(output)
 }
@@ -64,4 +79,64 @@ pub(crate) fn is_branch_merged_remote(repo_path: &str, branch: &str, base: &str)
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::ConductorError;
+
+    #[test]
+    fn check_output_success() {
+        let output = check_output(Command::new("echo").arg("hello")).unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("hello"));
+    }
+
+    #[test]
+    fn check_output_nonzero_exit_returns_git_error() {
+        let err =
+            check_output(Command::new("sh").args(["-c", "echo oops >&2; exit 1"])).unwrap_err();
+        assert!(
+            matches!(&err, ConductorError::Git(msg) if msg.contains("oops")),
+            "expected Git variant with stderr, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_gh_output_nonzero_exit_returns_ghcli_error() {
+        let err =
+            check_gh_output(Command::new("sh").args(["-c", "echo bad >&2; exit 1"])).unwrap_err();
+        assert!(
+            matches!(&err, ConductorError::GhCli(msg) if msg.contains("bad")),
+            "expected GhCli variant with stderr, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_gh_output_empty_stderr_includes_exit_status() {
+        let err = check_gh_output(Command::new("sh").args(["-c", "exit 42"])).unwrap_err();
+        assert!(
+            matches!(&err, ConductorError::GhCli(msg) if msg.contains("exited with")),
+            "expected GhCli variant with exit status, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_gh_output_spawn_failure_returns_ghcli_error() {
+        let err = check_gh_output(&mut Command::new("__nonexistent_binary_xyz__")).unwrap_err();
+        assert!(
+            matches!(&err, ConductorError::GhCli(msg) if msg.contains("failed to spawn")),
+            "expected GhCli variant for spawn failure, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn check_output_spawn_failure_returns_git_error() {
+        let err = check_output(&mut Command::new("__nonexistent_binary_xyz__")).unwrap_err();
+        assert!(
+            matches!(&err, ConductorError::Git(msg) if msg.contains("failed to spawn")),
+            "expected Git variant for spawn failure, got: {err:?}"
+        );
+    }
 }

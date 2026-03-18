@@ -8,7 +8,7 @@ use std::process::Command;
 use crate::config::Config;
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
-use crate::git::{check_output, git_in};
+use crate::git::{check_gh_output, check_output, git_in};
 use crate::repo::RepoManager;
 
 /// Typed representation of the three worktree lifecycle states stored in the DB.
@@ -538,7 +538,7 @@ impl<'a> WorktreeManager<'a> {
             args.push("--draft");
         }
 
-        let output = check_output(Command::new("gh").args(&args).current_dir(&worktree.path))?;
+        let output = check_gh_output(Command::new("gh").args(&args).current_dir(&worktree.path))?;
 
         let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(url)
@@ -890,7 +890,7 @@ fn parse_pr_view_output(raw: &str) -> Result<(String, String, String, bool)> {
     let raw = raw.trim();
     let parts: Vec<&str> = raw.splitn(4, '|').collect();
     if parts.len() < 4 {
-        return Err(ConductorError::Git(format!(
+        return Err(ConductorError::GhCli(format!(
             "unexpected gh pr view output: {raw}"
         )));
     }
@@ -909,25 +909,19 @@ fn parse_pr_view_output(raw: &str) -> Result<(String, String, String, bool)> {
 /// branch is fetched from there.
 fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String, String)> {
     // 1. Resolve the PR's head branch name, base branch, and repository info
-    let output = Command::new("gh")
-        .args([
-            "pr",
-            "view",
-            &pr_number.to_string(),
-            "--json",
-            "headRefName,baseRefName,headRepository,isCrossRepository",
-            "--jq",
-            ".headRefName + \"|\" + .baseRefName + \"|\" + .headRepository.owner.login + \"/\" + .headRepository.name + \"|\" + (.isCrossRepository | tostring)",
-        ])
-        .current_dir(repo_path)
-        .output()?;
-
-    if !output.status.success() {
-        return Err(ConductorError::Git(format!(
-            "gh pr view #{pr_number} failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
+    let output = check_gh_output(
+        Command::new("gh")
+            .args([
+                "pr",
+                "view",
+                &pr_number.to_string(),
+                "--json",
+                "headRefName,baseRefName,headRepository,isCrossRepository",
+                "--jq",
+                ".headRefName + \"|\" + .baseRefName + \"|\" + .headRepository.owner.login + \"/\" + .headRepository.name + \"|\" + (.isCrossRepository | tostring)",
+            ])
+            .current_dir(repo_path),
+    )?;
 
     let raw = String::from_utf8_lossy(&output.stdout);
     let (head_branch, base_branch, head_repo, is_fork) = parse_pr_view_output(&raw)?;
@@ -938,17 +932,11 @@ fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String, String)> 
         let fork_owner = head_repo.split('/').next().unwrap_or(&head_repo);
 
         // Look up the fork's clone URL via gh api
-        let url_output = Command::new("gh")
-            .args(["api", &format!("repos/{head_repo}"), "--jq", ".clone_url"])
-            .current_dir(repo_path)
-            .output()?;
-
-        if !url_output.status.success() {
-            return Err(ConductorError::Git(format!(
-                "Could not get clone URL for fork {head_repo}: {}",
-                String::from_utf8_lossy(&url_output.stderr).trim()
-            )));
-        }
+        let url_output = check_gh_output(
+            Command::new("gh")
+                .args(["api", &format!("repos/{head_repo}"), "--jq", ".clone_url"])
+                .current_dir(repo_path),
+        )?;
 
         let fork_url = String::from_utf8_lossy(&url_output.stdout)
             .trim()
@@ -1719,11 +1707,12 @@ mod tests {
     fn test_parse_pr_view_output_bad_format() {
         let raw = "incomplete|data";
         let result = parse_pr_view_output(raw);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("unexpected gh pr view output"));
+        let err = result.unwrap_err();
+        assert!(
+            matches!(&err, crate::error::ConductorError::GhCli(_)),
+            "expected GhCli variant, got: {err:?}"
+        );
+        assert!(err.to_string().contains("unexpected gh pr view output"));
     }
 
     #[test]
@@ -1738,7 +1727,11 @@ mod tests {
         // This exercises the error path of fetch_pr_branch.
         let (_tmp, _, local) = setup_repo_with_remote();
         let result = fetch_pr_branch(local.to_str().unwrap(), 999);
-        assert!(result.is_err(), "expected error for non-GitHub repo");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, ConductorError::GhCli(_)),
+            "expected GhCli error, got: {err:?}"
+        );
     }
 
     #[test]
@@ -1764,9 +1757,10 @@ mod tests {
         let mgr = WorktreeManager::new(&conn, &config);
         let result = mgr.create("test-repo", "from-pr-test", None, None, Some(42));
         // fetch_pr_branch will fail because the local repo has no GitHub remote
+        let err = result.unwrap_err();
         assert!(
-            result.is_err(),
-            "expected error when gh pr view is unavailable"
+            matches!(err, ConductorError::GhCli(_)),
+            "expected GhCli error, got: {err:?}"
         );
     }
 
