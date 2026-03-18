@@ -777,4 +777,36 @@ mod tests {
             "should return the newest top-level run"
         );
     }
+
+    #[test]
+    fn test_latest_run_for_worktree_empty() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let result = mgr.latest_run_for_worktree("w1").unwrap();
+        assert!(result.is_none(), "empty worktree should return None");
+    }
+
+    #[test]
+    fn test_latest_run_for_worktree_only_child_runs_returns_none() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a parent run on w1
+        let parent = mgr
+            .create_run(Some("w1"), "Parent task", None, None)
+            .unwrap();
+
+        // Create a child run on w2, parented to the w1 run
+        let _child = mgr
+            .create_child_run(Some("w2"), "Child task", None, None, &parent.id, None)
+            .unwrap();
+
+        // w2 only has a child run — parent_run_id IS NULL filter should exclude it
+        let result = mgr.latest_run_for_worktree("w2").unwrap();
+        assert!(
+            result.is_none(),
+            "worktree with only child runs should return None"
+        );
+    }
 }
