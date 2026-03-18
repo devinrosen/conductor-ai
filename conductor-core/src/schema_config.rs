@@ -59,8 +59,12 @@ pub enum FieldType {
     Boolean,
     /// Enum with allowed values.
     Enum(Vec<String>),
-    /// Array of items defined by sub-fields.
+    /// Array of items defined by sub-fields or a scalar type.
     Array {
+        /// Scalar element type (e.g. `string`, `number`). Set when `items` is a
+        /// bare type string rather than an object map.
+        item_type: Option<Box<FieldType>>,
+        /// Object-shaped sub-fields for each array element.
         items: Vec<FieldDef>,
     },
     /// Nested object with named fields.
@@ -92,14 +96,25 @@ enum RawFieldDef {
     Object(RawFieldObject),
 }
 
+/// Array `items` can be either a scalar type string (`items: string`) or an
+/// object map of named sub-fields (existing behaviour).
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawArrayItems {
+    /// Scalar type string, e.g. `"string"`, `"number"`, `"enum(a,b)"`.
+    Scalar(String),
+    /// Object map of named sub-fields.
+    Object(HashMap<String, RawFieldDef>),
+}
+
 #[derive(Debug, Deserialize)]
 struct RawFieldObject {
     #[serde(rename = "type")]
     field_type: Option<String>,
     desc: Option<String>,
     examples: Option<Vec<String>>,
-    /// Sub-fields for `array` items.
-    items: Option<HashMap<String, RawFieldDef>>,
+    /// Sub-fields (or scalar type) for `array` items.
+    items: Option<RawArrayItems>,
     /// Sub-fields for `object` type.
     fields: Option<HashMap<String, RawFieldDef>>,
 }
@@ -317,14 +332,23 @@ fn parse_single_field(name: &str, required: bool, raw: &RawFieldDef) -> Result<F
         RawFieldDef::Object(obj) => {
             let type_str = obj.field_type.as_deref().unwrap_or("object");
             let field_type = match type_str {
-                "array" => {
-                    let items = if let Some(ref items_map) = obj.items {
-                        parse_raw_fields(items_map)?
-                    } else {
-                        Vec::new()
-                    };
-                    FieldType::Array { items }
-                }
+                "array" => match &obj.items {
+                    Some(RawArrayItems::Scalar(type_str)) => {
+                        let scalar = parse_type_str(type_str)?;
+                        FieldType::Array {
+                            item_type: Some(Box::new(scalar)),
+                            items: Vec::new(),
+                        }
+                    }
+                    Some(RawArrayItems::Object(items_map)) => FieldType::Array {
+                        item_type: None,
+                        items: parse_raw_fields(items_map)?,
+                    },
+                    None => FieldType::Array {
+                        item_type: None,
+                        items: Vec::new(),
+                    },
+                },
                 "object" => {
                     let sub_fields = if let Some(ref fields_map) = obj.fields {
                         parse_raw_fields(fields_map)?
@@ -355,7 +379,10 @@ fn parse_type_str(s: &str) -> Result<FieldType> {
     } else if s == "boolean" {
         Ok(FieldType::Boolean)
     } else if s == "array" {
-        Ok(FieldType::Array { items: Vec::new() })
+        Ok(FieldType::Array {
+            item_type: None,
+            items: Vec::new(),
+        })
     } else if s == "object" {
         Ok(FieldType::Object { fields: Vec::new() })
     } else if let Some(inner) = s.strip_prefix("enum(").and_then(|s| s.strip_suffix(')')) {
@@ -434,8 +461,24 @@ fn generate_field_example_value(field: &FieldDef, indent: usize) -> String {
             let joined = variants.join("|");
             format!("\"{joined}\"")
         }
-        FieldType::Array { items } if items.is_empty() => "[]".to_string(),
-        FieldType::Array { items } => {
+        FieldType::Array {
+            item_type: Some(ft),
+            ..
+        } => {
+            let example = match ft.as_ref() {
+                FieldType::String => "\"...\", \"...\"",
+                FieldType::Number => "0, 0",
+                FieldType::Boolean => "true, false",
+                FieldType::Enum(variants) => {
+                    let joined = variants.join("|");
+                    return format!("[\"{joined}\"]");
+                }
+                _ => return "[]".to_string(),
+            };
+            format!("[{example}]")
+        }
+        FieldType::Array { items, .. } if items.is_empty() => "[]".to_string(),
+        FieldType::Array { items, .. } => {
             let item_json = generate_json_example(items, indent + 1);
             format!("[\n{item_json}\n{inner_pad}]")
         }
@@ -456,7 +499,56 @@ fn generate_field_hints(fields: &[FieldDef], prefix: &str) -> String {
         let optional_tag = if !field.required { " (optional)" } else { "" };
 
         match &field.field_type {
-            FieldType::Array { items } if !items.is_empty() => {
+            FieldType::Array {
+                item_type: Some(ft),
+                ..
+            } => {
+                let type_label = match ft.as_ref() {
+                    FieldType::String => "string",
+                    FieldType::Number => "number",
+                    FieldType::Boolean => "boolean",
+                    FieldType::Enum(v) => {
+                        let joined = v.join(", ");
+                        let label = format!("enum({joined})");
+                        if let Some(ref desc) = field.desc {
+                            hints.push(format!(
+                                "\"{full_name}\"{optional_tag}: {desc} (array of {label})"
+                            ));
+                        } else {
+                            hints.push(format!("\"{full_name}\"{optional_tag}: array of {label}"));
+                        }
+                        // Early continue — we already pushed the hint
+                        if let Some(ref examples) = field.examples {
+                            let examples_str = examples
+                                .iter()
+                                .map(|e| format!("\"{e}\""))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            hints.push(format!("  examples: [{examples_str}]"));
+                        }
+                        continue;
+                    }
+                    _ => "unknown",
+                };
+                if let Some(ref desc) = field.desc {
+                    hints.push(format!(
+                        "\"{full_name}\"{optional_tag}: {desc} (array of {type_label})"
+                    ));
+                } else {
+                    hints.push(format!(
+                        "\"{full_name}\"{optional_tag}: array of {type_label}"
+                    ));
+                }
+                if let Some(ref examples) = field.examples {
+                    let examples_str = examples
+                        .iter()
+                        .map(|e| format!("\"{e}\""))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    hints.push(format!("  examples: [{examples_str}]"));
+                }
+            }
+            FieldType::Array { items, .. } if !items.is_empty() => {
                 if let Some(ref desc) = field.desc {
                     hints.push(format!("\"{full_name}\"{optional_tag}: {desc}"));
                 }
@@ -717,7 +809,7 @@ fn validate_field_value(value: &serde_json::Value, field: &FieldDef) -> Result<(
                 )));
             }
         }
-        FieldType::Array { items } => {
+        FieldType::Array { item_type, items } => {
             let arr = value.as_array().ok_or_else(|| {
                 ConductorError::Schema(format!(
                     "Field '{}' expected array, got {}",
@@ -725,7 +817,19 @@ fn validate_field_value(value: &serde_json::Value, field: &FieldDef) -> Result<(
                     json_type_name(value)
                 ))
             })?;
-            if !items.is_empty() {
+            if let Some(ft) = item_type {
+                // Scalar-typed array: validate each element against the scalar type
+                for (i, elem) in arr.iter().enumerate() {
+                    let synthetic = FieldDef {
+                        name: format!("{}[{}]", field.name, i),
+                        required: true,
+                        field_type: *ft.clone(),
+                        desc: None,
+                        examples: None,
+                    };
+                    validate_field_value(elem, &synthetic)?;
+                }
+            } else if !items.is_empty() {
                 for (i, elem) in arr.iter().enumerate() {
                     validate_value(elem, items).map_err(|e| {
                         ConductorError::Schema(format!("In '{}[{}]': {e}", field.name, i))
@@ -1155,7 +1259,7 @@ markers:
         // Check findings field
         let findings = schema.fields.iter().find(|f| f.name == "findings").unwrap();
         assert!(findings.required);
-        if let FieldType::Array { items } = &findings.field_type {
+        if let FieldType::Array { items, .. } = &findings.field_type {
             assert!(items.len() >= 5);
             let severity = items.iter().find(|f| f.name == "severity").unwrap();
             if let FieldType::Enum(variants) = &severity.field_type {
@@ -1909,6 +2013,152 @@ Real output:
 "#;
         let result = parse_structured_output(text, &schema).unwrap();
         assert_eq!(result.context, "fenced result");
+    }
+
+    // -----------------------------------------------------------------------
+    // Scalar array tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_scalar_array_string() {
+        let yaml = "fields:\n  tags:\n    type: array\n    items: string\n";
+        let schema = parse_schema_content(yaml, "test").unwrap();
+        let field = schema.fields.iter().find(|f| f.name == "tags").unwrap();
+        match &field.field_type {
+            FieldType::Array { item_type, items } => {
+                assert!(items.is_empty());
+                assert!(matches!(item_type.as_deref(), Some(FieldType::String)));
+            }
+            _ => panic!("expected Array"),
+        }
+    }
+
+    #[test]
+    fn test_parse_scalar_array_number() {
+        let yaml = "fields:\n  scores:\n    type: array\n    items: number\n";
+        let schema = parse_schema_content(yaml, "test").unwrap();
+        let field = schema.fields.iter().find(|f| f.name == "scores").unwrap();
+        match &field.field_type {
+            FieldType::Array { item_type, items } => {
+                assert!(items.is_empty());
+                assert!(matches!(item_type.as_deref(), Some(FieldType::Number)));
+            }
+            _ => panic!("expected Array"),
+        }
+    }
+
+    #[test]
+    fn test_parse_scalar_array_boolean() {
+        let yaml = "fields:\n  flags:\n    type: array\n    items: boolean\n";
+        let schema = parse_schema_content(yaml, "test").unwrap();
+        let field = schema.fields.iter().find(|f| f.name == "flags").unwrap();
+        match &field.field_type {
+            FieldType::Array { item_type, items } => {
+                assert!(items.is_empty());
+                assert!(matches!(item_type.as_deref(), Some(FieldType::Boolean)));
+            }
+            _ => panic!("expected Array"),
+        }
+    }
+
+    #[test]
+    fn test_parse_scalar_array_enum() {
+        let yaml = "fields:\n  levels:\n    type: array\n    items: \"enum(a, b, c)\"\n";
+        let schema = parse_schema_content(yaml, "test").unwrap();
+        let field = schema.fields.iter().find(|f| f.name == "levels").unwrap();
+        match &field.field_type {
+            FieldType::Array { item_type, items } => {
+                assert!(items.is_empty());
+                if let Some(ft) = item_type.as_deref() {
+                    if let FieldType::Enum(variants) = ft {
+                        assert_eq!(variants, &["a", "b", "c"]);
+                    } else {
+                        panic!("expected Enum item type");
+                    }
+                } else {
+                    panic!("expected Some item_type");
+                }
+            }
+            _ => panic!("expected Array"),
+        }
+    }
+
+    #[test]
+    fn test_validate_scalar_array() {
+        let yaml = "fields:\n  tags:\n    type: array\n    items: string\n";
+        let schema = parse_schema_content(yaml, "test").unwrap();
+        let json = "<<<CONDUCTOR_OUTPUT>>>\n{\"tags\": [\"a\", \"b\"]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+        let result = parse_structured_output(json, &schema);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_scalar_array_rejects_wrong_type() {
+        let yaml = "fields:\n  tags:\n    type: array\n    items: string\n";
+        let schema = parse_schema_content(yaml, "test").unwrap();
+        let json = "<<<CONDUCTOR_OUTPUT>>>\n{\"tags\": [1, 2]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+        let result = parse_structured_output(json, &schema);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("expected string"));
+    }
+
+    #[test]
+    fn test_prompt_scalar_array() {
+        let yaml = "fields:\n  tags:\n    type: array\n    items: string\n";
+        let schema = parse_schema_content(yaml, "test").unwrap();
+        let prompt = generate_prompt_instructions(&schema);
+        assert!(prompt.contains("[\"...\", \"...\"]"));
+    }
+
+    #[test]
+    fn test_mixed_schema_scalar_and_object_arrays() {
+        let yaml = r#"
+fields:
+  tags:
+    type: array
+    items: string
+  findings:
+    type: array
+    items:
+      file: string
+      line: number
+  summary: string
+"#;
+        let schema = parse_schema_content(yaml, "test").unwrap();
+        assert_eq!(schema.fields.len(), 3);
+
+        let tags = schema.fields.iter().find(|f| f.name == "tags").unwrap();
+        match &tags.field_type {
+            FieldType::Array { item_type, items } => {
+                assert!(matches!(item_type.as_deref(), Some(FieldType::String)));
+                assert!(items.is_empty());
+            }
+            _ => panic!("expected Array for tags"),
+        }
+
+        let findings = schema.fields.iter().find(|f| f.name == "findings").unwrap();
+        match &findings.field_type {
+            FieldType::Array { item_type, items } => {
+                assert!(item_type.is_none());
+                assert_eq!(items.len(), 2);
+            }
+            _ => panic!("expected Array for findings"),
+        }
+    }
+
+    #[test]
+    fn test_hints_scalar_array() {
+        let yaml = r#"
+fields:
+  tags:
+    type: array
+    items: string
+    desc: "list of labels"
+"#;
+        let schema = parse_schema_content(yaml, "test").unwrap();
+        let hints = generate_field_hints(&schema.fields, "");
+        assert!(hints.contains("array of string"));
+        assert!(hints.contains("list of labels"));
     }
 
     /// Regression: when a field value contains the start marker string, the real block is still found.
