@@ -626,6 +626,68 @@ mod tests {
     }
 
     #[test]
+    fn test_list_agent_runs_repo_and_status_filter() {
+        let conn = setup_db();
+        // setup_db inserts w1 (repo_id='r1') and w2 (repo_id='r1').
+        // Insert a second repo with its own worktree.
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+             VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', 'main', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w3', 'r2', 'feat-other', 'feat/other', '/tmp/ws2/other', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        let mgr = AgentManager::new(&conn);
+        let r1_running = mgr.create_run(Some("w1"), "r1 running task", None, None).unwrap();
+        let r1_completed = mgr.create_run(Some("w1"), "r1 completed task", None, None).unwrap();
+        let _r2_running = mgr.create_run(Some("w3"), "r2 running task", None, None).unwrap();
+
+        mgr.update_run_completed(
+            &r1_completed.id,
+            None,
+            Some("Done"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // repo_id=r1 + status=Running → only r1_running
+        let running = mgr
+            .list_agent_runs(None, Some("r1"), Some(&AgentRunStatus::Running), 50, 0)
+            .unwrap();
+        assert_eq!(running.len(), 1);
+        assert_eq!(running[0].id, r1_running.id);
+
+        // repo_id=r1 + status=Completed → only r1_completed
+        let completed = mgr
+            .list_agent_runs(None, Some("r1"), Some(&AgentRunStatus::Completed), 50, 0)
+            .unwrap();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].id, r1_completed.id);
+
+        // repo_id=r2 + status=Running → only r2's run (excludes r1 runs)
+        let r2_running = mgr
+            .list_agent_runs(None, Some("r2"), Some(&AgentRunStatus::Running), 50, 0)
+            .unwrap();
+        assert_eq!(r2_running.len(), 1);
+
+        // repo_id=r2 + status=Completed → nothing (r2 has no completed runs)
+        let r2_completed = mgr
+            .list_agent_runs(None, Some("r2"), Some(&AgentRunStatus::Completed), 50, 0)
+            .unwrap();
+        assert_eq!(r2_completed.len(), 0);
+    }
+
+    #[test]
     fn test_list_agent_runs_status_only_filter() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
