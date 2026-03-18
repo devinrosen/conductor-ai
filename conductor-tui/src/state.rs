@@ -782,6 +782,9 @@ pub struct DataCache {
     /// Keyed by run_id; populated when workflow_runs is refreshed to avoid
     /// re-parsing the DSL on every render frame.
     pub workflow_run_declared_inputs: HashMap<String, Vec<InputDecl>>,
+    /// Live turn counts for running agents, keyed by worktree_id.
+    /// Populated by the background poller each tick.
+    pub live_turns_by_worktree: HashMap<String, i64>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.

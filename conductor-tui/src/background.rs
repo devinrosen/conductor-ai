@@ -293,6 +293,20 @@ pub fn poll_data() -> Option<PollResult> {
         })
     });
 
+    // Compute live turn counts for running agents off the main thread.
+    let live_turns_by_worktree = {
+        use conductor_core::agent::{count_turns_in_log, AgentRunStatus};
+        let mut map = std::collections::HashMap::new();
+        for (wt_id, run) in &latest_agent_runs {
+            if run.status == AgentRunStatus::Running {
+                if let Some(ref path) = run.log_file {
+                    map.insert(wt_id.clone(), count_turns_in_log(path));
+                }
+            }
+        }
+        map
+    };
+
     let action = Action::DataRefreshed(Box::new(DataRefreshedPayload {
         repos,
         worktrees,
@@ -305,6 +319,7 @@ pub fn poll_data() -> Option<PollResult> {
         active_non_worktree_workflow_runs,
         pending_feedback_requests,
         waiting_gate_steps,
+        live_turns_by_worktree,
     }));
     Some(PollResult {
         action,
