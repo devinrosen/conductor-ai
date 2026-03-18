@@ -10,7 +10,7 @@ mkdir -p .conductor/postmortems
 run_output=$(conductor workflow run-show "$RUN_ID")
 
 # Extract workflow name from the output (line like "Workflow: <name>")
-workflow_name=$(echo "$run_output" | grep -oP '(?<=Workflow:\s)\S+' || true)
+workflow_name=$(echo "$run_output" | sed -n 's/^Workflow:[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -1)
 
 # Read the .wf file if it exists
 wf_contents=""
@@ -22,10 +22,11 @@ if [[ -n "$workflow_name" ]]; then
 fi
 
 # Extract summary fields for context
-status=$(echo "$run_output" | grep -oP '(?<=Status:\s)\S+' || echo "unknown")
+status=$(echo "$run_output" | sed -n 's/^Status:[[:space:]]*\([^[:space:]]*\).*/\1/p' | head -1)
+status=${status:-unknown}
 step_count=$(echo "$run_output" | grep -c '^\s*Step ' || echo "0")
-started_at=$(echo "$run_output" | grep -oP '(?<=Started:\s).+' || true)
-ended_at=$(echo "$run_output" | grep -oP '(?<=Ended:\s).+' || true)
+started_at=$(echo "$run_output" | sed -n 's/^Started:[[:space:]]*//p' | head -1)
+ended_at=$(echo "$run_output" | sed -n 's/^Ended:[[:space:]]*//p' | head -1)
 
 # Compute elapsed time if both timestamps are available
 elapsed=""
