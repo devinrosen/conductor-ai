@@ -2300,6 +2300,15 @@ fn test_filter_wf_dir_entries_skips_io_errors() {
 }
 
 #[test]
+fn test_gate_type_from_str_error_path() {
+    use std::str::FromStr;
+    let result = GateType::from_str("unknown_gate");
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.contains("unknown gate type"), "unexpected error: {err}");
+}
+
+#[test]
 fn test_parse_boolean_input_declaration() {
     let input = r#"
 workflow test {
