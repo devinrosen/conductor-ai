@@ -49,13 +49,8 @@ pub(super) fn tool_validate_workflow(
     db_path: &Path,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
-    use conductor_core::agent_config::AgentSpec;
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::WorkflowManager;
-    use conductor_core::workflow::{
-        collect_agent_names, default_skills_dir, detect_workflow_cycles, make_script_resolver,
-        validate_script_steps, validate_workflow_semantics,
-    };
 
     let repo_slug = require_arg!(args, "repo");
     let workflow_name = require_arg!(args, "workflow");
@@ -77,74 +72,50 @@ pub(super) fn tool_validate_workflow(
         Err(e) => return tool_err(e),
     };
 
-    let mut all_refs = collect_agent_names(&workflow.body);
-    all_refs.extend(collect_agent_names(&workflow.always));
-    all_refs.sort();
-    all_refs.dedup();
+    let known_bots: std::collections::HashSet<String> =
+        config.github.apps.keys().cloned().collect();
 
-    let specs: Vec<AgentSpec> = all_refs.iter().map(AgentSpec::from).collect();
-    let missing_agents = conductor_core::agent_config::find_missing_agents(
-        wt_path,
-        repo_path,
-        &specs,
-        Some(workflow_name),
-    );
+    let entry = WorkflowManager::validate_single(wt_path, repo_path, &workflow, &known_bots);
 
-    let all_snippets = workflow.collect_all_snippet_refs();
-    let missing_snippets = conductor_core::prompt_config::find_missing_snippets(
-        wt_path,
-        repo_path,
-        &all_snippets,
-        Some(workflow_name),
-    );
+    format_validation_result(workflow_name, &entry)
+}
 
-    let wt_path2 = wt_path.clone();
-    let repo_path2 = repo_path.clone();
-    let loader = |wf_name: &str| {
-        WorkflowManager::load_def_by_name(&wt_path2, &repo_path2, wf_name)
-            .map_err(|e| e.to_string())
-    };
-
-    let cycle_err = detect_workflow_cycles(&workflow.name, &loader).err();
-
-    let report = validate_workflow_semantics(&workflow, &loader);
-
+/// Format a [`WorkflowValidationEntry`] into a [`CallToolResult`].
+///
+/// Extracted so that each branch (pass, warnings-only, errors) is independently
+/// testable without needing a full repo + DB setup.
+fn format_validation_result(
+    workflow_name: &str,
+    entry: &conductor_core::workflow::WorkflowValidationEntry,
+) -> CallToolResult {
     let mut errors: Vec<String> = Vec::new();
-    for agent in &missing_agents {
-        errors.push(format!("Missing agent: {agent}"));
-    }
-    for snippet in &missing_snippets {
-        errors.push(format!("Missing prompt snippet: {snippet}"));
-    }
-    if let Some(msg) = cycle_err {
-        errors.push(format!("Cycle detected: {msg}"));
-    }
-    for err in &report.errors {
+    for err in &entry.errors {
         if let Some(hint) = &err.hint {
             errors.push(format!("{} (hint: {hint})", err.message));
         } else {
             errors.push(err.message.clone());
         }
     }
-    let script_errors = validate_script_steps(
-        &workflow,
-        &make_script_resolver(
-            wt_path.to_string(),
-            repo_path.to_string(),
-            default_skills_dir(),
-        ),
-    );
-    for err in &script_errors {
-        if let Some(hint) = &err.hint {
-            errors.push(format!("{} (hint: {hint})", err.message));
-        } else {
-            errors.push(err.message.clone());
-        }
+
+    let mut warnings: Vec<String> = Vec::new();
+    for w in &entry.warnings {
+        warnings.push(w.message.to_string());
     }
+
+    let warning_section = if warnings.is_empty() {
+        String::new()
+    } else {
+        let warning_list = warnings
+            .iter()
+            .map(|w| format!("- {w}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("\n\nWarnings:\n{warning_list}")
+    };
 
     if errors.is_empty() {
         tool_ok(format!(
-            "status: PASS\n\nWorkflow '{workflow_name}' is valid."
+            "status: PASS\n\nWorkflow '{workflow_name}' is valid.{warning_section}"
         ))
     } else {
         let error_list = errors
@@ -152,7 +123,9 @@ pub(super) fn tool_validate_workflow(
             .map(|e| format!("- {e}"))
             .collect::<Vec<_>>()
             .join("\n");
-        tool_ok(format!("status: FAIL\n\nErrors:\n{error_list}"))
+        tool_ok(format!(
+            "status: FAIL\n\nErrors:\n{error_list}{warning_section}"
+        ))
     }
 }
 
@@ -780,5 +753,97 @@ workflow w {
         a.insert("workflow".into(), Value::String("deploy".into()));
         let result = tool_validate_workflow(&db, &a);
         assert_eq!(result.is_error, Some(true));
+    }
+
+    // -----------------------------------------------------------------------
+    // format_validation_result tests
+    // -----------------------------------------------------------------------
+
+    fn make_entry(
+        errors: Vec<conductor_core::workflow::ValidationError>,
+        warnings: Vec<conductor_core::workflow::BatchValidationWarning>,
+    ) -> conductor_core::workflow::WorkflowValidationEntry {
+        conductor_core::workflow::WorkflowValidationEntry {
+            name: "test-wf".to_string(),
+            errors,
+            warnings,
+        }
+    }
+
+    #[test]
+    fn test_format_validation_result_pass_no_warnings() {
+        let entry = make_entry(vec![], vec![]);
+        let result = format_validation_result("test-wf", &entry);
+        assert_eq!(result.is_error, Some(false));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("status: PASS"), "got: {text}");
+        assert!(text.contains("is valid"), "got: {text}");
+        assert!(!text.contains("Warnings"), "got: {text}");
+    }
+
+    #[test]
+    fn test_format_validation_result_pass_with_warnings() {
+        let entry = make_entry(
+            vec![],
+            vec![conductor_core::workflow::BatchValidationWarning {
+                message: "unknown bot name 'foo-bot'".to_string(),
+            }],
+        );
+        let result = format_validation_result("test-wf", &entry);
+        assert_eq!(result.is_error, Some(false));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("status: PASS"), "got: {text}");
+        assert!(text.contains("Warnings"), "got: {text}");
+        assert!(text.contains("unknown bot name 'foo-bot'"), "got: {text}");
+    }
+
+    #[test]
+    fn test_format_validation_result_fail_with_errors() {
+        let entry = make_entry(
+            vec![conductor_core::workflow::ValidationError {
+                message: "missing agent 'deployer'".to_string(),
+                hint: Some("add an agent config".to_string()),
+            }],
+            vec![],
+        );
+        let result = format_validation_result("test-wf", &entry);
+        assert_eq!(result.is_error, Some(false)); // tool_ok even for FAIL
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("status: FAIL"), "got: {text}");
+        assert!(text.contains("missing agent 'deployer'"), "got: {text}");
+        assert!(text.contains("hint: add an agent config"), "got: {text}");
+    }
+
+    #[test]
+    fn test_format_validation_result_fail_with_errors_and_warnings() {
+        let entry = make_entry(
+            vec![conductor_core::workflow::ValidationError {
+                message: "missing agent 'deployer'".to_string(),
+                hint: None,
+            }],
+            vec![conductor_core::workflow::BatchValidationWarning {
+                message: "unknown bot name 'foo-bot'".to_string(),
+            }],
+        );
+        let result = format_validation_result("test-wf", &entry);
+        assert_eq!(result.is_error, Some(false));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("status: FAIL"), "got: {text}");
+        assert!(text.contains("Errors"), "got: {text}");
+        assert!(text.contains("missing agent 'deployer'"), "got: {text}");
+        assert!(text.contains("Warnings"), "got: {text}");
+        assert!(text.contains("unknown bot name 'foo-bot'"), "got: {text}");
     }
 }

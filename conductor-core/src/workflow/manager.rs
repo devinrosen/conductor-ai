@@ -1276,6 +1276,45 @@ impl<'a> WorkflowManager<'a> {
         workflow_dsl::load_workflow_by_name(worktree_path, repo_path, name)
     }
 
+    /// Validate a single workflow definition using the full batch validation
+    /// pipeline (agents, snippets, schemas, cycles, semantics, scripts, bot names).
+    ///
+    /// This is a convenience wrapper around [`validate_workflows_batch`] for callers
+    /// that already have a loaded `WorkflowDef` — e.g. the MCP tool.
+    pub fn validate_single(
+        wt_path: &str,
+        repo_path: &str,
+        workflow: &crate::workflow_dsl::WorkflowDef,
+        known_bots: &HashSet<String>,
+    ) -> super::batch_validate::WorkflowValidationEntry {
+        let wt = wt_path.to_string();
+        let rp = repo_path.to_string();
+        let loader = |name: &str| -> std::result::Result<crate::workflow_dsl::WorkflowDef, String> {
+            workflow_dsl::load_workflow_by_name(&wt, &rp, name).map_err(|e| e.to_string())
+        };
+        let result = super::batch_validate::validate_workflows_batch(
+            std::slice::from_ref(workflow),
+            &[],
+            wt_path,
+            repo_path,
+            known_bots,
+            &loader,
+        );
+        // validate_workflows_batch produces exactly one entry per input workflow,
+        // so with a single-item slice this always yields one element.
+        // Use unwrap_or_else to avoid a bare expect() in library code.
+        result.entries.into_iter().next().unwrap_or_else(|| {
+            super::batch_validate::WorkflowValidationEntry {
+                name: workflow.name.clone(),
+                errors: vec![crate::workflow_dsl::ValidationError {
+                    message: "internal error: batch validation returned no entries".to_string(),
+                    hint: None,
+                }],
+                warnings: vec![],
+            }
+        })
+    }
+
     const SQL_RESET_FAILED: &'static str = "UPDATE workflow_run_steps \
          SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
          context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL \
@@ -2702,5 +2741,115 @@ mod tests {
         mgr.set_workflow_run_iteration(&run.id, 0).unwrap();
         let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.iteration, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_single tests
+    // -----------------------------------------------------------------------
+
+    /// Helper to build a minimal WorkflowDef for validation tests.
+    fn minimal_workflow(name: &str) -> crate::workflow_dsl::WorkflowDef {
+        crate::workflow_dsl::WorkflowDef {
+            name: name.to_string(),
+            description: "test workflow".to_string(),
+            trigger: crate::workflow_dsl::WorkflowTrigger::Manual,
+            targets: vec![],
+            inputs: vec![],
+            body: vec![],
+            always: vec![],
+            source_path: "test.wf".to_string(),
+        }
+    }
+
+    /// Create a temp dir with a `.conductor/workflows/<name>.wf` file so the
+    /// loader used by cycle detection can resolve the workflow by name.
+    fn write_wf_file(dir: &std::path::Path, name: &str, content: &str) {
+        let wf_dir = dir.join(".conductor/workflows");
+        std::fs::create_dir_all(&wf_dir).unwrap();
+        std::fs::write(wf_dir.join(format!("{name}.wf")), content).unwrap();
+    }
+
+    #[test]
+    fn test_validate_single_returns_entry_for_valid_workflow() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wf_src = "workflow good-wf {\n  meta {\n    description = \"test\"\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }\n}\n";
+        write_wf_file(tmp.path(), "good-wf", wf_src);
+
+        let wf = minimal_workflow("good-wf");
+        let known_bots = std::collections::HashSet::new();
+        let path = tmp.path().to_str().unwrap();
+
+        let entry = WorkflowManager::validate_single(path, path, &wf, &known_bots);
+
+        assert_eq!(entry.name, "good-wf");
+        assert!(
+            entry.errors.is_empty(),
+            "expected no errors: {:?}",
+            entry.errors
+        );
+    }
+
+    #[test]
+    fn test_validate_single_surfaces_warnings_for_unknown_bot() {
+        use crate::workflow_dsl::{AgentRef, CallNode, WorkflowNode};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let wf_src = "workflow bot-wf {\n  meta {\n    description = \"test\"\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }\n  call some-step { as = \"unknown-bot\" }\n}\n";
+        write_wf_file(tmp.path(), "bot-wf", wf_src);
+
+        let mut wf = minimal_workflow("bot-wf");
+        wf.body.push(WorkflowNode::Call(CallNode {
+            agent: AgentRef::Name("some-step".to_string()),
+            retries: 0,
+            on_fail: None,
+            output: None,
+            with: vec![],
+            bot_name: Some("unknown-bot".to_string()),
+        }));
+        // known_bots is empty, so "unknown-bot" should produce a warning
+        let known_bots = std::collections::HashSet::new();
+        let path = tmp.path().to_str().unwrap();
+
+        let entry = WorkflowManager::validate_single(path, path, &wf, &known_bots);
+
+        assert_eq!(entry.name, "bot-wf");
+        assert!(
+            !entry.warnings.is_empty(),
+            "expected warning for unknown bot name, got none"
+        );
+        assert!(
+            entry.warnings[0].message.contains("unknown-bot"),
+            "warning should mention the unknown bot name: {}",
+            entry.warnings[0].message
+        );
+    }
+
+    #[test]
+    fn test_validate_single_reports_errors_for_missing_agent() {
+        use crate::workflow_dsl::{AgentRef, CallNode, WorkflowNode};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let wf_src = "workflow bad-wf {\n  meta {\n    description = \"test\"\n    trigger = \"manual\"\n    targets = [\"worktree\"]\n  }\n  call nonexistent-agent\n}\n";
+        write_wf_file(tmp.path(), "bad-wf", wf_src);
+
+        let mut wf = minimal_workflow("bad-wf");
+        wf.body.push(WorkflowNode::Call(CallNode {
+            agent: AgentRef::Name("nonexistent-agent".to_string()),
+            retries: 0,
+            on_fail: None,
+            output: None,
+            with: vec![],
+            bot_name: None,
+        }));
+        let known_bots = std::collections::HashSet::new();
+        let path = tmp.path().to_str().unwrap();
+
+        let entry = WorkflowManager::validate_single(path, path, &wf, &known_bots);
+
+        assert_eq!(entry.name, "bad-wf");
+        assert!(
+            !entry.errors.is_empty(),
+            "expected validation errors for missing agent"
+        );
     }
 }
