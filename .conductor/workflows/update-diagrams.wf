@@ -23,7 +23,10 @@ workflow update-diagrams {
       on_timeout = fail
     }
 
-    call commit-diagrams
+    script commit-diagrams {
+      run = ".conductor/scripts/commit-diagrams.sh"
+      env = { TICKET = "{{ticket}}" }
+    }
     script push-and-pr {
       run = ".conductor/scripts/push-and-pr.sh"
     }
