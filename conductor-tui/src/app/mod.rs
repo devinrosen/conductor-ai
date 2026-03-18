@@ -704,14 +704,13 @@ impl App {
                 if let Some(crate::state::DashboardRow::Feature {
                     repo_idx,
                     feature_idx,
+                    total,
+                    merged,
                 }) = self.state.current_dashboard_row()
                 {
                     if let Some(repo) = self.state.data.repos.get(repo_idx) {
                         if let Some(features) = self.state.data.features_by_repo.get(&repo.id) {
                             if let Some(feature) = features.get(feature_idx) {
-                                let (total, merged) =
-                                    self.state.feature_child_stats(&repo.id, feature);
-
                                 let body = format!(
                                     "Name:        {}\n\
                                      Branch:      {}\n\

@@ -67,8 +67,14 @@ pub enum DashboardRow {
     /// Index into `AppState::data.repos`.
     Repo(usize),
     /// A feature header row. `repo_idx` indexes `data.repos`, `feature_idx` indexes
-    /// `data.features_by_repo[&repo.id]`.
-    Feature { repo_idx: usize, feature_idx: usize },
+    /// `data.features_by_repo[&repo.id]`. `total` / `merged` are pre-computed child
+    /// worktree counts so render and input handlers don't rescan worktrees.
+    Feature {
+        repo_idx: usize,
+        feature_idx: usize,
+        total: usize,
+        merged: usize,
+    },
     /// Index into `AppState::data.worktrees`.
     Worktree { idx: usize, is_feature_child: bool },
 }
@@ -1920,41 +1926,23 @@ impl AppState {
         }
     }
 
-    /// Returns true if the worktree is a child of the given feature
-    /// (same repo and base_branch matches the feature branch).
-    pub fn worktree_belongs_to_feature(
-        wt: &conductor_core::worktree::Worktree,
-        repo_id: &str,
-        feature: &conductor_core::feature::FeatureRow,
-    ) -> bool {
-        wt.repo_id == repo_id && wt.base_branch.as_deref() == Some(feature.branch.as_str())
-    }
-
-    /// Count child worktrees for a feature and how many are merged/abandoned.
-    /// Returns `(total, merged_or_abandoned)`.
-    pub fn feature_child_stats(
-        &self,
-        repo_id: &str,
-        feature: &conductor_core::feature::FeatureRow,
-    ) -> (usize, usize) {
-        self.data
-            .worktrees
-            .iter()
-            .filter(|wt| Self::worktree_belongs_to_feature(wt, repo_id, feature))
-            .fold((0, 0), |(total, merged), wt| {
-                let is_done = matches!(
-                    wt.status,
-                    conductor_core::worktree::WorktreeStatus::Merged
-                        | conductor_core::worktree::WorktreeStatus::Abandoned
-                );
-                (total + 1, merged + usize::from(is_done))
-            })
-    }
-
     /// Ordered list of rows for the unified dashboard panel.
     /// Each repo appears first, then feature groups with their child worktrees,
     /// then ungrouped worktrees.
+    ///
+    /// Builds a per-repo worktree index up-front so the inner loop is O(W) total
+    /// rather than O(F×W).
     pub fn dashboard_rows(&self) -> Vec<DashboardRow> {
+        // Build an index: repo_id → [(global_wt_idx, &Worktree)]
+        let mut wts_by_repo: HashMap<&str, Vec<(usize, &conductor_core::worktree::Worktree)>> =
+            HashMap::new();
+        for (idx, wt) in self.data.worktrees.iter().enumerate() {
+            wts_by_repo
+                .entry(wt.repo_id.as_str())
+                .or_default()
+                .push((idx, wt));
+        }
+
         let mut rows = Vec::new();
         for (repo_idx, repo) in self.data.repos.iter().enumerate() {
             rows.push(DashboardRow::Repo(repo_idx));
@@ -1966,32 +1954,53 @@ impl AppState {
                 .get(&repo.id)
                 .unwrap_or(&empty_features);
 
+            let repo_wts = wts_by_repo.get(repo.id.as_str());
+            let empty_wts = Vec::new();
+            let repo_wts = repo_wts.unwrap_or(&empty_wts);
+
             // Track which worktrees are grouped under a feature
             let mut grouped_wt_indices: HashSet<usize> = HashSet::new();
 
             for (fi, feature) in features.iter().enumerate() {
+                let mut total = 0usize;
+                let mut merged = 0usize;
+                let mut children = Vec::new();
+
+                for &(wt_idx, wt) in repo_wts {
+                    if wt.belongs_to_feature(&repo.id, &feature.branch) {
+                        grouped_wt_indices.insert(wt_idx);
+                        total += 1;
+                        if matches!(
+                            wt.status,
+                            conductor_core::worktree::WorktreeStatus::Merged
+                                | conductor_core::worktree::WorktreeStatus::Abandoned
+                        ) {
+                            merged += 1;
+                        }
+                        children.push(wt_idx);
+                    }
+                }
+
                 rows.push(DashboardRow::Feature {
                     repo_idx,
                     feature_idx: fi,
+                    total,
+                    merged,
                 });
 
-                // Collect grouped worktree indices
-                for (wt_idx, wt) in self.data.worktrees.iter().enumerate() {
-                    if Self::worktree_belongs_to_feature(wt, &repo.id, feature) {
-                        grouped_wt_indices.insert(wt_idx);
-                        if !self.collapsed_features.contains(&feature.id) {
-                            rows.push(DashboardRow::Worktree {
-                                idx: wt_idx,
-                                is_feature_child: true,
-                            });
-                        }
+                if !self.collapsed_features.contains(&feature.id) {
+                    for wt_idx in children {
+                        rows.push(DashboardRow::Worktree {
+                            idx: wt_idx,
+                            is_feature_child: true,
+                        });
                     }
                 }
             }
 
             // Ungrouped worktrees (not under any feature)
-            for (wt_idx, wt) in self.data.worktrees.iter().enumerate() {
-                if wt.repo_id == repo.id && !grouped_wt_indices.contains(&wt_idx) {
+            for &(wt_idx, _) in repo_wts {
+                if !grouped_wt_indices.contains(&wt_idx) {
                     rows.push(DashboardRow::Worktree {
                         idx: wt_idx,
                         is_feature_child: false,
@@ -3794,7 +3803,9 @@ pub(crate) mod tests {
                 DashboardRow::Repo(0),
                 DashboardRow::Feature {
                     repo_idx: 0,
-                    feature_idx: 0
+                    feature_idx: 0,
+                    total: 1,
+                    merged: 0,
                 },
                 DashboardRow::Worktree {
                     idx: 0,
@@ -3838,7 +3849,9 @@ pub(crate) mod tests {
                 DashboardRow::Repo(0),
                 DashboardRow::Feature {
                     repo_idx: 0,
-                    feature_idx: 0
+                    feature_idx: 0,
+                    total: 1,
+                    merged: 0,
                 },
                 // wt1 is hidden (collapsed)
                 DashboardRow::Worktree {
@@ -3950,10 +3963,13 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn feature_child_stats_counts_correctly() {
+    fn dashboard_rows_feature_stats_count_correctly() {
         let mut state = AppState::new();
         state.data.repos = vec![make_repo("r1", "repo-a")];
-        let feature = make_feature_row("f1", "feat/big-thing");
+        state
+            .data
+            .features_by_repo
+            .insert("r1".into(), vec![make_feature_row("f1", "feat/big-thing")]);
         state.data.worktrees = vec![
             make_worktree(
                 "wt1",
@@ -3980,8 +3996,18 @@ pub(crate) mod tests {
                 conductor_core::worktree::WorktreeStatus::Active,
             ),
         ];
-        let (total, merged) = state.feature_child_stats("r1", &feature);
-        assert_eq!(total, 3);
-        assert_eq!(merged, 2);
+        let rows = state.dashboard_rows();
+        // The Feature row should have total=3, merged=2
+        let feature_row = rows
+            .iter()
+            .find(|r| matches!(r, DashboardRow::Feature { .. }))
+            .unwrap();
+        match feature_row {
+            DashboardRow::Feature { total, merged, .. } => {
+                assert_eq!(*total, 3);
+                assert_eq!(*merged, 2);
+            }
+            _ => unreachable!(),
+        }
     }
 }

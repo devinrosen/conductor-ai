@@ -73,6 +73,12 @@ impl Worktree {
         self.status == WorktreeStatus::Active
     }
 
+    /// Returns true if this worktree is a child of the given feature
+    /// (same repo and base_branch matches the feature branch).
+    pub fn belongs_to_feature(&self, repo_id: &str, feature_branch: &str) -> bool {
+        self.repo_id == repo_id && self.base_branch.as_deref() == Some(feature_branch)
+    }
+
     /// Resolve the effective base branch: the worktree's own base, or the repo default.
     pub fn effective_base<'a>(&'a self, repo_default: &'a str) -> &'a str {
         self.base_branch.as_deref().unwrap_or(repo_default)

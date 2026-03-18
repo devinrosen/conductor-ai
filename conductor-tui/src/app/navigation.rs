@@ -649,6 +649,7 @@ impl App {
                     Some(DashboardRow::Feature {
                         repo_idx,
                         feature_idx,
+                        ..
                     }) => {
                         // Enter on a feature header toggles collapse
                         if let Some(repo) = self.state.data.repos.get(*repo_idx) {

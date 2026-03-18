@@ -49,6 +49,8 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
             DashboardRow::Feature {
                 repo_idx,
                 feature_idx,
+                total,
+                merged,
             } => {
                 let Some(repo) = state.data.repos.get(*repo_idx) else {
                     return ListItem::new(Line::from(""));
@@ -59,8 +61,6 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                     return ListItem::new(Line::from(""));
                 };
                 let collapsed = state.collapsed_features.contains(&feature.id);
-
-                let (total, merged) = state.feature_child_stats(&repo.id, feature);
 
                 let arrow = if collapsed { "▸" } else { "▾" };
                 let progress = format!(" ({merged}/{total} merged)");
