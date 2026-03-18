@@ -87,7 +87,9 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
         // INSERT OR IGNORE attempts on every subsequent tick.
         let mut notified_feedback_ids: HashSet<String> = HashSet::new();
         let mut notified_gate_ids: HashSet<String> = HashSet::new();
-        // Incremental turn-counting state: worktree_id → (byte_offset, turn_count).
+        // Incremental turn-counting state: run_id → (byte_offset, turn_count).
+        // Keyed by run ID (not worktree ID) so that a new run on the same
+        // worktree starts with a fresh offset instead of inheriting a stale one.
         let mut turn_state: HashMap<String, (u64, i64)> = HashMap::new();
         loop {
             thread::sleep(interval);
@@ -103,26 +105,22 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                     use conductor_core::agent::{count_turns_incremental, AgentRunStatus};
 
                     let mut live_turns = HashMap::new();
+                    let mut live_run_ids = HashSet::new();
                     for (wt_id, run) in &payload.latest_agent_runs {
                         if run.status == AgentRunStatus::Running {
                             if let Some(ref path) = run.log_file {
                                 let (prev_offset, prev_count) =
-                                    turn_state.get(wt_id).copied().unwrap_or((0, 0));
+                                    turn_state.get(&run.id).copied().unwrap_or((0, 0));
                                 let (new_offset, new_count) =
                                     count_turns_incremental(path, prev_offset, prev_count);
-                                turn_state.insert(wt_id.clone(), (new_offset, new_count));
+                                turn_state.insert(run.id.clone(), (new_offset, new_count));
                                 live_turns.insert(wt_id.clone(), new_count);
+                                live_run_ids.insert(run.id.clone());
                             }
                         }
                     }
-                    // Prune entries for agents that are no longer running.
-                    let running_wt_ids: HashSet<&String> = payload
-                        .latest_agent_runs
-                        .iter()
-                        .filter(|(_, run)| run.status == AgentRunStatus::Running)
-                        .map(|(wt_id, _)| wt_id)
-                        .collect();
-                    turn_state.retain(|wt_id, _| running_wt_ids.contains(wt_id));
+                    // Prune entries for runs that are no longer active.
+                    turn_state.retain(|run_id, _| live_run_ids.contains(run_id));
 
                     payload.live_turns_by_worktree = live_turns;
 
