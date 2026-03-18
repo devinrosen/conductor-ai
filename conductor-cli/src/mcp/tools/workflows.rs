@@ -121,7 +121,16 @@ fn format_validation_result(
             .map(|e| format!("- {e}"))
             .collect::<Vec<_>>()
             .join("\n");
-        tool_ok(format!("status: FAIL\n\nErrors:\n{error_list}"))
+        let mut output = format!("status: FAIL\n\nErrors:\n{error_list}");
+        if !warnings.is_empty() {
+            let warning_list = warnings
+                .iter()
+                .map(|w| format!("- {w}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            output.push_str(&format!("\n\nWarnings:\n{warning_list}"));
+        }
+        tool_ok(output)
     }
 }
 
@@ -817,5 +826,29 @@ workflow w {
         assert!(text.contains("status: FAIL"), "got: {text}");
         assert!(text.contains("missing agent 'deployer'"), "got: {text}");
         assert!(text.contains("hint: add an agent config"), "got: {text}");
+    }
+
+    #[test]
+    fn test_format_validation_result_fail_with_errors_and_warnings() {
+        let entry = make_entry(
+            vec![conductor_core::workflow::ValidationError {
+                message: "missing agent 'deployer'".to_string(),
+                hint: None,
+            }],
+            vec![conductor_core::workflow::BatchValidationWarning {
+                message: "unknown bot name 'foo-bot'".to_string(),
+            }],
+        );
+        let result = format_validation_result("test-wf", &entry);
+        assert_eq!(result.is_error, Some(false));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("status: FAIL"), "got: {text}");
+        assert!(text.contains("Errors"), "got: {text}");
+        assert!(text.contains("missing agent 'deployer'"), "got: {text}");
+        assert!(text.contains("Warnings"), "got: {text}");
+        assert!(text.contains("unknown bot name 'foo-bot'"), "got: {text}");
     }
 }
