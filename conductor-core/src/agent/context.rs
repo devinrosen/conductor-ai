@@ -171,3 +171,93 @@ pub fn build_startup_context(
 
     format!("## Session Context\n\n{}", sections.join("\n\n"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::manager::AgentManager;
+    use crate::agent::status::AgentRunStatus;
+
+    fn setup_conn() -> rusqlite::Connection {
+        crate::agent::manager::setup_db()
+    }
+
+    #[test]
+    fn test_build_startup_context_ephemeral_no_commits() {
+        let conn = setup_conn();
+        // Ephemeral run (no worktree_id). Use a non-git path so git_recent_commits
+        // returns empty — only the feedback protocol section should be present.
+        let ctx = build_startup_context(&conn, None, "run-1", "/tmp");
+        assert!(
+            ctx.contains("[NEEDS_FEEDBACK]"),
+            "feedback protocol must be included"
+        );
+        // No worktree/ticket sections for ephemeral runs.
+        assert!(!ctx.contains("**Worktree:**"));
+        assert!(!ctx.contains("**Ticket:**"));
+    }
+
+    #[test]
+    fn test_build_startup_context_with_worktree_no_ticket() {
+        let conn = setup_conn();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run(Some("w1"), "initial prompt", None, None)
+            .unwrap();
+
+        // "w1" is the test worktree with branch "feat/test" (from setup_db).
+        let ctx = build_startup_context(&conn, Some("w1"), &run.id, "/tmp");
+        assert!(ctx.contains("**Worktree:** feat/test"));
+        assert!(ctx.contains("[NEEDS_FEEDBACK]"));
+        // No ticket linked in the test fixture.
+        assert!(!ctx.contains("**Ticket:**"));
+    }
+
+    #[test]
+    fn test_build_startup_context_includes_prior_run_outcome() {
+        let conn = setup_conn();
+        let mgr = AgentManager::new(&conn);
+
+        // Create and complete a prior run.
+        let prior = mgr
+            .create_run(Some("w1"), "do the thing", None, None)
+            .unwrap();
+        mgr.update_run_completed(
+            &prior.id,
+            None,
+            Some("Prior run finished successfully."),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Create a new (current) run.
+        let current = mgr.create_run(Some("w1"), "follow-up", None, None).unwrap();
+        assert_eq!(current.status, AgentRunStatus::Running);
+
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
+        assert!(
+            ctx.contains("Prior run finished successfully."),
+            "context must include prior run result"
+        );
+    }
+
+    #[test]
+    fn test_build_startup_context_excludes_current_run_from_prior() {
+        let conn = setup_conn();
+        let mgr = AgentManager::new(&conn);
+
+        // Only one run exists — the current one. No prior run section should appear.
+        let run = mgr.create_run(Some("w1"), "only run", None, None).unwrap();
+        let ctx = build_startup_context(&conn, Some("w1"), &run.id, "/tmp");
+        assert!(
+            !ctx.contains("**Prior run outcome"),
+            "current run must not appear as prior"
+        );
+    }
+}

@@ -88,6 +88,7 @@ pub(crate) fn try_recover_from_log_at(
             .unwrap_or(DEFAULT_AGENT_ERROR_MSG);
         if let Err(e) = mgr.update_run_failed(run_id, error_msg) {
             tracing::warn!("failed to mark run {run_id} as failed during log recovery: {e}");
+            return None;
         }
     } else if let Err(e) = mgr.update_run_completed(
         run_id,
@@ -102,8 +103,17 @@ pub(crate) fn try_recover_from_log_at(
         log_result.cache_creation_input_tokens,
     ) {
         tracing::warn!("failed to mark run {run_id} as completed during log recovery: {e}");
+        return None;
     }
-    mgr.get_run(run_id).ok().flatten()
+    // DB update succeeded — read back the refreshed run. Warn explicitly on
+    // failure so a DB error is never silently dropped after a state mutation.
+    match mgr.get_run(run_id) {
+        Ok(run) => run,
+        Err(e) => {
+            tracing::warn!("failed to fetch run {run_id} after log recovery: {e}");
+            None
+        }
+    }
 }
 
 /// Parse a single stream-json log line into zero or more display events.
@@ -378,5 +388,91 @@ mod tests {
         assert_eq!(events[0].kind, "system");
         assert_eq!(events[1].kind, "text");
         assert_eq!(events[1].summary, "Hello");
+    }
+
+    // ---- try_recover_from_log_at tests ----
+
+    use crate::agent::manager::AgentManager;
+    use crate::agent::status::AgentRunStatus;
+
+    /// Write a minimal completed-result log line to a temp dir keyed by `run_id`.
+    fn write_result_log(dir: &std::path::Path, run_id: &str, is_error: bool, result: &str) {
+        let content = format!(
+            "{{\"type\":\"result\",\"result\":\"{result}\",\"is_error\":{is_error},\
+             \"total_cost_usd\":0.01,\"num_turns\":3,\"duration_ms\":500,\
+             \"usage\":{{\"input_tokens\":10,\"output_tokens\":20,\
+             \"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}}}\n"
+        );
+        std::fs::write(dir.join(format!("{run_id}.log")), content).unwrap();
+    }
+
+    #[test]
+    fn test_try_recover_from_log_at_completed() {
+        let conn = crate::agent::manager::setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        write_result_log(tmp_dir.path(), &run.id, false, "all done");
+
+        let recovered = try_recover_from_log_at(&mgr, &run.id, tmp_dir.path());
+        assert!(recovered.is_some(), "expected recovery to succeed");
+        let recovered = recovered.unwrap();
+        assert_eq!(recovered.status, AgentRunStatus::Completed);
+        assert_eq!(recovered.result_text.as_deref(), Some("all done"));
+    }
+
+    #[test]
+    fn test_try_recover_from_log_at_error_result() {
+        let conn = crate::agent::manager::setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        write_result_log(tmp_dir.path(), &run.id, true, "something went wrong");
+
+        let recovered = try_recover_from_log_at(&mgr, &run.id, tmp_dir.path());
+        assert!(
+            recovered.is_some(),
+            "expected recovery to succeed even for error result"
+        );
+        let recovered = recovered.unwrap();
+        assert_eq!(recovered.status, AgentRunStatus::Failed);
+        assert_eq!(
+            recovered.result_text.as_deref(),
+            Some("something went wrong")
+        );
+    }
+
+    #[test]
+    fn test_try_recover_from_log_at_missing_log() {
+        let conn = crate::agent::manager::setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        // No log file written — should return None without touching the DB.
+        let result = try_recover_from_log_at(&mgr, &run.id, tmp_dir.path());
+        assert!(result.is_none());
+        // Run should still be in running state.
+        let still_running = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(still_running.status, AgentRunStatus::Running);
+    }
+
+    #[test]
+    fn test_try_recover_from_log_at_no_result_event() {
+        let conn = crate::agent::manager::setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "test", None, None).unwrap();
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        // Log exists but contains no result event.
+        let log_path = tmp_dir.path().join(format!("{}.log", run.id));
+        std::fs::write(&log_path, "{\"type\":\"system\",\"subtype\":\"init\"}\n").unwrap();
+
+        let result = try_recover_from_log_at(&mgr, &run.id, tmp_dir.path());
+        assert!(result.is_none());
+        let still_running = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(still_running.status, AgentRunStatus::Running);
     }
 }
