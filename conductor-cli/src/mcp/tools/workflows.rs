@@ -49,13 +49,8 @@ pub(super) fn tool_validate_workflow(
     db_path: &Path,
     args: &serde_json::Map<String, Value>,
 ) -> CallToolResult {
-    use conductor_core::agent_config::AgentSpec;
     use conductor_core::repo::RepoManager;
     use conductor_core::workflow::WorkflowManager;
-    use conductor_core::workflow::{
-        collect_agent_names, default_skills_dir, detect_workflow_cycles, make_script_resolver,
-        validate_script_steps, validate_workflow_semantics,
-    };
 
     let repo_slug = require_arg!(args, "repo");
     let workflow_name = require_arg!(args, "workflow");
@@ -77,64 +72,13 @@ pub(super) fn tool_validate_workflow(
         Err(e) => return tool_err(e),
     };
 
-    let mut all_refs = collect_agent_names(&workflow.body);
-    all_refs.extend(collect_agent_names(&workflow.always));
-    all_refs.sort();
-    all_refs.dedup();
+    let known_bots: std::collections::HashSet<String> =
+        config.github.apps.keys().cloned().collect();
 
-    let specs: Vec<AgentSpec> = all_refs.iter().map(AgentSpec::from).collect();
-    let missing_agents = conductor_core::agent_config::find_missing_agents(
-        wt_path,
-        repo_path,
-        &specs,
-        Some(workflow_name),
-    );
-
-    let all_snippets = workflow.collect_all_snippet_refs();
-    let missing_snippets = conductor_core::prompt_config::find_missing_snippets(
-        wt_path,
-        repo_path,
-        &all_snippets,
-        Some(workflow_name),
-    );
-
-    let wt_path2 = wt_path.clone();
-    let repo_path2 = repo_path.clone();
-    let loader = |wf_name: &str| {
-        WorkflowManager::load_def_by_name(&wt_path2, &repo_path2, wf_name)
-            .map_err(|e| e.to_string())
-    };
-
-    let cycle_err = detect_workflow_cycles(&workflow.name, &loader).err();
-
-    let report = validate_workflow_semantics(&workflow, &loader);
+    let entry = WorkflowManager::validate_single(wt_path, repo_path, &workflow, &known_bots);
 
     let mut errors: Vec<String> = Vec::new();
-    for agent in &missing_agents {
-        errors.push(format!("Missing agent: {agent}"));
-    }
-    for snippet in &missing_snippets {
-        errors.push(format!("Missing prompt snippet: {snippet}"));
-    }
-    if let Some(msg) = cycle_err {
-        errors.push(format!("Cycle detected: {msg}"));
-    }
-    for err in &report.errors {
-        if let Some(hint) = &err.hint {
-            errors.push(format!("{} (hint: {hint})", err.message));
-        } else {
-            errors.push(err.message.clone());
-        }
-    }
-    let script_errors = validate_script_steps(
-        &workflow,
-        &make_script_resolver(
-            wt_path.to_string(),
-            repo_path.to_string(),
-            default_skills_dir(),
-        ),
-    );
-    for err in &script_errors {
+    for err in &entry.errors {
         if let Some(hint) = &err.hint {
             errors.push(format!("{} (hint: {hint})", err.message));
         } else {
@@ -142,9 +86,23 @@ pub(super) fn tool_validate_workflow(
         }
     }
 
-    if errors.is_empty() {
+    let mut warnings: Vec<String> = Vec::new();
+    for w in &entry.warnings {
+        warnings.push(w.message.to_string());
+    }
+
+    if errors.is_empty() && warnings.is_empty() {
         tool_ok(format!(
             "status: PASS\n\nWorkflow '{workflow_name}' is valid."
+        ))
+    } else if errors.is_empty() {
+        let warning_list = warnings
+            .iter()
+            .map(|w| format!("- {w}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        tool_ok(format!(
+            "status: PASS\n\nWorkflow '{workflow_name}' is valid.\n\nWarnings:\n{warning_list}"
         ))
     } else {
         let error_list = errors

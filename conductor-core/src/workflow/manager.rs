@@ -1276,6 +1276,37 @@ impl<'a> WorkflowManager<'a> {
         workflow_dsl::load_workflow_by_name(worktree_path, repo_path, name)
     }
 
+    /// Validate a single workflow definition using the full batch validation
+    /// pipeline (agents, snippets, schemas, cycles, semantics, scripts, bot names).
+    ///
+    /// This is a convenience wrapper around [`validate_workflows_batch`] for callers
+    /// that already have a loaded `WorkflowDef` — e.g. the MCP tool.
+    pub fn validate_single(
+        wt_path: &str,
+        repo_path: &str,
+        workflow: &crate::workflow_dsl::WorkflowDef,
+        known_bots: &HashSet<String>,
+    ) -> super::batch_validate::WorkflowValidationEntry {
+        let wt = wt_path.to_string();
+        let rp = repo_path.to_string();
+        let loader = |name: &str| -> std::result::Result<crate::workflow_dsl::WorkflowDef, String> {
+            workflow_dsl::load_workflow_by_name(&wt, &rp, name).map_err(|e| e.to_string())
+        };
+        let result = super::batch_validate::validate_workflows_batch(
+            std::slice::from_ref(workflow),
+            &[],
+            wt_path,
+            repo_path,
+            known_bots,
+            &loader,
+        );
+        result
+            .entries
+            .into_iter()
+            .next()
+            .expect("batch with one workflow must produce one entry")
+    }
+
     const SQL_RESET_FAILED: &'static str = "UPDATE workflow_run_steps \
          SET status = 'pending', started_at = NULL, ended_at = NULL, result_text = NULL, \
          context_out = NULL, markers_out = NULL, structured_output = NULL, child_run_id = NULL \
