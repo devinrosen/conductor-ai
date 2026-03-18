@@ -11,6 +11,27 @@ use crate::state::{
 use super::helpers::advance_form_field;
 use super::App;
 
+/// Build the "From PR (optional)" input modal used to transition into the PR step
+/// of worktree creation. Centralised here to avoid duplicating the title/prompt strings.
+fn pr_step_modal(
+    repo_slug: String,
+    wt_name: String,
+    ticket_id: Option<String>,
+    from_branch: Option<String>,
+) -> Modal {
+    Modal::Input {
+        title: "From PR (optional)".to_string(),
+        prompt: "PR number to check out (leave blank for new branch):".to_string(),
+        value: String::new(),
+        on_submit: InputAction::CreateWorktreePrStep {
+            repo_slug,
+            wt_name,
+            ticket_id,
+            from_branch,
+        },
+    }
+}
+
 impl App {
     pub(super) fn handle_form_char(&mut self, c: char) {
         let config = &self.config;
@@ -324,7 +345,7 @@ impl App {
                         use crate::action::Action;
                         use conductor_core::config::{db_path, load_config};
                         use conductor_core::db::open_database;
-                        use conductor_core::feature::{FeatureManager, FeatureStatus};
+                        use conductor_core::feature::FeatureManager;
 
                         let db = db_path();
                         let result = (|| {
@@ -333,12 +354,9 @@ impl App {
                             let config =
                                 load_config().map_err(|e| format!("Failed to load config: {e}"))?;
                             let fm = FeatureManager::new(&conn, &config);
-                            let features: Vec<_> = fm
-                                .list(&slug)
-                                .map_err(|e| format!("Failed to list features: {e}"))?
-                                .into_iter()
-                                .filter(|f| f.status == FeatureStatus::Active)
-                                .collect();
+                            let features = fm
+                                .list_active(&slug)
+                                .map_err(|e| format!("Failed to list features: {e}"))?;
                             Ok(features)
                         })();
                         match result {
@@ -360,17 +378,7 @@ impl App {
                     };
                 } else {
                     // No background sender — skip branch picker, go straight to PR step.
-                    self.state.modal = Modal::Input {
-                        title: "From PR (optional)".to_string(),
-                        prompt: "PR number to check out (leave blank for new branch):".to_string(),
-                        value: String::new(),
-                        on_submit: InputAction::CreateWorktreePrStep {
-                            repo_slug,
-                            wt_name,
-                            ticket_id,
-                            from_branch: None,
-                        },
-                    };
+                    self.state.modal = pr_step_modal(repo_slug, wt_name, ticket_id, None);
                 }
             }
             InputAction::CreateWorktreePrStep {
@@ -740,23 +748,12 @@ impl App {
     ) {
         if features.is_empty() {
             // No features → skip branch picker, go straight to PR step.
-            self.state.modal = Modal::Input {
-                title: "From PR (optional)".to_string(),
-                prompt: "PR number to check out (leave blank for new branch):".to_string(),
-                value: String::new(),
-                on_submit: InputAction::CreateWorktreePrStep {
-                    repo_slug,
-                    wt_name,
-                    ticket_id,
-                    from_branch: None,
-                },
-            };
+            self.state.modal = pr_step_modal(repo_slug, wt_name, ticket_id, None);
         } else {
             // Build branch picker items: default branch first, then features.
             let mut items = vec![BranchPickerItem {
                 label: "default branch".to_string(),
                 branch: None,
-                feature_id: None,
             }];
             for f in &features {
                 let mut detail_parts = Vec::new();
@@ -782,7 +779,6 @@ impl App {
                 items.push(BranchPickerItem {
                     label: format!("{}{}", f.branch, detail),
                     branch: Some(f.branch.clone()),
-                    feature_id: Some(f.id.clone()),
                 });
             }
             self.state.modal = Modal::BranchPicker {
@@ -809,17 +805,7 @@ impl App {
             let idx = if index == usize::MAX { selected } else { index };
             let from_branch = items.get(idx).and_then(|item| item.branch.clone());
             // Transition to PR input step, carrying the selected branch.
-            self.state.modal = Modal::Input {
-                title: "From PR (optional)".to_string(),
-                prompt: "PR number to check out (leave blank for new branch):".to_string(),
-                value: String::new(),
-                on_submit: InputAction::CreateWorktreePrStep {
-                    repo_slug,
-                    wt_name,
-                    ticket_id,
-                    from_branch,
-                },
-            };
+            self.state.modal = pr_step_modal(repo_slug, wt_name, ticket_id, from_branch);
         }
     }
 }
@@ -954,12 +940,10 @@ mod tests {
             crate::state::BranchPickerItem {
                 label: "default branch".to_string(),
                 branch: None,
-                feature_id: None,
             },
             crate::state::BranchPickerItem {
                 label: "feat/notifications".to_string(),
                 branch: Some("feat/notifications".to_string()),
-                feature_id: Some("f1".to_string()),
             },
         ]
     }
@@ -1018,6 +1002,26 @@ mod tests {
             Modal::Input { on_submit, .. } => match on_submit {
                 InputAction::CreateWorktreePrStep { from_branch, .. } => {
                     assert!(from_branch.is_none());
+                }
+                other => panic!("expected CreateWorktreePrStep, got {:?}", other),
+            },
+            other => panic!("expected Input modal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn branch_pick_out_of_bounds_falls_back_to_default_branch() {
+        let mut app = make_app();
+        app.state.modal = branch_picker_modal(0);
+        // Pick an index beyond the items list → items.get() returns None → from_branch = None.
+        app.handle_branch_pick(999);
+        match &app.state.modal {
+            Modal::Input { on_submit, .. } => match on_submit {
+                InputAction::CreateWorktreePrStep { from_branch, .. } => {
+                    assert!(
+                        from_branch.is_none(),
+                        "out-of-bounds index should yield None (default branch)"
+                    );
                 }
                 other => panic!("expected CreateWorktreePrStep, got {:?}", other),
             },

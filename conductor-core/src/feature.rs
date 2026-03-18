@@ -217,6 +217,34 @@ impl<'a> FeatureManager<'a> {
         )
     }
 
+    /// List only active features for a repo (with worktree and ticket counts).
+    pub fn list_active(&self, repo_slug: &str) -> Result<Vec<FeatureRow>> {
+        let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
+
+        query_collect(
+            self.conn,
+            "SELECT f.id, f.name, f.branch, f.base_branch, f.status, f.created_at,
+                    (SELECT COUNT(*) FROM worktrees w WHERE w.repo_id = f.repo_id AND w.base_branch = f.branch) AS wt_count,
+                    (SELECT COUNT(*) FROM feature_tickets ft WHERE ft.feature_id = f.id) AS ticket_count
+             FROM features f
+             WHERE f.repo_id = ?1 AND f.status = 'active'
+             ORDER BY f.created_at DESC",
+            params![repo.id],
+            |row| {
+                Ok(FeatureRow {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    branch: row.get(2)?,
+                    base_branch: row.get(3)?,
+                    status: row.get(4)?,
+                    created_at: row.get(5)?,
+                    worktree_count: row.get(6)?,
+                    ticket_count: row.get(7)?,
+                })
+            },
+        )
+    }
+
     /// Look up a single feature by repo slug + feature name.
     pub fn get_by_name(&self, repo_slug: &str, name: &str) -> Result<Feature> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;

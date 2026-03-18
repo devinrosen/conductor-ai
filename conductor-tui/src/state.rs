@@ -363,9 +363,6 @@ pub struct BranchPickerItem {
     pub label: String,
     /// `None` → repo default branch; `Some(branch)` → feature branch name.
     pub branch: Option<String>,
-    /// Set when this item corresponds to a feature.
-    #[allow(dead_code)]
-    pub feature_id: Option<String>,
 }
 
 #[derive(Clone)]
