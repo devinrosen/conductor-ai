@@ -1395,22 +1395,21 @@ pub(super) fn execute_gate(
 
     // Atomically set status=Waiting and blocked_on in a single DB statement so
     // there is no observable window where status=Waiting but blocked_on=NULL.
+    let gate_name = node.name.clone();
     let blocked_on = match node.gate_type {
         GateType::HumanApproval => super::types::BlockedOn::HumanApproval {
-            gate_name: node.name.clone(),
+            gate_name,
             prompt: node.prompt.clone(),
         },
         GateType::HumanReview => super::types::BlockedOn::HumanReview {
-            gate_name: node.name.clone(),
+            gate_name,
             prompt: node.prompt.clone(),
         },
         GateType::PrApproval => super::types::BlockedOn::PrApproval {
-            gate_name: node.name.clone(),
+            gate_name,
             approvals_needed: node.min_approvals,
         },
-        GateType::PrChecks => super::types::BlockedOn::PrChecks {
-            gate_name: node.name.clone(),
-        },
+        GateType::PrChecks => super::types::BlockedOn::PrChecks { gate_name },
     };
     state
         .wf_mgr

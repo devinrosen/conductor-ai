@@ -192,10 +192,11 @@ impl<'a> WorkflowManager<'a> {
         status: WorkflowRunStatus,
         result_summary: Option<&str>,
     ) -> Result<()> {
-        assert!(
-            !matches!(status, WorkflowRunStatus::Waiting),
-            "Use set_waiting_blocked_on() to transition to Waiting status"
-        );
+        if matches!(status, WorkflowRunStatus::Waiting) {
+            return Err(ConductorError::InvalidInput(
+                "Use set_waiting_blocked_on() to transition to Waiting status".into(),
+            ));
+        }
 
         let now = Utc::now().to_rfc3339();
         let is_terminal = matches!(

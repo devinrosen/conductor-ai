@@ -1813,12 +1813,17 @@ fn test_malformed_blocked_on_json_is_silently_dropped() {
 }
 
 #[test]
-#[should_panic(expected = "Use set_waiting_blocked_on()")]
 fn test_update_workflow_status_rejects_waiting() {
     let conn = setup_db();
     let (mgr, _parent, run) = make_workflow_run(&conn);
 
-    // Calling update_workflow_status with Waiting must panic — callers should
-    // use set_waiting_blocked_on() to enforce the blocked_on invariant.
-    let _ = mgr.update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None);
+    // Calling update_workflow_status with Waiting must return an error — callers
+    // should use set_waiting_blocked_on() to enforce the blocked_on invariant.
+    let err = mgr
+        .update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("set_waiting_blocked_on()"),
+        "Expected InvalidInput error, got: {err}"
+    );
 }
