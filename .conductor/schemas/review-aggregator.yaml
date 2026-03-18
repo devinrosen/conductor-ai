@@ -16,7 +16,6 @@ fields:
       message: string
   overall_approved: boolean
   summary: string
-  review_body: string
   off_diff_findings:
     type: array
     items:

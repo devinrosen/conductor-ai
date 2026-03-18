@@ -25,8 +25,10 @@ fi
 # ---------------------------------------------------------------------------
 if [ "${DRY_RUN:-false}" = "true" ]; then
   echo "DRY_RUN=true — would submit formal GitHub review for PR #${PR_NUMBER}."
-  echo "review_body preview:"
-  echo "${PRIOR_OUTPUT}" | jq -r '.review_body // "(no review_body in output)"'
+  echo "reviewers:"
+  echo "${PRIOR_OUTPUT}" | jq '.reviewers // []'
+  echo "blocking_findings:"
+  echo "${PRIOR_OUTPUT}" | jq '.blocking_findings // []'
   echo "off_diff_findings:"
   echo "${PRIOR_OUTPUT}" | jq '.off_diff_findings // []'
   exit 0
@@ -120,9 +122,48 @@ ${MESSAGE}"
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Build complete review body
+# 5. Build complete review body programmatically
 # ---------------------------------------------------------------------------
-REVIEW_BODY=$(echo "${PRIOR_OUTPUT}" | jq -r '.review_body // ""')
+OVERALL_APPROVED=$(echo "${PRIOR_OUTPUT}" | jq -r 'if .overall_approved == false then "false" else "true" end')
+
+if [ "${OVERALL_APPROVED}" = "true" ]; then
+  HEADING="## Conductor Review Swarm — All Clear"
+else
+  HEADING="## Conductor Review Swarm — Changes Requested"
+fi
+
+# Build reviewer table
+REVIEWER_TABLE=$(echo "${PRIOR_OUTPUT}" | jq -r '
+  (.reviewers // []) |
+  "| Reviewer | Verdict |\n|----------|---------|",
+  (.[] | "| \(.name) | \(if .approved then ":white_check_mark: approve" else ":x: changes requested" end) |")
+')
+
+REVIEW_BODY="${HEADING}
+
+${REVIEWER_TABLE}"
+
+# Append blocking findings section if any
+HAS_BLOCKING=$(echo "${PRIOR_OUTPUT}" | jq -r 'if (.blocking_findings // [] | length) > 0 then "true" else "false" end')
+if [ "${HAS_BLOCKING}" = "true" ]; then
+  BLOCKING_SECTION=$(echo "${PRIOR_OUTPUT}" | jq -r '
+    "\n### Blocking findings\n",
+    (
+      [(.blocking_findings // []) | group_by(.reviewer)[] |
+        . as $group |
+        "<details>\n<summary><b>\($group[0].reviewer)</b> — \($group | length) \(if ($group | length) == 1 then "issue" else "issues" end)</summary>\n",
+        ($group[] | "- **\(.severity)** `\(.file):\(.line)` — \(.message)"),
+        "</details>"
+      ] | .[]
+    )
+  ')
+  REVIEW_BODY="${REVIEW_BODY}
+${BLOCKING_SECTION}"
+fi
+
+REVIEW_BODY="${REVIEW_BODY}
+
+<!-- conductor-review -->"
 
 if [ -n "${FILED_ISSUES}" ]; then
   REVIEW_BODY="${REVIEW_BODY}
@@ -138,17 +179,6 @@ echo "${REVIEW_BODY}" > "${REVIEW_BODY_FILE}"
 # ---------------------------------------------------------------------------
 # 6. Submit formal review
 # ---------------------------------------------------------------------------
-OVERALL_APPROVED=$(echo "${PRIOR_OUTPUT}" | jq -r 'if .overall_approved == false then "false" else "true" end')
-
-# Safety net: if blocking_findings is non-empty, override to REQUEST CHANGES
-# regardless of overall_approved (guards against prompt inconsistency producing
-# overall_approved:true with non-empty blocking_findings)
-HAS_BLOCKING=$(echo "${PRIOR_OUTPUT}" | jq -r 'if (.blocking_findings // [] | length) > 0 then "true" else "false" end')
-if [ "${OVERALL_APPROVED}" = "true" ] && [ "${HAS_BLOCKING}" = "true" ]; then
-  echo "WARNING: overall_approved=true but blocking_findings is non-empty — overriding to REQUEST CHANGES."
-  OVERALL_APPROVED="false"
-fi
-
 if [ "${OVERALL_APPROVED}" = "true" ]; then
   echo "Submitting APPROVE review for PR #${PR_NUMBER}…"
   gh pr review "${PR_NUMBER}" --approve --body-file "${REVIEW_BODY_FILE}"
