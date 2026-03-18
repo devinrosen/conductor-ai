@@ -41,6 +41,9 @@ pub enum ConductorError {
     #[error("agent error: {0}")]
     Agent(String),
 
+    #[error("feedback request {id} is not pending (current status: {status})")]
+    FeedbackNotPending { id: String, status: String },
+
     #[error("worktree already has a linked ticket")]
     TicketAlreadyLinked,
 
