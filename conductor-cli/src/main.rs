@@ -11,6 +11,7 @@ use conductor_core::agent_config::AgentSpec;
 use conductor_core::config::{ensure_dirs, load_config};
 use conductor_core::db::open_database;
 use conductor_core::error::ConductorError;
+use conductor_core::feature::FeatureManager;
 use conductor_core::github;
 use conductor_core::github_app;
 use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig};
@@ -70,6 +71,11 @@ enum Commands {
     Statusline {
         #[command(subcommand)]
         command: StatuslineCommands,
+    },
+    /// Manage features (multi-worktree coordination branches)
+    Feature {
+        #[command(subcommand)]
+        command: FeatureCommands,
     },
     /// Model Context Protocol server (stdio transport for Claude Code integration)
     Mcp {
@@ -386,11 +392,14 @@ enum WorktreeCommands {
         /// Worktree name (e.g., smart-playlists, fix-scan-crash)
         name: String,
         /// Base branch
-        #[arg(long, short, conflicts_with = "from_pr")]
+        #[arg(long, short, conflicts_with_all = &["from_pr", "feature"])]
         from: Option<String>,
         /// Checkout an existing PR branch by PR number
-        #[arg(long, conflicts_with = "from")]
+        #[arg(long, conflicts_with_all = &["from", "feature"])]
         from_pr: Option<u32>,
+        /// Create worktree based on a feature branch
+        #[arg(long, conflicts_with_all = &["from", "from_pr"])]
+        feature: Option<String>,
         /// Link to a ticket ID
         #[arg(long)]
         ticket: Option<String>,
@@ -470,6 +479,66 @@ enum TicketCommands {
     Stats {
         /// Filter by repo slug
         repo: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum FeatureCommands {
+    /// Create a new feature branch
+    #[command(
+        after_help = "Examples:\n  conductor feature create my-repo notification-improvements\n  conductor feature create my-repo notification-improvements --from develop\n  conductor feature create my-repo notification-improvements --tickets 1262,1263"
+    )]
+    Create {
+        /// Repo slug
+        repo: String,
+        /// Feature name (e.g., notification-improvements)
+        name: String,
+        /// Base branch (defaults to repo's default branch)
+        #[arg(long)]
+        from: Option<String>,
+        /// Comma-separated ticket source IDs to link
+        #[arg(long)]
+        tickets: Option<String>,
+    },
+    /// List features for a repo
+    List {
+        /// Repo slug
+        repo: String,
+    },
+    /// Link tickets to a feature
+    Link {
+        /// Repo slug
+        repo: String,
+        /// Feature name
+        name: String,
+        /// Comma-separated ticket source IDs
+        tickets: String,
+    },
+    /// Unlink tickets from a feature
+    Unlink {
+        /// Repo slug
+        repo: String,
+        /// Feature name
+        name: String,
+        /// Comma-separated ticket source IDs
+        tickets: String,
+    },
+    /// Create a pull request for the feature branch
+    Pr {
+        /// Repo slug
+        repo: String,
+        /// Feature name
+        name: String,
+        /// Create as draft PR
+        #[arg(long)]
+        draft: bool,
+    },
+    /// Close a feature (marks as merged if branch was merged, otherwise closed)
+    Close {
+        /// Repo slug
+        repo: String,
+        /// Feature name
+        name: String,
     },
 }
 
@@ -717,12 +786,27 @@ fn main() -> Result<()> {
                     name,
                     from,
                     from_pr,
+                    feature,
                     ticket,
                     auto_agent,
                 } => {
+                    // --feature resolves to --from <feature-branch>
+                    let effective_from = if let Some(ref feat_name) = feature {
+                        let feat_mgr = FeatureManager::new(&conn, &config);
+                        let f = feat_mgr.get_by_name(&repo, feat_name)?;
+                        Some(f.branch)
+                    } else {
+                        from
+                    };
+
                     let mgr = WorktreeManager::new(&conn, &config);
-                    let (wt, warnings) =
-                        mgr.create(&repo, &name, from.as_deref(), ticket.as_deref(), from_pr)?;
+                    let (wt, warnings) = mgr.create(
+                        &repo,
+                        &name,
+                        effective_from.as_deref(),
+                        ticket.as_deref(),
+                        from_pr,
+                    )?;
                     for warning in &warnings {
                         eprintln!("warning: {warning}");
                     }
@@ -1114,6 +1198,89 @@ fn main() -> Result<()> {
                 if !found {
                     println!("No agent stats. Run agents on ticket-linked worktrees first.");
                 }
+            }
+        },
+        Commands::Feature { command } => match command {
+            FeatureCommands::Create {
+                repo,
+                name,
+                from,
+                tickets,
+            } => {
+                let ticket_ids: Vec<String> = tickets
+                    .as_deref()
+                    .unwrap_or("")
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
+                let mgr = FeatureManager::new(&conn, &config);
+                let feature = mgr.create(&repo, &name, from.as_deref(), &ticket_ids)?;
+                println!("Created feature: {} ({})", feature.name, feature.branch);
+                println!("  Base: {}", feature.base_branch);
+                if !ticket_ids.is_empty() {
+                    println!("  Linked {} ticket(s)", ticket_ids.len());
+                }
+            }
+            FeatureCommands::List { repo } => {
+                let mgr = FeatureManager::new(&conn, &config);
+                let features = mgr.list(&repo)?;
+                if features.is_empty() {
+                    println!("No features. Create one with `conductor feature create`.");
+                } else {
+                    println!(
+                        "  {:<25} {:<30} {:<10} {:<5} {:<5}",
+                        "NAME", "BRANCH", "STATUS", "WTs", "TKTs"
+                    );
+                    for f in features {
+                        println!(
+                            "  {:<25} {:<30} {:<10} {:<5} {:<5}",
+                            f.name, f.branch, f.status, f.worktree_count, f.ticket_count
+                        );
+                    }
+                }
+            }
+            FeatureCommands::Link {
+                repo,
+                name,
+                tickets,
+            } => {
+                let ticket_ids: Vec<String> = tickets
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                let mgr = FeatureManager::new(&conn, &config);
+                mgr.link_tickets(&repo, &name, &ticket_ids)?;
+                println!("Linked {} ticket(s) to feature '{name}'", ticket_ids.len());
+            }
+            FeatureCommands::Unlink {
+                repo,
+                name,
+                tickets,
+            } => {
+                let ticket_ids: Vec<String> = tickets
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                let mgr = FeatureManager::new(&conn, &config);
+                mgr.unlink_tickets(&repo, &name, &ticket_ids)?;
+                println!(
+                    "Unlinked {} ticket(s) from feature '{name}'",
+                    ticket_ids.len()
+                );
+            }
+            FeatureCommands::Pr { repo, name, draft } => {
+                let mgr = FeatureManager::new(&conn, &config);
+                let url = mgr.create_pr(&repo, &name, draft)?;
+                println!("{url}");
+            }
+            FeatureCommands::Close { repo, name } => {
+                let mgr = FeatureManager::new(&conn, &config);
+                mgr.close(&repo, &name)?;
+                println!("Feature '{name}' closed.");
             }
         },
         Commands::Workflow { command } => match command {
