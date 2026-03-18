@@ -221,29 +221,22 @@ impl<'a> FeatureManager<'a> {
             })
         };
 
+        const SELECT: &str = "\
+            SELECT f.id, f.name, f.branch, f.base_branch, f.status, f.created_at, \
+                   (SELECT COUNT(*) FROM worktrees w WHERE w.repo_id = f.repo_id AND w.base_branch = f.branch) AS wt_count, \
+                   (SELECT COUNT(*) FROM feature_tickets ft WHERE ft.feature_id = f.id) AS ticket_count \
+            FROM features f";
+        const ORDER: &str = " ORDER BY f.created_at DESC";
+
         match status {
-            Some(s) => query_collect(
-                self.conn,
-                "SELECT f.id, f.name, f.branch, f.base_branch, f.status, f.created_at,
-                        (SELECT COUNT(*) FROM worktrees w WHERE w.repo_id = f.repo_id AND w.base_branch = f.branch) AS wt_count,
-                        (SELECT COUNT(*) FROM feature_tickets ft WHERE ft.feature_id = f.id) AS ticket_count
-                 FROM features f
-                 WHERE f.repo_id = ?1 AND f.status = ?2
-                 ORDER BY f.created_at DESC",
-                params![repo.id, s],
-                row_mapper,
-            ),
-            None => query_collect(
-                self.conn,
-                "SELECT f.id, f.name, f.branch, f.base_branch, f.status, f.created_at,
-                        (SELECT COUNT(*) FROM worktrees w WHERE w.repo_id = f.repo_id AND w.base_branch = f.branch) AS wt_count,
-                        (SELECT COUNT(*) FROM feature_tickets ft WHERE ft.feature_id = f.id) AS ticket_count
-                 FROM features f
-                 WHERE f.repo_id = ?1
-                 ORDER BY f.created_at DESC",
-                params![repo.id],
-                row_mapper,
-            ),
+            Some(s) => {
+                let sql = format!("{SELECT} WHERE f.repo_id = ?1 AND f.status = ?2{ORDER}");
+                query_collect(self.conn, &sql, params![repo.id, s], row_mapper)
+            }
+            None => {
+                let sql = format!("{SELECT} WHERE f.repo_id = ?1{ORDER}");
+                query_collect(self.conn, &sql, params![repo.id], row_mapper)
+            }
         }
     }
 
