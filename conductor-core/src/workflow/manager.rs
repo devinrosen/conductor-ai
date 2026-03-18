@@ -82,6 +82,7 @@ impl<'a> WorkflowManager<'a> {
             definition_snapshot,
             None,
             None,
+            None,
         )
     }
 
@@ -99,6 +100,7 @@ impl<'a> WorkflowManager<'a> {
         definition_snapshot: Option<&str>,
         parent_workflow_run_id: Option<&str>,
         target_label: Option<&str>,
+        feature_id: Option<&str>,
     ) -> Result<WorkflowRun> {
         let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
@@ -106,8 +108,8 @@ impl<'a> WorkflowManager<'a> {
         self.conn.execute(
             "INSERT INTO workflow_runs (id, workflow_name, worktree_id, ticket_id, repo_id, \
              parent_run_id, status, dry_run, trigger, started_at, definition_snapshot, \
-             parent_workflow_run_id, target_label) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+             parent_workflow_run_id, target_label, feature_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 id,
                 workflow_name,
@@ -122,6 +124,7 @@ impl<'a> WorkflowManager<'a> {
                 definition_snapshot,
                 parent_workflow_run_id,
                 target_label,
+                feature_id,
             ],
         )?;
 
@@ -145,7 +148,7 @@ impl<'a> WorkflowManager<'a> {
             default_bot_name: None,
             iteration: 0,
             blocked_on: None,
-            feature_id: None,
+            feature_id: feature_id.map(String::from),
         })
     }
 
@@ -1654,6 +1657,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .unwrap()
     }
@@ -1697,6 +1701,7 @@ mod tests {
                 &parent_id,
                 false,
                 "manual",
+                None,
                 None,
                 None,
                 None,
@@ -2434,6 +2439,7 @@ mod tests {
                 None,
                 None,
                 Some("conductor-ai/feat-123"),
+                None,
             )
             .unwrap();
 

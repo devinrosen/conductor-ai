@@ -373,6 +373,7 @@ pub(super) fn insert_workflow_run_with_targets(
             None,
             None,
             None,
+            None,
         )
         .unwrap();
     run.id

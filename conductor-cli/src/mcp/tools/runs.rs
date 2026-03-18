@@ -515,6 +515,7 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
                 )
                 .unwrap();
             wf_mgr
@@ -526,6 +527,7 @@ mod tests {
                     &p2.id,
                     false,
                     "manual",
+                    None,
                     None,
                     None,
                     None,
@@ -619,6 +621,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .expect("create run A");
         let _run_b = mgr
@@ -630,6 +633,7 @@ mod tests {
                 &parent.id,
                 false,
                 "manual",
+                None,
                 None,
                 None,
                 None,
@@ -895,6 +899,7 @@ mod tests {
                 &parent.id,
                 false,
                 "manual",
+                None,
                 None,
                 None,
                 None,

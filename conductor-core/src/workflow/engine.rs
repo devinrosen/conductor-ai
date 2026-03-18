@@ -271,6 +271,13 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     let parent_prompt = format!("Workflow: {} — {}", workflow.name, workflow.description);
     let parent_run = agent_mgr.create_run(input.worktree_id, &parent_prompt, None, input.model)?;
 
+    // Resolve feature up front so we can include it in the initial INSERT.
+    let feature = if let Some(fid) = input.feature_id {
+        Some(FeatureManager::new(conn, config).get_by_id(fid)?)
+    } else {
+        None
+    };
+
     // Create workflow run record with snapshot and target FKs in a single INSERT
     let wf_run = wf_mgr.create_workflow_run_with_targets(
         &workflow.name,
@@ -283,6 +290,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         Some(&snapshot_json),
         input.parent_workflow_run_id,
         input.target_label,
+        feature.as_ref().map(|f| f.id.as_str()),
     )?;
 
     // Notify any waiting caller of the freshly-created run ID.
@@ -290,18 +298,6 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         let (lock, cvar) = pair.as_ref();
         *lock.lock().unwrap_or_else(|e| e.into_inner()) = Some(wf_run.id.clone());
         cvar.notify_one();
-    }
-
-    // Resolve feature up front so we only hit the DB once.
-    let feature = if let Some(fid) = input.feature_id {
-        Some(FeatureManager::new(conn, config).get_by_id(fid)?)
-    } else {
-        None
-    };
-
-    // Persist feature_id on the workflow run record.
-    if let Some(ref f) = feature {
-        wf_mgr.set_workflow_run_feature_id(&wf_run.id, &f.id)?;
     }
 
     // Persist default_bot_name so it can be restored on resume.
