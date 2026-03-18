@@ -5,6 +5,10 @@ workflow draft-release-notes {
     targets     = ["pr"]
   }
 
-  call fetch-pr-context
+  script fetch-pr-context {
+    run = ".conductor/scripts/fetch-pr-context.sh"
+    as  = "actor"
+    env = { PR_NUMBER = "{{pr_number}}" }
+  }
   call draft-release-notes
 }
