@@ -504,31 +504,14 @@ fn generate_field_hints(fields: &[FieldDef], prefix: &str) -> String {
                 ..
             } => {
                 let type_label = match ft.as_ref() {
-                    FieldType::String => "string",
-                    FieldType::Number => "number",
-                    FieldType::Boolean => "boolean",
+                    FieldType::String => "string".to_owned(),
+                    FieldType::Number => "number".to_owned(),
+                    FieldType::Boolean => "boolean".to_owned(),
                     FieldType::Enum(v) => {
                         let joined = v.join(", ");
-                        let label = format!("enum({joined})");
-                        if let Some(ref desc) = field.desc {
-                            hints.push(format!(
-                                "\"{full_name}\"{optional_tag}: {desc} (array of {label})"
-                            ));
-                        } else {
-                            hints.push(format!("\"{full_name}\"{optional_tag}: array of {label}"));
-                        }
-                        // Early continue — we already pushed the hint
-                        if let Some(ref examples) = field.examples {
-                            let examples_str = examples
-                                .iter()
-                                .map(|e| format!("\"{e}\""))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            hints.push(format!("  examples: [{examples_str}]"));
-                        }
-                        continue;
+                        format!("enum({joined})")
                     }
-                    _ => "unknown",
+                    _ => "unknown".to_owned(),
                 };
                 if let Some(ref desc) = field.desc {
                     hints.push(format!(
@@ -819,11 +802,12 @@ fn validate_field_value(value: &serde_json::Value, field: &FieldDef) -> Result<(
             })?;
             if let Some(ft) = item_type {
                 // Scalar-typed array: validate each element against the scalar type
+                let item_field_type = *ft.clone();
                 for (i, elem) in arr.iter().enumerate() {
                     let synthetic = FieldDef {
                         name: format!("{}[{}]", field.name, i),
                         required: true,
-                        field_type: *ft.clone(),
+                        field_type: item_field_type.clone(),
                         desc: None,
                         examples: None,
                     };
@@ -2108,6 +2092,38 @@ Real output:
         let schema = parse_schema_content(yaml, "test").unwrap();
         let prompt = generate_prompt_instructions(&schema);
         assert!(prompt.contains("[\"...\", \"...\"]"));
+    }
+
+    #[test]
+    fn test_validate_enum_scalar_array_valid() {
+        let yaml = "fields:\n  status:\n    type: array\n    items: \"enum(a,b)\"\n";
+        let schema = parse_schema_content(yaml, "test").unwrap();
+        let json = "<<<CONDUCTOR_OUTPUT>>>\n{\"status\": [\"a\"]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+        let result = parse_structured_output(json, &schema);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_enum_scalar_array_rejects_invalid_value() {
+        let yaml = "fields:\n  status:\n    type: array\n    items: \"enum(a,b)\"\n";
+        let schema = parse_schema_content(yaml, "test").unwrap();
+        let json = "<<<CONDUCTOR_OUTPUT>>>\n{\"status\": [\"c\"]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+        let result = parse_structured_output(json, &schema);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("is not one of"));
+    }
+
+    #[test]
+    fn test_validate_enum_scalar_array_rejects_wrong_type() {
+        let yaml = "fields:\n  status:\n    type: array\n    items: \"enum(a,b)\"\n";
+        let schema = parse_schema_content(yaml, "test").unwrap();
+        let json = "<<<CONDUCTOR_OUTPUT>>>\n{\"status\": [123]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+        let result = parse_structured_output(json, &schema);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("expected enum string"));
     }
 
     #[test]
