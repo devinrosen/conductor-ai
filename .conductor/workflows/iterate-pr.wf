@@ -18,7 +18,9 @@ workflow iterate-pr {
     call workflow review-pr
 
     if review-aggregator.has_blocking_findings {
-      call address-reviews
+      call address-reviews {
+        as = "developer"
+      }
       script fmt-fix {
         run = ".conductor/scripts/fmt-fix.sh"
       }
