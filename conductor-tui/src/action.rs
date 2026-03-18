@@ -326,7 +326,12 @@ pub enum Action {
     WorkflowDataRefreshed(Box<WorkflowDataPayload>),
 
     // Feature actions (dashboard feature header rows)
-    FeatureDetail,
+    FeatureDetail {
+        repo_idx: usize,
+        feature_idx: usize,
+        total: usize,
+        merged: usize,
+    },
 
     // Timer tick — also triggers workflow data refresh on workflow views
     Tick,

@@ -1921,4 +1921,48 @@ mod tests {
         let result = mgr.get_by_ids(&["nonexistent"]).unwrap();
         assert!(result.is_empty());
     }
+
+    // -----------------------------------------------------------------------
+    // Worktree::belongs_to_feature() tests
+    // -----------------------------------------------------------------------
+
+    fn make_worktree_with_base(repo_id: &str, base_branch: Option<&str>) -> Worktree {
+        Worktree {
+            id: "wt-test".into(),
+            repo_id: repo_id.into(),
+            slug: "test-wt".into(),
+            branch: "feat/child".into(),
+            path: "/tmp/test".into(),
+            ticket_id: None,
+            status: WorktreeStatus::Active,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            completed_at: None,
+            model: None,
+            base_branch: base_branch.map(String::from),
+        }
+    }
+
+    #[test]
+    fn belongs_to_feature_matching_repo_and_branch() {
+        let wt = make_worktree_with_base("repo1", Some("feat/parent"));
+        assert!(wt.belongs_to_feature("repo1", "feat/parent"));
+    }
+
+    #[test]
+    fn belongs_to_feature_mismatched_repo() {
+        let wt = make_worktree_with_base("repo1", Some("feat/parent"));
+        assert!(!wt.belongs_to_feature("repo2", "feat/parent"));
+    }
+
+    #[test]
+    fn belongs_to_feature_mismatched_branch() {
+        let wt = make_worktree_with_base("repo1", Some("feat/parent"));
+        assert!(!wt.belongs_to_feature("repo1", "feat/other"));
+    }
+
+    #[test]
+    fn belongs_to_feature_none_base_branch() {
+        let wt = make_worktree_with_base("repo1", None);
+        assert!(!wt.belongs_to_feature("repo1", "feat/parent"));
+    }
 }

@@ -700,37 +700,34 @@ impl App {
             }
 
             // Feature actions
-            Action::FeatureDetail => {
-                if let Some(crate::state::DashboardRow::Feature {
-                    repo_idx,
-                    feature_idx,
-                    total,
-                    merged,
-                }) = self.state.current_dashboard_row()
-                {
-                    if let Some(feature) = self.state.feature_at(repo_idx, feature_idx) {
-                        let body = format!(
-                            "Name:        {}\n\
-                             Branch:      {}\n\
-                             Base:        {}\n\
-                             Status:      {:?}\n\
-                             Worktrees:   {total} ({merged} merged)\n\
-                             Tickets:     {}",
-                            feature.name,
-                            feature.branch,
-                            feature.base_branch,
-                            feature.status,
-                            feature.ticket_count
-                        );
-                        let line_count = body.lines().count();
-                        self.state.modal = Modal::EventDetail {
-                            title: format!("Feature: {}", feature.name),
-                            body,
-                            line_count,
-                            scroll_offset: 0,
-                            horizontal_offset: 0,
-                        };
-                    }
+            Action::FeatureDetail {
+                repo_idx,
+                feature_idx,
+                total,
+                merged,
+            } => {
+                if let Some(feature) = self.state.feature_at(repo_idx, feature_idx) {
+                    let body = format!(
+                        "Name:        {}\n\
+                         Branch:      {}\n\
+                         Base:        {}\n\
+                         Status:      {:?}\n\
+                         Worktrees:   {total} ({merged} merged)\n\
+                         Tickets:     {}",
+                        feature.name,
+                        feature.branch,
+                        feature.base_branch,
+                        feature.status,
+                        feature.ticket_count
+                    );
+                    let line_count = body.lines().count();
+                    self.state.modal = Modal::EventDetail {
+                        title: format!("Feature: {}", feature.name),
+                        body,
+                        line_count,
+                        scroll_offset: 0,
+                        horizontal_offset: 0,
+                    };
                 }
             }
             // Background results
