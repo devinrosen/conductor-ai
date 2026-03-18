@@ -1920,6 +1920,45 @@ impl AppState {
         }
     }
 
+    /// Returns true if the worktree is a child of the given feature
+    /// (same repo and base_branch matches the feature branch).
+    pub fn worktree_belongs_to_feature(
+        wt: &conductor_core::worktree::Worktree,
+        repo_id: &str,
+        feature: &conductor_core::feature::FeatureRow,
+    ) -> bool {
+        wt.repo_id == repo_id && wt.base_branch.as_deref() == Some(feature.branch.as_str())
+    }
+
+    /// Count child worktrees for a feature and how many are merged/abandoned.
+    /// Returns `(total, merged_or_abandoned)`.
+    pub fn feature_child_stats(
+        &self,
+        repo_id: &str,
+        feature: &conductor_core::feature::FeatureRow,
+    ) -> (usize, usize) {
+        let total = self
+            .data
+            .worktrees
+            .iter()
+            .filter(|wt| Self::worktree_belongs_to_feature(wt, repo_id, feature))
+            .count();
+        let merged = self
+            .data
+            .worktrees
+            .iter()
+            .filter(|wt| {
+                Self::worktree_belongs_to_feature(wt, repo_id, feature)
+                    && matches!(
+                        wt.status,
+                        conductor_core::worktree::WorktreeStatus::Merged
+                            | conductor_core::worktree::WorktreeStatus::Abandoned
+                    )
+            })
+            .count();
+        (total, merged)
+    }
+
     /// Ordered list of rows for the unified dashboard panel.
     /// Each repo appears first, then feature groups with their child worktrees,
     /// then ungrouped worktrees.
@@ -1943,22 +1982,13 @@ impl AppState {
                     repo_idx,
                     feature_idx: fi,
                 });
-                if !self.collapsed_features.contains(&feature.id) {
-                    for (wt_idx, wt) in self.data.worktrees.iter().enumerate() {
-                        if wt.repo_id == repo.id
-                            && wt.base_branch.as_deref() == Some(feature.branch.as_str())
-                        {
+
+                // Collect grouped worktree indices
+                for (wt_idx, wt) in self.data.worktrees.iter().enumerate() {
+                    if Self::worktree_belongs_to_feature(wt, &repo.id, feature) {
+                        grouped_wt_indices.insert(wt_idx);
+                        if !self.collapsed_features.contains(&feature.id) {
                             rows.push(DashboardRow::Worktree(wt_idx));
-                            grouped_wt_indices.insert(wt_idx);
-                        }
-                    }
-                } else {
-                    // Still track grouped worktrees even when collapsed
-                    for (wt_idx, wt) in self.data.worktrees.iter().enumerate() {
-                        if wt.repo_id == repo.id
-                            && wt.base_branch.as_deref() == Some(feature.branch.as_str())
-                        {
-                            grouped_wt_indices.insert(wt_idx);
                         }
                     }
                 }
@@ -3634,5 +3664,205 @@ pub(crate) mod tests {
             "child run c1 should appear, got {:?}",
             rows[2]
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // dashboard_rows() tests
+    // -----------------------------------------------------------------------
+
+    fn make_repo(id: &str, slug: &str) -> conductor_core::repo::Repo {
+        conductor_core::repo::Repo {
+            id: id.into(),
+            slug: slug.into(),
+            local_path: String::new(),
+            remote_url: String::new(),
+            default_branch: "main".into(),
+            workspace_dir: String::new(),
+            created_at: String::new(),
+            model: None,
+            allow_agent_issue_creation: false,
+        }
+    }
+
+    fn make_worktree(
+        id: &str,
+        repo_id: &str,
+        base_branch: Option<&str>,
+        status: conductor_core::worktree::WorktreeStatus,
+    ) -> conductor_core::worktree::Worktree {
+        conductor_core::worktree::Worktree {
+            id: id.into(),
+            repo_id: repo_id.into(),
+            slug: id.into(),
+            branch: format!("feat/{id}"),
+            path: String::new(),
+            ticket_id: None,
+            status,
+            created_at: String::new(),
+            completed_at: None,
+            model: None,
+            base_branch: base_branch.map(|s| s.to_string()),
+        }
+    }
+
+    fn make_feature_row(id: &str, branch: &str) -> conductor_core::feature::FeatureRow {
+        conductor_core::feature::FeatureRow {
+            id: id.into(),
+            name: id.into(),
+            branch: branch.into(),
+            base_branch: "main".into(),
+            status: conductor_core::feature::FeatureStatus::Active,
+            created_at: String::new(),
+            worktree_count: 0,
+            ticket_count: 0,
+        }
+    }
+
+    #[test]
+    fn dashboard_rows_repo_only() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        let rows = state.dashboard_rows();
+        assert_eq!(rows, vec![DashboardRow::Repo(0)]);
+    }
+
+    #[test]
+    fn dashboard_rows_ungrouped_worktrees() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        state.data.worktrees = vec![
+            make_worktree(
+                "wt1",
+                "r1",
+                None,
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+            make_worktree(
+                "wt2",
+                "r1",
+                None,
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+        ];
+        let rows = state.dashboard_rows();
+        assert_eq!(
+            rows,
+            vec![
+                DashboardRow::Repo(0),
+                DashboardRow::Worktree(0),
+                DashboardRow::Worktree(1),
+            ]
+        );
+    }
+
+    #[test]
+    fn dashboard_rows_feature_groups_worktrees() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        state
+            .data
+            .features_by_repo
+            .insert("r1".into(), vec![make_feature_row("f1", "feat/big-thing")]);
+        state.data.worktrees = vec![
+            make_worktree(
+                "wt1",
+                "r1",
+                Some("feat/big-thing"),
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+            make_worktree(
+                "wt2",
+                "r1",
+                None,
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+        ];
+        let rows = state.dashboard_rows();
+        assert_eq!(
+            rows,
+            vec![
+                DashboardRow::Repo(0),
+                DashboardRow::Feature {
+                    repo_idx: 0,
+                    feature_idx: 0
+                },
+                DashboardRow::Worktree(0), // grouped under feature
+                DashboardRow::Worktree(1), // ungrouped
+            ]
+        );
+    }
+
+    #[test]
+    fn dashboard_rows_collapsed_feature_hides_children() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        state
+            .data
+            .features_by_repo
+            .insert("r1".into(), vec![make_feature_row("f1", "feat/big-thing")]);
+        state.data.worktrees = vec![
+            make_worktree(
+                "wt1",
+                "r1",
+                Some("feat/big-thing"),
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+            make_worktree(
+                "wt2",
+                "r1",
+                None,
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+        ];
+        state.collapsed_features.insert("f1".into());
+        let rows = state.dashboard_rows();
+        assert_eq!(
+            rows,
+            vec![
+                DashboardRow::Repo(0),
+                DashboardRow::Feature {
+                    repo_idx: 0,
+                    feature_idx: 0
+                },
+                // wt1 is hidden (collapsed)
+                DashboardRow::Worktree(1), // ungrouped still shows
+            ]
+        );
+    }
+
+    #[test]
+    fn feature_child_stats_counts_correctly() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        let feature = make_feature_row("f1", "feat/big-thing");
+        state.data.worktrees = vec![
+            make_worktree(
+                "wt1",
+                "r1",
+                Some("feat/big-thing"),
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+            make_worktree(
+                "wt2",
+                "r1",
+                Some("feat/big-thing"),
+                conductor_core::worktree::WorktreeStatus::Merged,
+            ),
+            make_worktree(
+                "wt3",
+                "r1",
+                Some("feat/big-thing"),
+                conductor_core::worktree::WorktreeStatus::Abandoned,
+            ),
+            make_worktree(
+                "wt4",
+                "r1",
+                None,
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+        ];
+        let (total, merged) = state.feature_child_stats("r1", &feature);
+        assert_eq!(total, 3);
+        assert_eq!(merged, 2);
     }
 }

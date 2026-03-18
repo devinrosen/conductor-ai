@@ -24,7 +24,9 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         .iter()
         .map(|row| match row {
             DashboardRow::Repo(idx) => {
-                let repo = &state.data.repos[*idx];
+                let Some(repo) = state.data.repos.get(*idx) else {
+                    return ListItem::new(Line::from(""));
+                };
                 let active = state
                     .data
                     .worktrees
@@ -48,33 +50,17 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                 repo_idx,
                 feature_idx,
             } => {
-                let repo = &state.data.repos[*repo_idx];
+                let Some(repo) = state.data.repos.get(*repo_idx) else {
+                    return ListItem::new(Line::from(""));
+                };
                 let empty = Vec::new();
                 let features = state.data.features_by_repo.get(&repo.id).unwrap_or(&empty);
-                let feature = &features[*feature_idx];
+                let Some(feature) = features.get(*feature_idx) else {
+                    return ListItem::new(Line::from(""));
+                };
                 let collapsed = state.collapsed_features.contains(&feature.id);
 
-                // Count child worktrees and how many are merged
-                let child_wts: Vec<_> = state
-                    .data
-                    .worktrees
-                    .iter()
-                    .filter(|wt| {
-                        wt.repo_id == repo.id
-                            && wt.base_branch.as_deref() == Some(feature.branch.as_str())
-                    })
-                    .collect();
-                let merged = child_wts
-                    .iter()
-                    .filter(|wt| {
-                        matches!(
-                            wt.status,
-                            conductor_core::worktree::WorktreeStatus::Merged
-                                | conductor_core::worktree::WorktreeStatus::Abandoned
-                        )
-                    })
-                    .count();
-                let total = child_wts.len();
+                let (total, merged) = state.feature_child_stats(&repo.id, feature);
 
                 let arrow = if collapsed { "▸" } else { "▾" };
                 let progress = format!(" ({merged}/{total} merged)");
@@ -94,7 +80,9 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                 ]))
             }
             DashboardRow::Worktree(idx) => {
-                let wt = &state.data.worktrees[*idx];
+                let Some(wt) = state.data.worktrees.get(*idx) else {
+                    return ListItem::new(Line::from(""));
+                };
                 // Check if this worktree is under a feature (deeper indent with tree line)
                 let is_under_feature = state
                     .data
@@ -103,7 +91,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                     .map(|features| {
                         features
                             .iter()
-                            .any(|f| wt.base_branch.as_deref() == Some(f.branch.as_str()))
+                            .any(|f| AppState::worktree_belongs_to_feature(wt, &wt.repo_id, f))
                     })
                     .unwrap_or(false);
                 let prefix = if is_under_feature {

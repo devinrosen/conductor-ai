@@ -330,9 +330,14 @@ pub fn poll_data() -> Option<PollResult> {
     let feat_mgr = FeatureManager::new(&conn, &config);
     let mut features_by_repo = std::collections::HashMap::new();
     for repo in &repos {
-        if let Ok(features) = feat_mgr.list_active(&repo.slug) {
-            if !features.is_empty() {
-                features_by_repo.insert(repo.id.clone(), features);
+        match feat_mgr.list_active(&repo.slug) {
+            Ok(features) => {
+                if !features.is_empty() {
+                    features_by_repo.insert(repo.id.clone(), features);
+                }
+            }
+            Err(e) => {
+                eprintln!("warn: list_active features failed for {}: {e}", repo.slug);
             }
         }
     }

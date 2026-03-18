@@ -326,13 +326,7 @@ pub enum Action {
     WorkflowDataRefreshed(Box<WorkflowDataPayload>),
 
     // Feature actions (dashboard feature header rows)
-    #[allow(dead_code)]
-    ToggleFeatureCollapse,
     FeatureDetail,
-    #[allow(dead_code)]
-    FeaturePrComplete {
-        result: Result<String, String>,
-    },
 
     // Timer tick — also triggers workflow data refresh on workflow views
     Tick,

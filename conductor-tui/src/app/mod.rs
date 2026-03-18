@@ -700,25 +700,6 @@ impl App {
             }
 
             // Feature actions
-            Action::ToggleFeatureCollapse => {
-                let rows = self.state.dashboard_rows();
-                if let Some(crate::state::DashboardRow::Feature {
-                    repo_idx,
-                    feature_idx,
-                }) = rows.get(self.state.dashboard_index)
-                {
-                    if let Some(repo) = self.state.data.repos.get(*repo_idx) {
-                        if let Some(features) = self.state.data.features_by_repo.get(&repo.id) {
-                            if let Some(feature) = features.get(*feature_idx) {
-                                let fid = feature.id.clone();
-                                if !self.state.collapsed_features.remove(&fid) {
-                                    self.state.collapsed_features.insert(fid);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
             Action::FeatureDetail => {
                 let rows = self.state.dashboard_rows();
                 if let Some(crate::state::DashboardRow::Feature {
@@ -729,23 +710,8 @@ impl App {
                     if let Some(repo) = self.state.data.repos.get(*repo_idx) {
                         if let Some(features) = self.state.data.features_by_repo.get(&repo.id) {
                             if let Some(feature) = features.get(*feature_idx) {
-                                // Count child worktrees and merged status
-                                let child_wts: Vec<_> = self
-                                    .state
-                                    .data
-                                    .worktrees
-                                    .iter()
-                                    .filter(|wt| {
-                                        wt.repo_id == repo.id
-                                            && wt.base_branch.as_deref()
-                                                == Some(feature.branch.as_str())
-                                    })
-                                    .collect();
-                                let merged = child_wts
-                                    .iter()
-                                    .filter(|wt| matches!(wt.status, conductor_core::worktree::WorktreeStatus::Merged | conductor_core::worktree::WorktreeStatus::Abandoned))
-                                    .count();
-                                let total = child_wts.len();
+                                let (total, merged) =
+                                    self.state.feature_child_stats(&repo.id, feature);
 
                                 let body = format!(
                                     "Name:        {}\n\
@@ -773,14 +739,6 @@ impl App {
                     }
                 }
             }
-            Action::FeaturePrComplete { result } => {
-                self.state.modal = Modal::None;
-                match result {
-                    Ok(msg) => self.state.status_message = Some(msg),
-                    Err(e) => self.state.modal = Modal::Error { message: e },
-                }
-            }
-
             // Background results
             Action::PrsRefreshed { repo_id, mut prs } => {
                 if self.state.selected_repo_id.as_deref() == Some(&repo_id) {
