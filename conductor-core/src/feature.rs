@@ -288,7 +288,7 @@ impl<'a> FeatureManager<'a> {
             0 => Ok(None),
             1 => Ok(Some(features.into_iter().next().unwrap())),
             n => Err(ConductorError::Workflow(format!(
-                "Ticket is linked to {n} active features ({}). Specify a feature to disambiguate.",
+                "Ticket is linked to {n} active features ({}) — specify which feature to use.",
                 features
                     .iter()
                     .map(|f| f.name.as_str())
@@ -299,6 +299,12 @@ impl<'a> FeatureManager<'a> {
     }
 
     /// Resolve a feature ID for a workflow run.
+    ///
+    /// This is an intentional cross-domain convenience orchestrator: it touches
+    /// `TicketSyncer` and `WorktreeManager` so that callers (CLI, TUI, web, MCP)
+    /// share a single resolution path instead of each re-implementing the lookup
+    /// chain. The coupling is accepted because feature resolution inherently
+    /// requires ticket and worktree context.
     ///
     /// Resolution order:
     /// 1. Explicit feature name → look up by repo slug + name, verify active.
@@ -1298,7 +1304,7 @@ mod tests {
         assert!(result.is_err(), "should error when ambiguous");
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("disambiguate"),
+            err_msg.contains("specify which feature"),
             "error should mention disambiguation: {err_msg}"
         );
     }

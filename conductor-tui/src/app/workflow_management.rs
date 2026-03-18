@@ -11,6 +11,41 @@ use super::helpers::{
 };
 use super::App;
 
+/// Resolve a feature ID for a workflow run in a background thread.
+///
+/// Opens a fresh DB connection, calls `resolve_feature_id_for_run`, and logs
+/// any errors via `eprintln!` so they appear in the TUI debug output instead
+/// of being silently discarded.  Returns `None` on failure so the workflow
+/// proceeds without feature context rather than aborting entirely.
+fn resolve_feature_id_logged(
+    config: &conductor_core::config::Config,
+    feature_name: Option<&str>,
+    repo_slug: Option<&str>,
+    ticket_id: Option<&str>,
+    worktree_slug: Option<&str>,
+) -> Option<String> {
+    let db_path = conductor_core::config::db_path();
+    let conn = match conductor_core::db::open_database(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[conductor] feature resolution: failed to open database: {e}");
+            return None;
+        }
+    };
+    match conductor_core::feature::FeatureManager::new(&conn, config).resolve_feature_id_for_run(
+        feature_name,
+        repo_slug,
+        ticket_id,
+        worktree_slug,
+    ) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("[conductor] feature resolution failed: {e}");
+            None
+        }
+    }
+}
+
 impl App {
     /// Dispatch workflow data loading to a background thread. The result
     /// arrives as a `WorkflowDataRefreshed` action, avoiding synchronous
@@ -834,23 +869,13 @@ impl App {
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
             };
 
-            // Resolve feature_id off the main thread.
-            let feature_id = {
-                let db = conductor_core::config::db_path();
-                conductor_core::db::open_database(&db)
-                    .ok()
-                    .and_then(|conn| {
-                        conductor_core::feature::FeatureManager::new(&conn, &config)
-                            .resolve_feature_id_for_run(
-                                None,
-                                repo_slug.as_deref(),
-                                ticket_id.as_deref(),
-                                wt_slug.as_deref(),
-                            )
-                            .ok()
-                            .flatten()
-                    })
-            };
+            let feature_id = resolve_feature_id_logged(
+                &config,
+                None,
+                repo_slug.as_deref(),
+                ticket_id.as_deref(),
+                wt_slug.as_deref(),
+            );
 
             let params = WorkflowExecStandalone {
                 config,
@@ -901,18 +926,7 @@ impl App {
                 execute_workflow_standalone, WorkflowExecConfig, WorkflowExecStandalone,
             };
 
-            // Resolve feature_id off the main thread.
-            let feature_id = {
-                let db = conductor_core::config::db_path();
-                conductor_core::db::open_database(&db)
-                    .ok()
-                    .and_then(|conn| {
-                        conductor_core::feature::FeatureManager::new(&conn, &config)
-                            .resolve_feature_id_for_run(None, None, Some(&ticket_id), None)
-                            .ok()
-                            .flatten()
-                    })
-            };
+            let feature_id = resolve_feature_id_logged(&config, None, None, Some(&ticket_id), None);
 
             let working_dir = repo_path.clone();
 
