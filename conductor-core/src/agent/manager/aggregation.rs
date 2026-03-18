@@ -188,6 +188,71 @@ mod tests {
     use super::super::AgentManager;
 
     #[test]
+    fn test_active_run_counts_by_repo() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // No active runs yet — map should be empty
+        let counts = mgr.active_run_counts_by_repo().unwrap();
+        assert!(counts.is_empty());
+
+        // Create runs: two running in w1 (repo r1), one waiting_for_feedback in w2 (repo r1)
+        let _run1 = mgr.create_run(Some("w1"), "Task 1", None, None).unwrap();
+        let _run2 = mgr.create_run(Some("w1"), "Task 2", None, None).unwrap();
+        let run3 = mgr.create_run(Some("w2"), "Task 3", None, None).unwrap();
+        // Set run3 to waiting_for_feedback via request_feedback
+        mgr.request_feedback(&run3.id, "What should I do?").unwrap();
+
+        // Also create a completed run — should not appear in counts
+        let run4 = mgr.create_run(Some("w1"), "Task 4", None, None).unwrap();
+        mgr.update_run_completed(
+            &run4.id,
+            None,
+            Some("done"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let counts = mgr.active_run_counts_by_repo().unwrap();
+        assert_eq!(counts.len(), 1);
+        let r1_counts = counts.get("r1").unwrap();
+        assert_eq!(r1_counts.running, 2);
+        assert_eq!(r1_counts.waiting, 1);
+    }
+
+    #[test]
+    fn test_active_run_counts_multiple_repos() {
+        let conn = setup_db();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+             VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', 'main', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w3', 'r2', 'feat-other', 'feat/other', '/tmp/ws2/other', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        let mgr = AgentManager::new(&conn);
+        let _r1 = mgr.create_run(Some("w1"), "r1 task", None, None).unwrap();
+        let _r2 = mgr.create_run(Some("w3"), "r2 task", None, None).unwrap();
+
+        let counts = mgr.active_run_counts_by_repo().unwrap();
+        assert_eq!(counts.len(), 2);
+        assert_eq!(counts["r1"].running, 1);
+        assert_eq!(counts["r1"].waiting, 0);
+        assert_eq!(counts["r2"].running, 1);
+        assert_eq!(counts["r2"].waiting, 0);
+    }
+
+    #[test]
     fn test_totals_by_ticket_all() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);

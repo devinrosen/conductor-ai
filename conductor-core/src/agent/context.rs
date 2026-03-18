@@ -8,6 +8,37 @@ use super::status::{AgentRunStatus, FeedbackStatus};
 /// Prefix used for the parent run prompt when launching a PR review swarm.
 pub const PR_REVIEW_SWARM_PROMPT_PREFIX: &str = "PR review swarm";
 
+/// Standard feedback protocol appended to every agent prompt.
+///
+/// Defined once here so both the ephemeral and worktree code paths use the
+/// exact same wording — a single edit propagates everywhere.
+const FEEDBACK_PROTOCOL: &str = "**Feedback protocol:** If you need human input to continue \
+     (e.g. a decision, clarification, or approval), output \
+     `[NEEDS_FEEDBACK] <your question>` as a standalone line. \
+     The conductor will pause your run and surface the question to \
+     the user. When they respond, your run will resume with their answer.";
+
+/// Run `git log --oneline -10` in `worktree_path` and return the commit lines.
+///
+/// Returns an empty `Vec` when git is unavailable, the directory is not a
+/// repository, or the output contains invalid UTF-8.  Uses `from_utf8_lossy`
+/// so partial output is never silently discarded.
+fn git_recent_commits(worktree_path: &str) -> Vec<String> {
+    Command::new("git")
+        .args(["log", "--oneline", "-10"])
+        .current_dir(worktree_path)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Build a startup context block to prepend to the agent prompt.
 ///
 /// Pulls worktree info, linked ticket, prior run plans, recent commits,
@@ -24,26 +55,12 @@ pub fn build_startup_context(
     // For ephemeral runs (no worktree), skip worktree-specific context
     let Some(wt_id) = worktree_id else {
         // Still include commits + feedback protocol below
-        let commits = Command::new("git")
-            .args(["log", "--oneline", "-10"])
-            .current_dir(worktree_path)
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default();
-        if !commits.is_empty() {
-            sections.push(format!("**Recent commits:**\n{commits}"));
+        let commit_lines = git_recent_commits(worktree_path);
+        if !commit_lines.is_empty() {
+            let formatted: Vec<String> = commit_lines.iter().map(|l| format!("- {l}")).collect();
+            sections.push(format!("**Recent commits:**\n{}", formatted.join("\n")));
         }
-        sections.push(
-            "**Feedback protocol:** If you need human input to continue \
-             (e.g. a decision, clarification, or approval), output \
-             `[NEEDS_FEEDBACK] <your question>` as a standalone line. \
-             The conductor will pause your run and surface the question \
-             to the user. When they respond, your run will resume with \
-             their answer."
-                .to_string(),
-        );
+        sections.push(FEEDBACK_PROTOCOL.to_string());
         return sections.join("\n\n---\n\n");
     };
 
@@ -140,38 +157,17 @@ pub fn build_startup_context(
     }
 
     // 4. Recent commits via git log
-    let commits = Command::new("git")
-        .args(["log", "--oneline", "-10"])
-        .current_dir(worktree_path)
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                String::from_utf8(o.stdout).ok()
-            } else {
-                None
-            }
-        });
-
-    if let Some(ref commit_output) = commits {
-        let lines: Vec<&str> = commit_output.lines().collect();
-        if !lines.is_empty() {
-            let commit_lines: Vec<String> = lines.iter().map(|l| format!("- {l}")).collect();
-            sections.push(format!(
-                "**Recent commits in this worktree:**\n{}",
-                commit_lines.join("\n")
-            ));
-        }
+    let commit_lines = git_recent_commits(worktree_path);
+    if !commit_lines.is_empty() {
+        let formatted: Vec<String> = commit_lines.iter().map(|l| format!("- {l}")).collect();
+        sections.push(format!(
+            "**Recent commits in this worktree:**\n{}",
+            formatted.join("\n")
+        ));
     }
 
     // Always include the feedback protocol so agents know how to request input.
-    sections.push(
-        "**Feedback protocol:** If you need human input to continue (e.g. a decision, \
-         clarification, or approval), output `[NEEDS_FEEDBACK] <your question>` as a \
-         standalone line. The conductor will pause your run and surface the question to \
-         the user. When they respond, your run will resume with their answer."
-            .to_string(),
-    );
+    sections.push(FEEDBACK_PROTOCOL.to_string());
 
     format!("## Session Context\n\n{}", sections.join("\n\n"))
 }

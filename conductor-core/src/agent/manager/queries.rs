@@ -14,13 +14,13 @@ use super::super::types::AgentRun;
 use super::AgentManager;
 
 impl<'a> AgentManager<'a> {
-    pub fn get_run(&self, run_id: &str) -> Result<Option<AgentRun>> {
-        let result = self.conn.query_row(
-            &format!("{AGENT_RUN_SELECT} WHERE id = ?1"),
-            params![run_id],
-            row_to_agent_run,
-        );
-
+    /// Convert a single-row query result into `Ok(Some(run))`, loading plan steps,
+    /// or `Ok(None)` on `QueryReturnedNoRows`.  Centralises the 3-arm match that
+    /// `get_run` and `latest_for_worktree` previously inlined identically.
+    fn load_optional_run(
+        &self,
+        result: std::result::Result<AgentRun, rusqlite::Error>,
+    ) -> Result<Option<AgentRun>> {
         match result {
             Ok(mut run) => {
                 let steps = self.get_run_steps(&run.id)?;
@@ -30,6 +30,15 @@ impl<'a> AgentManager<'a> {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    pub fn get_run(&self, run_id: &str) -> Result<Option<AgentRun>> {
+        let result = self.conn.query_row(
+            &format!("{AGENT_RUN_SELECT} WHERE id = ?1"),
+            params![run_id],
+            row_to_agent_run,
+        );
+        self.load_optional_run(result)
     }
 
     /// Batch-load multiple agent runs by ID in a single query.
@@ -112,16 +121,7 @@ impl<'a> AgentManager<'a> {
             params![worktree_id],
             row_to_agent_run,
         );
-
-        match result {
-            Ok(mut run) => {
-                let steps = self.get_run_steps(&run.id)?;
-                run.plan = if steps.is_empty() { None } else { Some(steps) };
-                Ok(Some(run))
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        self.load_optional_run(result)
     }
 
     /// Returns the latest agent run for each worktree, keyed by worktree_id.

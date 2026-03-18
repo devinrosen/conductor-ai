@@ -319,6 +319,50 @@ mod tests {
     }
 
     #[test]
+    fn test_count_turns_in_log_basic() {
+        // Two assistant lines and one non-assistant line
+        let content = concat!(
+            r#"{"type":"assistant","message":{"content":[]}}"#,
+            "\n",
+            r#"{"type":"system","subtype":"init","model":"claude-3"}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[]}}"#,
+            "\n",
+        );
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), content).unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+        assert_eq!(count_turns_in_log(&path), 2);
+    }
+
+    #[test]
+    fn test_count_turns_in_log_empty_file() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+        assert_eq!(count_turns_in_log(&path), 0);
+    }
+
+    #[test]
+    fn test_count_turns_in_log_no_assistant_lines() {
+        let content = concat!(
+            r#"{"type":"result","num_turns":3}"#,
+            "\n",
+            r#"{"type":"system","subtype":"init","model":"claude-3"}"#,
+            "\n",
+        );
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), content).unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+        assert_eq!(count_turns_in_log(&path), 0);
+    }
+
+    #[test]
+    fn test_count_turns_in_log_missing_file() {
+        // A path that does not exist should return 0 rather than panic
+        assert_eq!(count_turns_in_log("/nonexistent/path/to/log.jsonl"), 0);
+    }
+
+    #[test]
     fn test_parse_agent_log_uses_from_line() {
         let line1 = r#"{"type":"system","subtype":"init","model":"claude-3"}"#;
         let line2 =
