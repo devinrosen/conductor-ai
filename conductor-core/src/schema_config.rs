@@ -60,6 +60,10 @@ pub enum FieldType {
     /// Enum with allowed values.
     Enum(Vec<String>),
     /// Array of items defined by sub-fields or a scalar type.
+    ///
+    /// Invariant: `item_type` and `items` are mutually exclusive — at most one
+    /// may be populated.  `item_type.is_some()` implies `items.is_empty()` and
+    /// vice-versa.  The parser enforces this by construction.
     Array {
         /// Scalar element type (e.g. `string`, `number`). Set when `items` is a
         /// bare type string rather than an object map.
@@ -793,6 +797,10 @@ fn validate_field_value(value: &serde_json::Value, field: &FieldDef) -> Result<(
             }
         }
         FieldType::Array { item_type, items } => {
+            debug_assert!(
+                item_type.is_none() || items.is_empty(),
+                "FieldType::Array invariant violated: item_type and items are mutually exclusive"
+            );
             let arr = value.as_array().ok_or_else(|| {
                 ConductorError::Schema(format!(
                     "Field '{}' expected array, got {}",
@@ -801,16 +809,18 @@ fn validate_field_value(value: &serde_json::Value, field: &FieldDef) -> Result<(
                 ))
             })?;
             if let Some(ft) = item_type {
-                // Scalar-typed array: validate each element against the scalar type
-                let item_field_type = *ft.clone();
+                // Scalar-typed array: validate each element against the scalar type.
+                // Hoist the FieldType clone and FieldDef outside the loop so we
+                // allocate O(1) instead of O(n) for enum variants.
+                let mut synthetic = FieldDef {
+                    name: String::new(),
+                    required: true,
+                    field_type: *ft.clone(),
+                    desc: None,
+                    examples: None,
+                };
                 for (i, elem) in arr.iter().enumerate() {
-                    let synthetic = FieldDef {
-                        name: format!("{}[{}]", field.name, i),
-                        required: true,
-                        field_type: item_field_type.clone(),
-                        desc: None,
-                        examples: None,
-                    };
+                    synthetic.name = format!("{}[{}]", field.name, i);
                     validate_field_value(elem, &synthetic)?;
                 }
             } else if !items.is_empty() {
@@ -2175,6 +2185,46 @@ fields:
         let hints = generate_field_hints(&schema.fields, "");
         assert!(hints.contains("array of string"));
         assert!(hints.contains("list of labels"));
+    }
+
+    #[test]
+    fn test_validate_scalar_array_number() {
+        let yaml = "fields:\n  scores:\n    type: array\n    items: number\n";
+        let schema = parse_schema_content(yaml, "test").unwrap();
+
+        let ok = "<<<CONDUCTOR_OUTPUT>>>\n{\"scores\": [1, 2.5, 3]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+        assert!(parse_structured_output(ok, &schema).is_ok());
+
+        let bad = "<<<CONDUCTOR_OUTPUT>>>\n{\"scores\": [\"nope\"]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+        let err = parse_structured_output(bad, &schema)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("expected number"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_scalar_array_boolean() {
+        let yaml = "fields:\n  flags:\n    type: array\n    items: boolean\n";
+        let schema = parse_schema_content(yaml, "test").unwrap();
+
+        let ok = "<<<CONDUCTOR_OUTPUT>>>\n{\"flags\": [true, false]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+        assert!(parse_structured_output(ok, &schema).is_ok());
+
+        let bad = "<<<CONDUCTOR_OUTPUT>>>\n{\"flags\": [\"yes\"]}\n<<<END_CONDUCTOR_OUTPUT>>>";
+        let err = parse_structured_output(bad, &schema)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("expected boolean"), "got: {err}");
+    }
+
+    #[test]
+    fn test_hints_scalar_array_no_desc() {
+        let yaml = "fields:\n  tags:\n    type: array\n    items: string\n";
+        let schema = parse_schema_content(yaml, "test").unwrap();
+        let hints = generate_field_hints(&schema.fields, "");
+        assert!(hints.contains("array of string"), "got: {hints}");
+        // Without a desc, the hint should NOT contain a colon-separated description
+        assert!(!hints.contains("list of"), "got: {hints}");
     }
 
     /// Regression: when a field value contains the start marker string, the real block is still found.
