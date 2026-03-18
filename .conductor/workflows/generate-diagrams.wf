@@ -10,7 +10,9 @@ workflow generate-diagrams {
     types default = "ux,architecture,data-flow,state-machines,api,db"
   }
 
-  call check-personas-exist
+  script check-personas-exist {
+    run = ".conductor/scripts/check-personas-exist.sh"
+  }
 
   unless check-personas-exist.personas_exist {
     call extract-personas
