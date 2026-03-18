@@ -729,12 +729,12 @@ pub fn run(conn: &Connection) -> Result<()> {
 
     // --- Migration 42: features + feature_tickets tables ---
     if version < 42 {
-        let table_exists: bool = conn.query_row(
-            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='features'",
+        let both_exist: bool = conn.query_row(
+            "SELECT COUNT(*) = 2 FROM sqlite_master WHERE type='table' AND name IN ('features', 'feature_tickets')",
             [],
             |row| row.get(0),
         )?;
-        if !table_exists {
+        if !both_exist {
             conn.execute_batch(include_str!("migrations/042_features.sql"))?;
         }
         bump_version(conn, 42)?;

@@ -1207,13 +1207,7 @@ fn main() -> Result<()> {
                 from,
                 tickets,
             } => {
-                let ticket_ids: Vec<String> = tickets
-                    .as_deref()
-                    .unwrap_or("")
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+                let ticket_ids = parse_ticket_ids(tickets.as_deref().unwrap_or(""));
 
                 let mgr = FeatureManager::new(&conn, &config);
                 let feature = mgr.create(&repo, &name, from.as_deref(), &ticket_ids)?;
@@ -1246,11 +1240,7 @@ fn main() -> Result<()> {
                 name,
                 tickets,
             } => {
-                let ticket_ids: Vec<String> = tickets
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+                let ticket_ids = parse_ticket_ids(&tickets);
                 let mgr = FeatureManager::new(&conn, &config);
                 mgr.link_tickets(&repo, &name, &ticket_ids)?;
                 println!("Linked {} ticket(s) to feature '{name}'", ticket_ids.len());
@@ -1260,11 +1250,7 @@ fn main() -> Result<()> {
                 name,
                 tickets,
             } => {
-                let ticket_ids: Vec<String> = tickets
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+                let ticket_ids = parse_ticket_ids(&tickets);
                 let mgr = FeatureManager::new(&conn, &config);
                 mgr.unlink_tickets(&repo, &name, &ticket_ids)?;
                 println!(
@@ -2092,6 +2078,15 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Parse a comma-separated list of ticket IDs, trimming whitespace and dropping empties.
+fn parse_ticket_ids(input: &str) -> Vec<String> {
+    input
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn truncate_str(s: &str, max: usize) -> String {
