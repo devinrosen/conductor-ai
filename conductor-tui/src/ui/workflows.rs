@@ -1716,13 +1716,11 @@ fn run_status_icon(
         return status_display(&run.status.to_string(), theme);
     }
     // For waiting runs, inspect the first waiting step's gate_type.
-    let gate_type = steps
-        .get(&run.id)
-        .and_then(|ss| {
-            ss.iter()
-                .find(|s| s.status.to_string() == "waiting" && s.gate_type.is_some())
-                .and_then(|s| s.gate_type.as_deref())
-        });
+    let gate_type = steps.get(&run.id).and_then(|ss| {
+        ss.iter()
+            .find(|s| s.status.to_string() == "waiting" && s.gate_type.is_some())
+            .and_then(|s| s.gate_type.as_deref())
+    });
     match gate_type {
         Some("pr_checks") => ("⏳", theme.status_waiting),
         Some("pr_approval" | "human_approval" | "human_review") => ("👤", theme.label_warning),
