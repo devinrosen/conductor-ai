@@ -2327,3 +2327,31 @@ workflow test {
     let label = def.inputs.iter().find(|i| i.name == "label").unwrap();
     assert_eq!(label.input_type, InputType::String);
 }
+
+#[test]
+fn test_collect_all_agent_refs_deduplicates_across_body_and_always() {
+    let input = r#"workflow test {
+        meta { targets = ["worktree"] }
+        call shared-agent {}
+        call body-only-agent {}
+        always {
+            call shared-agent {}
+            call always-only-agent {}
+        }
+    }"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    let refs: Vec<String> = def
+        .collect_all_agent_refs()
+        .into_iter()
+        .map(|r| r.label().to_string())
+        .collect();
+    // Should be sorted and deduplicated: "shared-agent" appears in both blocks
+    assert_eq!(
+        refs,
+        vec![
+            "always-only-agent".to_string(),
+            "body-only-agent".to_string(),
+            "shared-agent".to_string(),
+        ]
+    );
+}

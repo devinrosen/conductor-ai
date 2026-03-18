@@ -5,7 +5,7 @@ use crate::prompt_config;
 use crate::schema_config;
 use crate::workflow_dsl::{
     default_skills_dir, detect_workflow_cycles, make_script_resolver, validate_script_steps,
-    validate_workflow_semantics, WorkflowDef,
+    validate_workflow_semantics, AgentRef, WorkflowDef,
 };
 
 // ---------------------------------------------------------------------------
@@ -84,13 +84,30 @@ where
     // against global directories once, avoiding O(N) redundant
     // filesystem probes when multiple workflows share agents,
     // snippets, or schemas.
+    //
+    // We cache per-workflow refs to avoid traversing each workflow's
+    // AST twice (once for global dedup, once for per-workflow checks).
+    struct WorkflowRefs {
+        agents: Vec<AgentRef>,
+        snippets: Vec<String>,
+        schemas: Vec<String>,
+    }
+    let per_wf_refs: Vec<WorkflowRefs> = workflows
+        .iter()
+        .map(|wf| WorkflowRefs {
+            agents: wf.collect_all_agent_refs(),
+            snippets: wf.collect_all_snippet_refs(),
+            schemas: wf.collect_all_schema_refs(),
+        })
+        .collect();
+
     let mut all_agent_refs = Vec::new();
     let mut all_snippet_names = Vec::new();
     let mut all_schema_names = Vec::new();
-    for wf in workflows {
-        all_agent_refs.extend(wf.collect_all_agent_refs());
-        all_snippet_names.extend(wf.collect_all_snippet_refs());
-        all_schema_names.extend(wf.collect_all_schema_refs());
+    for refs in &per_wf_refs {
+        all_agent_refs.extend(refs.agents.iter().cloned());
+        all_snippet_names.extend(refs.snippets.iter().cloned());
+        all_schema_names.extend(refs.schemas.iter().cloned());
     }
     all_agent_refs.sort();
     all_agent_refs.dedup();
@@ -123,27 +140,27 @@ where
             .collect();
 
     let mut entries = Vec::new();
-    for workflow in workflows {
+    for (workflow, wf_refs) in workflows.iter().zip(per_wf_refs.iter()) {
         let wf_name = &workflow.name;
         let mut wf_errors: Vec<String> = Vec::new();
 
         // --- Agents: emit errors directly from pre-computed missing set ---
-        for r in &workflow.collect_all_agent_refs() {
+        for r in &wf_refs.agents {
             if globally_missing_agents.contains(r.label()) {
                 wf_errors.push(format!("missing agent: {}", r.label()));
             }
         }
 
         // --- Snippets: emit errors directly from pre-computed missing set ---
-        for snippet in workflow.collect_all_snippet_refs() {
-            if globally_missing_snippets.contains(&snippet) {
+        for snippet in &wf_refs.snippets {
+            if globally_missing_snippets.contains(snippet) {
                 wf_errors.push(format!("missing prompt snippet: {snippet}"));
             }
         }
 
         // --- Schemas: emit errors directly from pre-computed issue map ---
-        for schema in workflow.collect_all_schema_refs() {
-            if let Some(issue) = global_schema_issue_map.get(&schema) {
+        for schema in &wf_refs.schemas {
+            if let Some(issue) = global_schema_issue_map.get(schema) {
                 match issue {
                     schema_config::SchemaIssue::Missing(s) => {
                         wf_errors.push(format!("missing schema: {s}"));
@@ -210,6 +227,30 @@ mod tests {
     /// A loader that always fails — useful when we don't care about sub-workflows.
     fn failing_loader(name: &str) -> std::result::Result<WorkflowDef, String> {
         Err(format!("workflow '{name}' not found"))
+    }
+
+    #[test]
+    fn batch_missing_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+
+        let wf = parse_wf(
+            r#"workflow agent-test {
+                meta { trigger = "manual" targets = ["worktree"] }
+                call nonexistent-agent {}
+            }"#,
+        );
+
+        let known_bots = HashSet::new();
+        let result =
+            validate_workflows_batch(&[wf], &[], path, path, &known_bots, &failing_loader);
+
+        assert_eq!(result.entries.len(), 1);
+        let errs = &result.entries[0].errors;
+        assert!(
+            errs.iter().any(|e| e.contains("missing agent")),
+            "expected missing agent error, got: {errs:?}"
+        );
     }
 
     #[test]
