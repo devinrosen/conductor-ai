@@ -179,6 +179,11 @@ impl<'a> FeatureManager<'a> {
     pub fn list(&self, repo_slug: &str) -> Result<Vec<FeatureRow>> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
 
+        // Worktree count uses an implicit join via branch name
+        // (w.base_branch = f.branch) rather than an FK join table. This is
+        // intentional: worktrees are created independently of features and
+        // linked by which branch they're based on, while ticket-feature links
+        // are explicit user actions stored in the `feature_tickets` table.
         query_collect(
             self.conn,
             "SELECT f.id, f.name, f.branch, f.base_branch, f.status, f.created_at,
@@ -234,15 +239,15 @@ impl<'a> FeatureManager<'a> {
         let ticket_ids = self.resolve_ticket_ids(&repo.id, ticket_source_ids)?;
 
         if !ticket_ids.is_empty() {
-            let (sql, param_values) = build_in_clause(
+            with_in_clause(
                 "DELETE FROM feature_tickets WHERE feature_id = ?1 AND ticket_id IN",
                 &feature.id,
                 &ticket_ids,
-            );
-            let mut stmt = self.conn.prepare(&sql)?;
-            let params: Vec<&dyn rusqlite::types::ToSql> =
-                param_values.iter().map(|p| p.as_ref()).collect();
-            stmt.execute(params.as_slice())?;
+                |sql, params| -> Result<()> {
+                    self.conn.prepare(sql)?.execute(params)?;
+                    Ok(())
+                },
+            )?;
         }
         Ok(())
     }
@@ -268,7 +273,8 @@ impl<'a> FeatureManager<'a> {
         let output = Command::new("gh")
             .args(&args)
             .current_dir(&repo.local_path)
-            .output()?;
+            .output()
+            .map_err(|e| ConductorError::GhCli(format!("failed to run `gh`: {e}")))?;
         if !output.status.success() {
             return Err(ConductorError::GhCli(
                 String::from_utf8_lossy(&output.stderr).trim().to_string(),
@@ -331,22 +337,22 @@ impl<'a> FeatureManager<'a> {
             return Ok(Vec::new());
         }
 
-        let (sql, param_values) = build_in_clause(
+        let map = with_in_clause(
             "SELECT id, source_id FROM tickets WHERE repo_id = ?1 AND source_id IN",
             repo_id,
             source_ids,
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            param_values.iter().map(|p| p.as_ref()).collect();
-
-        let mut rows = stmt.query(params.as_slice())?;
-        let mut map = std::collections::HashMap::new();
-        while let Some(row) = rows.next()? {
-            let id: String = row.get(0)?;
-            let source_id: String = row.get(1)?;
-            map.insert(source_id, id);
-        }
+            |sql, params| -> Result<std::collections::HashMap<String, String>> {
+                let mut stmt = self.conn.prepare(sql)?;
+                let mut rows = stmt.query(params)?;
+                let mut map = std::collections::HashMap::new();
+                while let Some(row) = rows.next()? {
+                    let id: String = row.get(0)?;
+                    let source_id: String = row.get(1)?;
+                    map.insert(source_id, id);
+                }
+                Ok(map)
+            },
+        )?;
 
         // Verify all requested source_ids were found, preserving order
         let mut ids = Vec::with_capacity(source_ids.len());
@@ -389,26 +395,33 @@ fn map_feature_row(row: &rusqlite::Row) -> rusqlite::Result<Feature> {
     })
 }
 
-/// Build a parameterised IN-clause query.
+/// Build a parameterised IN-clause query and execute a closure with the
+/// prepared params slice.
 ///
 /// `prefix` is everything before the `IN (...)` — e.g.
 /// `"SELECT id FROM tickets WHERE repo_id = ?1 AND source_id IN"`.
 /// `first_param` is bound to `?1`; `items` are bound to `?2`, `?3`, …
-fn build_in_clause(
+///
+/// The closure receives `(&str, &[&dyn ToSql])` — the SQL string and a
+/// ready-to-use params slice — so callers never need to manually convert
+/// boxed params.
+fn with_in_clause<T>(
     prefix: &str,
     first_param: &str,
     items: &[String],
-) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
+    f: impl FnOnce(&str, &[&dyn rusqlite::types::ToSql]) -> T,
+) -> T {
     let placeholders: Vec<String> = (0..items.len()).map(|i| format!("?{}", i + 2)).collect();
     let sql = format!(
         "{prefix} ({placeholders})",
         placeholders = placeholders.join(", ")
     );
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(first_param.to_string())];
+    let first = first_param.to_string();
+    let mut params: Vec<&dyn rusqlite::types::ToSql> = vec![&first];
     for item in items {
-        params.push(Box::new(item.clone()));
+        params.push(item);
     }
-    (sql, params)
+    f(&sql, &params)
 }
 
 /// Derive a git branch name from a feature name.
@@ -799,6 +812,92 @@ mod tests {
         // Verify DB record via get_by_name
         let fetched = mgr.get_by_name("test-repo", "my-feature").unwrap();
         assert_eq!(fetched.id, feature.id);
+    }
+
+    #[test]
+    fn test_create_feature_with_custom_base_branch() {
+        let (work, _bare) = setup_git_repo();
+
+        // Create a "develop" branch and push it so it can be used as base
+        std::process::Command::new("git")
+            .args(["branch", "develop", "main"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["push", "origin", "develop"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+
+        let conn = setup_db();
+        let _repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let feature = mgr
+            .create("test-repo", "custom-base", Some("develop"), &[])
+            .unwrap();
+
+        assert_eq!(feature.name, "custom-base");
+        assert_eq!(feature.branch, "feat/custom-base");
+        assert_eq!(feature.base_branch, "develop");
+
+        // Verify the branch was created from develop
+        let output = std::process::Command::new("git")
+            .args(["branch", "--list", "feat/custom-base"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&output.stdout).contains("feat/custom-base"));
+    }
+
+    #[test]
+    fn test_create_feature_with_ticket_source_ids() {
+        let (work, _bare) = setup_git_repo();
+        let conn = setup_db();
+        let repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+
+        // Pre-create tickets with known source_ids
+        let ticket_a = insert_ticket(&conn, &repo_id, "42");
+        let ticket_b = insert_ticket(&conn, &repo_id, "43");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let feature = mgr
+            .create(
+                "test-repo",
+                "with-tickets",
+                None,
+                &["42".into(), "43".into()],
+            )
+            .unwrap();
+
+        // Verify tickets were linked
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM feature_tickets WHERE feature_id = ?1",
+                params![feature.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+
+        // Verify the correct tickets were linked
+        let linked: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT ticket_id FROM feature_tickets WHERE feature_id = ?1 ORDER BY ticket_id")
+                .unwrap();
+            stmt.query_map(params![feature.id], |row| row.get(0))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+        let mut expected = vec![ticket_a, ticket_b];
+        expected.sort();
+        assert_eq!(linked, expected);
     }
 
     #[test]
