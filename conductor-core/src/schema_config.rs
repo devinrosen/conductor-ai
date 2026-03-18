@@ -2322,4 +2322,43 @@ fields:
         let result = parse_structured_output(text, &schema).unwrap();
         assert_eq!(result.context, "all good");
     }
+
+    #[test]
+    fn test_example_scalar_array_number() {
+        let schema = parse_schema_content(
+            "fields:\n  scores:\n    type: array\n    items: number\n",
+            "test",
+        )
+        .unwrap();
+        let prompt = generate_prompt_instructions(&schema);
+        assert!(prompt.contains("[0, 0]"), "expected number array example");
+    }
+
+    #[test]
+    fn test_example_scalar_array_boolean() {
+        let schema = parse_schema_content(
+            "fields:\n  flags:\n    type: array\n    items: boolean\n",
+            "test",
+        )
+        .unwrap();
+        let prompt = generate_prompt_instructions(&schema);
+        assert!(
+            prompt.contains("[true, false]"),
+            "expected boolean array example"
+        );
+    }
+
+    #[test]
+    fn test_example_scalar_array_enum() {
+        let schema = parse_schema_content(
+            "fields:\n  levels:\n    type: array\n    items: \"enum(low, medium, high)\"\n",
+            "test",
+        )
+        .unwrap();
+        let prompt = generate_prompt_instructions(&schema);
+        assert!(
+            prompt.contains("[\"low|medium|high\"]"),
+            "expected enum array example"
+        );
+    }
 }
