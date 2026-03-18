@@ -359,10 +359,12 @@ impl std::fmt::Display for PostCreateChoice {
 /// One selectable row in the branch picker modal.
 #[derive(Debug, Clone)]
 pub struct BranchPickerItem {
-    /// Display text (e.g., "main (default)", "feat/notifications (3 worktrees)")
-    pub label: String,
     /// `None` → repo default branch; `Some(branch)` → feature branch name.
     pub branch: Option<String>,
+    /// Number of worktrees on this branch (0 for default branch entry).
+    pub worktree_count: i64,
+    /// Number of linked tickets (0 for default branch entry).
+    pub ticket_count: i64,
 }
 
 #[derive(Clone)]

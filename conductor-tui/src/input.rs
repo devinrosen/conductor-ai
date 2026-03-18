@@ -672,14 +672,16 @@ mod tests {
         // First item: default branch (branch = None)
         if item_count > 0 {
             items.push(BranchPickerItem {
-                label: "main (default)".into(),
                 branch: None,
+                worktree_count: 0,
+                ticket_count: 0,
             });
         }
         for i in 1..item_count {
             items.push(BranchPickerItem {
-                label: format!("feat/branch-{i}"),
                 branch: Some(format!("feat/branch-{i}")),
+                worktree_count: 0,
+                ticket_count: 0,
             });
         }
         let mut state = AppState::new();

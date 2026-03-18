@@ -363,33 +363,15 @@ impl App {
                                 return Ok(Vec::new());
                             }
                             let mut items = vec![BranchPickerItem {
-                                label: "default branch".to_string(),
                                 branch: None,
+                                worktree_count: 0,
+                                ticket_count: 0,
                             }];
                             for f in &features {
-                                let mut detail_parts = Vec::new();
-                                if f.worktree_count > 0 {
-                                    detail_parts.push(format!(
-                                        "{} worktree{}",
-                                        f.worktree_count,
-                                        if f.worktree_count == 1 { "" } else { "s" }
-                                    ));
-                                }
-                                if f.ticket_count > 0 {
-                                    detail_parts.push(format!(
-                                        "{} ticket{}",
-                                        f.ticket_count,
-                                        if f.ticket_count == 1 { "" } else { "s" }
-                                    ));
-                                }
-                                let detail = if detail_parts.is_empty() {
-                                    String::new()
-                                } else {
-                                    format!(" ({})", detail_parts.join(", "))
-                                };
                                 items.push(BranchPickerItem {
-                                    label: format!("{}{}", f.branch, detail),
                                     branch: Some(f.branch.clone()),
+                                    worktree_count: f.worktree_count,
+                                    ticket_count: f.ticket_count,
                                 });
                             }
                             Ok::<Vec<BranchPickerItem>, String>(items)
@@ -944,12 +926,14 @@ mod tests {
     fn branch_picker_items() -> Vec<crate::state::BranchPickerItem> {
         vec![
             crate::state::BranchPickerItem {
-                label: "default branch".to_string(),
                 branch: None,
+                worktree_count: 0,
+                ticket_count: 0,
             },
             crate::state::BranchPickerItem {
-                label: "feat/notifications".to_string(),
                 branch: Some("feat/notifications".to_string()),
+                worktree_count: 0,
+                ticket_count: 0,
             },
         ]
     }
@@ -1076,12 +1060,14 @@ mod tests {
         let mut app = make_app();
         let items = vec![
             BranchPickerItem {
-                label: "default branch".to_string(),
                 branch: None,
+                worktree_count: 0,
+                ticket_count: 0,
             },
             BranchPickerItem {
-                label: "feat/notifications (2 worktrees, 1 ticket)".to_string(),
                 branch: Some("feat/notifications".to_string()),
+                worktree_count: 2,
+                ticket_count: 1,
             },
         ];
         app.handle_feature_branches_loaded(
@@ -1098,8 +1084,8 @@ mod tests {
                 assert_eq!(items.len(), 2); // default + 1 feature
                 assert!(items[0].branch.is_none());
                 assert_eq!(items[1].branch.as_deref(), Some("feat/notifications"));
-                assert!(items[1].label.contains("2 worktrees"));
-                assert!(items[1].label.contains("1 ticket"));
+                assert_eq!(items[1].worktree_count, 2);
+                assert_eq!(items[1].ticket_count, 1);
             }
             other => panic!("expected BranchPicker modal, got {:?}", other),
         }

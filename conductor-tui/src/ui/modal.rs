@@ -617,7 +617,35 @@ pub fn render_branch_picker(
     selected: usize,
     theme: &Theme,
 ) {
-    let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+    let label_strings: Vec<String> = items
+        .iter()
+        .map(|item| match &item.branch {
+            None => "default branch".to_string(),
+            Some(branch) => {
+                let mut parts = Vec::new();
+                if item.worktree_count > 0 {
+                    parts.push(format!(
+                        "{} worktree{}",
+                        item.worktree_count,
+                        if item.worktree_count == 1 { "" } else { "s" }
+                    ));
+                }
+                if item.ticket_count > 0 {
+                    parts.push(format!(
+                        "{} ticket{}",
+                        item.ticket_count,
+                        if item.ticket_count == 1 { "" } else { "s" }
+                    ));
+                }
+                if parts.is_empty() {
+                    branch.clone()
+                } else {
+                    format!("{} ({})", branch, parts.join(", "))
+                }
+            }
+        })
+        .collect();
+    let labels: Vec<&str> = label_strings.iter().map(|s| s.as_str()).collect();
     render_numbered_picker(
         frame,
         area,
