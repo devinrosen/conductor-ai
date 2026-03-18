@@ -1,9 +1,9 @@
 pub mod agents;
 pub mod events;
 pub mod issue_sources;
+pub mod model_config;
 pub mod repos;
 pub mod tickets;
-pub mod model_config;
 pub mod workflows;
 pub mod worktrees;
 
