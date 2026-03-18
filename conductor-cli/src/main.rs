@@ -1779,7 +1779,10 @@ fn main() -> Result<()> {
                         return Ok(());
                     }
                 } else {
-                    let wf_name = name.as_deref().unwrap();
+                    // SAFETY: the `!all && name.is_none()` guard above ensures `name` is `Some` here.
+                    let wf_name = name
+                        .as_deref()
+                        .expect("name must be Some when --all is not set");
                     workflows = vec![WorkflowManager::load_def_by_name(
                         &wt_path, &repo_path, wf_name,
                     )?];
@@ -1867,14 +1870,17 @@ fn main() -> Result<()> {
                         wf_errors.push(format!("cycle detected: {cycle_msg}"));
                     }
 
+                    let format_hint_error = |msg: &str, hint: &Option<String>| -> String {
+                        match hint {
+                            Some(h) => format!("{msg} (hint: {h})"),
+                            None => msg.to_string(),
+                        }
+                    };
+
                     // Semantic validation.
                     let report = validate_workflow_semantics(workflow, &loader);
                     for err in &report.errors {
-                        let msg = match &err.hint {
-                            Some(hint) => format!("{} (hint: {hint})", err.message),
-                            None => err.message.clone(),
-                        };
-                        wf_errors.push(msg);
+                        wf_errors.push(format_hint_error(&err.message, &err.hint));
                     }
 
                     // Script step validation.
@@ -1887,32 +1893,21 @@ fn main() -> Result<()> {
                         ),
                     );
                     for err in &script_errors {
-                        let msg = match &err.hint {
-                            Some(hint) => format!("{} (hint: {hint})", err.message),
-                            None => err.message.clone(),
-                        };
-                        wf_errors.push(msg);
+                        wf_errors.push(format_hint_error(&err.message, &err.hint));
                     }
 
                     // Print result for this workflow.
                     if wf_errors.is_empty() {
                         println!("PASS  {wf_name}");
-                        if !unknown_bots.is_empty() {
-                            for b in &unknown_bots {
-                                println!("      ~ warning: unknown bot name '{b}' (not in [github.apps])");
-                            }
-                        }
                     } else {
                         println!("FAIL  {wf_name}");
                         for e in &wf_errors {
                             println!("      \u{2717} {e}");
                         }
-                        if !unknown_bots.is_empty() {
-                            for b in &unknown_bots {
-                                println!("      ~ warning: unknown bot name '{b}' (not in [github.apps])");
-                            }
-                        }
                         total_errors += 1;
+                    }
+                    for b in &unknown_bots {
+                        println!("      ~ warning: unknown bot name '{b}' (not in [github.apps])");
                     }
                 }
 
