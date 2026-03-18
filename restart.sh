@@ -1,10 +1,10 @@
 #!/bin/sh
-# Pull latest main, rebuild, and launch the TUI.
+# Pull latest changes on the current branch, rebuild, and launch the TUI.
 set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-echo "==> Pulling latest main..."
+echo "==> Pulling latest changes..."
 cd "$REPO_ROOT"
 git pull
 
