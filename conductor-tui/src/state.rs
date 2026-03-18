@@ -1227,14 +1227,19 @@ fn push_children(
     // Collect direct steps (non-sub-workflow steps) from the parent.
     // push_children is only called when the parent is not collapsed, so direct steps
     // should always be visible alongside child runs — no expanded_step_run_ids gate.
+    //
+    // Use the GLOBAL max iteration (across all step names) so we only show direct
+    // steps from the current loop iteration. Per-step-name max would mix steps from
+    // different iterations — e.g. address-reviews from iteration 0 alongside child
+    // runs from iteration 1 (because address-reviews hasn't run in iteration 1 yet).
     let direct_steps: Vec<&conductor_core::workflow::WorkflowRunStep> =
         if let Some(steps) = parent_steps {
-            let max_iter = max_iter_by_step_name(steps);
+            let global_max_iter = steps.iter().map(|s| s.iteration).max().unwrap_or(0);
             steps
                 .iter()
                 .filter(|s| {
-                    // Keep steps at their per-name max iteration.
-                    s.iteration == *max_iter.get(&s.step_name).unwrap_or(&0)
+                    // Keep only steps from the current (global max) iteration.
+                    s.iteration == global_max_iter
                 })
                 .filter(|s| {
                     // Exclude sub-workflow steps — they already appear as child run rows.
