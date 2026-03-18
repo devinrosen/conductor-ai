@@ -635,24 +635,36 @@ fn poll_workflow_data(
         Vec::new()
     };
 
-    // Batch-fetch steps for all leaf runs (runs with no children in the current batch).
-    // Build the set of run IDs that appear as someone's parent — these are non-leaf.
-    let runs_with_children: std::collections::HashSet<&str> = runs
-        .iter()
-        .filter_map(|r| r.parent_workflow_run_id.as_deref())
-        .collect();
-    let leaf_run_ids: Vec<&str> = runs
-        .iter()
-        .filter(|r| !runs_with_children.contains(r.id.as_str()))
-        .map(|r| r.id.as_str())
-        .collect();
-    let all_run_steps = match wf_mgr.get_steps_for_runs(&leaf_run_ids) {
+    // Batch-fetch steps for ALL runs (not just leaves) so that:
+    // 1. Direct-call steps on non-leaf parents are available for interleaving
+    // 2. Step detail panel works for non-leaf parents
+    let all_run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+    let mut all_run_steps = match wf_mgr.get_steps_for_runs(&all_run_ids) {
         Ok(steps) => steps,
         Err(e) => {
-            tracing::warn!("get_steps_for_runs failed for runs {:?}: {e}", leaf_run_ids);
+            tracing::warn!("get_steps_for_runs failed: {e}");
             Default::default()
         }
     };
+
+    // Ancestor fetch: collect parent_workflow_run_id values that aren't in the
+    // current run set and fetch their steps too. This covers global/repo 50-run-limit
+    // mode where the parent may be outside the paginated window.
+    let known_ids: std::collections::HashSet<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+    let ancestor_ids: Vec<String> = runs
+        .iter()
+        .filter_map(|r| r.parent_workflow_run_id.as_deref())
+        .filter(|pid| !known_ids.contains(pid))
+        .map(|s| s.to_string())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    if !ancestor_ids.is_empty() {
+        let ancestor_refs: Vec<&str> = ancestor_ids.iter().map(|s| s.as_str()).collect();
+        if let Ok(ancestor_steps) = wf_mgr.get_steps_for_runs(&ancestor_refs) {
+            all_run_steps.extend(ancestor_steps);
+        }
+    }
 
     // Load agent events for the selected step's child run
     let agent_mgr = AgentManager::new(&conn);
@@ -803,6 +815,7 @@ mod tests {
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            iteration: 0,
         }
     }
 

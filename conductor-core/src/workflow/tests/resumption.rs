@@ -925,6 +925,7 @@ fn test_resume_workflow_repo_target() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        iteration: 0,
         run_id_notify: None,
     };
     let result = execute_workflow(&input).unwrap();
@@ -978,6 +979,7 @@ fn test_resume_workflow_ticket_target() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        iteration: 0,
         run_id_notify: None,
     };
     let result = execute_workflow(&input).unwrap();

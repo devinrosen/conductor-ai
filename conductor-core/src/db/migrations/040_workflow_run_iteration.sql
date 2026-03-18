@@ -1,0 +1,1 @@
+ALTER TABLE workflow_runs ADD COLUMN iteration INTEGER NOT NULL DEFAULT 0;

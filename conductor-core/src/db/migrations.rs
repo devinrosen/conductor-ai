@@ -690,6 +690,24 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 39)?;
     }
 
+    // Migration 040: add iteration column to workflow_runs for loop-based tree filtering.
+    let has_wf_run_iteration: bool = conn
+        .prepare("SELECT iteration FROM workflow_runs LIMIT 0")
+        .is_ok();
+    if !has_wf_run_iteration {
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='workflow_runs'",
+            [],
+            |row| row.get(0),
+        )?;
+        if table_exists {
+            conn.execute_batch(include_str!("migrations/040_workflow_run_iteration.sql"))?;
+        }
+    }
+    if version < 40 {
+        bump_version(conn, 40)?;
+    }
+
     Ok(())
 }
 

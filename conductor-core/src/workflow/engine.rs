@@ -249,6 +249,11 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         wf_mgr.set_workflow_run_default_bot_name(&wf_run.id, bot_name)?;
     }
 
+    // Persist loop iteration number for sub-workflow runs.
+    if input.iteration > 0 {
+        wf_mgr.set_workflow_run_iteration(&wf_run.id, input.iteration as i64)?;
+    }
+
     // Build inputs map, injecting implicit ticket/repo variables
     let mut merged_inputs = input.inputs.clone();
     if let Some(tid) = input.ticket_id {
@@ -438,6 +443,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         parent_workflow_run_id: None,
         target_label: params.target_label.as_deref(),
         default_bot_name: None,
+        iteration: 0,
         run_id_notify: params.run_id_notify.clone(),
     };
 

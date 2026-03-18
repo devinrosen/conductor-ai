@@ -897,6 +897,7 @@ fn test_cannot_start_workflow_run_when_active() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        iteration: 0,
         run_id_notify: None,
     };
     let err = execute_workflow(&input).unwrap_err();
@@ -940,6 +941,7 @@ fn test_can_start_workflow_run_after_completion() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        iteration: 0,
         run_id_notify: None,
     };
     // Guard should pass; empty workflow completes successfully.
@@ -985,6 +987,7 @@ fn test_child_workflow_not_blocked_by_parent() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        iteration: 0,
         run_id_notify: None,
     };
     let result = execute_workflow(&input);
@@ -1024,6 +1027,7 @@ fn test_run_id_notify_slot_is_populated() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        iteration: 0,
         run_id_notify: Some(std::sync::Arc::clone(&slot)),
     };
 
@@ -1071,6 +1075,7 @@ fn test_execute_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        iteration: 0,
         run_id_notify: None,
     };
 
@@ -2026,6 +2031,7 @@ fn test_execute_workflow_injects_repo_variables() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        iteration: 0,
         run_id_notify: None,
     };
     let result = execute_workflow(&input).unwrap();
@@ -2075,6 +2081,7 @@ fn test_execute_workflow_injects_ticket_variables() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        iteration: 0,
         run_id_notify: None,
     };
     let result = execute_workflow(&input).unwrap();
@@ -2128,6 +2135,7 @@ fn test_execute_workflow_existing_input_not_overwritten_by_injection() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        iteration: 0,
         run_id_notify: None,
     };
     let result = execute_workflow(&input).unwrap();
@@ -2168,6 +2176,7 @@ fn test_execute_workflow_unknown_ticket_id_returns_error() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        iteration: 0,
         run_id_notify: None,
     };
     assert!(
@@ -2199,6 +2208,7 @@ fn test_execute_workflow_unknown_repo_id_returns_error() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        iteration: 0,
         run_id_notify: None,
     };
     assert!(
@@ -2235,6 +2245,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        iteration: 0,
         run_id_notify: None,
     };
     let result1 = execute_workflow(&input1);
@@ -2265,6 +2276,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        iteration: 0,
         run_id_notify: None,
     };
     let result2 = execute_workflow(&input2);

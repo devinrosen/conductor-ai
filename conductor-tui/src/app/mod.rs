@@ -1164,6 +1164,7 @@ mod tests {
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            iteration: 0,
         }
     }
 
@@ -1481,6 +1482,7 @@ workflow my-wf {
             parent_workflow_run_id: None,
             target_label: None,
             default_bot_name: None,
+            iteration: 0,
         };
         run.inputs
             .insert("pr_url".to_string(), "https://example.com".to_string());

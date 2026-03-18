@@ -586,6 +586,7 @@ pub(super) fn execute_call_workflow(
                 .bot_name
                 .clone()
                 .or_else(|| state.default_bot_name.clone()),
+            iteration,
             run_id_notify: None,
         };
 

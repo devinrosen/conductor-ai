@@ -39,6 +39,9 @@ pub struct WorkflowRun {
     /// Default named GitHub App bot identity for this run.
     /// Set when the run is invoked via `call workflow { as = "..." }`.
     pub default_bot_name: Option<String>,
+    /// Loop iteration number (0-indexed). Used by the TUI to filter
+    /// children of a parent run to show only the latest loop iteration.
+    pub iteration: i64,
 }
 
 /// A workflow step execution record from the database.
@@ -299,6 +302,11 @@ pub struct WorkflowExecInput<'a> {
     /// Default named GitHub App bot identity for call nodes that have no explicit `as =`.
     /// Set by a `call workflow { as = "..." }` node when it invokes a sub-workflow.
     pub default_bot_name: Option<String>,
+    /// Loop iteration number (0-indexed) from the parent's loop context.
+    /// Stored on the child `WorkflowRun` record so the TUI can filter
+    /// children to show only the latest loop iteration without cross-referencing
+    /// parent step records.
+    pub iteration: u32,
     /// If set, the workflow run ID is written here immediately after the run record is
     /// created (before any steps execute). Used by callers that need to return the ID
     /// to an external client while execution continues in the background.

@@ -143,7 +143,17 @@ impl<'a> WorkflowManager<'a> {
             parent_workflow_run_id: parent_workflow_run_id.map(String::from),
             target_label: target_label.map(String::from),
             default_bot_name: None,
+            iteration: 0,
         })
+    }
+
+    /// Persist the loop iteration number for a workflow run.
+    pub fn set_workflow_run_iteration(&self, run_id: &str, iteration: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workflow_runs SET iteration = ?1 WHERE id = ?2",
+            params![iteration, run_id],
+        )?;
+        Ok(())
     }
 
     /// Persist the default bot name for a workflow run.
@@ -1468,6 +1478,7 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
     let parent_workflow_run_id: Option<String> = row.get(14)?;
     let target_label: Option<String> = row.get(15)?;
     let default_bot_name: Option<String> = row.get(16)?;
+    let iteration: i64 = row.get(17)?;
     Ok(WorkflowRun {
         id: row.get(0)?,
         workflow_name: row.get(1)?,
@@ -1486,6 +1497,7 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
         parent_workflow_run_id,
         target_label,
         default_bot_name,
+        iteration,
     })
 }
 
