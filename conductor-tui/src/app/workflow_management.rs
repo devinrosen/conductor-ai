@@ -1420,10 +1420,12 @@ impl App {
             .and_then(|r| r.model.clone());
         let is_wt = wt_model.is_some();
         let is_repo = !is_wt && repo_model.is_some();
-        match wt_model
-            .or(repo_model)
-            .or_else(|| self.config.general.model.clone())
-        {
+        let model = conductor_core::models::resolve_model(
+            wt_model.as_deref(),
+            repo_model.as_deref(),
+            self.config.general.model.as_deref(),
+        );
+        match model {
             Some(m) => {
                 let source = if is_wt {
                     "worktree"
