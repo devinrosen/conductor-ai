@@ -253,6 +253,20 @@ impl<'a> FeatureManager<'a> {
             })
     }
 
+    /// Look up a feature by repo slug + name and verify it is active.
+    ///
+    /// Returns `ConductorError::Workflow` if the feature exists but is not active.
+    pub fn resolve_active_feature(&self, repo_slug: &str, name: &str) -> Result<Feature> {
+        let f = self.get_by_name(repo_slug, name)?;
+        if f.status != FeatureStatus::Active {
+            return Err(ConductorError::Workflow(format!(
+                "Feature '{}' is {} — only active features can be used.",
+                name, f.status
+            )));
+        }
+        Ok(f)
+    }
+
     /// Find the active feature linked to a ticket, if any.
     ///
     /// Returns `None` when the ticket is not linked to any feature or when all
@@ -1247,5 +1261,40 @@ mod tests {
         let result = mgr.get_by_id(&feature_id).unwrap();
         assert_eq!(result.name, "my-feat");
         assert_eq!(result.id, feature_id);
+    }
+
+    #[test]
+    fn test_resolve_active_feature_returns_active() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let f = mgr.resolve_active_feature("test-repo", "my-feat").unwrap();
+        assert_eq!(f.name, "my-feat");
+        assert_eq!(f.status, FeatureStatus::Active);
+    }
+
+    #[test]
+    fn test_resolve_active_feature_rejects_closed() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let fid = insert_feature(&conn, &repo_id, "done-feat", "feat/done-feat");
+        conn.execute(
+            "UPDATE features SET status = 'closed' WHERE id = ?1",
+            params![fid],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let err = mgr
+            .resolve_active_feature("test-repo", "done-feat")
+            .unwrap_err();
+        assert!(
+            matches!(err, ConductorError::Workflow(ref msg) if msg.contains("only active features")),
+            "expected Workflow error about active features, got: {err:?}"
+        );
     }
 }

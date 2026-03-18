@@ -145,6 +145,29 @@ pub fn apply_workflow_input_defaults(
     Ok(())
 }
 
+/// Inject feature metadata variables into the merged inputs map.
+///
+/// Looks up the feature by ID and inserts `feature_id`, `feature_name`, and
+/// `feature_branch` (using `or_insert_with` so caller-provided values win).
+fn inject_feature_variables(
+    conn: &Connection,
+    config: &crate::config::Config,
+    feature_id: &str,
+    merged_inputs: &mut HashMap<String, String>,
+) -> Result<()> {
+    let feature = crate::feature::FeatureManager::new(conn, config).get_by_id(feature_id)?;
+    merged_inputs
+        .entry("feature_id".to_string())
+        .or_insert_with(|| feature.id);
+    merged_inputs
+        .entry("feature_name".to_string())
+        .or_insert_with(|| feature.name);
+    merged_inputs
+        .entry("feature_branch".to_string())
+        .or_insert_with(|| feature.branch);
+    Ok(())
+}
+
 /// Execute a workflow definition against a worktree.
 pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult> {
     let conn = input.conn;
@@ -322,33 +345,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
 
     // Inject feature metadata when a feature_id is provided.
     if let Some(fid) = input.feature_id {
-        let feature = conn
-            .query_row(
-                "SELECT id, name, branch FROM features WHERE id = ?1",
-                rusqlite::params![fid],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                },
-            )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => {
-                    ConductorError::Workflow(format!("Feature not found: {fid}"))
-                }
-                _ => ConductorError::Database(e),
-            })?;
-        merged_inputs
-            .entry("feature_id".to_string())
-            .or_insert_with(|| feature.0);
-        merged_inputs
-            .entry("feature_name".to_string())
-            .or_insert_with(|| feature.1);
-        merged_inputs
-            .entry("feature_branch".to_string())
-            .or_insert_with(|| feature.2);
+        inject_feature_variables(conn, config, fid, &mut merged_inputs)?;
     }
 
     // Persist inputs so they can be restored on resume
@@ -1410,5 +1407,53 @@ mod tests {
         // Required but not provided — should return an error before defaulting.
         let result = apply_workflow_input_defaults(&workflow, &mut inputs);
         assert!(result.is_err(), "expected error for missing required input");
+    }
+
+    fn insert_feature(conn: &rusqlite::Connection) {
+        conn.execute(
+            "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
+             VALUES ('f1', 'r1', 'my-feature', 'feat/my-feature', 'main', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+    }
+
+    #[test]
+    fn test_inject_feature_variables() {
+        let conn = crate::test_helpers::setup_db();
+        insert_feature(&conn);
+
+        let config = crate::config::Config::default();
+        let mut inputs = HashMap::new();
+        inject_feature_variables(&conn, &config, "f1", &mut inputs).unwrap();
+
+        assert_eq!(inputs.get("feature_id").unwrap(), "f1");
+        assert_eq!(inputs.get("feature_name").unwrap(), "my-feature");
+        assert_eq!(inputs.get("feature_branch").unwrap(), "feat/my-feature");
+    }
+
+    #[test]
+    fn test_inject_feature_variables_missing_feature() {
+        let conn = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let mut inputs = HashMap::new();
+        let result = inject_feature_variables(&conn, &config, "nonexistent", &mut inputs);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_inject_feature_variables_does_not_overwrite_caller() {
+        let conn = crate::test_helpers::setup_db();
+        insert_feature(&conn);
+
+        let config = crate::config::Config::default();
+        let mut inputs = HashMap::new();
+        inputs.insert("feature_name".to_string(), "caller-override".to_string());
+        inject_feature_variables(&conn, &config, "f1", &mut inputs).unwrap();
+
+        // Caller's value should win
+        assert_eq!(inputs.get("feature_name").unwrap(), "caller-override");
+        // Other keys populated from DB
+        assert_eq!(inputs.get("feature_id").unwrap(), "f1");
+        assert_eq!(inputs.get("feature_branch").unwrap(), "feat/my-feature");
     }
 }

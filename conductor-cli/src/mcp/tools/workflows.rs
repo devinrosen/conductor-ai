@@ -231,16 +231,8 @@ pub(super) fn tool_run_workflow(
     let feature_id: Option<String> = if let Some(feat_name) = feature_arg {
         use conductor_core::feature::FeatureManager;
         let fm = FeatureManager::new(&conn, &config);
-        match fm.get_by_name(repo_slug, feat_name) {
-            Ok(f) => {
-                if f.status != conductor_core::feature::FeatureStatus::Active {
-                    return tool_err(format!(
-                        "Feature '{}' is {} — only active features can be used.",
-                        feat_name, f.status
-                    ));
-                }
-                Some(f.id)
-            }
+        match fm.resolve_active_feature(repo_slug, feat_name) {
+            Ok(f) => Some(f.id),
             Err(e) => return tool_err(e),
         }
     } else {

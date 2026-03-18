@@ -674,11 +674,16 @@ impl App {
                 let ticket_id = wt_ticket_id.or_else(|| inputs.get("ticket_id").cloned());
                 // Auto-detect feature from the worktree's linked ticket.
                 let feature_id = ticket_id.as_deref().and_then(|tid| {
-                    conductor_core::feature::FeatureManager::new(&self.conn, &self.config)
+                    match conductor_core::feature::FeatureManager::new(&self.conn, &self.config)
                         .find_feature_for_ticket(tid)
-                        .ok()
-                        .flatten()
-                        .map(|f| f.id)
+                    {
+                        Ok(opt) => opt.map(|f| f.id),
+                        Err(e) => {
+                            self.state.status_message =
+                                Some(format!("Feature auto-detect failed: {e}"));
+                            None
+                        }
+                    }
                 });
                 self.spawn_workflow_in_background(
                     def,
@@ -735,11 +740,16 @@ impl App {
             } => {
                 // Auto-detect feature from ticket.
                 let feature_id =
-                    conductor_core::feature::FeatureManager::new(&self.conn, &self.config)
+                    match conductor_core::feature::FeatureManager::new(&self.conn, &self.config)
                         .find_feature_for_ticket(&ticket_id)
-                        .ok()
-                        .flatten()
-                        .map(|f| f.id);
+                    {
+                        Ok(opt) => opt.map(|f| f.id),
+                        Err(e) => {
+                            self.state.status_message =
+                                Some(format!("Feature auto-detect failed: {e}"));
+                            None
+                        }
+                    };
                 self.spawn_ticket_workflow_in_background(
                     def,
                     ticket_id,

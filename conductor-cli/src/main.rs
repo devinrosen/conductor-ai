@@ -1395,36 +1395,20 @@ fn main() -> Result<()> {
                     // We need a repo slug to look up the feature. Derive it from whichever
                     // target mode is active.
                     let repo_slug_for_feature = repo.as_deref().or(repo_flag.as_deref());
-                    if let Some(slug) = repo_slug_for_feature {
-                        let fm = FeatureManager::new(&conn, &config);
-                        let f = fm.get_by_name(slug, feat_name)?;
-                        if f.status != conductor_core::feature::FeatureStatus::Active {
-                            anyhow::bail!(
-                                "Feature '{}' is {} — only active features can be used.",
-                                feat_name,
-                                f.status
-                            );
-                        }
-                        Some(f.id)
+                    let slug = if let Some(s) = repo_slug_for_feature {
+                        s.to_string()
                     } else if let Some(ref tid) = ticket {
-                        // Resolve repo from ticket
                         let t = TicketSyncer::new(&conn).get_by_id(tid)?;
                         let r = RepoManager::new(&conn, &config).get_by_id(&t.repo_id)?;
-                        let fm = FeatureManager::new(&conn, &config);
-                        let f = fm.get_by_name(&r.slug, feat_name)?;
-                        if f.status != conductor_core::feature::FeatureStatus::Active {
-                            anyhow::bail!(
-                                "Feature '{}' is {} — only active features can be used.",
-                                feat_name,
-                                f.status
-                            );
-                        }
-                        Some(f.id)
+                        r.slug
                     } else {
                         anyhow::bail!(
                             "--feature requires a repo context (--repo, positional repo, or --ticket)"
                         );
-                    }
+                    };
+                    let fm = FeatureManager::new(&conn, &config);
+                    let f = fm.resolve_active_feature(&slug, feat_name)?;
+                    Some(f.id)
                 } else if let Some(ref tid) = ticket {
                     // Auto-detect feature from ticket
                     let fm = FeatureManager::new(&conn, &config);

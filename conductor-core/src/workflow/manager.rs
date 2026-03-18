@@ -2706,4 +2706,28 @@ mod tests {
         let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
         assert_eq!(fetched.iteration, 0);
     }
+
+    #[test]
+    fn test_set_workflow_run_feature_id_round_trip() {
+        let conn = setup_db();
+        // Insert a feature record for FK constraint
+        conn.execute(
+            "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
+             VALUES ('feat-123', 'r1', 'test-feature', 'feat/test-feature', 'main', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        let run = create_worktree_run(&conn, "w1");
+        let mgr = WorkflowManager::new(&conn);
+
+        // Initially no feature_id
+        let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert!(fetched.feature_id.is_none());
+
+        // Set feature_id and read back
+        mgr.set_workflow_run_feature_id(&run.id, "feat-123")
+            .unwrap();
+        let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.feature_id.as_deref(), Some("feat-123"));
+    }
 }
