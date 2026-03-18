@@ -5,7 +5,9 @@ use rusqlite::params;
 use crate::db::query_collect;
 use crate::error::Result;
 
-use super::super::db::{row_to_agent_run, AGENT_RUN_SELECT};
+use super::super::db::{
+    row_to_agent_run, AGENT_RUN_COLS_A, AGENT_RUN_COLS_A_NULL_PLAN, AGENT_RUN_SELECT,
+};
 use super::super::status::AgentRunStatus;
 use super::super::types::AgentRun;
 use super::AgentManager;
@@ -74,20 +76,18 @@ impl<'a> AgentManager<'a> {
 
     /// List all agent runs for a repo (across all its worktrees), newest first.
     pub fn list_for_repo(&self, repo_id: &str) -> Result<Vec<AgentRun>> {
-        // Cannot use AGENT_RUN_SELECT here: the JOIN requires the `a.` alias, and
-        // col 15 is intentionally `NULL` for `plan` (populated separately via
-        // `populate_plans` to avoid loading steps for every row in the JOIN).
+        // Cannot use AGENT_RUN_SELECT here: the JOIN requires the `a.` alias.
+        // NULL for plan is intentional — populated separately via `populate_plans`
+        // to avoid loading steps for every row in the JOIN.
         let mut runs = query_collect(
             self.conn,
-            "SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, a.result_text, \
-             a.cost_usd, a.num_turns, a.duration_ms, a.started_at, a.ended_at, a.tmux_window, \
-             a.log_file, a.model, NULL, a.parent_run_id, \
-             a.input_tokens, a.output_tokens, a.cache_read_input_tokens, a.cache_creation_input_tokens, \
-             a.bot_name \
-             FROM agent_runs a \
-             JOIN worktrees w ON a.worktree_id = w.id \
-             WHERE w.repo_id = ?1 \
-             ORDER BY a.started_at DESC",
+            &format!(
+                "SELECT {AGENT_RUN_COLS_A_NULL_PLAN} \
+                 FROM agent_runs a \
+                 JOIN worktrees w ON a.worktree_id = w.id \
+                 WHERE w.repo_id = ?1 \
+                 ORDER BY a.started_at DESC"
+            ),
             params![repo_id],
             row_to_agent_run,
         )?;
@@ -127,15 +127,14 @@ impl<'a> AgentManager<'a> {
     pub fn latest_runs_by_worktree(&self) -> Result<HashMap<String, AgentRun>> {
         let mut runs = query_collect(
             self.conn,
-            "SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, \
-             a.result_text, a.cost_usd, a.num_turns, a.duration_ms, a.started_at, \
-             a.ended_at, a.tmux_window, a.log_file, a.model, a.plan, a.parent_run_id, \
-             a.input_tokens, a.output_tokens, a.cache_read_input_tokens, a.cache_creation_input_tokens, bot_name \
-             FROM agent_runs a \
-             INNER JOIN ( \
-                 SELECT worktree_id, MAX(started_at) AS max_started \
-                 FROM agent_runs GROUP BY worktree_id \
-             ) latest ON a.worktree_id = latest.worktree_id AND a.started_at = latest.max_started",
+            &format!(
+                "SELECT {AGENT_RUN_COLS_A} \
+                 FROM agent_runs a \
+                 INNER JOIN ( \
+                     SELECT worktree_id, MAX(started_at) AS max_started \
+                     FROM agent_runs GROUP BY worktree_id \
+                 ) latest ON a.worktree_id = latest.worktree_id AND a.started_at = latest.max_started"
+            ),
             [],
             row_to_agent_run,
         )?;
@@ -190,19 +189,17 @@ impl<'a> AgentManager<'a> {
         // Cannot use AGENT_RUN_SELECT here: the CTE requires the `a.` alias throughout.
         let mut runs = query_collect(
             self.conn,
-            "WITH RECURSIVE tree(id) AS ( \
-                 SELECT id FROM agent_runs WHERE id = ?1 \
-                 UNION ALL \
-                 SELECT a.id FROM agent_runs a JOIN tree t ON a.parent_run_id = t.id \
-             ) \
-             SELECT a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, \
-                    a.result_text, a.cost_usd, a.num_turns, a.duration_ms, a.started_at, \
-                    a.ended_at, a.tmux_window, a.log_file, a.model, a.plan, a.parent_run_id, \
-                    a.input_tokens, a.output_tokens, a.cache_read_input_tokens, a.cache_creation_input_tokens, \
-                    a.bot_name \
-             FROM agent_runs a \
-             JOIN tree t ON a.id = t.id \
-             ORDER BY a.started_at ASC",
+            &format!(
+                "WITH RECURSIVE tree(id) AS ( \
+                     SELECT id FROM agent_runs WHERE id = ?1 \
+                     UNION ALL \
+                     SELECT a.id FROM agent_runs a JOIN tree t ON a.parent_run_id = t.id \
+                 ) \
+                 SELECT {AGENT_RUN_COLS_A} \
+                 FROM agent_runs a \
+                 JOIN tree t ON a.id = t.id \
+                 ORDER BY a.started_at ASC"
+            ),
             params![root_run_id],
             row_to_agent_run,
         )?;
@@ -715,6 +712,42 @@ mod tests {
 
         let page2 = mgr.list_agent_runs(None, None, None, 3, 3).unwrap();
         assert_eq!(page2.len(), 2);
+    }
+
+    #[test]
+    fn test_list_for_repo() {
+        let conn = setup_db();
+        // setup_db seeds r1 with w1 and w2; insert a second repo with its own worktree.
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+             VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', 'main', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w3', 'r2', 'feat-other', 'feat/other', '/tmp/ws2/other', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        let mgr = AgentManager::new(&conn);
+        let r1a = mgr
+            .create_run(Some("w1"), "Task for r1 w1", None, None)
+            .unwrap();
+        let r1b = mgr
+            .create_run(Some("w2"), "Task for r1 w2", None, None)
+            .unwrap();
+        let _r2 = mgr
+            .create_run(Some("w3"), "Task for r2", None, None)
+            .unwrap();
+
+        let runs = mgr.list_for_repo("r1").unwrap();
+        assert_eq!(runs.len(), 2);
+        let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&r1a.id.as_str()));
+        assert!(ids.contains(&r1b.id.as_str()));
+
+        let r2_runs = mgr.list_for_repo("r2").unwrap();
+        assert_eq!(r2_runs.len(), 1);
     }
 
     #[test]

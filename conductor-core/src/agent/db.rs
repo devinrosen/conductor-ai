@@ -7,14 +7,31 @@ pub(super) const FEEDBACK_SELECT: &str =
     "SELECT id, run_id, prompt, response, status, created_at, responded_at FROM feedback_requests";
 
 /// Shared SELECT column list for the `agent_runs` table (plain, unaliased form).
-/// Aliased `a.` variants used in JOINs/CTEs are left inline — they require table
-/// prefixes and/or intentional column substitutions (e.g. `NULL` for `plan`).
 pub(super) const AGENT_RUN_SELECT: &str =
     "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
      cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
      model, plan, parent_run_id, \
      input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
      bot_name FROM agent_runs";
+
+/// Column list for `agent_runs` with the `a.` table alias, including `a.plan`.
+/// Use this in JOINs/CTEs where the table is aliased as `a`.
+pub(super) const AGENT_RUN_COLS_A: &str =
+    "a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, a.result_text, \
+     a.cost_usd, a.num_turns, a.duration_ms, a.started_at, a.ended_at, a.tmux_window, \
+     a.log_file, a.model, a.plan, a.parent_run_id, \
+     a.input_tokens, a.output_tokens, a.cache_read_input_tokens, \
+     a.cache_creation_input_tokens, a.bot_name";
+
+/// Like [`AGENT_RUN_COLS_A`] but substitutes `NULL` for the `plan` column.
+/// Use this when plan steps are intentionally omitted (populated separately via
+/// `populate_plans` to avoid loading steps for every row in a JOIN).
+pub(super) const AGENT_RUN_COLS_A_NULL_PLAN: &str =
+    "a.id, a.worktree_id, a.claude_session_id, a.prompt, a.status, a.result_text, \
+     a.cost_usd, a.num_turns, a.duration_ms, a.started_at, a.ended_at, a.tmux_window, \
+     a.log_file, a.model, NULL, a.parent_run_id, \
+     a.input_tokens, a.output_tokens, a.cache_read_input_tokens, \
+     a.cache_creation_input_tokens, a.bot_name";
 
 /// Shared SELECT column list for the `agent_run_steps` table.
 pub(super) const AGENT_RUN_STEPS_SELECT: &str =

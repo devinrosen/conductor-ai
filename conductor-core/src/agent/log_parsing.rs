@@ -86,20 +86,22 @@ pub(crate) fn try_recover_from_log_at(
             .result_text
             .as_deref()
             .unwrap_or(DEFAULT_AGENT_ERROR_MSG);
-        let _ = mgr.update_run_failed(run_id, error_msg);
-    } else {
-        let _ = mgr.update_run_completed(
-            run_id,
-            None,
-            log_result.result_text.as_deref(),
-            log_result.cost_usd,
-            log_result.num_turns,
-            log_result.duration_ms,
-            log_result.input_tokens,
-            log_result.output_tokens,
-            log_result.cache_read_input_tokens,
-            log_result.cache_creation_input_tokens,
-        );
+        if let Err(e) = mgr.update_run_failed(run_id, error_msg) {
+            tracing::warn!("failed to mark run {run_id} as failed during log recovery: {e}");
+        }
+    } else if let Err(e) = mgr.update_run_completed(
+        run_id,
+        None,
+        log_result.result_text.as_deref(),
+        log_result.cost_usd,
+        log_result.num_turns,
+        log_result.duration_ms,
+        log_result.input_tokens,
+        log_result.output_tokens,
+        log_result.cache_read_input_tokens,
+        log_result.cache_creation_input_tokens,
+    ) {
+        tracing::warn!("failed to mark run {run_id} as completed during log recovery: {e}");
     }
     mgr.get_run(run_id).ok().flatten()
 }

@@ -459,6 +459,79 @@ mod tests {
     }
 
     #[test]
+    fn test_worktree_cost_phases_review_fix() {
+        // Exercises the `else if review_count > 0` branch: a non-review run that
+        // follows a review run should be labelled "Review fix #N".
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // 1. Initial implementation run
+        let run1 = mgr
+            .create_run(Some("w1"), "Implement the feature", None, Some("sonnet"))
+            .unwrap();
+        mgr.update_run_completed(
+            &run1.id,
+            None,
+            Some("done"),
+            Some(0.03),
+            Some(10),
+            Some(300_000),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // 2. Review run (prompt starts with PR_REVIEW_SWARM_PROMPT_PREFIX)
+        let review = mgr
+            .create_run(
+                Some("w1"),
+                "PR review swarm for branch 'feat/test'.",
+                None,
+                Some("haiku"),
+            )
+            .unwrap();
+        mgr.update_run_completed(
+            &review.id,
+            None,
+            Some("changes requested"),
+            Some(0.005),
+            Some(2),
+            Some(60_000),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // 3. Fix run — non-review prompt after a review: triggers the `else if review_count > 0` branch
+        let fix = mgr
+            .create_run(Some("w1"), "Address review comments", None, Some("sonnet"))
+            .unwrap();
+        mgr.update_run_completed(
+            &fix.id,
+            None,
+            Some("done"),
+            Some(0.02),
+            Some(6),
+            Some(200_000),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let phases = mgr.worktree_cost_phases("w1").unwrap();
+        assert_eq!(phases.len(), 3);
+        assert_eq!(phases[0].label, "Initial run");
+        assert_eq!(phases[1].label, "Review #1");
+        assert_eq!(phases[2].label, "Review fix #1");
+    }
+
+    #[test]
     fn test_worktree_cost_phases_excludes_child_runs() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);
