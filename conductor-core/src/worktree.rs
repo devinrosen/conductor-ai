@@ -1724,11 +1724,12 @@ mod tests {
     fn test_parse_pr_view_output_bad_format() {
         let raw = "incomplete|data";
         let result = parse_pr_view_output(raw);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("unexpected gh pr view output"));
+        let err = result.unwrap_err();
+        assert!(
+            matches!(&err, crate::error::ConductorError::GhCli(_)),
+            "expected GhCli variant, got: {err:?}"
+        );
+        assert!(err.to_string().contains("unexpected gh pr view output"));
     }
 
     #[test]
