@@ -1,9 +1,12 @@
 use std::process::Command;
 
-use rusqlite::{params, Connection};
+use rusqlite::Connection;
 
 use super::manager::AgentManager;
 use super::status::{AgentRunStatus, FeedbackStatus};
+use crate::config::Config;
+use crate::tickets::TicketSyncer;
+use crate::worktree::WorktreeManager;
 
 /// Prefix used for the parent run prompt when launching a PR review swarm.
 pub const PR_REVIEW_SWARM_PROMPT_PREFIX: &str = "PR review swarm";
@@ -46,6 +49,7 @@ fn git_recent_commits(worktree_path: &str) -> Vec<String> {
 /// protocol so agents know how to request human input mid-run.
 pub fn build_startup_context(
     conn: &Connection,
+    config: &Config,
     worktree_id: Option<&str>,
     current_run_id: &str,
     worktree_path: &str,
@@ -65,28 +69,20 @@ pub fn build_startup_context(
     };
 
     // 1. Worktree branch
-    let branch: Option<String> = conn
-        .query_row(
-            "SELECT branch FROM worktrees WHERE id = ?1",
-            params![wt_id],
-            |row| row.get(0),
-        )
-        .ok();
+    let wt_mgr = WorktreeManager::new(conn, config);
+    let worktree = wt_mgr.get_by_id(wt_id).ok();
+    let branch = worktree.as_ref().map(|w| w.branch.clone());
 
     if let Some(ref branch) = branch {
         sections.push(format!("**Worktree:** {branch}"));
     }
 
     // 2. Linked ticket
-    let ticket_info: Option<(String, String)> = conn
-        .query_row(
-            "SELECT t.source_id, t.title FROM tickets t \
-             JOIN worktrees w ON w.ticket_id = t.id \
-             WHERE w.id = ?1",
-            params![wt_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .ok();
+    let ticket_info = worktree
+        .as_ref()
+        .and_then(|w| w.ticket_id.as_deref())
+        .and_then(|tid| TicketSyncer::new(conn).get_by_id(tid).ok())
+        .map(|t| (t.source_id, t.title));
 
     if let Some((source_id, title)) = ticket_info {
         sections.push(format!("**Ticket:** #{source_id} — {title}"));
@@ -178,6 +174,7 @@ mod tests {
     use crate::agent::manager::AgentManager;
     use crate::agent::status::{AgentRunStatus, StepStatus};
     use crate::agent::types::PlanStep;
+    use crate::config::Config;
 
     fn setup_conn() -> rusqlite::Connection {
         crate::agent::manager::setup_db()
@@ -188,7 +185,7 @@ mod tests {
         let conn = setup_conn();
         // Ephemeral run (no worktree_id). Use a non-git path so git_recent_commits
         // returns empty — only the feedback protocol section should be present.
-        let ctx = build_startup_context(&conn, None, "run-1", "/tmp");
+        let ctx = build_startup_context(&conn, &Config::default(), None, "run-1", "/tmp");
         assert!(
             ctx.contains("[NEEDS_FEEDBACK]"),
             "feedback protocol must be included"
@@ -207,7 +204,7 @@ mod tests {
             .unwrap();
 
         // "w1" is the test worktree with branch "feat/test" (from setup_db).
-        let ctx = build_startup_context(&conn, Some("w1"), &run.id, "/tmp");
+        let ctx = build_startup_context(&conn, &Config::default(), Some("w1"), &run.id, "/tmp");
         assert!(ctx.contains("**Worktree:** feat/test"));
         assert!(ctx.contains("[NEEDS_FEEDBACK]"));
         // No ticket linked in the test fixture.
@@ -241,7 +238,7 @@ mod tests {
         let current = mgr.create_run(Some("w1"), "follow-up", None, None).unwrap();
         assert_eq!(current.status, AgentRunStatus::Running);
 
-        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, &Config::default(), Some("w1"), &current.id, "/tmp");
         assert!(
             ctx.contains("Prior run finished successfully."),
             "context must include prior run result"
@@ -255,7 +252,7 @@ mod tests {
 
         // Only one run exists — the current one. No prior run section should appear.
         let run = mgr.create_run(Some("w1"), "only run", None, None).unwrap();
-        let ctx = build_startup_context(&conn, Some("w1"), &run.id, "/tmp");
+        let ctx = build_startup_context(&conn, &Config::default(), Some("w1"), &run.id, "/tmp");
         assert!(
             !ctx.contains("**Prior run outcome"),
             "current run must not appear as prior"
@@ -278,7 +275,7 @@ mod tests {
         let mgr = AgentManager::new(&conn);
         let current = mgr.create_run(Some("w1"), "Fix it", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, &Config::default(), Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Ticket:** #42 — Fix payment bug"));
     }
 
@@ -329,7 +326,7 @@ mod tests {
             .create_run(Some("w1"), "Continue work", None, None)
             .unwrap();
 
-        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, &Config::default(), Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Plan steps (from prior run):**"));
         assert!(ctx.contains("1. ✅ Read the code"));
         assert!(ctx.contains("2. ✅ Write tests"));
@@ -362,7 +359,7 @@ mod tests {
 
         let current = mgr.create_run(Some("w1"), "Next", None, None).unwrap();
 
-        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
+        let ctx = build_startup_context(&conn, &Config::default(), Some("w1"), &current.id, "/tmp");
         assert!(ctx.contains("**Prior run outcome (completed):**"));
         // Should be truncated to 500 chars + ellipsis
         assert!(ctx.contains(&"x".repeat(500)));
