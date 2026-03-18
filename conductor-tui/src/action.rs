@@ -274,6 +274,17 @@ pub enum Action {
     },
 
     // Branch picker (during worktree creation)
+    /// Background result: feature branches loaded for branch picker.
+    FeatureBranchesLoaded {
+        repo_slug: String,
+        wt_name: String,
+        ticket_id: Option<String>,
+        features: Vec<conductor_core::feature::FeatureRow>,
+    },
+    /// Background result: feature branch load failed.
+    FeatureBranchesFailed {
+        error: String,
+    },
     SelectBranch(usize),
 
     // Post-create picker (after worktree creation)

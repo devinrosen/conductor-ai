@@ -314,19 +314,52 @@ impl App {
                 }
                 let wt_name = value;
 
-                // Check for active feature branches to offer as base.
-                let active_features: Vec<_> = {
-                    use conductor_core::feature::{FeatureManager, FeatureStatus};
-                    let fm = FeatureManager::new(&self.conn, &self.config);
-                    fm.list(&repo_slug)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter(|f| f.status == FeatureStatus::Active)
-                        .collect()
-                };
+                // Load active feature branches off-thread (DB call must not block the TUI).
+                if let Some(ref tx) = self.bg_tx {
+                    let tx = tx.clone();
+                    let slug = repo_slug.clone();
+                    let name = wt_name.clone();
+                    let tid = ticket_id.clone();
+                    std::thread::spawn(move || {
+                        use crate::action::Action;
+                        use conductor_core::config::{db_path, load_config};
+                        use conductor_core::db::open_database;
+                        use conductor_core::feature::{FeatureManager, FeatureStatus};
 
-                if active_features.is_empty() {
-                    // No features → skip branch picker, go straight to PR step.
+                        let db = db_path();
+                        let result = (|| {
+                            let conn = open_database(&db)
+                                .map_err(|e| format!("Failed to open database: {e}"))?;
+                            let config =
+                                load_config().map_err(|e| format!("Failed to load config: {e}"))?;
+                            let fm = FeatureManager::new(&conn, &config);
+                            let features: Vec<_> = fm
+                                .list(&slug)
+                                .map_err(|e| format!("Failed to list features: {e}"))?
+                                .into_iter()
+                                .filter(|f| f.status == FeatureStatus::Active)
+                                .collect();
+                            Ok(features)
+                        })();
+                        match result {
+                            Ok(features) => {
+                                let _ = tx.send(Action::FeatureBranchesLoaded {
+                                    repo_slug: slug,
+                                    wt_name: name,
+                                    ticket_id: tid,
+                                    features,
+                                });
+                            }
+                            Err(error) => {
+                                let _ = tx.send(Action::FeatureBranchesFailed { error });
+                            }
+                        }
+                    });
+                    self.state.modal = Modal::Progress {
+                        message: "Loading feature branches…".into(),
+                    };
+                } else {
+                    // No background sender — skip branch picker, go straight to PR step.
                     self.state.modal = Modal::Input {
                         title: "From PR (optional)".to_string(),
                         prompt: "PR number to check out (leave blank for new branch):".to_string(),
@@ -337,47 +370,6 @@ impl App {
                             ticket_id,
                             from_branch: None,
                         },
-                    };
-                } else {
-                    // Build branch picker items: default branch first, then features.
-                    let mut items = vec![BranchPickerItem {
-                        label: "default branch".to_string(),
-                        branch: None,
-                        feature_id: None,
-                    }];
-                    for f in &active_features {
-                        let mut detail_parts = Vec::new();
-                        if f.worktree_count > 0 {
-                            detail_parts.push(format!(
-                                "{} worktree{}",
-                                f.worktree_count,
-                                if f.worktree_count == 1 { "" } else { "s" }
-                            ));
-                        }
-                        if f.ticket_count > 0 {
-                            detail_parts.push(format!(
-                                "{} ticket{}",
-                                f.ticket_count,
-                                if f.ticket_count == 1 { "" } else { "s" }
-                            ));
-                        }
-                        let detail = if detail_parts.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" ({})", detail_parts.join(", "))
-                        };
-                        items.push(BranchPickerItem {
-                            label: format!("{}{}", f.branch, detail),
-                            branch: Some(f.branch.clone()),
-                            feature_id: Some(f.id.clone()),
-                        });
-                    }
-                    self.state.modal = Modal::BranchPicker {
-                        repo_slug,
-                        wt_name,
-                        ticket_id,
-                        items,
-                        selected: 0,
                     };
                 }
             }
@@ -738,6 +730,71 @@ impl App {
         }
     }
 
+    /// Handle background result: feature branches loaded for branch picker.
+    pub(super) fn handle_feature_branches_loaded(
+        &mut self,
+        repo_slug: String,
+        wt_name: String,
+        ticket_id: Option<String>,
+        features: Vec<conductor_core::feature::FeatureRow>,
+    ) {
+        if features.is_empty() {
+            // No features → skip branch picker, go straight to PR step.
+            self.state.modal = Modal::Input {
+                title: "From PR (optional)".to_string(),
+                prompt: "PR number to check out (leave blank for new branch):".to_string(),
+                value: String::new(),
+                on_submit: InputAction::CreateWorktreePrStep {
+                    repo_slug,
+                    wt_name,
+                    ticket_id,
+                    from_branch: None,
+                },
+            };
+        } else {
+            // Build branch picker items: default branch first, then features.
+            let mut items = vec![BranchPickerItem {
+                label: "default branch".to_string(),
+                branch: None,
+                feature_id: None,
+            }];
+            for f in &features {
+                let mut detail_parts = Vec::new();
+                if f.worktree_count > 0 {
+                    detail_parts.push(format!(
+                        "{} worktree{}",
+                        f.worktree_count,
+                        if f.worktree_count == 1 { "" } else { "s" }
+                    ));
+                }
+                if f.ticket_count > 0 {
+                    detail_parts.push(format!(
+                        "{} ticket{}",
+                        f.ticket_count,
+                        if f.ticket_count == 1 { "" } else { "s" }
+                    ));
+                }
+                let detail = if detail_parts.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", detail_parts.join(", "))
+                };
+                items.push(BranchPickerItem {
+                    label: format!("{}{}", f.branch, detail),
+                    branch: Some(f.branch.clone()),
+                    feature_id: Some(f.id.clone()),
+                });
+            }
+            self.state.modal = Modal::BranchPicker {
+                repo_slug,
+                wt_name,
+                ticket_id,
+                items,
+                selected: 0,
+            };
+        }
+    }
+
     /// Handle branch selection from the BranchPicker modal.
     pub(super) fn handle_branch_pick(&mut self, index: usize) {
         let modal = std::mem::replace(&mut self.state.modal, Modal::None);
@@ -888,5 +945,154 @@ mod tests {
             app.state.status_message.as_deref(),
             Some("Model for feat-test set to: my-custom-model")
         );
+    }
+
+    // ---------- Branch picker tests ----------
+
+    fn branch_picker_items() -> Vec<crate::state::BranchPickerItem> {
+        vec![
+            crate::state::BranchPickerItem {
+                label: "default branch".to_string(),
+                branch: None,
+                feature_id: None,
+            },
+            crate::state::BranchPickerItem {
+                label: "feat/notifications".to_string(),
+                branch: Some("feat/notifications".to_string()),
+                feature_id: Some("f1".to_string()),
+            },
+        ]
+    }
+
+    fn branch_picker_modal(selected: usize) -> Modal {
+        Modal::BranchPicker {
+            repo_slug: "test-repo".to_string(),
+            wt_name: "my-wt".to_string(),
+            ticket_id: None,
+            items: branch_picker_items(),
+            selected,
+        }
+    }
+
+    #[test]
+    fn branch_pick_explicit_index_selects_that_item() {
+        let mut app = make_app();
+        app.state.modal = branch_picker_modal(0);
+        // Pick index 1 explicitly (feat/notifications).
+        app.handle_branch_pick(1);
+        match &app.state.modal {
+            Modal::Input { on_submit, .. } => match on_submit {
+                InputAction::CreateWorktreePrStep { from_branch, .. } => {
+                    assert_eq!(from_branch.as_deref(), Some("feat/notifications"));
+                }
+                other => panic!("expected CreateWorktreePrStep, got {:?}", other),
+            },
+            other => panic!("expected Input modal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn branch_pick_usize_max_uses_selected_field() {
+        let mut app = make_app();
+        app.state.modal = branch_picker_modal(1); // selected = 1 (feat/notifications)
+                                                  // usize::MAX means "use the modal's selected field".
+        app.handle_branch_pick(usize::MAX);
+        match &app.state.modal {
+            Modal::Input { on_submit, .. } => match on_submit {
+                InputAction::CreateWorktreePrStep { from_branch, .. } => {
+                    assert_eq!(from_branch.as_deref(), Some("feat/notifications"));
+                }
+                other => panic!("expected CreateWorktreePrStep, got {:?}", other),
+            },
+            other => panic!("expected Input modal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn branch_pick_default_branch_sets_none() {
+        let mut app = make_app();
+        app.state.modal = branch_picker_modal(0);
+        // Pick index 0 (default branch → None).
+        app.handle_branch_pick(0);
+        match &app.state.modal {
+            Modal::Input { on_submit, .. } => match on_submit {
+                InputAction::CreateWorktreePrStep { from_branch, .. } => {
+                    assert!(from_branch.is_none());
+                }
+                other => panic!("expected CreateWorktreePrStep, got {:?}", other),
+            },
+            other => panic!("expected Input modal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn branch_pick_noop_when_not_branch_picker_modal() {
+        let mut app = make_app();
+        app.state.modal = Modal::None;
+        app.handle_branch_pick(0);
+        // Modal should stay None (no-op).
+        assert!(matches!(app.state.modal, Modal::None));
+    }
+
+    // ---------- handle_feature_branches_loaded tests ----------
+
+    #[test]
+    fn feature_branches_loaded_empty_skips_to_pr_step() {
+        let mut app = make_app();
+        app.handle_feature_branches_loaded(
+            "test-repo".to_string(),
+            "my-wt".to_string(),
+            None,
+            vec![],
+        );
+        match &app.state.modal {
+            Modal::Input { on_submit, .. } => match on_submit {
+                InputAction::CreateWorktreePrStep {
+                    from_branch,
+                    wt_name,
+                    ..
+                } => {
+                    assert!(from_branch.is_none());
+                    assert_eq!(wt_name, "my-wt");
+                }
+                other => panic!("expected CreateWorktreePrStep, got {:?}", other),
+            },
+            other => panic!("expected Input modal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn feature_branches_loaded_shows_branch_picker() {
+        use conductor_core::feature::{FeatureRow, FeatureStatus};
+        let mut app = make_app();
+        let features = vec![FeatureRow {
+            id: "f1".to_string(),
+            name: "notifications".to_string(),
+            branch: "feat/notifications".to_string(),
+            base_branch: "main".to_string(),
+            status: FeatureStatus::Active,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            worktree_count: 2,
+            ticket_count: 1,
+        }];
+        app.handle_feature_branches_loaded(
+            "test-repo".to_string(),
+            "my-wt".to_string(),
+            Some("t1".to_string()),
+            features,
+        );
+        match &app.state.modal {
+            Modal::BranchPicker {
+                items, selected, ..
+            } => {
+                assert_eq!(*selected, 0);
+                assert_eq!(items.len(), 2); // default + 1 feature
+                assert!(items[0].branch.is_none());
+                assert_eq!(items[1].branch.as_deref(), Some("feat/notifications"));
+                assert!(items[1].label.contains("2 worktrees"));
+                assert!(items[1].label.contains("1 ticket"));
+            }
+            other => panic!("expected BranchPicker modal, got {:?}", other),
+        }
     }
 }
