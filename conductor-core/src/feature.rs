@@ -196,6 +196,42 @@ impl<'a> FeatureManager<'a> {
         self.list_with_status_filter(repo_slug, Some(FeatureStatus::Active))
     }
 
+    /// List active features for all repos in a single query, keyed by repo_id.
+    pub fn list_all_active(&self) -> Result<std::collections::HashMap<String, Vec<FeatureRow>>> {
+        let row_mapper = |row: &rusqlite::Row<'_>| {
+            Ok((
+                row.get::<_, String>(0)?, // repo_id
+                FeatureRow {
+                    id: row.get(1)?,
+                    name: row.get(2)?,
+                    branch: row.get(3)?,
+                    base_branch: row.get(4)?,
+                    status: row.get(5)?,
+                    created_at: row.get(6)?,
+                    worktree_count: row.get(7)?,
+                    ticket_count: row.get(8)?,
+                },
+            ))
+        };
+
+        let sql = "\
+            SELECT f.repo_id, f.id, f.name, f.branch, f.base_branch, f.status, f.created_at, \
+                   (SELECT COUNT(*) FROM worktrees w WHERE w.repo_id = f.repo_id AND w.base_branch = f.branch) AS wt_count, \
+                   (SELECT COUNT(*) FROM feature_tickets ft WHERE ft.feature_id = f.id) AS ticket_count \
+            FROM features f \
+            WHERE f.status = ?1 \
+            ORDER BY f.created_at DESC";
+
+        let pairs: Vec<(String, FeatureRow)> =
+            query_collect(self.conn, sql, params![FeatureStatus::Active], row_mapper)?;
+
+        let mut map = std::collections::HashMap::new();
+        for (repo_id, row) in pairs {
+            map.entry(repo_id).or_insert_with(Vec::new).push(row);
+        }
+        Ok(map)
+    }
+
     /// Shared helper: list features with an optional status filter.
     ///
     /// Worktree count uses an implicit join via branch name

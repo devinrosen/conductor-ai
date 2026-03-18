@@ -326,21 +326,12 @@ pub fn poll_data() -> Option<PollResult> {
     // Return an empty map here; the loop merges in the incremental state.
     let live_turns_by_worktree = std::collections::HashMap::new();
 
-    // Load active features per repo for dashboard grouping.
+    // Load active features for all repos in a single query.
     let feat_mgr = FeatureManager::new(&conn, &config);
-    let mut features_by_repo = std::collections::HashMap::new();
-    for repo in &repos {
-        match feat_mgr.list_active(&repo.slug) {
-            Ok(features) => {
-                if !features.is_empty() {
-                    features_by_repo.insert(repo.id.clone(), features);
-                }
-            }
-            Err(e) => {
-                eprintln!("warn: list_active features failed for {}: {e}", repo.slug);
-            }
-        }
-    }
+    let features_by_repo = feat_mgr.list_all_active().unwrap_or_else(|e| {
+        tracing::warn!("list_all_active features failed: {e}");
+        std::collections::HashMap::new()
+    });
 
     let action = Action::DataRefreshed(Box::new(DataRefreshedPayload {
         repos,

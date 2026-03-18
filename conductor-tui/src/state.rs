@@ -2002,75 +2002,20 @@ impl AppState {
         rows
     }
 
-    /// Returns the dashboard row at `dashboard_index` without allocating the
-    /// full row `Vec`. Walks the repo/feature/worktree structure the same way
-    /// `dashboard_rows()` does but stops as soon as the target index is reached.
+    /// Returns the dashboard row at `dashboard_index`.
+    /// Delegates to `dashboard_rows()` to guarantee the two can never diverge.
     pub fn current_dashboard_row(&self) -> Option<DashboardRow> {
-        let target = self.dashboard_index;
-        let mut pos: usize = 0;
-        for (repo_idx, repo) in self.data.repos.iter().enumerate() {
-            if pos == target {
-                return Some(DashboardRow::Repo(repo_idx));
-            }
-            pos += 1;
-
-            let empty_features = Vec::new();
-            let features = self
-                .data
-                .features_by_repo
-                .get(&repo.id)
-                .unwrap_or(&empty_features);
-
-            let mut grouped_wt_indices: HashSet<usize> = HashSet::new();
-
-            for (fi, feature) in features.iter().enumerate() {
-                if pos == target {
-                    return Some(DashboardRow::Feature {
-                        repo_idx,
-                        feature_idx: fi,
-                    });
-                }
-                pos += 1;
-
-                for (wt_idx, wt) in self.data.worktrees.iter().enumerate() {
-                    if Self::worktree_belongs_to_feature(wt, &repo.id, feature) {
-                        grouped_wt_indices.insert(wt_idx);
-                        if !self.collapsed_features.contains(&feature.id) {
-                            if pos == target {
-                                return Some(DashboardRow::Worktree {
-                                    idx: wt_idx,
-                                    is_feature_child: true,
-                                });
-                            }
-                            pos += 1;
-                        }
-                    }
-                }
-            }
-
-            for (wt_idx, wt) in self.data.worktrees.iter().enumerate() {
-                if wt.repo_id == repo.id && !grouped_wt_indices.contains(&wt_idx) {
-                    if pos == target {
-                        return Some(DashboardRow::Worktree {
-                            idx: wt_idx,
-                            is_feature_child: false,
-                        });
-                    }
-                    pos += 1;
-                }
-            }
-        }
-        None
+        self.dashboard_rows().into_iter().nth(self.dashboard_index)
     }
 
     /// Get the currently selected repo, if any.
     /// When the cursor is on a worktree or feature row, returns that item's owning repo.
     pub fn selected_repo(&self) -> Option<&Repo> {
-        match self.dashboard_rows().get(self.dashboard_index)? {
-            DashboardRow::Repo(idx) => self.data.repos.get(*idx),
-            DashboardRow::Feature { repo_idx, .. } => self.data.repos.get(*repo_idx),
+        match self.current_dashboard_row()? {
+            DashboardRow::Repo(idx) => self.data.repos.get(idx),
+            DashboardRow::Feature { repo_idx, .. } => self.data.repos.get(repo_idx),
             DashboardRow::Worktree { idx, .. } => {
-                let wt = self.data.worktrees.get(*idx)?;
+                let wt = self.data.worktrees.get(idx)?;
                 self.data.repos.iter().find(|r| r.id == wt.repo_id)
             }
         }
@@ -3902,6 +3847,106 @@ pub(crate) mod tests {
                 }, // ungrouped still shows
             ]
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // current_dashboard_row() tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn current_dashboard_row_returns_correct_row() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        state.data.worktrees = vec![make_worktree(
+            "wt1",
+            "r1",
+            None,
+            conductor_core::worktree::WorktreeStatus::Active,
+        )];
+        // index 0 = Repo, index 1 = Worktree
+        state.dashboard_index = 0;
+        assert_eq!(state.current_dashboard_row(), Some(DashboardRow::Repo(0)));
+        state.dashboard_index = 1;
+        assert_eq!(
+            state.current_dashboard_row(),
+            Some(DashboardRow::Worktree {
+                idx: 0,
+                is_feature_child: false
+            })
+        );
+    }
+
+    #[test]
+    fn current_dashboard_row_out_of_bounds() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        state.dashboard_index = 99;
+        assert_eq!(state.current_dashboard_row(), None);
+    }
+
+    #[test]
+    fn current_dashboard_row_skips_collapsed_children() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        state
+            .data
+            .features_by_repo
+            .insert("r1".into(), vec![make_feature_row("f1", "feat/big-thing")]);
+        state.data.worktrees = vec![
+            make_worktree(
+                "wt1",
+                "r1",
+                Some("feat/big-thing"),
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+            make_worktree(
+                "wt2",
+                "r1",
+                None,
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+        ];
+        state.collapsed_features.insert("f1".into());
+        // Rows: Repo(0), Feature{0,0}, Worktree{1,false} (wt1 hidden)
+        state.dashboard_index = 2;
+        assert_eq!(
+            state.current_dashboard_row(),
+            Some(DashboardRow::Worktree {
+                idx: 1,
+                is_feature_child: false
+            })
+        );
+    }
+
+    #[test]
+    fn current_dashboard_row_agrees_with_dashboard_rows() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a"), make_repo("r2", "repo-b")];
+        state
+            .data
+            .features_by_repo
+            .insert("r1".into(), vec![make_feature_row("f1", "feat/thing")]);
+        state.data.worktrees = vec![
+            make_worktree(
+                "wt1",
+                "r1",
+                Some("feat/thing"),
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+            make_worktree(
+                "wt2",
+                "r2",
+                None,
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+        ];
+        let rows = state.dashboard_rows();
+        for (i, row) in rows.iter().enumerate() {
+            state.dashboard_index = i;
+            assert_eq!(state.current_dashboard_row().as_ref(), Some(row));
+        }
+        state.dashboard_index = rows.len();
+        assert_eq!(state.current_dashboard_row(), None);
     }
 
     #[test]
