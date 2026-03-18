@@ -421,24 +421,21 @@ impl App {
                     return;
                 }
                 // Resolve the default model: per-worktree → per-repo → global config
-                let wt_model = self
+                let wt = self
                     .state
                     .data
                     .worktrees
                     .iter()
-                    .find(|w| w.id == worktree_id)
-                    .and_then(|w| w.model.clone());
-                let repo_model = self
-                    .state
-                    .data
-                    .worktrees
-                    .iter()
-                    .find(|w| w.id == worktree_id)
+                    .find(|w| w.id == worktree_id);
+                let wt_model = wt.and_then(|w| w.model.as_deref());
+                let repo_model = wt
                     .and_then(|w| self.state.data.repos.iter().find(|r| r.id == w.repo_id))
-                    .and_then(|r| r.model.clone());
-                let resolved_default = wt_model
-                    .or(repo_model)
-                    .or_else(|| self.config.general.model.clone());
+                    .and_then(|r| r.model.as_deref());
+                let resolved_default = conductor_core::models::resolve_model(
+                    wt_model,
+                    repo_model,
+                    self.config.general.model.as_deref(),
+                );
 
                 // Suggest a model based on the prompt text
                 let suggested = conductor_core::models::suggest_model(&value);
@@ -451,27 +448,9 @@ impl App {
 
                 let (effective_default, effective_source) = match &resolved_default {
                     Some(m) => {
-                        // Determine source
-                        let source = if self
-                            .state
-                            .data
-                            .worktrees
-                            .iter()
-                            .find(|w| w.id == worktree_id)
-                            .and_then(|w| w.model.as_ref())
-                            .is_some()
-                        {
+                        let source = if wt_model.is_some() {
                             "worktree"
-                        } else if self
-                            .state
-                            .data
-                            .worktrees
-                            .iter()
-                            .find(|w| w.id == worktree_id)
-                            .and_then(|w| self.state.data.repos.iter().find(|r| r.id == w.repo_id))
-                            .and_then(|r| r.model.as_ref())
-                            .is_some()
-                        {
+                        } else if repo_model.is_some() {
                             "repo"
                         } else {
                             "global config"

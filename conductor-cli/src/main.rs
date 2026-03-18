@@ -740,11 +740,12 @@ fn main() -> Result<()> {
                                     let repo_mgr = RepoManager::new(&conn, &config);
                                     let repo_model =
                                         repo_mgr.get_by_slug(&repo).ok().and_then(|r| r.model);
-                                    let model = wt
-                                        .model
-                                        .as_deref()
-                                        .or(repo_model.as_deref())
-                                        .or(config.general.model.as_deref());
+                                    let resolved_model = conductor_core::models::resolve_model(
+                                        wt.model.as_deref(),
+                                        repo_model.as_deref(),
+                                        config.general.model.as_deref(),
+                                    );
+                                    let model = resolved_model.as_deref();
                                     let agent_mgr = AgentManager::new(&conn);
                                     let run = agent_mgr.create_run(
                                         Some(&wt.id),

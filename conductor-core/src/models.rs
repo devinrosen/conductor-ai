@@ -66,6 +66,23 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
     },
 ];
 
+/// Resolve the effective model using the per-worktree → per-repo → global config
+/// precedence chain. All inputs are optional; returns `None` if nothing is set.
+///
+/// This is a pure function — callers supply already-loaded values so it works
+/// in both the CLI (loads from DB before calling) and the TUI (reads from
+/// cached in-memory state without blocking the render thread).
+pub fn resolve_model(
+    worktree_model: Option<&str>,
+    repo_model: Option<&str>,
+    global_model: Option<&str>,
+) -> Option<String> {
+    worktree_model
+        .or(repo_model)
+        .or(global_model)
+        .map(|s| s.to_string())
+}
+
 /// Look up a known model by its ID or alias. Returns `None` for custom model strings.
 pub fn find_known_model(id_or_alias: &str) -> Option<&'static KnownModel> {
     KNOWN_MODELS
@@ -129,6 +146,35 @@ pub fn suggest_model(prompt: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_model_worktree_wins() {
+        assert_eq!(
+            resolve_model(Some("opus"), Some("sonnet"), Some("haiku")),
+            Some("opus".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_model_repo_wins_when_no_worktree() {
+        assert_eq!(
+            resolve_model(None, Some("sonnet"), Some("haiku")),
+            Some("sonnet".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_model_global_wins_when_no_worktree_or_repo() {
+        assert_eq!(
+            resolve_model(None, None, Some("haiku")),
+            Some("haiku".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_model_none_when_nothing_set() {
+        assert_eq!(resolve_model(None, None, None), None);
+    }
 
     #[test]
     fn test_known_models_count() {
