@@ -7,7 +7,7 @@ This guide is for teams that want to use `conductor` as a standalone command-lin
 - **macOS or Linux**
 - **[`gh` CLI](https://cli.github.com/)** — authenticated (`gh auth login`)
 - **[`tmux`](https://github.com/tmux/tmux)** — agents run in tmux windows
-- **Claude API key** — set as `ANTHROPIC_API_KEY` in your environment
+- **[Claude Code CLI (`claude`)](https://docs.anthropic.com/en/docs/claude-code)** — installed and authenticated
 - **Git**
 
 ## Installation

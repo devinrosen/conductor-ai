@@ -481,8 +481,9 @@ fn check_prerequisites() {
     if Command::new("tmux").arg("-V").output().is_err() {
         missing.push("  - tmux: https://github.com/tmux/tmux");
     }
-    if std::env::var("ANTHROPIC_API_KEY").is_err() {
-        missing.push("  - ANTHROPIC_API_KEY (get a key at https://console.anthropic.com)");
+    if Command::new("claude").arg("--version").output().is_err() {
+        missing
+            .push("  - claude (Claude Code CLI): https://docs.anthropic.com/en/docs/claude-code");
     }
     if !missing.is_empty() {
         eprintln!("conductor: missing prerequisites:\n{}", missing.join("\n"));
