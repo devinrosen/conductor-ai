@@ -259,7 +259,7 @@ impl App {
                     let repo = match self.state.data.repos.get(repo_idx) {
                         Some(r) => r.clone(),
                         None => {
-                            self.state.status_message = Some("No repo selected".to_string());
+                            self.state.status_message = Some(format!("Internal error: repo index {repo_idx} not found"));
                             return;
                         }
                     };
@@ -269,7 +269,7 @@ impl App {
                     let repo = match self.state.data.repos.get(*repo_idx) {
                         Some(r) => r.clone(),
                         None => {
-                            self.state.status_message = Some("No repo selected".to_string());
+                            self.state.status_message = Some(format!("Internal error: repo index {repo_idx} not found"));
                             return;
                         }
                     };

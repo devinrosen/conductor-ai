@@ -657,6 +657,7 @@ impl App {
                             if !self.state.collapsed_features.remove(&fid) {
                                 self.state.collapsed_features.insert(fid);
                             }
+                            self.state.invalidate_dashboard_rows();
                         }
                     }
                     Some(&DashboardRow::Worktree { idx: wt_idx, .. }) => {

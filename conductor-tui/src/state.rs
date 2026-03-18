@@ -1037,6 +1037,10 @@ pub struct AppState {
     /// Set of leaf run IDs whose steps are currently expanded inline.
     pub expanded_step_run_ids: HashSet<String>,
 
+    /// Cached result of `dashboard_rows()`. Invalidated when repos, worktrees,
+    /// features_by_repo, or collapsed_features change.
+    cached_dashboard_rows: RefCell<Option<Vec<DashboardRow>>>,
+
     pub should_quit: bool,
 
     /// When false (default), closed tickets are hidden in all ticket views.
@@ -1417,6 +1421,7 @@ impl AppState {
             selected_workflow_run_id: None,
             collapsed_workflow_run_ids: HashSet::new(),
             collapsed_features: HashSet::new(),
+            cached_dashboard_rows: RefCell::new(None),
             collapsed_repo_headers: HashSet::new(),
             collapsed_target_headers: HashSet::new(),
             collapse_initialized: HashSet::new(),
@@ -1933,6 +1938,24 @@ impl AppState {
     /// Builds a per-repo worktree index up-front so the inner loop is O(W) total
     /// rather than O(F×W).
     pub fn dashboard_rows(&self) -> Vec<DashboardRow> {
+        {
+            let cache = self.cached_dashboard_rows.borrow();
+            if let Some(ref rows) = *cache {
+                return rows.clone();
+            }
+        }
+        let rows = self.build_dashboard_rows();
+        *self.cached_dashboard_rows.borrow_mut() = Some(rows.clone());
+        rows
+    }
+
+    /// Invalidate the cached dashboard rows. Call this whenever repos, worktrees,
+    /// features_by_repo, or collapsed_features change.
+    pub fn invalidate_dashboard_rows(&self) {
+        *self.cached_dashboard_rows.borrow_mut() = None;
+    }
+
+    fn build_dashboard_rows(&self) -> Vec<DashboardRow> {
         // Build an index: repo_id → [(global_wt_idx, &Worktree)]
         let mut wts_by_repo: HashMap<&str, Vec<(usize, &conductor_core::worktree::Worktree)>> =
             HashMap::new();
