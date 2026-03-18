@@ -8,7 +8,9 @@ use ratatui::Frame;
 
 use conductor_core::workflow::InputType;
 use conductor_core::workflow::WorkflowNode;
-use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep};
+use conductor_core::workflow::{
+    WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
+};
 
 use super::common::truncate;
 use super::helpers::{format_condition, shorten_paths, visual_idx_with_headers};
@@ -1718,7 +1720,7 @@ fn run_status_icon(
     // For waiting runs, inspect the first waiting step's gate_type.
     let gate_type = steps.get(&run.id).and_then(|ss| {
         ss.iter()
-            .find(|s| s.status.to_string() == "waiting" && s.gate_type.is_some())
+            .find(|s| s.status == WorkflowStepStatus::Waiting && s.gate_type.is_some())
             .and_then(|s| s.gate_type.as_deref())
     });
     match gate_type {
