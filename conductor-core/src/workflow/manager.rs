@@ -2653,4 +2653,25 @@ mod tests {
             "waiting gate steps from failed runs must not be returned"
         );
     }
+
+    #[test]
+    fn test_set_workflow_run_iteration() {
+        let conn = setup_db();
+        let run = create_worktree_run(&conn, "w1");
+        let mgr = WorkflowManager::new(&conn);
+
+        // Default iteration should be 0.
+        let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.iteration, 0);
+
+        // Set iteration to 3.
+        mgr.set_workflow_run_iteration(&run.id, 3).unwrap();
+        let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.iteration, 3);
+
+        // Set iteration to 0 again.
+        mgr.set_workflow_run_iteration(&run.id, 0).unwrap();
+        let fetched = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.iteration, 0);
+    }
 }

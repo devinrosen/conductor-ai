@@ -642,7 +642,7 @@ fn poll_workflow_data(
     let mut all_run_steps = match wf_mgr.get_steps_for_runs(&all_run_ids) {
         Ok(steps) => steps,
         Err(e) => {
-            tracing::warn!("get_steps_for_runs failed: {e}");
+            tracing::warn!("get_steps_for_runs failed for runs {:?}: {e}", all_run_ids);
             Default::default()
         }
     };
@@ -661,8 +661,14 @@ fn poll_workflow_data(
         .collect();
     if !ancestor_ids.is_empty() {
         let ancestor_refs: Vec<&str> = ancestor_ids.iter().map(|s| s.as_str()).collect();
-        if let Ok(ancestor_steps) = wf_mgr.get_steps_for_runs(&ancestor_refs) {
-            all_run_steps.extend(ancestor_steps);
+        match wf_mgr.get_steps_for_runs(&ancestor_refs) {
+            Ok(ancestor_steps) => all_run_steps.extend(ancestor_steps),
+            Err(e) => {
+                tracing::warn!(
+                    "get_steps_for_runs failed for ancestor runs {:?}: {e}",
+                    ancestor_ids
+                );
+            }
         }
     }
 

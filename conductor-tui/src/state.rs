@@ -3488,4 +3488,66 @@ pub(crate) mod tests {
         // Third should be the child run (pos 1)
         assert!(matches!(&rows[2], WorkflowRunRow::Child { run_id, .. } if run_id == "c1"));
     }
+
+    #[test]
+    fn push_children_global_max_iter_filters_old_iteration_direct_steps() {
+        // Direct steps at iteration 0 should be hidden when iteration 1 steps exist,
+        // because the global_max_iter filter keeps only the latest iteration.
+        // push_children is exercised when the parent has child runs in children_map.
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Running, None),
+            make_wf_run_with_iter("c1", WorkflowRunStatus::Running, Some("p1"), "sub-wf", 1),
+        ];
+
+        // Parent has steps from two iterations:
+        // iter 0: "step-a" (pos 0), "step-b" (pos 1), "workflow:sub-wf" (pos 2)
+        // iter 1: "step-a" (pos 3), "workflow:sub-wf" (pos 4)
+        let step_a_iter0 = make_iter_step("p1", "step-a", 0, 0);
+        let step_b_iter0 = make_iter_step("p1", "step-b", 0, 1);
+        let mut wf_step_iter0 = make_iter_step("p1", "workflow:sub-wf", 0, 2);
+        wf_step_iter0.child_run_id = Some("c0".to_string());
+        let step_a_iter1 = make_iter_step("p1", "step-a", 1, 3);
+        let mut wf_step_iter1 = make_iter_step("p1", "workflow:sub-wf", 1, 4);
+        wf_step_iter1.child_run_id = Some("c1".to_string());
+
+        state.data.workflow_run_steps.insert(
+            "p1".to_string(),
+            vec![
+                step_a_iter0,
+                step_b_iter0,
+                wf_step_iter0,
+                step_a_iter1,
+                wf_step_iter1,
+            ],
+        );
+
+        // Expand parent to show direct steps
+        state.expanded_step_run_ids.insert("p1".to_string());
+
+        let rows = state.visible_workflow_run_rows();
+
+        // Parent row + iteration-1 direct step ("step-a" at pos 3) + child run "c1"
+        // Iteration 0 steps ("step-a" pos 0, "step-b" pos 1) must be filtered out.
+        // "workflow:sub-wf" steps are excluded because they start with "workflow:".
+        assert_eq!(
+            rows.len(),
+            3,
+            "expected parent + 1 iteration-1 step + 1 child run, got {:?}",
+            rows
+        );
+        assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
+        assert!(
+            matches!(&rows[1], WorkflowRunRow::Step { step_name, position, .. }
+                if step_name == "step-a" && *position == 3),
+            "only iteration 1 direct step (position 3) should appear, got {:?}",
+            rows[1]
+        );
+        assert!(
+            matches!(&rows[2], WorkflowRunRow::Child { run_id, .. } if run_id == "c1"),
+            "child run c1 should appear, got {:?}",
+            rows[2]
+        );
+    }
 }

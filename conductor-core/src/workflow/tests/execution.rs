@@ -2583,3 +2583,64 @@ fn test_parallel_min_success_with_skipped_resume_agents() {
         "should fail when effective successes don't meet min_required"
     );
 }
+
+#[test]
+fn test_execute_workflow_iteration_persisted() {
+    // When iteration > 0, execute_workflow should persist the iteration on the
+    // created workflow run record via set_workflow_run_iteration.
+    let conn = setup_db();
+    let config = Config::default();
+    let exec_config = WorkflowExecConfig::default();
+    let workflow = make_empty_workflow();
+
+    // Use run_id_notify to capture the workflow run ID.
+    let slot: RunIdSlot =
+        std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+
+    let input = WorkflowExecInput {
+        conn: &conn,
+        config: &config,
+        workflow: &workflow,
+        worktree_id: None,
+        working_dir: "",
+        repo_path: "",
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: &exec_config,
+        inputs: HashMap::new(),
+        depth: 1,
+        parent_workflow_run_id: None,
+        target_label: None,
+        default_bot_name: None,
+        iteration: 3,
+        run_id_notify: Some(slot.clone()),
+    };
+
+    let result = execute_workflow(&input);
+    // The workflow will complete (empty body, no agents to spawn).
+    assert!(
+        result.is_ok(),
+        "execute_workflow should succeed: {:?}",
+        result
+    );
+
+    // Retrieve the run ID from the notify slot.
+    let run_id = slot
+        .0
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("run_id should be set");
+
+    // Verify the run record has iteration == 3.
+    let wf_mgr = WorkflowManager::new(&conn);
+    let run = wf_mgr
+        .get_workflow_run(&run_id)
+        .unwrap()
+        .expect("run should exist");
+    assert_eq!(
+        run.iteration, 3,
+        "iteration should be persisted on the workflow run"
+    );
+}
