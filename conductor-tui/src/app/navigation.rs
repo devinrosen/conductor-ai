@@ -346,6 +346,14 @@ impl App {
                 wrap_decrement(selected, total);
                 return;
             }
+            Modal::BranchPicker {
+                ref items,
+                ref mut selected,
+                ..
+            } => {
+                wrap_decrement(selected, items.len());
+                return;
+            }
             Modal::PostCreatePicker {
                 ref items,
                 ref mut selected,
@@ -467,6 +475,14 @@ impl App {
                 let total =
                     conductor_core::models::KNOWN_MODELS.len() + 1 + usize::from(allow_default);
                 wrap_increment(selected, total);
+                return;
+            }
+            Modal::BranchPicker {
+                ref items,
+                ref mut selected,
+                ..
+            } => {
+                wrap_increment(selected, items.len());
                 return;
             }
             Modal::PostCreatePicker {

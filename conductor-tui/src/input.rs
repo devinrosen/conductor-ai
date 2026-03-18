@@ -195,6 +195,23 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::BranchPicker { ref items, .. } => {
+            return match key.code {
+                KeyCode::Esc => Action::DismissModal,
+                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
+                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
+                KeyCode::Enter => Action::SelectBranch(usize::MAX),
+                KeyCode::Char(c) if c.is_ascii_digit() => {
+                    let n = c.to_digit(10).unwrap() as usize;
+                    if n >= 1 && n <= items.len() {
+                        Action::SelectBranch(n - 1)
+                    } else {
+                        Action::None
+                    }
+                }
+                _ => Action::None,
+            };
+        }
         Modal::PostCreatePicker { ref items, .. } => {
             return match key.code {
                 KeyCode::Esc => Action::DismissModal,

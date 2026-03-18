@@ -99,6 +99,9 @@ pub fn render(frame: &mut Frame, state: &AppState) {
                 &state.theme,
             );
         }
+        Modal::BranchPicker {
+            items, selected, ..
+        } => modal::render_branch_picker(frame, area, items, *selected, &state.theme),
         Modal::PostCreatePicker {
             items,
             selected,

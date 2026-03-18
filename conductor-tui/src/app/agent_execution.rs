@@ -343,6 +343,7 @@ impl App {
         name: String,
         ticket_id: Option<String>,
         from_pr: Option<u32>,
+        from_branch: Option<String>,
     ) {
         // Guard before setting the non-dismissable Progress modal: if bg_tx is
         // None (only possible before init() completes), skip rather than
@@ -363,8 +364,13 @@ impl App {
                 let db = conductor_core::config::db_path();
                 let conn = conductor_core::db::open_database(&db)?;
                 let wt_mgr = WorktreeManager::new(&conn, &config);
-                let (wt, warnings) =
-                    wt_mgr.create(&repo_slug, &name, None, ticket_id.as_deref(), from_pr)?;
+                let (wt, warnings) = wt_mgr.create(
+                    &repo_slug,
+                    &name,
+                    from_branch.as_deref(),
+                    ticket_id.as_deref(),
+                    from_pr,
+                )?;
                 Ok((wt, warnings))
             })();
             match result {

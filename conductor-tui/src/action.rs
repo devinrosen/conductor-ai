@@ -273,6 +273,9 @@ pub enum Action {
         errors: Vec<String>,
     },
 
+    // Branch picker (during worktree creation)
+    SelectBranch(usize),
+
     // Post-create picker (after worktree creation)
     SelectPostCreateChoice(usize),
     /// Background result: workflow defs loaded, ready to show post-create picker.

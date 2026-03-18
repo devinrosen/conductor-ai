@@ -347,6 +347,7 @@ impl App {
             Action::CreatePr => self.handle_create_pr(),
             Action::SyncTickets => self.handle_sync_tickets(),
             Action::LinkTicket => self.handle_link_ticket(),
+            Action::SelectBranch(index) => self.handle_branch_pick(index),
             Action::SelectPostCreateChoice(index) => self.handle_post_create_pick(index),
             Action::PostCreatePickerReady {
                 items,

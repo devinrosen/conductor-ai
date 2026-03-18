@@ -4,7 +4,9 @@ use conductor_core::repo::{derive_local_path, derive_slug_from_url, RepoManager}
 use conductor_core::tickets::TicketSyncer;
 use conductor_core::worktree::WorktreeManager;
 
-use crate::state::{ConfirmAction, FormAction, FormField, FormFieldType, InputAction, Modal};
+use crate::state::{
+    BranchPickerItem, ConfirmAction, FormAction, FormField, FormFieldType, InputAction, Modal,
+};
 
 use super::helpers::advance_form_field;
 use super::App;
@@ -310,22 +312,80 @@ impl App {
                 if value.is_empty() {
                     return;
                 }
-                // Show a second prompt asking for an optional PR number.
-                self.state.modal = Modal::Input {
-                    title: "From PR (optional)".to_string(),
-                    prompt: "PR number to check out (leave blank for new branch):".to_string(),
-                    value: String::new(),
-                    on_submit: InputAction::CreateWorktreePrStep {
-                        repo_slug,
-                        wt_name: value,
-                        ticket_id,
-                    },
+                let wt_name = value;
+
+                // Check for active feature branches to offer as base.
+                let active_features: Vec<_> = {
+                    use conductor_core::feature::{FeatureManager, FeatureStatus};
+                    let fm = FeatureManager::new(&self.conn, &self.config);
+                    fm.list(&repo_slug)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|f| f.status == FeatureStatus::Active)
+                        .collect()
                 };
+
+                if active_features.is_empty() {
+                    // No features → skip branch picker, go straight to PR step.
+                    self.state.modal = Modal::Input {
+                        title: "From PR (optional)".to_string(),
+                        prompt: "PR number to check out (leave blank for new branch):".to_string(),
+                        value: String::new(),
+                        on_submit: InputAction::CreateWorktreePrStep {
+                            repo_slug,
+                            wt_name,
+                            ticket_id,
+                            from_branch: None,
+                        },
+                    };
+                } else {
+                    // Build branch picker items: default branch first, then features.
+                    let mut items = vec![BranchPickerItem {
+                        label: "default branch".to_string(),
+                        branch: None,
+                        feature_id: None,
+                    }];
+                    for f in &active_features {
+                        let mut detail_parts = Vec::new();
+                        if f.worktree_count > 0 {
+                            detail_parts.push(format!(
+                                "{} worktree{}",
+                                f.worktree_count,
+                                if f.worktree_count == 1 { "" } else { "s" }
+                            ));
+                        }
+                        if f.ticket_count > 0 {
+                            detail_parts.push(format!(
+                                "{} ticket{}",
+                                f.ticket_count,
+                                if f.ticket_count == 1 { "" } else { "s" }
+                            ));
+                        }
+                        let detail = if detail_parts.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({})", detail_parts.join(", "))
+                        };
+                        items.push(BranchPickerItem {
+                            label: format!("{}{}", f.branch, detail),
+                            branch: Some(f.branch.clone()),
+                            feature_id: Some(f.id.clone()),
+                        });
+                    }
+                    self.state.modal = Modal::BranchPicker {
+                        repo_slug,
+                        wt_name,
+                        ticket_id,
+                        items,
+                        selected: 0,
+                    };
+                }
             }
             InputAction::CreateWorktreePrStep {
                 repo_slug,
                 wt_name,
                 ticket_id,
+                from_branch,
             } => {
                 // Parse optional PR number (blank → None, non-numeric → error).
                 let from_pr: Option<u32> = if value.trim().is_empty() {
@@ -367,10 +427,11 @@ impl App {
                             wt_name,
                             ticket_id,
                             from_pr,
+                            from_branch,
                         },
                     };
                 } else {
-                    self.spawn_worktree_create(repo_slug, wt_name, ticket_id, from_pr);
+                    self.spawn_worktree_create(repo_slug, wt_name, ticket_id, from_pr, from_branch);
                 }
             }
             InputAction::LinkTicket { worktree_id } => {
@@ -674,6 +735,34 @@ impl App {
                 );
             }
             _ => {}
+        }
+    }
+
+    /// Handle branch selection from the BranchPicker modal.
+    pub(super) fn handle_branch_pick(&mut self, index: usize) {
+        let modal = std::mem::replace(&mut self.state.modal, Modal::None);
+        if let Modal::BranchPicker {
+            repo_slug,
+            wt_name,
+            ticket_id,
+            items,
+            selected,
+        } = modal
+        {
+            let idx = if index == usize::MAX { selected } else { index };
+            let from_branch = items.get(idx).and_then(|item| item.branch.clone());
+            // Transition to PR input step, carrying the selected branch.
+            self.state.modal = Modal::Input {
+                title: "From PR (optional)".to_string(),
+                prompt: "PR number to check out (leave blank for new branch):".to_string(),
+                value: String::new(),
+                on_submit: InputAction::CreateWorktreePrStep {
+                    repo_slug,
+                    wt_name,
+                    ticket_id,
+                    from_branch,
+                },
+            };
         }
     }
 }
