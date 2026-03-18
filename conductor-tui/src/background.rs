@@ -602,21 +602,16 @@ fn poll_workflow_data(
         Vec::new()
     };
 
-    // Batch-fetch steps for all leaf runs (runs with no children in the current batch).
-    // Build the set of run IDs that appear as someone's parent — these are non-leaf.
-    let runs_with_children: std::collections::HashSet<&str> = runs
-        .iter()
-        .filter_map(|r| r.parent_workflow_run_id.as_deref())
-        .collect();
-    let leaf_run_ids: Vec<&str> = runs
-        .iter()
-        .filter(|r| !runs_with_children.contains(r.id.as_str()))
-        .map(|r| r.id.as_str())
-        .collect();
-    let all_run_steps = match wf_mgr.get_steps_for_runs(&leaf_run_ids) {
+    // Batch-fetch steps for all runs (both leaf and non-leaf parents).
+    // Non-leaf parents need their steps so that:
+    //   1. The loop-iteration filter in push_children can build latest_child_ids correctly.
+    //   2. Direct agent-call steps (steps without a child_run_id) on non-leaf parents are
+    //      visible in the tree alongside their sub-workflow children.
+    let all_run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+    let all_run_steps = match wf_mgr.get_steps_for_runs(&all_run_ids) {
         Ok(steps) => steps,
         Err(e) => {
-            tracing::warn!("get_steps_for_runs failed for runs {:?}: {e}", leaf_run_ids);
+            tracing::warn!("get_steps_for_runs failed for runs {:?}: {e}", all_run_ids);
             Default::default()
         }
     };

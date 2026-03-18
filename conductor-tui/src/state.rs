@@ -1165,59 +1165,148 @@ fn push_children(
     let Some(children) = children_map.get(parent_id) else {
         return;
     };
+
     // Build the set of child run IDs that belong to the latest loop iteration.
     // Steps at the max iteration (per step name) for the parent run identify which
     // child runs are current. An empty set means no filtering (safe fallback when
     // the parent's step data hasn't been loaded yet, or steps have no child_run_id).
-    let latest_child_ids: std::collections::HashSet<&str> =
-        if let Some(steps) = workflow_run_steps.get(parent_id) {
-            let max_iter_by_name = max_iter_by_step_name(steps);
-            steps
-                .iter()
-                .filter(|s| {
-                    s.child_run_id.is_some()
-                        && s.iteration == *max_iter_by_name.get(&s.step_name).unwrap_or(&0)
-                })
-                .filter_map(|s| s.child_run_id.as_deref())
-                .collect()
-        } else {
-            std::collections::HashSet::new()
-        };
-    for child in children {
+    //
+    // At the same time, collect:
+    //   - child_run_position: child_run_id → position in parent's step list
+    //   - direct_steps: parent's own steps that have no child_run_id (latest iteration only)
+    let (latest_child_ids, child_run_position, direct_steps): (
+        std::collections::HashSet<&str>,
+        std::collections::HashMap<&str, i64>,
+        Vec<&conductor_core::workflow::WorkflowRunStep>,
+    ) = if let Some(steps) = workflow_run_steps.get(parent_id) {
+        let max_iter_by_name = max_iter_by_step_name(steps);
+        let latest_child_ids = steps
+            .iter()
+            .filter(|s| {
+                s.child_run_id.is_some()
+                    && s.iteration == *max_iter_by_name.get(&s.step_name).unwrap_or(&0)
+            })
+            .filter_map(|s| s.child_run_id.as_deref())
+            .collect();
+        let child_run_position: std::collections::HashMap<&str, i64> = steps
+            .iter()
+            .filter_map(|s| s.child_run_id.as_deref().map(|cid| (cid, s.position)))
+            .collect();
+        let direct_steps: Vec<&conductor_core::workflow::WorkflowRunStep> = steps
+            .iter()
+            .filter(|s| {
+                s.child_run_id.is_none()
+                    && s.iteration == *max_iter_by_name.get(&s.step_name).unwrap_or(&0)
+            })
+            .collect();
+        (latest_child_ids, child_run_position, direct_steps)
+    } else {
+        (
+            std::collections::HashSet::new(),
+            std::collections::HashMap::new(),
+            Vec::new(),
+        )
+    };
+
+    // Enumerate items to emit: each is either a child run or a direct step, with a position.
+    // Items without a known position get i64::MAX so they sort after positioned items.
+    enum Item<'a> {
+        ChildRun(&'a conductor_core::workflow::WorkflowRun),
+        DirectStep(&'a conductor_core::workflow::WorkflowRunStep),
+    }
+    let mut items: Vec<(i64, Item)> = Vec::new();
+
+    for child in children.iter().copied() {
         // Skip children that belong to an earlier loop iteration.
         if !latest_child_ids.is_empty() && !latest_child_ids.contains(child.id.as_str()) {
             continue;
         }
-        let child_count = children_map.get(child.id.as_str()).map_or(0, |v| v.len());
-        let collapsed = collapsed_ids.contains(&child.id);
-        let max_iteration = max_iteration_for_run(child.id.as_str(), workflow_run_steps);
-        rows.push(WorkflowRunRow::Child {
-            run_id: child.id.clone(),
-            parent_id: parent_id.to_string(),
-            depth,
-            collapsed,
-            child_count,
-            max_iteration,
-        });
-        if !collapsed {
-            if child_count == 0 {
-                push_steps_for_run(
-                    &child.id,
-                    depth + 1,
-                    rows,
-                    expanded_step_run_ids,
-                    workflow_run_steps,
-                );
-            } else {
-                push_children(
-                    &child.id,
-                    depth + 1,
-                    rows,
-                    children_map,
-                    collapsed_ids,
-                    expanded_step_run_ids,
-                    workflow_run_steps,
-                );
+        let pos = child_run_position
+            .get(child.id.as_str())
+            .copied()
+            .unwrap_or(i64::MAX);
+        items.push((pos, Item::ChildRun(child)));
+    }
+
+    // Only show direct steps for non-leaf parents (i.e. when there are children after
+    // filtering). If there are no children at all, push_steps_for_run handles this run
+    // from the caller — we don't double-emit here.
+    for step in &direct_steps {
+        items.push((step.position, Item::DirectStep(step)));
+    }
+
+    // Sort by position so execution order is preserved.
+    items.sort_by_key(|(pos, _)| *pos);
+
+    for (_, item) in items {
+        match item {
+            Item::ChildRun(child) => {
+                let child_count = children_map.get(child.id.as_str()).map_or(0, |v| v.len());
+                let collapsed = collapsed_ids.contains(&child.id);
+                let max_iteration = max_iteration_for_run(child.id.as_str(), workflow_run_steps);
+                rows.push(WorkflowRunRow::Child {
+                    run_id: child.id.clone(),
+                    parent_id: parent_id.to_string(),
+                    depth,
+                    collapsed,
+                    child_count,
+                    max_iteration,
+                });
+                if !collapsed {
+                    if child_count == 0 {
+                        push_steps_for_run(
+                            &child.id,
+                            depth + 1,
+                            rows,
+                            expanded_step_run_ids,
+                            workflow_run_steps,
+                        );
+                    } else {
+                        push_children(
+                            &child.id,
+                            depth + 1,
+                            rows,
+                            children_map,
+                            collapsed_ids,
+                            expanded_step_run_ids,
+                            workflow_run_steps,
+                        );
+                    }
+                }
+            }
+            Item::DirectStep(step) => {
+                // Only emit direct steps when the parent is in expanded_step_run_ids.
+                if !expanded_step_run_ids.contains(parent_id) {
+                    continue;
+                }
+                match &step.parallel_group_id {
+                    None => {
+                        rows.push(WorkflowRunRow::Step {
+                            run_id: parent_id.to_string(),
+                            step_id: step.id.clone(),
+                            step_name: step.step_name.clone(),
+                            status: step.status.to_string(),
+                            position: step.position,
+                            depth,
+                            role: step.role.clone(),
+                            parallel_group_id: None,
+                        });
+                    }
+                    Some(_) => {
+                        // Parallel-grouped direct steps on a non-leaf parent are unusual;
+                        // emit them as plain steps to keep the tree readable.
+                        rows.push(WorkflowRunRow::Step {
+                            run_id: parent_id.to_string(),
+                            step_id: step.id.clone(),
+                            step_name: step.step_name.clone(),
+                            status: step.status.to_string(),
+                            position: step.position,
+                            depth,
+                            role: step.role.clone(),
+                            parallel_group_id: step.parallel_group_id.clone(),
+                        });
+                    }
+                }
             }
         }
     }
@@ -3353,5 +3442,170 @@ pub(crate) mod tests {
             "c1 (review iter 0) must be hidden"
         );
         assert!(!child_ids.contains(&"c2"), "c2 (fix iter 0) must be hidden");
+    }
+
+    // --- non-leaf parent direct-step interleaving tests (#1217) ---
+
+    /// Non-leaf parent `p1` has:
+    ///   - step "rebase"  (pos 0, child_run_id = c1)
+    ///   - step "address" (pos 1, no child_run_id — direct agent call)
+    ///   - step "push"    (pos 2, no child_run_id — direct agent call)
+    ///   - step "review"  (pos 3, child_run_id = c2)
+    ///
+    /// With p1 expanded, the tree should show c1, "address", "push", c2
+    /// in position order.
+    #[test]
+    fn non_leaf_parent_direct_steps_interleaved_with_children() {
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Running, None),
+            make_wf_run_full("c1", WorkflowRunStatus::Completed, Some("p1")),
+            make_wf_run_full("c2", WorkflowRunStatus::Running, Some("p1")),
+        ];
+
+        // Build parent steps: two spawn child runs, two are direct calls.
+        let mut rebase = make_iter_step_with_child("p1", "rebase", 0, 0, "c1");
+        rebase.child_run_id = Some("c1".into());
+        let address = make_iter_step("p1", "address", 0, 1); // no child_run_id
+        let push = make_iter_step("p1", "push", 0, 2); // no child_run_id
+        let mut review = make_iter_step_with_child("p1", "review", 0, 3, "c2");
+        review.child_run_id = Some("c2".into());
+
+        state
+            .data
+            .workflow_run_steps
+            .insert("p1".into(), vec![rebase, address, push, review]);
+
+        // Expand p1 so direct steps are emitted.
+        state.expanded_step_run_ids.insert("p1".into());
+
+        let rows = state.visible_workflow_run_rows();
+
+        // Expected: Parent(p1), Child(c1), Step(address), Step(push), Child(c2)
+        assert_eq!(
+            rows.len(),
+            5,
+            "expected Parent + Child(c1) + Step(address) + Step(push) + Child(c2)"
+        );
+        assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
+        assert!(matches!(&rows[1], WorkflowRunRow::Child { run_id, .. } if run_id == "c1"));
+        assert!(
+            matches!(&rows[2], WorkflowRunRow::Step { step_name, .. } if step_name == "address")
+        );
+        assert!(matches!(&rows[3], WorkflowRunRow::Step { step_name, .. } if step_name == "push"));
+        assert!(matches!(&rows[4], WorkflowRunRow::Child { run_id, .. } if run_id == "c2"));
+    }
+
+    /// When p1 is NOT in expanded_step_run_ids, direct steps on a non-leaf parent
+    /// must NOT appear — only the child run rows show.
+    #[test]
+    fn non_leaf_parent_direct_steps_hidden_when_not_expanded() {
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Running, None),
+            make_wf_run_full("c1", WorkflowRunStatus::Running, Some("p1")),
+        ];
+
+        let mut spawn = make_iter_step_with_child("p1", "rebase", 0, 0, "c1");
+        spawn.child_run_id = Some("c1".into());
+        let direct = make_iter_step("p1", "address", 0, 1);
+
+        state
+            .data
+            .workflow_run_steps
+            .insert("p1".into(), vec![spawn, direct]);
+
+        // p1 is NOT in expanded_step_run_ids — direct step must be invisible.
+        let rows = state.visible_workflow_run_rows();
+
+        // Only Parent + Child — no Step row.
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
+        assert!(matches!(&rows[1], WorkflowRunRow::Child { run_id, .. } if run_id == "c1"));
+    }
+
+    /// Loop iteration filter still works on non-leaf parents now that their steps
+    /// are fetched. Two iterations each spawning two child runs; only the latest
+    /// iteration children should appear, and the direct step from the latest iteration
+    /// should also appear.
+    #[test]
+    fn non_leaf_parent_loop_filter_and_direct_steps() {
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Running, None),
+            // iter 0 children
+            make_wf_run_full("c1", WorkflowRunStatus::Completed, Some("p1")),
+            make_wf_run_full("c2", WorkflowRunStatus::Completed, Some("p1")),
+            // iter 1 children
+            make_wf_run_full("d1", WorkflowRunStatus::Running, Some("p1")),
+            make_wf_run_full("d2", WorkflowRunStatus::Running, Some("p1")),
+        ];
+
+        // Parent steps for iter 0.
+        let mut r0 = make_iter_step_with_child("p1", "review", 0, 0, "c1");
+        r0.child_run_id = Some("c1".into());
+        let mut f0 = make_iter_step_with_child("p1", "fix", 0, 2, "c2");
+        f0.child_run_id = Some("c2".into());
+        let mut addr0 = make_iter_step("p1", "address", 0, 1); // direct, iter 0
+        addr0.iteration = 0;
+
+        // Parent steps for iter 1.
+        let mut r1 = make_iter_step_with_child("p1", "review", 1, 0, "d1");
+        r1.child_run_id = Some("d1".into());
+        let mut f1 = make_iter_step_with_child("p1", "fix", 1, 2, "d2");
+        f1.child_run_id = Some("d2".into());
+        let mut addr1 = make_iter_step("p1", "address", 1, 1); // direct, iter 1
+        addr1.iteration = 1;
+
+        state
+            .data
+            .workflow_run_steps
+            .insert("p1".into(), vec![r0, addr0, f0, r1, addr1, f1]);
+        state.expanded_step_run_ids.insert("p1".into());
+
+        let rows = state.visible_workflow_run_rows();
+
+        // Expected: Parent(p1), Child(d1), Step(address iter-1), Child(d2)
+        // c1 and c2 (iter 0) must be hidden; addr0 (iter 0) must also be hidden.
+        assert_eq!(
+            rows.len(),
+            4,
+            "expected Parent + Child(d1) + Step(address) + Child(d2)"
+        );
+        assert!(matches!(&rows[0], WorkflowRunRow::Parent { run_id, .. } if run_id == "p1"));
+
+        let child_ids: Vec<_> = rows
+            .iter()
+            .filter_map(|r| {
+                if let WorkflowRunRow::Child { run_id, .. } = r {
+                    Some(run_id.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(child_ids.contains(&"d1"), "d1 (iter 1) must be visible");
+        assert!(child_ids.contains(&"d2"), "d2 (iter 1) must be visible");
+        assert!(!child_ids.contains(&"c1"), "c1 (iter 0) must be hidden");
+        assert!(!child_ids.contains(&"c2"), "c2 (iter 0) must be hidden");
+
+        // The iter-1 "address" direct step must appear.
+        let step_names: Vec<_> = rows
+            .iter()
+            .filter_map(|r| {
+                if let WorkflowRunRow::Step { step_name, .. } = r {
+                    Some(step_name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            step_names.contains(&"address"),
+            "direct step from iter 1 must be visible"
+        );
     }
 }
