@@ -238,24 +238,72 @@ pub fn parse_agent_log(path: &str) -> Vec<AgentEvent> {
 /// Count the number of assistant turns in a stream-json agent log file.
 /// Each JSON line with `"type": "assistant"` counts as one turn.
 pub fn count_turns_in_log(path: &str) -> i64 {
-    let Ok(contents) = fs::read_to_string(Path::new(path)) else {
-        return 0;
+    let (_, count) = count_turns_incremental(path, 0, 0);
+    count
+}
+
+/// Incrementally count assistant turns starting from `prev_offset`.
+///
+/// Only reads bytes appended since `prev_offset`, avoiding a full-file scan on
+/// every poll tick. If the file has been truncated (length < prev_offset), it
+/// resets and recounts from the beginning.
+///
+/// Returns `(new_offset, new_count)` where `new_count = prev_count + newly found turns`.
+pub fn count_turns_incremental(path: &str, prev_offset: u64, prev_count: i64) -> (u64, i64) {
+    use std::io::{Read as _, Seek, SeekFrom};
+
+    let mut file = match std::fs::File::open(Path::new(path)) {
+        Ok(f) => f,
+        Err(_) => return (prev_offset, prev_count),
+    };
+    let len = match file.metadata() {
+        Ok(m) => m.len(),
+        Err(_) => return (prev_offset, prev_count),
     };
 
-    let mut count: i64 = 0;
-    for line in contents.lines() {
-        let line = line.trim();
-        if line.is_empty() {
+    // Truncation detected — recount from scratch.
+    let (offset, base_count) = if len < prev_offset {
+        (0u64, 0i64)
+    } else {
+        (prev_offset, prev_count)
+    };
+
+    if offset >= len {
+        return (offset, base_count);
+    }
+
+    if file.seek(SeekFrom::Start(offset)).is_err() {
+        return (offset, base_count);
+    }
+
+    let mut buf = String::new();
+    if file.read_to_string(&mut buf).is_err() {
+        return (offset, base_count);
+    }
+
+    // Only process up to the last complete line (ending with '\n').
+    // This avoids counting a partial line that is still being written.
+    let complete_end = match buf.rfind('\n') {
+        Some(pos) => pos + 1,                // include the '\n'
+        None => return (offset, base_count), // no complete line yet
+    };
+    let complete = &buf[..complete_end];
+
+    let mut new_turns: i64 = 0;
+    for line in complete.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
             continue;
         };
         if value.get("type").and_then(|v| v.as_str()) == Some("assistant") {
-            count += 1;
+            new_turns += 1;
         }
     }
-    count
+
+    (offset + complete_end as u64, base_count + new_turns)
 }
 
 /// Extract a human-readable summary for a tool_use event.
@@ -388,6 +436,97 @@ mod tests {
         assert_eq!(events[0].kind, "system");
         assert_eq!(events[1].kind, "text");
         assert_eq!(events[1].summary, "Hello");
+    }
+
+    // ---- count_turns_incremental tests ----
+
+    #[test]
+    fn test_count_turns_incremental_from_zero() {
+        let content = concat!(
+            r#"{"type":"assistant","message":{"content":[]}}"#,
+            "\n",
+            r#"{"type":"system","subtype":"init","model":"claude-3"}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[]}}"#,
+            "\n",
+        );
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), content).unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+
+        let (offset, count) = count_turns_incremental(&path, 0, 0);
+        assert_eq!(count, 2);
+        assert_eq!(offset, content.len() as u64);
+    }
+
+    #[test]
+    fn test_count_turns_incremental_resumes() {
+        let line1 = r#"{"type":"assistant","message":{"content":[]}}"#;
+        let line2 = r#"{"type":"system","subtype":"init","model":"claude-3"}"#;
+        let line3 = r#"{"type":"assistant","message":{"content":[]}}"#;
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+
+        // Write first two lines
+        let initial = format!("{line1}\n{line2}\n");
+        std::fs::write(tmp.path(), &initial).unwrap();
+        let (offset, count) = count_turns_incremental(&path, 0, 0);
+        assert_eq!(count, 1);
+        assert_eq!(offset, initial.len() as u64);
+
+        // Append a third line
+        let full = format!("{initial}{line3}\n");
+        std::fs::write(tmp.path(), &full).unwrap();
+        let (offset2, count2) = count_turns_incremental(&path, offset, count);
+        assert_eq!(count2, 2);
+        assert_eq!(offset2, full.len() as u64);
+    }
+
+    #[test]
+    fn test_count_turns_incremental_truncation_resets() {
+        let content = concat!(
+            r#"{"type":"assistant","message":{"content":[]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[]}}"#,
+            "\n",
+        );
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+
+        std::fs::write(tmp.path(), content).unwrap();
+        let (offset, count) = count_turns_incremental(&path, 0, 0);
+        assert_eq!(count, 2);
+
+        // Truncate to a shorter file with only one assistant line.
+        let short = concat!(r#"{"type":"assistant","message":{"content":[]}}"#, "\n",);
+        std::fs::write(tmp.path(), short).unwrap();
+        let (offset2, count2) = count_turns_incremental(&path, offset, count);
+        assert_eq!(count2, 1, "should recount from zero after truncation");
+        assert_eq!(offset2, short.len() as u64);
+    }
+
+    #[test]
+    fn test_count_turns_incremental_no_new_data() {
+        let content = concat!(r#"{"type":"assistant","message":{"content":[]}}"#, "\n",);
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), content).unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+
+        let (offset, count) = count_turns_incremental(&path, 0, 0);
+        assert_eq!(count, 1);
+
+        // Call again with same offset — no new data.
+        let (offset2, count2) = count_turns_incremental(&path, offset, count);
+        assert_eq!(count2, 1);
+        assert_eq!(offset2, offset);
+    }
+
+    #[test]
+    fn test_count_turns_incremental_missing_file() {
+        let (offset, count) = count_turns_incremental("/nonexistent/path.log", 0, 0);
+        assert_eq!(offset, 0);
+        assert_eq!(count, 0);
     }
 
     // ---- try_recover_from_log_at tests ----

@@ -11,7 +11,8 @@ pub(crate) mod types;
 pub use context::{build_startup_context, PR_REVIEW_SWARM_PROMPT_PREFIX};
 
 pub use log_parsing::{
-    count_turns_in_log, parse_agent_log, parse_events_from_line, parse_result_event,
+    count_turns_in_log, count_turns_incremental, parse_agent_log, parse_events_from_line,
+    parse_result_event,
 };
 
 pub use manager::AgentManager;
