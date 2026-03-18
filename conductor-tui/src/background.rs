@@ -608,13 +608,37 @@ fn poll_workflow_data(
     //   2. Direct agent-call steps (steps without a child_run_id) on non-leaf parents are
     //      visible in the tree alongside their sub-workflow children.
     let all_run_ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
-    let all_run_steps = match wf_mgr.get_steps_for_runs(&all_run_ids) {
+    let known_run_id_set: std::collections::HashSet<&str> = all_run_ids.iter().copied().collect();
+
+    // In global/repo mode the run list is capped at 50. A parent run (e.g. iterate-pr)
+    // that started before its many children may fall outside that cap while its children
+    // are still visible. Without the parent's step records, push_children cannot build
+    // latest_child_ids and shows all loop iterations. Collect any parent IDs referenced
+    // by visible runs that are themselves outside the cap, and fetch their steps too.
+    let ancestor_ids: Vec<&str> = runs
+        .iter()
+        .filter_map(|r| r.parent_workflow_run_id.as_deref())
+        .filter(|pid| !known_run_id_set.contains(pid))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    let mut all_run_steps = match wf_mgr.get_steps_for_runs(&all_run_ids) {
         Ok(steps) => steps,
         Err(e) => {
             tracing::warn!("get_steps_for_runs failed for runs {:?}: {e}", all_run_ids);
             Default::default()
         }
     };
+    if !ancestor_ids.is_empty() {
+        match wf_mgr.get_steps_for_runs(&ancestor_ids) {
+            Ok(ancestor_steps) => all_run_steps.extend(ancestor_steps),
+            Err(e) => tracing::warn!(
+                "get_steps_for_runs failed for ancestor runs {:?}: {e}",
+                ancestor_ids
+            ),
+        }
+    }
 
     // Load agent events for the selected step's child run
     let agent_mgr = AgentManager::new(&conn);
