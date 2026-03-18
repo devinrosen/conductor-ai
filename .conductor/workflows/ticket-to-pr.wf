@@ -23,6 +23,7 @@ workflow ticket-to-pr {
 
   call implement {
     retries = 2
+    as      = "developer"
   }
 
   call workflow lint-fix
