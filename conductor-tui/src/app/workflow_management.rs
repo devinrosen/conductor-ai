@@ -12,14 +12,20 @@ use super::helpers::{
 use super::App;
 
 impl App {
-    /// Try to auto-detect the feature linked to a ticket. On error (e.g.
-    /// ambiguous features) the message is shown in the status bar and `None`
-    /// is returned so the workflow can still proceed without a feature.
-    fn try_detect_feature_id(&mut self, ticket_id: &str) -> Option<String> {
+    /// Try to auto-detect the feature for a workflow run using the unified
+    /// resolver. On error (e.g. ambiguous features) the message is shown in
+    /// the status bar and `None` is returned so the workflow can still proceed
+    /// without a feature.
+    fn try_detect_feature_id(
+        &mut self,
+        repo_slug: Option<&str>,
+        ticket_id: Option<&str>,
+        worktree_slug: Option<&str>,
+    ) -> Option<String> {
         match conductor_core::feature::FeatureManager::new(&self.conn, &self.config)
-            .find_feature_for_ticket(ticket_id)
+            .resolve_feature_id_for_run(None, repo_slug, ticket_id, worktree_slug)
         {
-            Ok(opt) => opt.map(|f| f.id),
+            Ok(opt) => opt,
             Err(e) => {
                 self.state.status_message = Some(format!("Feature auto-detect failed: {e}"));
                 None
@@ -687,10 +693,17 @@ impl App {
                 // Fall back to inputs["ticket_id"] when the worktree's in-memory state
                 // hasn't been refreshed yet (e.g. post-create flow).
                 let ticket_id = wt_ticket_id.or_else(|| inputs.get("ticket_id").cloned());
-                // Auto-detect feature from the worktree's linked ticket.
-                let feature_id = ticket_id
-                    .as_deref()
-                    .and_then(|tid| self.try_detect_feature_id(tid));
+                // Extract repo_slug and worktree_slug from the target label (repo/wt).
+                let (repo_slug, wt_slug) = wt_target_label
+                    .split_once('/')
+                    .map(|(r, w)| (Some(r.to_string()), Some(w.to_string())))
+                    .unwrap_or((None, None));
+                // Auto-detect feature via the unified resolver.
+                let feature_id = self.try_detect_feature_id(
+                    repo_slug.as_deref(),
+                    ticket_id.as_deref(),
+                    wt_slug.as_deref(),
+                );
                 self.spawn_workflow_in_background(
                     def,
                     worktree_id,
@@ -744,8 +757,8 @@ impl App {
                 repo_path,
                 ..
             } => {
-                // Auto-detect feature from ticket.
-                let feature_id = self.try_detect_feature_id(&ticket_id);
+                // Auto-detect feature via the unified resolver.
+                let feature_id = self.try_detect_feature_id(None, Some(&ticket_id), None);
                 self.spawn_ticket_workflow_in_background(
                     def,
                     ticket_id,

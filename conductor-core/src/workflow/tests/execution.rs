@@ -6,8 +6,8 @@ use crate::agent_runtime;
 use crate::config::Config;
 use crate::error::ConductorError;
 use crate::workflow_dsl::{
-    AgentRef, ApprovalMode, CallNode, DoNode, DoWhileNode, GateNode, GateType, IfNode, OnMaxIter,
-    OnTimeout, ParallelNode, UnlessNode, WhileNode, WorkflowNode,
+    AgentRef, ApprovalMode, CallNode, CallWorkflowNode, DoNode, DoWhileNode, GateNode, GateType,
+    IfNode, OnMaxIter, OnTimeout, ParallelNode, UnlessNode, WhileNode, WorkflowNode,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -2957,5 +2957,101 @@ fn test_execute_workflow_invalid_feature_id_returns_error() {
     assert!(
         matches!(err, ConductorError::FeatureNotFound { .. }),
         "expected FeatureNotFound error, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_call_workflow_propagates_feature_id_to_child() {
+    let conn = setup_db();
+    let config = Config::default();
+    let exec_config = WorkflowExecConfig::default();
+
+    // Create a temp dir with a child workflow file (empty body, so it completes instantly).
+    let tmp = tempfile::tempdir().unwrap();
+    let wf_dir = tmp.path().join(".conductor/workflows");
+    std::fs::create_dir_all(&wf_dir).unwrap();
+    std::fs::write(
+        wf_dir.join("child.wf"),
+        "workflow child { meta { targets = [\"worktree\"] } }",
+    )
+    .unwrap();
+    let working_dir = tmp.path().to_str().unwrap();
+
+    // Insert a feature for repo r1 (created by setup_db).
+    conn.execute(
+        "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at) \
+         VALUES ('f1', 'r1', 'my-feature', 'feat/my-feature', 'main', 'active', '2025-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    // Parent workflow that calls the child.
+    let mut parent = make_empty_workflow();
+    parent
+        .body
+        .push(WorkflowNode::CallWorkflow(CallWorkflowNode {
+            workflow: "child".into(),
+            inputs: HashMap::new(),
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        }));
+
+    let input = WorkflowExecInput {
+        conn: &conn,
+        config: &config,
+        workflow: &parent,
+        worktree_id: None,
+        working_dir,
+        repo_path: "",
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: &exec_config,
+        inputs: HashMap::new(),
+        depth: 0,
+        parent_workflow_run_id: None,
+        target_label: None,
+        default_bot_name: None,
+        feature_id: Some("f1"),
+        iteration: 0,
+        run_id_notify: None,
+    };
+    let result = execute_workflow(&input).unwrap();
+
+    let wf_mgr = WorkflowManager::new(&conn);
+
+    // Find the child run by querying for runs whose parent is our parent run.
+    use rusqlite::params;
+    let child_run_id: String = conn
+        .query_row(
+            "SELECT id FROM workflow_runs WHERE parent_workflow_run_id = ?1",
+            params![result.workflow_run_id],
+            |row| row.get(0),
+        )
+        .expect("child run should exist");
+    let child_run = wf_mgr
+        .get_workflow_run(&child_run_id)
+        .unwrap()
+        .expect("child run should exist");
+    assert_eq!(
+        child_run.feature_id.as_deref(),
+        Some("f1"),
+        "child run should inherit feature_id from parent"
+    );
+    assert_eq!(
+        child_run.inputs.get("feature_id").map(String::as_str),
+        Some("f1"),
+        "child run should have feature_id in its inputs"
+    );
+    assert_eq!(
+        child_run.inputs.get("feature_name").map(String::as_str),
+        Some("my-feature"),
+        "child run should have feature_name in its inputs"
+    );
+    assert_eq!(
+        child_run.inputs.get("feature_branch").map(String::as_str),
+        Some("feat/my-feature"),
+        "child run should have feature_branch in its inputs"
     );
 }
