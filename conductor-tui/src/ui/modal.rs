@@ -549,7 +549,7 @@ pub fn render_form(
 struct NumberedPickerConfig<'a> {
     title: &'a str,
     subtitle: &'a str,
-    labels: &'a [String],
+    labels: &'a [&'a str],
     selected: usize,
     hint: &'a str,
 }
@@ -590,7 +590,7 @@ fn render_numbered_picker(
 
         lines.push(Line::from(vec![
             Span::styled(format!("  {prefix}{number}"), style),
-            Span::styled(label.as_str(), style),
+            Span::styled(*label, style),
         ]));
     }
 
@@ -617,7 +617,7 @@ pub fn render_branch_picker(
     selected: usize,
     theme: &Theme,
 ) {
-    let labels: Vec<String> = items.iter().map(|item| item.label.clone()).collect();
+    let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
     render_numbered_picker(
         frame,
         area,
@@ -640,7 +640,8 @@ pub fn render_post_create_picker(
     ticket_source_id: &str,
     theme: &Theme,
 ) {
-    let labels: Vec<String> = items.iter().map(|item| format!("{item}")).collect();
+    let label_strings: Vec<String> = items.iter().map(|item| format!("{item}")).collect();
+    let labels: Vec<&str> = label_strings.iter().map(|s| s.as_str()).collect();
     let subtitle = format!("Start work on #{ticket_source_id}?");
     render_numbered_picker(
         frame,

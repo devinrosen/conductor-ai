@@ -351,9 +351,9 @@ impl App {
                 repo_slug,
                 wt_name,
                 ticket_id,
-                features,
+                items,
             } => {
-                self.handle_feature_branches_loaded(repo_slug, wt_name, ticket_id, features);
+                self.handle_feature_branches_loaded(repo_slug, wt_name, ticket_id, items);
             }
             Action::FeatureBranchesFailed { error } => {
                 self.state.modal = Modal::Error {

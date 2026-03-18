@@ -200,11 +200,11 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Esc => Action::DismissModal,
                 KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
                 KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
-                KeyCode::Enter => Action::SelectBranch(usize::MAX),
+                KeyCode::Enter => Action::SelectBranch(None),
                 KeyCode::Char(c) if c.is_ascii_digit() => {
                     let n = c.to_digit(10).unwrap() as usize;
                     if n >= 1 && n <= items.len() {
-                        Action::SelectBranch(n - 1)
+                        Action::SelectBranch(Some(n - 1))
                     } else {
                         Action::None
                     }

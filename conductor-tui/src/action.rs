@@ -279,13 +279,13 @@ pub enum Action {
         repo_slug: String,
         wt_name: String,
         ticket_id: Option<String>,
-        features: Vec<conductor_core::feature::FeatureRow>,
+        items: Vec<crate::state::BranchPickerItem>,
     },
     /// Background result: feature branch load failed.
     FeatureBranchesFailed {
         error: String,
     },
-    SelectBranch(usize),
+    SelectBranch(Option<usize>),
 
     // Post-create picker (after worktree creation)
     SelectPostCreateChoice(usize),
