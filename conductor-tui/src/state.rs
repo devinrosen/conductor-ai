@@ -62,7 +62,7 @@ pub enum View {
 }
 
 /// A row in the unified dashboard list — repo header, feature header, or worktree entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DashboardRow {
     /// Index into `AppState::data.repos`.
     Repo(usize),
