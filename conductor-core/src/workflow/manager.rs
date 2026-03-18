@@ -1286,7 +1286,7 @@ impl<'a> WorkflowManager<'a> {
         repo_path: &str,
         workflow: &crate::workflow_dsl::WorkflowDef,
         known_bots: &HashSet<String>,
-    ) -> super::batch_validate::WorkflowValidationEntry {
+    ) -> Option<super::batch_validate::WorkflowValidationEntry> {
         let wt = wt_path.to_string();
         let rp = repo_path.to_string();
         let loader = |name: &str| -> std::result::Result<crate::workflow_dsl::WorkflowDef, String> {
@@ -1300,11 +1300,7 @@ impl<'a> WorkflowManager<'a> {
             known_bots,
             &loader,
         );
-        result
-            .entries
-            .into_iter()
-            .next()
-            .expect("batch with one workflow must produce one entry")
+        result.entries.into_iter().next()
     }
 
     const SQL_RESET_FAILED: &'static str = "UPDATE workflow_run_steps \

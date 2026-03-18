@@ -75,7 +75,10 @@ pub(super) fn tool_validate_workflow(
     let known_bots: std::collections::HashSet<String> =
         config.github.apps.keys().cloned().collect();
 
-    let entry = WorkflowManager::validate_single(wt_path, repo_path, &workflow, &known_bots);
+    let entry = match WorkflowManager::validate_single(wt_path, repo_path, &workflow, &known_bots) {
+        Some(e) => e,
+        None => return tool_err(format!("validation produced no result for workflow '{workflow_name}'")),
+    };
 
     let mut errors: Vec<String> = Vec::new();
     for err in &entry.errors {
