@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
+use crate::git::{check_output, git_in};
 use crate::repo::RepoManager;
-use crate::worktree::{check_output, git_in};
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -127,14 +127,22 @@ impl<'a> FeatureManager<'a> {
             .map(|b| b.to_string())
             .unwrap_or_else(|| repo.default_branch.clone());
 
-        // Create git branch and push
+        // Create git branch and push — clean up local branch on push failure
         check_output(git_in(&repo.local_path).args([
             "branch",
             "--",
             &branch,
             &format!("refs/heads/{base}"),
         ]))?;
-        check_output(git_in(&repo.local_path).args(["push", "-u", "origin", "--", &branch]))?;
+        if let Err(e) =
+            check_output(git_in(&repo.local_path).args(["push", "-u", "origin", "--", &branch]))
+        {
+            // Best-effort cleanup of the local branch so the command is retriable
+            let _ = git_in(&repo.local_path)
+                .args(["branch", "-D", "--", &branch])
+                .output();
+            return Err(e);
+        }
 
         let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
@@ -231,18 +239,12 @@ impl<'a> FeatureManager<'a> {
         let ticket_ids = self.resolve_ticket_ids(&repo.id, ticket_source_ids)?;
 
         if !ticket_ids.is_empty() {
-            let placeholders: Vec<String> = (0..ticket_ids.len())
-                .map(|i| format!("?{}", i + 2))
-                .collect();
-            let sql = format!(
-                "DELETE FROM feature_tickets WHERE feature_id = ?1 AND ticket_id IN ({})",
-                placeholders.join(", ")
+            let (sql, param_values) = build_in_clause(
+                "DELETE FROM feature_tickets WHERE feature_id = ?1 AND ticket_id IN",
+                &feature.id,
+                &ticket_ids,
             );
             let mut stmt = self.conn.prepare(&sql)?;
-            let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(feature.id)];
-            for tid in &ticket_ids {
-                param_values.push(Box::new(tid.clone()));
-            }
             let params: Vec<&dyn rusqlite::types::ToSql> =
                 param_values.iter().map(|p| p.as_ref()).collect();
             stmt.execute(params.as_slice())?;
@@ -322,20 +324,12 @@ impl<'a> FeatureManager<'a> {
             return Ok(Vec::new());
         }
 
-        // Batch query: SELECT id, source_id WHERE source_id IN (...)
-        let placeholders: Vec<String> = (0..source_ids.len())
-            .map(|i| format!("?{}", i + 2))
-            .collect();
-        let sql = format!(
-            "SELECT id, source_id FROM tickets WHERE repo_id = ?1 AND source_id IN ({})",
-            placeholders.join(", ")
+        let (sql, param_values) = build_in_clause(
+            "SELECT id, source_id FROM tickets WHERE repo_id = ?1 AND source_id IN",
+            repo_id,
+            source_ids,
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
-            vec![Box::new(repo_id.to_string())];
-        for sid in source_ids {
-            param_values.push(Box::new(sid.clone()));
-        }
         let params: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
 
@@ -366,11 +360,11 @@ impl<'a> FeatureManager<'a> {
         feature_id: &str,
         ticket_ids: &[String],
     ) -> Result<()> {
+        let mut stmt = self.conn.prepare(
+            "INSERT OR IGNORE INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        )?;
         for tid in ticket_ids {
-            self.conn.execute(
-                "INSERT OR IGNORE INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
-                params![feature_id, tid],
-            )?;
+            stmt.execute(params![feature_id, tid])?;
         }
         Ok(())
     }
@@ -391,6 +385,28 @@ fn map_feature_row(row: &rusqlite::Row) -> rusqlite::Result<Feature> {
         created_at: row.get(6)?,
         merged_at: row.get(7)?,
     })
+}
+
+/// Build a parameterised IN-clause query.
+///
+/// `prefix` is everything before the `IN (...)` — e.g.
+/// `"SELECT id FROM tickets WHERE repo_id = ?1 AND source_id IN"`.
+/// `first_param` is bound to `?1`; `items` are bound to `?2`, `?3`, …
+fn build_in_clause(
+    prefix: &str,
+    first_param: &str,
+    items: &[String],
+) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
+    let placeholders: Vec<String> = (0..items.len()).map(|i| format!("?{}", i + 2)).collect();
+    let sql = format!(
+        "{prefix} ({placeholders})",
+        placeholders = placeholders.join(", ")
+    );
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(first_param.to_string())];
+    for item in items {
+        params.push(Box::new(item.clone()));
+    }
+    (sql, params)
 }
 
 /// Check whether `branch` has been merged into `base` by looking at the remote.
@@ -499,13 +515,37 @@ mod tests {
     fn test_list_features() {
         let conn = setup_db();
         let repo_id = insert_repo(&conn);
-        insert_feature(&conn, &repo_id, "feature-a", "feat/feature-a");
+        let feat_a_id = insert_feature(&conn, &repo_id, "feature-a", "feat/feature-a");
         insert_feature(&conn, &repo_id, "feature-b", "feat/feature-b");
+
+        // Create a worktree record whose base_branch matches feature-a's branch
+        let wt_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, created_at)
+             VALUES (?1, ?2, 'wt-a', 'wt-branch', 'feat/feature-a', '/tmp/wt', '2024-01-01T00:00:00Z')",
+            params![wt_id, repo_id],
+        ).unwrap();
+
+        // Link a ticket to feature-a
+        let ticket_id = insert_ticket(&conn, &repo_id, "42");
+        conn.execute(
+            "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+            params![feat_a_id, ticket_id],
+        )
+        .unwrap();
 
         let config = Config::default();
         let mgr = FeatureManager::new(&conn, &config);
         let features = mgr.list("test-repo").unwrap();
         assert_eq!(features.len(), 2);
+
+        // Features are ordered by created_at DESC, so feature-b is first
+        let feat_a = features.iter().find(|f| f.name == "feature-a").unwrap();
+        let feat_b = features.iter().find(|f| f.name == "feature-b").unwrap();
+        assert_eq!(feat_a.worktree_count, 1);
+        assert_eq!(feat_a.ticket_count, 1);
+        assert_eq!(feat_b.worktree_count, 0);
+        assert_eq!(feat_b.ticket_count, 0);
     }
 
     #[test]
@@ -559,21 +599,118 @@ mod tests {
         assert!(matches!(result, Err(ConductorError::TicketNotFound { .. })));
     }
 
+    /// Create a temp git repo with "origin" remote (bare) and a default "main" branch.
+    /// Returns (repo_dir, bare_dir) as TempDir handles (drop cleans up).
+    fn setup_git_repo() -> (tempfile::TempDir, tempfile::TempDir) {
+        use std::process::Command;
+
+        let bare = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "--bare"])
+            .current_dir(bare.path())
+            .output()
+            .unwrap();
+
+        let work = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        // Configure user for commits
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        // Create initial commit on main
+        Command::new("git")
+            .args(["checkout", "-b", "main"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        std::fs::write(work.path().join("README"), "init").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        // Add bare as origin and push
+        Command::new("git")
+            .args(["remote", "add", "origin", bare.path().to_str().unwrap()])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["push", "-u", "origin", "main"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+
+        (work, bare)
+    }
+
+    fn insert_repo_at(conn: &Connection, local_path: &str) -> String {
+        let id = crate::new_id();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at)
+             VALUES (?1, 'test-repo', ?2, 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+            params![id, local_path],
+        ).unwrap();
+        id
+    }
+
     #[test]
     fn test_close_feature_sets_closed_status() {
+        let (work, _bare) = setup_git_repo();
         let conn = setup_db();
-        let repo_id = insert_repo(&conn);
-        let feature_id = insert_feature(&conn, &repo_id, "done-feature", "feat/done-feature");
+        let repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
 
-        // Simulate close using FeatureStatus enum param (matching manager pattern)
-        conn.execute(
-            "UPDATE features SET status = ?1 WHERE id = ?2",
-            params![FeatureStatus::Closed, feature_id],
-        )
-        .unwrap();
+        // Create a feature branch with an extra commit NOT merged into main
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "feat/done-feature", "main"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        std::fs::write(work.path().join("unmerged.txt"), "unmerged work").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "unmerged commit"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["push", "origin", "feat/done-feature"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        // Switch back to main
+        std::process::Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+
+        insert_feature(&conn, &repo_id, "done-feature", "feat/done-feature");
 
         let config = Config::default();
         let mgr = FeatureManager::new(&conn, &config);
+        mgr.close("test-repo", "done-feature").unwrap();
+
         let f = mgr.get_by_name("test-repo", "done-feature").unwrap();
         assert_eq!(f.status, FeatureStatus::Closed);
         assert!(f.merged_at.is_none());
@@ -581,20 +718,51 @@ mod tests {
 
     #[test]
     fn test_close_feature_sets_merged_status() {
+        let (work, _bare) = setup_git_repo();
         let conn = setup_db();
-        let repo_id = insert_repo(&conn);
-        let feature_id = insert_feature(&conn, &repo_id, "merged-feature", "feat/merged-feature");
-        let now = Utc::now().to_rfc3339();
+        let repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
 
-        // Simulate the merged path using FeatureStatus enum param
-        conn.execute(
-            "UPDATE features SET status = ?1, merged_at = ?2 WHERE id = ?3",
-            params![FeatureStatus::Merged, now, feature_id],
-        )
-        .unwrap();
+        // Create a feature branch, make a commit, merge it into main, push both
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "feat/merged-feature", "main"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        std::fs::write(work.path().join("feature.txt"), "feature work").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "feature commit"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        // Merge into main
+        std::process::Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["merge", "--no-ff", "feat/merged-feature", "-m", "merge"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        // Push both branches
+        std::process::Command::new("git")
+            .args(["push", "origin", "main", "feat/merged-feature"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+
+        insert_feature(&conn, &repo_id, "merged-feature", "feat/merged-feature");
 
         let config = Config::default();
         let mgr = FeatureManager::new(&conn, &config);
+        mgr.close("test-repo", "merged-feature").unwrap();
+
         let f = mgr.get_by_name("test-repo", "merged-feature").unwrap();
         assert_eq!(f.status, FeatureStatus::Merged);
         assert!(f.merged_at.is_some());

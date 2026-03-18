@@ -884,23 +884,8 @@ fn is_branch_merged(repo_path: &str, branch: &str, default_branch: &str) -> bool
     }
 }
 
-/// Return a `Command` for `git` rooted at `dir`.
-pub(crate) fn git_in(dir: impl AsRef<std::path::Path>) -> Command {
-    let mut cmd = Command::new("git");
-    cmd.current_dir(dir);
-    cmd
-}
-
-/// Run `cmd`, returning its `Output` on success or a `ConductorError::Git` on non-zero exit.
-pub(crate) fn check_output(cmd: &mut Command) -> Result<std::process::Output> {
-    let output = cmd.output()?;
-    if !output.status.success() {
-        return Err(ConductorError::Git(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
-    }
-    Ok(output)
-}
+// Re-export git helpers so existing `use crate::worktree::{check_output, git_in}` keeps working.
+pub(crate) use crate::git::{check_output, git_in};
 
 /// Clone a remote repository into `local_path`.
 /// Uses `git clone -- <remote_url> <local_path>` so that a `remote_url`
