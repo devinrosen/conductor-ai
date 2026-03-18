@@ -733,6 +733,19 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 42)?;
     }
 
+    // --- Migration 43: index on worktrees(repo_id, base_branch) for feature list subquery ---
+    if version < 43 {
+        let has_base_branch: bool = conn
+            .prepare("SELECT base_branch FROM worktrees LIMIT 0")
+            .is_ok();
+        if has_base_branch {
+            conn.execute_batch(include_str!(
+                "migrations/043_idx_worktrees_repo_base_branch.sql"
+            ))?;
+        }
+        bump_version(conn, 43)?;
+    }
+
     Ok(())
 }
 

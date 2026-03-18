@@ -289,8 +289,13 @@ impl<'a> FeatureManager<'a> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
         let feature = self.get_feature_by_repo_id(&repo.id, feature_name)?;
 
-        // Check if the branch was merged on the remote
+        // Check if the branch was merged on the remote. Fall back to local
+        // merge check — the remote branch may have been auto-deleted after merge.
         let merged = crate::git::is_branch_merged_remote(
+            &repo.local_path,
+            &feature.branch,
+            &feature.base_branch,
+        ) || crate::git::is_branch_merged_local(
             &repo.local_path,
             &feature.branch,
             &feature.base_branch,
@@ -411,6 +416,10 @@ fn with_in_clause<T>(
     items: &[String],
     f: impl FnOnce(&str, &[&dyn rusqlite::types::ToSql]) -> T,
 ) -> T {
+    debug_assert!(
+        !items.is_empty(),
+        "with_in_clause called with empty items — produces invalid SQL `IN ()`"
+    );
     let placeholders: Vec<String> = (0..items.len()).map(|i| format!("?{}", i + 2)).collect();
     let sql = format!(
         "{prefix} ({placeholders})",
@@ -898,6 +907,87 @@ mod tests {
         let mut expected = vec![ticket_a, ticket_b];
         expected.sort();
         assert_eq!(linked, expected);
+    }
+
+    #[test]
+    fn test_close_feature_merged_when_remote_branch_deleted() {
+        let (work, _bare) = setup_git_repo();
+        let conn = setup_db();
+        let repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+
+        // Create a feature branch, commit, merge into main, push main, then delete the remote branch
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "feat/auto-deleted", "main"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        std::fs::write(work.path().join("ad.txt"), "work").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "feature work"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        // Merge into main
+        std::process::Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["merge", "--no-ff", "feat/auto-deleted", "-m", "merge"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        // Push main only (simulate remote branch auto-deletion)
+        std::process::Command::new("git")
+            .args(["push", "origin", "main"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+
+        insert_feature(&conn, &repo_id, "auto-deleted", "feat/auto-deleted");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        mgr.close("test-repo", "auto-deleted").unwrap();
+
+        let f = mgr.get_by_name("test-repo", "auto-deleted").unwrap();
+        assert_eq!(
+            f.status,
+            FeatureStatus::Merged,
+            "should detect merge via local fallback when remote branch is deleted"
+        );
+        assert!(f.merged_at.is_some());
+    }
+
+    #[test]
+    fn test_with_in_clause_generates_valid_sql() {
+        // Single item
+        let (sql, _) = with_in_clause(
+            "SELECT id FROM t WHERE repo_id = ?1 AND source_id IN",
+            "repo1",
+            &["a".to_string()],
+            |sql, params| (sql.to_string(), params.len()),
+        );
+        assert_eq!(
+            sql,
+            "SELECT id FROM t WHERE repo_id = ?1 AND source_id IN (?2)"
+        );
+
+        // Multiple items
+        let (sql, param_count) = with_in_clause(
+            "DELETE FROM ft WHERE fid = ?1 AND tid IN",
+            "f1",
+            &["a".to_string(), "b".to_string(), "c".to_string()],
+            |sql, params| (sql.to_string(), params.len()),
+        );
+        assert_eq!(sql, "DELETE FROM ft WHERE fid = ?1 AND tid IN (?2, ?3, ?4)");
+        assert_eq!(param_count, 4); // first_param + 3 items
     }
 
     #[test]
