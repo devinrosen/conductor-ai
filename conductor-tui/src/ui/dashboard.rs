@@ -79,22 +79,14 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                     Span::styled(progress, Style::default().fg(state.theme.label_secondary)),
                 ]))
             }
-            DashboardRow::Worktree(idx) => {
+            DashboardRow::Worktree {
+                idx,
+                is_feature_child,
+            } => {
                 let Some(wt) = state.data.worktrees.get(*idx) else {
                     return ListItem::new(Line::from(""));
                 };
-                // Check if this worktree is under a feature (deeper indent with tree line)
-                let is_under_feature = state
-                    .data
-                    .features_by_repo
-                    .get(&wt.repo_id)
-                    .map(|features| {
-                        features
-                            .iter()
-                            .any(|f| AppState::worktree_belongs_to_feature(wt, &wt.repo_id, f))
-                    })
-                    .unwrap_or(false);
-                let prefix = if is_under_feature {
+                let prefix = if *is_feature_child {
                     "    \u{2514} "
                 } else {
                     "  \u{2514} "

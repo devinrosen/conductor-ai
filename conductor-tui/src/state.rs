@@ -70,7 +70,7 @@ pub enum DashboardRow {
     /// `data.features_by_repo[&repo.id]`.
     Feature { repo_idx: usize, feature_idx: usize },
     /// Index into `AppState::data.worktrees`.
-    Worktree(usize),
+    Worktree { idx: usize, is_feature_child: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1937,26 +1937,18 @@ impl AppState {
         repo_id: &str,
         feature: &conductor_core::feature::FeatureRow,
     ) -> (usize, usize) {
-        let total = self
-            .data
+        self.data
             .worktrees
             .iter()
             .filter(|wt| Self::worktree_belongs_to_feature(wt, repo_id, feature))
-            .count();
-        let merged = self
-            .data
-            .worktrees
-            .iter()
-            .filter(|wt| {
-                Self::worktree_belongs_to_feature(wt, repo_id, feature)
-                    && matches!(
-                        wt.status,
-                        conductor_core::worktree::WorktreeStatus::Merged
-                            | conductor_core::worktree::WorktreeStatus::Abandoned
-                    )
+            .fold((0, 0), |(total, merged), wt| {
+                let is_done = matches!(
+                    wt.status,
+                    conductor_core::worktree::WorktreeStatus::Merged
+                        | conductor_core::worktree::WorktreeStatus::Abandoned
+                );
+                (total + 1, merged + usize::from(is_done))
             })
-            .count();
-        (total, merged)
     }
 
     /// Ordered list of rows for the unified dashboard panel.
@@ -1988,7 +1980,10 @@ impl AppState {
                     if Self::worktree_belongs_to_feature(wt, &repo.id, feature) {
                         grouped_wt_indices.insert(wt_idx);
                         if !self.collapsed_features.contains(&feature.id) {
-                            rows.push(DashboardRow::Worktree(wt_idx));
+                            rows.push(DashboardRow::Worktree {
+                                idx: wt_idx,
+                                is_feature_child: true,
+                            });
                         }
                     }
                 }
@@ -1997,11 +1992,75 @@ impl AppState {
             // Ungrouped worktrees (not under any feature)
             for (wt_idx, wt) in self.data.worktrees.iter().enumerate() {
                 if wt.repo_id == repo.id && !grouped_wt_indices.contains(&wt_idx) {
-                    rows.push(DashboardRow::Worktree(wt_idx));
+                    rows.push(DashboardRow::Worktree {
+                        idx: wt_idx,
+                        is_feature_child: false,
+                    });
                 }
             }
         }
         rows
+    }
+
+    /// Returns the dashboard row at `dashboard_index` without allocating the
+    /// full row `Vec`. Walks the repo/feature/worktree structure the same way
+    /// `dashboard_rows()` does but stops as soon as the target index is reached.
+    pub fn current_dashboard_row(&self) -> Option<DashboardRow> {
+        let target = self.dashboard_index;
+        let mut pos: usize = 0;
+        for (repo_idx, repo) in self.data.repos.iter().enumerate() {
+            if pos == target {
+                return Some(DashboardRow::Repo(repo_idx));
+            }
+            pos += 1;
+
+            let empty_features = Vec::new();
+            let features = self
+                .data
+                .features_by_repo
+                .get(&repo.id)
+                .unwrap_or(&empty_features);
+
+            let mut grouped_wt_indices: HashSet<usize> = HashSet::new();
+
+            for (fi, feature) in features.iter().enumerate() {
+                if pos == target {
+                    return Some(DashboardRow::Feature {
+                        repo_idx,
+                        feature_idx: fi,
+                    });
+                }
+                pos += 1;
+
+                for (wt_idx, wt) in self.data.worktrees.iter().enumerate() {
+                    if Self::worktree_belongs_to_feature(wt, &repo.id, feature) {
+                        grouped_wt_indices.insert(wt_idx);
+                        if !self.collapsed_features.contains(&feature.id) {
+                            if pos == target {
+                                return Some(DashboardRow::Worktree {
+                                    idx: wt_idx,
+                                    is_feature_child: true,
+                                });
+                            }
+                            pos += 1;
+                        }
+                    }
+                }
+            }
+
+            for (wt_idx, wt) in self.data.worktrees.iter().enumerate() {
+                if wt.repo_id == repo.id && !grouped_wt_indices.contains(&wt_idx) {
+                    if pos == target {
+                        return Some(DashboardRow::Worktree {
+                            idx: wt_idx,
+                            is_feature_child: false,
+                        });
+                    }
+                    pos += 1;
+                }
+            }
+        }
+        None
     }
 
     /// Get the currently selected repo, if any.
@@ -2010,7 +2069,7 @@ impl AppState {
         match self.dashboard_rows().get(self.dashboard_index)? {
             DashboardRow::Repo(idx) => self.data.repos.get(*idx),
             DashboardRow::Feature { repo_idx, .. } => self.data.repos.get(*repo_idx),
-            DashboardRow::Worktree(idx) => {
+            DashboardRow::Worktree { idx, .. } => {
                 let wt = self.data.worktrees.get(*idx)?;
                 self.data.repos.iter().find(|r| r.id == wt.repo_id)
             }
@@ -3749,8 +3808,14 @@ pub(crate) mod tests {
             rows,
             vec![
                 DashboardRow::Repo(0),
-                DashboardRow::Worktree(0),
-                DashboardRow::Worktree(1),
+                DashboardRow::Worktree {
+                    idx: 0,
+                    is_feature_child: false
+                },
+                DashboardRow::Worktree {
+                    idx: 1,
+                    is_feature_child: false
+                },
             ]
         );
     }
@@ -3786,8 +3851,14 @@ pub(crate) mod tests {
                     repo_idx: 0,
                     feature_idx: 0
                 },
-                DashboardRow::Worktree(0), // grouped under feature
-                DashboardRow::Worktree(1), // ungrouped
+                DashboardRow::Worktree {
+                    idx: 0,
+                    is_feature_child: true
+                }, // grouped under feature
+                DashboardRow::Worktree {
+                    idx: 1,
+                    is_feature_child: false
+                }, // ungrouped
             ]
         );
     }
@@ -3825,7 +3896,10 @@ pub(crate) mod tests {
                     feature_idx: 0
                 },
                 // wt1 is hidden (collapsed)
-                DashboardRow::Worktree(1), // ungrouped still shows
+                DashboardRow::Worktree {
+                    idx: 1,
+                    is_feature_child: false
+                }, // ungrouped still shows
             ]
         );
     }

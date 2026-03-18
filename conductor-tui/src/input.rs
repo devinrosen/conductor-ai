@@ -323,13 +323,10 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
     // View-specific keybindings (Dashboard)
     if state.view == View::Dashboard {
         // Feature-row-specific keybindings
-        let on_feature_row = {
-            let rows = state.dashboard_rows();
-            matches!(
-                rows.get(state.dashboard_index),
-                Some(crate::state::DashboardRow::Feature { .. })
-            )
-        };
+        let on_feature_row = matches!(
+            state.current_dashboard_row(),
+            Some(crate::state::DashboardRow::Feature { .. })
+        );
         if on_feature_row {
             if let KeyCode::Char('d') = key.code {
                 return Action::FeatureDetail;
