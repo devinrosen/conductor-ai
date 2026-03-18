@@ -780,7 +780,7 @@ mod tests {
             params![repo_id_b],
         ).unwrap();
 
-        insert_feature(&conn, &repo_id_a, "feat-a1", "feat/a1");
+        let feat_a1_id = insert_feature(&conn, &repo_id_a, "feat-a1", "feat/a1");
         insert_feature(&conn, &repo_id_a, "feat-a2", "feat/a2");
         insert_feature(&conn, &repo_id_b, "feat-b1", "feat/b1");
 
@@ -791,16 +791,39 @@ mod tests {
         )
         .unwrap();
 
+        // Insert a worktree under feat-a1 (base_branch matches feature branch).
+        let wt_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES (?1, ?2, 'wt-a1', 'feat/a1-impl', ?3, '/tmp/wt', 'active', '2024-01-02T00:00:00Z')",
+            params![wt_id, repo_id_a, "feat/a1"],
+        )
+        .unwrap();
+
+        // Link a ticket to feat-a1 via feature_tickets.
+        let ticket_id = insert_ticket(&conn, &repo_id_a, "42");
+        conn.execute(
+            "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+            params![feat_a1_id, ticket_id],
+        )
+        .unwrap();
+
         let config = Config::default();
         let mgr = FeatureManager::new(&conn, &config);
         let map = mgr.list_all_active().unwrap();
 
         // repo_a has 1 active feature (feat-a1), repo_b has 1 (feat-b1).
         assert_eq!(map.get(&repo_id_a).map(|v| v.len()), Some(1));
-        assert_eq!(map.get(&repo_id_a).unwrap()[0].name, "feat-a1");
+        let feat_a1 = &map.get(&repo_id_a).unwrap()[0];
+        assert_eq!(feat_a1.name, "feat-a1");
+        assert_eq!(feat_a1.worktree_count, 1);
+        assert_eq!(feat_a1.ticket_count, 1);
 
         assert_eq!(map.get(&repo_id_b).map(|v| v.len()), Some(1));
-        assert_eq!(map.get(&repo_id_b).unwrap()[0].name, "feat-b1");
+        let feat_b1 = &map.get(&repo_id_b).unwrap()[0];
+        assert_eq!(feat_b1.name, "feat-b1");
+        assert_eq!(feat_b1.worktree_count, 0);
+        assert_eq!(feat_b1.ticket_count, 0);
     }
 
     #[test]
