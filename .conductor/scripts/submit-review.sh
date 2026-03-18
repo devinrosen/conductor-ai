@@ -126,6 +126,12 @@ fi
 # ---------------------------------------------------------------------------
 OVERALL_APPROVED=$(echo "${PRIOR_OUTPUT}" | jq -r 'if .overall_approved == false then "false" else "true" end')
 
+# Safety net: if blocking findings exist, override to not approved regardless of model output
+HAS_BLOCKING_CHECK=$(echo "${PRIOR_OUTPUT}" | jq -r 'if (.blocking_findings // [] | length) > 0 then "true" else "false" end')
+if [ "${HAS_BLOCKING_CHECK}" = "true" ]; then
+  OVERALL_APPROVED="false"
+fi
+
 if [ "${OVERALL_APPROVED}" = "true" ]; then
   HEADING="## Conductor Review Swarm — All Clear"
 else
@@ -144,8 +150,7 @@ REVIEW_BODY="${HEADING}
 ${REVIEWER_TABLE}"
 
 # Append blocking findings section if any
-HAS_BLOCKING=$(echo "${PRIOR_OUTPUT}" | jq -r 'if (.blocking_findings // [] | length) > 0 then "true" else "false" end')
-if [ "${HAS_BLOCKING}" = "true" ]; then
+if [ "${HAS_BLOCKING_CHECK}" = "true" ]; then
   BLOCKING_SECTION=$(echo "${PRIOR_OUTPUT}" | jq -r '
     "\n### Blocking findings\n",
     (
