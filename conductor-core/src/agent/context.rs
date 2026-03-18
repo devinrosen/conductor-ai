@@ -176,7 +176,8 @@ pub fn build_startup_context(
 mod tests {
     use super::*;
     use crate::agent::manager::AgentManager;
-    use crate::agent::status::AgentRunStatus;
+    use crate::agent::status::{AgentRunStatus, StepStatus};
+    use crate::agent::types::PlanStep;
 
     fn setup_conn() -> rusqlite::Connection {
         crate::agent::manager::setup_db()
@@ -259,5 +260,113 @@ mod tests {
             !ctx.contains("**Prior run outcome"),
             "current run must not appear as prior"
         );
+    }
+
+    #[test]
+    fn test_startup_context_includes_ticket() {
+        let conn = setup_conn();
+
+        // Insert a ticket and link it to worktree w1
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES ('t1', 'r1', 'github', '42', 'Fix payment bug', 'Description', 'open', '[]', '', '2024-01-01T00:00:00Z', '{}')",
+            [],
+        ).unwrap();
+        conn.execute("UPDATE worktrees SET ticket_id = 't1' WHERE id = 'w1'", [])
+            .unwrap();
+
+        let mgr = AgentManager::new(&conn);
+        let current = mgr.create_run(Some("w1"), "Fix it", None, None).unwrap();
+
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
+        assert!(ctx.contains("**Ticket:** #42 — Fix payment bug"));
+    }
+
+    #[test]
+    fn test_startup_context_includes_prior_plan_steps() {
+        let conn = setup_conn();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a prior completed run with a plan
+        let prior = mgr
+            .create_run(Some("w1"), "Prior work", None, None)
+            .unwrap();
+        let steps = vec![
+            PlanStep {
+                description: "Read the code".to_string(),
+                done: true,
+                status: StepStatus::Completed,
+                ..Default::default()
+            },
+            PlanStep {
+                description: "Write tests".to_string(),
+                done: true,
+                status: StepStatus::Completed,
+                ..Default::default()
+            },
+            PlanStep {
+                description: "Implement feature".to_string(),
+                ..Default::default()
+            },
+        ];
+        mgr.update_run_plan(&prior.id, &steps).unwrap();
+        mgr.update_run_completed(
+            &prior.id,
+            None,
+            Some("All done"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Create current run
+        let current = mgr
+            .create_run(Some("w1"), "Continue work", None, None)
+            .unwrap();
+
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
+        assert!(ctx.contains("**Plan steps (from prior run):**"));
+        assert!(ctx.contains("1. ✅ Read the code"));
+        assert!(ctx.contains("2. ✅ Write tests"));
+        assert!(ctx.contains("3. ⏳ Implement feature"));
+    }
+
+    #[test]
+    fn test_startup_context_truncates_long_result() {
+        let conn = setup_conn();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a prior run with a very long result
+        let prior = mgr
+            .create_run(Some("w1"), "Prior task", None, None)
+            .unwrap();
+        let long_result = "x".repeat(1000);
+        mgr.update_run_completed(
+            &prior.id,
+            None,
+            Some(&long_result),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let current = mgr.create_run(Some("w1"), "Next", None, None).unwrap();
+
+        let ctx = build_startup_context(&conn, Some("w1"), &current.id, "/tmp");
+        assert!(ctx.contains("**Prior run outcome (completed):**"));
+        // Should be truncated to 500 chars + ellipsis
+        assert!(ctx.contains(&"x".repeat(500)));
+        assert!(ctx.contains('…'));
+        assert!(!ctx.contains(&"x".repeat(501)));
     }
 }
