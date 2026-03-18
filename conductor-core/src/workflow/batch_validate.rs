@@ -5,12 +5,24 @@ use crate::prompt_config;
 use crate::schema_config;
 use crate::workflow_dsl::{
     default_skills_dir, detect_workflow_cycles, make_script_resolver, validate_script_steps,
-    validate_workflow_semantics, AgentRef, WorkflowDef,
+    validate_workflow_semantics, AgentRef, ValidationError, WorkflowDef,
 };
 
 // ---------------------------------------------------------------------------
 // Batch workflow validation (orchestration)
 // ---------------------------------------------------------------------------
+
+/// A non-blocking warning found during batch validation (e.g. unknown bot name).
+#[derive(Debug, Clone)]
+pub struct BatchValidationWarning {
+    pub message: String,
+}
+
+impl std::fmt::Display for BatchValidationWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
 
 /// Result of validating a single workflow.
 #[derive(Debug)]
@@ -18,9 +30,9 @@ pub struct WorkflowValidationEntry {
     /// Workflow name.
     pub name: String,
     /// Blocking errors found during validation.
-    pub errors: Vec<String>,
+    pub errors: Vec<ValidationError>,
     /// Non-blocking warnings (e.g. unknown bot names).
-    pub warnings: Vec<String>,
+    pub warnings: Vec<BatchValidationWarning>,
 }
 
 /// Result of validating a batch of workflows.
@@ -73,11 +85,8 @@ where
         default_skills_dir(),
     );
 
-    let format_hint_error = |msg: &str, hint: &Option<String>| -> String {
-        match hint {
-            Some(h) => format!("{msg} (hint: {h})"),
-            None => msg.to_string(),
-        }
+    let make_error = |message: String, hint: Option<String>| -> ValidationError {
+        ValidationError { message, hint }
     };
 
     // Pre-collect unique refs across all workflows and batch-check
@@ -142,19 +151,22 @@ where
     let mut entries = Vec::new();
     for (workflow, wf_refs) in workflows.iter().zip(per_wf_refs.iter()) {
         let wf_name = &workflow.name;
-        let mut wf_errors: Vec<String> = Vec::new();
+        let mut wf_errors: Vec<ValidationError> = Vec::new();
 
         // --- Agents: emit errors directly from pre-computed missing set ---
         for r in &wf_refs.agents {
             if globally_missing_agents.contains(r.label()) {
-                wf_errors.push(format!("missing agent: {}", r.label()));
+                wf_errors.push(make_error(format!("missing agent: {}", r.label()), None));
             }
         }
 
         // --- Snippets: emit errors directly from pre-computed missing set ---
         for snippet in &wf_refs.snippets {
             if globally_missing_snippets.contains(snippet) {
-                wf_errors.push(format!("missing prompt snippet: {snippet}"));
+                wf_errors.push(make_error(
+                    format!("missing prompt snippet: {snippet}"),
+                    None,
+                ));
             }
         }
 
@@ -163,10 +175,13 @@ where
             if let Some(issue) = global_schema_issue_map.get(schema) {
                 match issue {
                     schema_config::SchemaIssue::Missing(s) => {
-                        wf_errors.push(format!("missing schema: {s}"));
+                        wf_errors.push(make_error(format!("missing schema: {s}"), None));
                     }
                     schema_config::SchemaIssue::Invalid { name: s, error } => {
-                        wf_errors.push(format!("invalid schema: {s} — {error}"));
+                        wf_errors.push(make_error(
+                            format!("invalid schema: {s}"),
+                            Some(error.clone()),
+                        ));
                     }
                 }
             }
@@ -181,24 +196,26 @@ where
 
         // --- Cycle detection ---
         if let Err(cycle_msg) = detect_workflow_cycles(wf_name, loader) {
-            wf_errors.push(format!("cycle detected: {cycle_msg}"));
+            wf_errors.push(make_error(format!("cycle detected: {cycle_msg}"), None));
         }
 
         // --- Semantic validation ---
         let report = validate_workflow_semantics(workflow, loader);
-        for err in &report.errors {
-            wf_errors.push(format_hint_error(&err.message, &err.hint));
+        for err in report.errors {
+            wf_errors.push(err);
         }
 
         // --- Script step validation ---
         let script_errors = validate_script_steps(workflow, &script_resolver);
-        for err in &script_errors {
-            wf_errors.push(format_hint_error(&err.message, &err.hint));
+        for err in script_errors {
+            wf_errors.push(err);
         }
 
-        let warnings: Vec<String> = unknown_bots
+        let warnings: Vec<BatchValidationWarning> = unknown_bots
             .iter()
-            .map(|b| format!("unknown bot name '{b}' (not in [github.apps])"))
+            .map(|b| BatchValidationWarning {
+                message: format!("unknown bot name '{b}' (not in [github.apps])"),
+            })
             .collect();
 
         entries.push(WorkflowValidationEntry {
@@ -247,7 +264,7 @@ mod tests {
         assert_eq!(result.entries.len(), 1);
         let errs = &result.entries[0].errors;
         assert!(
-            errs.iter().any(|e| e.contains("missing agent")),
+            errs.iter().any(|e| e.message.contains("missing agent")),
             "expected missing agent error, got: {errs:?}"
         );
     }
@@ -270,7 +287,8 @@ mod tests {
         assert_eq!(result.entries.len(), 1);
         let errs = &result.entries[0].errors;
         assert!(
-            errs.iter().any(|e| e.contains("missing prompt snippet")),
+            errs.iter()
+                .any(|e| e.message.contains("missing prompt snippet")),
             "expected missing snippet error, got: {errs:?}"
         );
     }
@@ -293,7 +311,7 @@ mod tests {
         assert_eq!(result.entries.len(), 1);
         let errs = &result.entries[0].errors;
         assert!(
-            errs.iter().any(|e| e.contains("missing schema")),
+            errs.iter().any(|e| e.message.contains("missing schema")),
             "expected missing schema error, got: {errs:?}"
         );
     }
@@ -324,7 +342,7 @@ mod tests {
         assert_eq!(result.entries.len(), 1);
         let errs = &result.entries[0].errors;
         assert!(
-            errs.iter().any(|e| e.contains("invalid schema")),
+            errs.iter().any(|e| e.message.contains("invalid schema")),
             "expected invalid schema error, got: {errs:?}"
         );
     }
@@ -347,9 +365,9 @@ mod tests {
         assert_eq!(result.entries.len(), 1);
         let warnings = &result.entries[0].warnings;
         assert!(
-            warnings
-                .iter()
-                .any(|w| w.contains("unknown bot name") && w.contains("unknown-bot")),
+            warnings.iter().any(
+                |w| w.message.contains("unknown bot name") && w.message.contains("unknown-bot")
+            ),
             "expected unknown bot warning, got: {warnings:?}"
         );
     }
@@ -381,7 +399,7 @@ mod tests {
         assert_eq!(result.entries.len(), 1);
         let errs = &result.entries[0].errors;
         assert!(
-            errs.iter().any(|e| e.contains("cycle")),
+            errs.iter().any(|e| e.message.contains("cycle")),
             "expected cycle detection error, got: {errs:?}"
         );
     }

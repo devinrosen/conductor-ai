@@ -1812,11 +1812,14 @@ fn main() -> Result<()> {
                     } else {
                         println!("FAIL  {}", entry.name);
                         for e in &entry.errors {
-                            println!("      \u{2717} {e}");
+                            match &e.hint {
+                                Some(h) => println!("      \u{2717} {} (hint: {h})", e.message),
+                                None => println!("      \u{2717} {}", e.message),
+                            }
                         }
                     }
                     for w in &entry.warnings {
-                        println!("      ~ warning: {w}");
+                        println!("      ~ warning: {}", w.message);
                     }
                 }
 
