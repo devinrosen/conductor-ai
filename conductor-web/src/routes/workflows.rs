@@ -166,7 +166,7 @@ pub async fn run_workflow(
     Json(req): Json<RunWorkflowRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     // Validate inputs while holding the lock
-    let (wt_path, wt_slug, wt_ticket_id, repo_path, repo_slug, model) = {
+    let (wt_path, wt_slug, wt_ticket_id, repo_path, repo_slug, model, feature_id) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
         let wt_mgr = WorktreeManager::new(&db, &config);
@@ -194,6 +194,15 @@ pub async fn run_workflow(
             .or_else(|| repo.model.clone())
             .or_else(|| config.general.model.clone());
 
+        // Resolve feature_id synchronously so user-facing errors (e.g. ambiguous
+        // features) are returned as HTTP errors before the 202 Accepted.
+        let feature_id = FeatureManager::new(&db, &config).resolve_feature_id_for_run(
+            None,
+            Some(&repo.slug),
+            wt.ticket_id.as_deref(),
+            Some(&wt.slug),
+        )?;
+
         (
             wt.path.clone(),
             wt.slug.clone(),
@@ -201,6 +210,7 @@ pub async fn run_workflow(
             repo.local_path.clone(),
             repo.slug.clone(),
             model,
+            feature_id,
         )
     };
 
@@ -242,26 +252,6 @@ pub async fn run_workflow(
             let exec_config = WorkflowExecConfig {
                 dry_run,
                 ..Default::default()
-            };
-
-            // Resolve feature_id from worktree/ticket context.
-            // User-facing errors (e.g. ambiguous features) abort the run;
-            // transient DB errors degrade gracefully (run proceeds without a feature).
-            let feature_id = match FeatureManager::new(&db, &config).resolve_feature_id_for_run(
-                None,
-                Some(&repo_slug),
-                wt_ticket_id.as_deref(),
-                Some(&wt_slug),
-            ) {
-                Ok(id) => id,
-                Err(ConductorError::Workflow(msg)) => {
-                    tracing::error!("Feature resolution failed: {msg}");
-                    return;
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to resolve feature for workflow run: {e}");
-                    None
-                }
             };
 
             let input = WorkflowExecInput {

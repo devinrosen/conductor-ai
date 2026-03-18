@@ -2925,3 +2925,37 @@ fn test_execute_workflow_injects_feature_variables() {
     // feature_id should also be persisted on the workflow run record.
     assert_eq!(run.feature_id.as_deref(), Some("f1"));
 }
+
+#[test]
+fn test_execute_workflow_invalid_feature_id_returns_error() {
+    let conn = setup_db();
+    let config = Config::default();
+    let exec_config = WorkflowExecConfig::default();
+    let workflow = make_empty_workflow();
+
+    let input = WorkflowExecInput {
+        conn: &conn,
+        config: &config,
+        workflow: &workflow,
+        worktree_id: None,
+        working_dir: "/tmp/repo",
+        repo_path: "/tmp/repo",
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: &exec_config,
+        inputs: HashMap::new(),
+        depth: 0,
+        parent_workflow_run_id: None,
+        target_label: None,
+        default_bot_name: None,
+        feature_id: Some("nonexistent-feature-id"),
+        iteration: 0,
+        run_id_notify: None,
+    };
+    let err = execute_workflow(&input).unwrap_err();
+    assert!(
+        matches!(err, ConductorError::FeatureNotFound { .. }),
+        "expected FeatureNotFound error, got: {err:?}"
+    );
+}

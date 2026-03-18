@@ -1446,6 +1446,29 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_feature_id_for_run_worktree_no_ticket() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        // Create a worktree with no linked ticket (ticket_id is NULL)
+        let wt_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, created_at)
+             VALUES (?1, ?2, 'wt-no-ticket', 'feat/no-ticket', 'main', '/tmp/wt', '2024-01-01T00:00:00Z')",
+            params![wt_id, repo_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        // Should return Ok(None) — no ticket means no feature can be resolved
+        let result = mgr
+            .resolve_feature_id_for_run(None, Some("test-repo"), None, Some("wt-no-ticket"))
+            .unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
     fn test_resolve_active_feature_rejects_closed() {
         let conn = setup_db();
         let repo_id = insert_repo(&conn);
