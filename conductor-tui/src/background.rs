@@ -822,6 +822,7 @@ mod tests {
             target_label: None,
             default_bot_name: None,
             iteration: 0,
+            blocked_on: None,
         }
     }
 

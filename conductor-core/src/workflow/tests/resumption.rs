@@ -508,7 +508,13 @@ fn test_default_bot_name_persists_through_suspend_and_resume() {
 
     // Simulate a suspend by marking the run as waiting
     wf_mgr
-        .update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None)
+        .set_waiting_blocked_on(
+            &run.id,
+            &BlockedOn::HumanApproval {
+                gate_name: "deploy-gate".to_string(),
+                prompt: None,
+            },
+        )
         .unwrap();
 
     // Load the run as resume_workflow would — the bot name must survive the round-trip

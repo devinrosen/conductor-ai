@@ -144,6 +144,7 @@ impl<'a> WorkflowManager<'a> {
             target_label: target_label.map(String::from),
             default_bot_name: None,
             iteration: 0,
+            blocked_on: None,
         })
     }
 
@@ -181,12 +182,23 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
+    /// Update workflow run status.
+    ///
+    /// Returns [`ConductorError::InvalidInput`] if called with `Waiting` —
+    /// use [`set_waiting_blocked_on`] instead to atomically set both status
+    /// and blocked_on context.
     pub fn update_workflow_status(
         &self,
         workflow_run_id: &str,
         status: WorkflowRunStatus,
         result_summary: Option<&str>,
     ) -> Result<()> {
+        if matches!(status, WorkflowRunStatus::Waiting) {
+            return Err(ConductorError::InvalidInput(
+                "Use set_waiting_blocked_on() to transition to Waiting status".into(),
+            ));
+        }
+
         let now = Utc::now().to_rfc3339();
         let is_terminal = matches!(
             status,
@@ -198,9 +210,29 @@ impl<'a> WorkflowManager<'a> {
             None
         };
 
+        // Always clear blocked_on — the only way to enter Waiting (which sets
+        // blocked_on) is through set_waiting_blocked_on().
         self.conn.execute(
-            "UPDATE workflow_runs SET status = ?1, result_summary = ?2, ended_at = ?3 WHERE id = ?4",
+            "UPDATE workflow_runs SET status = ?1, result_summary = ?2, ended_at = ?3, blocked_on = NULL WHERE id = ?4",
             params![status, result_summary, ended_at, workflow_run_id],
+        )?;
+        Ok(())
+    }
+
+    /// Atomically transition a workflow run to `Waiting` status and record what it
+    /// is blocked on.  This avoids a two-phase write where status and blocked_on
+    /// are set in separate statements.
+    pub fn set_waiting_blocked_on(
+        &self,
+        workflow_run_id: &str,
+        blocked_on: &super::types::BlockedOn,
+    ) -> Result<()> {
+        let json = serde_json::to_string(blocked_on).map_err(|e| {
+            ConductorError::Workflow(format!("Failed to serialize blocked_on: {e}"))
+        })?;
+        self.conn.execute(
+            "UPDATE workflow_runs SET status = ?1, blocked_on = ?2 WHERE id = ?3",
+            params![WorkflowRunStatus::Waiting, json, workflow_run_id],
         )?;
         Ok(())
     }
@@ -1462,13 +1494,14 @@ fn purge_where_clause(statuses: &[&str], repo_id: Option<&str>) -> (String, Vec<
 }
 
 pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<WorkflowRun> {
+    let id: String = row.get(0)?;
     let dry_run_int: i64 = row.get(5)?;
     let inputs_json: Option<String> = row.get(11)?;
     let inputs: std::collections::HashMap<String, String> = inputs_json
         .as_deref()
         .map(|s| {
             serde_json::from_str(s).unwrap_or_else(|e| {
-                tracing::warn!("Malformed inputs JSON in workflow run: {e}");
+                tracing::warn!("Malformed inputs JSON in workflow run {id}: {e}");
                 std::collections::HashMap::new()
             })
         })
@@ -1479,8 +1512,15 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
     let target_label: Option<String> = row.get(15)?;
     let default_bot_name: Option<String> = row.get(16)?;
     let iteration: i64 = row.get(17)?;
+    let blocked_on_json: Option<String> = row.get(18)?;
+    let blocked_on: Option<super::types::BlockedOn> = blocked_on_json.as_deref().and_then(|s| {
+        serde_json::from_str(s).unwrap_or_else(|e| {
+            tracing::warn!("Malformed blocked_on JSON in workflow run {id}: {e}");
+            None
+        })
+    });
     Ok(WorkflowRun {
-        id: row.get(0)?,
+        id,
         workflow_name: row.get(1)?,
         worktree_id: row.get::<_, Option<String>>(2)?,
         parent_run_id: row.get(3)?,
@@ -1498,6 +1538,7 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
         target_label,
         default_bot_name,
         iteration,
+        blocked_on,
     })
 }
 

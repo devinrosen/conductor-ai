@@ -1393,12 +1393,27 @@ pub(super) fn execute_gate(
         None,
     )?;
 
-    // Update workflow run to waiting status
-    state.wf_mgr.update_workflow_status(
-        &state.workflow_run_id,
-        WorkflowRunStatus::Waiting,
-        None,
-    )?;
+    // Atomically set status=Waiting and blocked_on in a single DB statement so
+    // there is no observable window where status=Waiting but blocked_on=NULL.
+    let gate_name = node.name.clone();
+    let blocked_on = match node.gate_type {
+        GateType::HumanApproval => super::types::BlockedOn::HumanApproval {
+            gate_name,
+            prompt: node.prompt.clone(),
+        },
+        GateType::HumanReview => super::types::BlockedOn::HumanReview {
+            gate_name,
+            prompt: node.prompt.clone(),
+        },
+        GateType::PrApproval => super::types::BlockedOn::PrApproval {
+            gate_name,
+            approvals_needed: node.min_approvals,
+        },
+        GateType::PrChecks => super::types::BlockedOn::PrChecks { gate_name },
+    };
+    state
+        .wf_mgr
+        .set_waiting_blocked_on(&state.workflow_run_id, &blocked_on)?;
 
     // Capture the bot name used for this gate (resolved fresh on each poll to avoid
     // using an expired installation token in long-running gate loops).

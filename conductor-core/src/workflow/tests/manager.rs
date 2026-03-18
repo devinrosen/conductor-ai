@@ -1045,8 +1045,14 @@ fn test_cancel_run_waiting_status() {
     let (mgr, _parent, run) = make_workflow_run(&conn);
 
     // Advance run to Waiting (e.g. at a gate)
-    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None)
-        .unwrap();
+    mgr.set_waiting_blocked_on(
+        &run.id,
+        &BlockedOn::HumanApproval {
+            gate_name: "human-gate".to_string(),
+            prompt: None,
+        },
+    )
+    .unwrap();
 
     // Insert a Waiting step (no child run)
     let step_id = mgr
@@ -1726,5 +1732,98 @@ fn test_resolve_run_context_no_worktree_no_repo() {
         err.to_string()
             .contains("has no associated worktree or repo"),
         "expected missing-targets error, got: {err}"
+    );
+}
+
+#[test]
+fn test_set_waiting_blocked_on_atomically_sets_status_and_blocked_on() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    // Start from Running
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+
+    let blocked = BlockedOn::HumanApproval {
+        gate_name: "deploy-gate".to_string(),
+        prompt: Some("Approve deploy?".to_string()),
+    };
+
+    mgr.set_waiting_blocked_on(&run.id, &blocked).unwrap();
+
+    let updated = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(updated.status, WorkflowRunStatus::Waiting);
+    assert!(updated.blocked_on.is_some());
+    match updated.blocked_on.unwrap() {
+        BlockedOn::HumanApproval {
+            gate_name, prompt, ..
+        } => {
+            assert_eq!(gate_name, "deploy-gate");
+            assert_eq!(prompt.as_deref(), Some("Approve deploy?"));
+        }
+        other => panic!("expected HumanApproval, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_blocked_on_cleared_when_transitioning_away_from_waiting() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    // Set waiting with blocked_on
+    let blocked = BlockedOn::PrChecks {
+        gate_name: "ci-gate".to_string(),
+    };
+    mgr.set_waiting_blocked_on(&run.id, &blocked).unwrap();
+
+    let waiting = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(waiting.status, WorkflowRunStatus::Waiting);
+    assert!(waiting.blocked_on.is_some());
+
+    // Transition to Running — blocked_on must be auto-cleared
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+
+    let running = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(running.status, WorkflowRunStatus::Running);
+    assert!(
+        running.blocked_on.is_none(),
+        "blocked_on should be cleared when leaving Waiting"
+    );
+}
+
+#[test]
+fn test_malformed_blocked_on_json_is_silently_dropped() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    // Directly inject malformed JSON into the blocked_on column
+    conn.execute(
+        "UPDATE workflow_runs SET blocked_on = ? WHERE id = ?",
+        params!["not-valid-json{{{", run.id],
+    )
+    .unwrap();
+
+    // Reading the run should succeed with blocked_on = None
+    let loaded = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert!(
+        loaded.blocked_on.is_none(),
+        "malformed blocked_on should deserialize as None"
+    );
+}
+
+#[test]
+fn test_update_workflow_status_rejects_waiting() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    // Calling update_workflow_status with Waiting must return an error — callers
+    // should use set_waiting_blocked_on() to enforce the blocked_on invariant.
+    let err = mgr
+        .update_workflow_status(&run.id, WorkflowRunStatus::Waiting, None)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("set_waiting_blocked_on()"),
+        "Expected InvalidInput error, got: {err}"
     );
 }
