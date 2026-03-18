@@ -138,3 +138,95 @@ impl std::str::FromStr for StepStatus {
 }
 
 crate::impl_sql_enum!(StepStatus);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ascii_within_limit() {
+        assert_eq!(truncate_utf8("hello", 10), "hello");
+    }
+
+    #[test]
+    fn ascii_exact_limit() {
+        assert_eq!(truncate_utf8("hello", 5), "hello");
+    }
+
+    #[test]
+    fn ascii_over_limit() {
+        assert_eq!(truncate_utf8("hello world", 5), "hello");
+    }
+
+    #[test]
+    fn empty_string() {
+        assert_eq!(truncate_utf8("", 5), "");
+        assert_eq!(truncate_utf8("", 0), "");
+    }
+
+    #[test]
+    fn max_bytes_zero() {
+        assert_eq!(truncate_utf8("hello", 0), "");
+        assert_eq!(truncate_utf8("é", 0), "");
+    }
+
+    #[test]
+    fn two_byte_char_boundary() {
+        // 'é' is 2 bytes (0xC3 0xA9), "aé" is 3 bytes
+        let s = "aé";
+        assert_eq!(s.len(), 3);
+        // Limit 3: fits entirely
+        assert_eq!(truncate_utf8(s, 3), "aé");
+        // Limit 2: would split 'é', must back up to 1
+        assert_eq!(truncate_utf8(s, 2), "a");
+        // Limit 1: just 'a'
+        assert_eq!(truncate_utf8(s, 1), "a");
+    }
+
+    #[test]
+    fn three_byte_char_boundary() {
+        // '€' is 3 bytes (0xE2 0x82 0xAC), "a€" is 4 bytes
+        let s = "a€";
+        assert_eq!(s.len(), 4);
+        assert_eq!(truncate_utf8(s, 4), "a€");
+        // Limit 3: splits '€', back up to 1
+        assert_eq!(truncate_utf8(s, 3), "a");
+        assert_eq!(truncate_utf8(s, 2), "a");
+        assert_eq!(truncate_utf8(s, 1), "a");
+    }
+
+    #[test]
+    fn four_byte_char_boundary() {
+        // '🦀' is 4 bytes, "a🦀" is 5 bytes
+        let s = "a🦀";
+        assert_eq!(s.len(), 5);
+        assert_eq!(truncate_utf8(s, 5), "a🦀");
+        // Limits 2-4: all split '🦀', back up to 1
+        assert_eq!(truncate_utf8(s, 4), "a");
+        assert_eq!(truncate_utf8(s, 3), "a");
+        assert_eq!(truncate_utf8(s, 2), "a");
+    }
+
+    #[test]
+    fn all_multibyte_string() {
+        // "ééé" = 6 bytes (each 'é' is 2 bytes)
+        let s = "ééé";
+        assert_eq!(s.len(), 6);
+        assert_eq!(truncate_utf8(s, 6), "ééé");
+        assert_eq!(truncate_utf8(s, 5), "éé");
+        assert_eq!(truncate_utf8(s, 4), "éé");
+        assert_eq!(truncate_utf8(s, 3), "é");
+        assert_eq!(truncate_utf8(s, 2), "é");
+        assert_eq!(truncate_utf8(s, 1), "");
+    }
+
+    #[test]
+    fn large_string_sanity() {
+        let s = "a".repeat(1000) + "🦀";
+        assert_eq!(s.len(), 1004);
+        assert_eq!(truncate_utf8(&s, 1004), s.as_str());
+        assert_eq!(truncate_utf8(&s, 1003), &s[..1000]);
+        assert_eq!(truncate_utf8(&s, 1000), &s[..1000]);
+        assert_eq!(truncate_utf8(&s, 500), &s[..500]);
+    }
+}
