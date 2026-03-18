@@ -1728,3 +1728,60 @@ fn test_resolve_run_context_no_worktree_no_repo() {
         "expected missing-targets error, got: {err}"
     );
 }
+
+#[test]
+fn test_set_waiting_blocked_on_atomically_sets_status_and_blocked_on() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    // Start from Running
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+
+    let blocked = BlockedOn::HumanApproval {
+        gate_name: "deploy-gate".to_string(),
+        prompt: Some("Approve deploy?".to_string()),
+    };
+
+    mgr.set_waiting_blocked_on(&run.id, &blocked).unwrap();
+
+    let updated = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(updated.status, WorkflowRunStatus::Waiting);
+    assert!(updated.blocked_on.is_some());
+    match updated.blocked_on.unwrap() {
+        BlockedOn::HumanApproval {
+            gate_name, prompt, ..
+        } => {
+            assert_eq!(gate_name, "deploy-gate");
+            assert_eq!(prompt.as_deref(), Some("Approve deploy?"));
+        }
+        other => panic!("expected HumanApproval, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_blocked_on_cleared_when_transitioning_away_from_waiting() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    // Set waiting with blocked_on
+    let blocked = BlockedOn::PrChecks {
+        gate_name: "ci-gate".to_string(),
+    };
+    mgr.set_waiting_blocked_on(&run.id, &blocked).unwrap();
+
+    let waiting = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(waiting.status, WorkflowRunStatus::Waiting);
+    assert!(waiting.blocked_on.is_some());
+
+    // Transition to Running — blocked_on must be auto-cleared
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+
+    let running = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(running.status, WorkflowRunStatus::Running);
+    assert!(
+        running.blocked_on.is_none(),
+        "blocked_on should be cleared when leaving Waiting"
+    );
+}

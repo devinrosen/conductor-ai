@@ -214,8 +214,10 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
-    /// Set the `blocked_on` field on a workflow run to describe what the run is waiting on.
-    pub fn set_blocked_on(
+    /// Atomically transition a workflow run to `Waiting` status and record what it
+    /// is blocked on.  This avoids a two-phase write where status and blocked_on
+    /// are set in separate statements.
+    pub fn set_waiting_blocked_on(
         &self,
         workflow_run_id: &str,
         blocked_on: &super::types::BlockedOn,
@@ -224,8 +226,8 @@ impl<'a> WorkflowManager<'a> {
             ConductorError::Workflow(format!("Failed to serialize blocked_on: {e}"))
         })?;
         self.conn.execute(
-            "UPDATE workflow_runs SET blocked_on = ?1 WHERE id = ?2",
-            params![json, workflow_run_id],
+            "UPDATE workflow_runs SET status = ?1, blocked_on = ?2 WHERE id = ?3",
+            params![WorkflowRunStatus::Waiting, json, workflow_run_id],
         )?;
         Ok(())
     }

@@ -1393,14 +1393,8 @@ pub(super) fn execute_gate(
         None,
     )?;
 
-    // Update workflow run to waiting status
-    state.wf_mgr.update_workflow_status(
-        &state.workflow_run_id,
-        WorkflowRunStatus::Waiting,
-        None,
-    )?;
-
-    // Record what this gate is blocked on so the TUI/web/MCP can display it.
+    // Atomically set status=Waiting and blocked_on in a single DB statement so
+    // there is no observable window where status=Waiting but blocked_on=NULL.
     let blocked_on = match node.gate_type {
         GateType::HumanApproval => super::types::BlockedOn::HumanApproval {
             gate_name: node.name.clone(),
@@ -1420,7 +1414,7 @@ pub(super) fn execute_gate(
     };
     state
         .wf_mgr
-        .set_blocked_on(&state.workflow_run_id, &blocked_on)?;
+        .set_waiting_blocked_on(&state.workflow_run_id, &blocked_on)?;
 
     // Capture the bot name used for this gate (resolved fresh on each poll to avoid
     // using an expired installation token in long-running gate loops).
