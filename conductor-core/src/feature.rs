@@ -116,12 +116,7 @@ impl<'a> FeatureManager<'a> {
             Vec::new()
         };
 
-        // Derive branch name
-        let branch = if name.contains('/') {
-            name.to_string()
-        } else {
-            format!("feat/{name}")
-        };
+        let branch = derive_branch_name(name);
 
         let base = from_branch
             .map(|b| b.to_string())
@@ -281,7 +276,11 @@ impl<'a> FeatureManager<'a> {
         let feature = self.get_feature_by_repo_id(&repo.id, feature_name)?;
 
         // Check if the branch was merged on the remote
-        let merged = is_branch_merged(&repo.local_path, &feature.branch, &feature.base_branch);
+        let merged = crate::git::is_branch_merged_remote(
+            &repo.local_path,
+            &feature.branch,
+            &feature.base_branch,
+        );
 
         let now = Utc::now().to_rfc3339();
         if merged {
@@ -409,24 +408,14 @@ fn build_in_clause(
     (sql, params)
 }
 
-/// Check whether `branch` has been merged into `base` by looking at the remote.
-fn is_branch_merged(repo_path: &str, branch: &str, base: &str) -> bool {
-    // Fetch latest remote state (best-effort)
-    let _ = git_in(repo_path)
-        .args(["fetch", "origin", "--", base, branch])
-        .output();
-
-    // Check if the branch is an ancestor of the base
-    git_in(repo_path)
-        .args([
-            "merge-base",
-            "--is-ancestor",
-            &format!("origin/{branch}"),
-            &format!("origin/{base}"),
-        ])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+/// Derive a git branch name from a feature name.
+/// Names containing `/` are used as-is; otherwise `feat/` is prepended.
+fn derive_branch_name(name: &str) -> String {
+    if name.contains('/') {
+        name.to_string()
+    } else {
+        format!("feat/{name}")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -785,21 +774,12 @@ mod tests {
     #[test]
     fn test_branch_name_derivation() {
         // Simple name gets feat/ prefix
-        let name = "notification-improvements";
-        let branch = if name.contains('/') {
-            name.to_string()
-        } else {
-            format!("feat/{name}")
-        };
-        assert_eq!(branch, "feat/notification-improvements");
+        assert_eq!(
+            derive_branch_name("notification-improvements"),
+            "feat/notification-improvements"
+        );
 
         // Name with slash is used as-is
-        let name2 = "release/2.0";
-        let branch2 = if name2.contains('/') {
-            name2.to_string()
-        } else {
-            format!("feat/{name2}")
-        };
-        assert_eq!(branch2, "release/2.0");
+        assert_eq!(derive_branch_name("release/2.0"), "release/2.0");
     }
 }

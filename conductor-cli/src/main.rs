@@ -2928,7 +2928,7 @@ fn read_and_maybe_cleanup_prompt_file(path: &str) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::read_and_maybe_cleanup_prompt_file;
+    use super::{parse_ticket_ids, read_and_maybe_cleanup_prompt_file};
 
     #[test]
     fn internal_temp_file_is_deleted_after_read() {
@@ -2963,5 +2963,34 @@ mod tests {
             "/tmp/conductor-nonexistent-file-that-does-not-exist.txt",
         );
         assert!(result.is_err(), "expected Err for nonexistent file, got Ok");
+    }
+
+    #[test]
+    fn parse_ticket_ids_basic() {
+        assert_eq!(parse_ticket_ids("ABC-1,ABC-2"), vec!["ABC-1", "ABC-2"]);
+    }
+
+    #[test]
+    fn parse_ticket_ids_trims_whitespace() {
+        assert_eq!(
+            parse_ticket_ids("  ABC-1 , ABC-2 , ABC-3 "),
+            vec!["ABC-1", "ABC-2", "ABC-3"]
+        );
+    }
+
+    #[test]
+    fn parse_ticket_ids_drops_empties() {
+        assert_eq!(parse_ticket_ids(",ABC-1,,ABC-2,"), vec!["ABC-1", "ABC-2"]);
+    }
+
+    #[test]
+    fn parse_ticket_ids_single() {
+        assert_eq!(parse_ticket_ids("ABC-1"), vec!["ABC-1"]);
+    }
+
+    #[test]
+    fn parse_ticket_ids_empty_string() {
+        let result: Vec<String> = parse_ticket_ids("");
+        assert!(result.is_empty());
     }
 }
