@@ -597,19 +597,14 @@ impl App {
         // Resolve the effective model from the per-worktree → per-repo → global config chain
         let (effective_default, effective_source) = match &target {
             WorkflowPickerTarget::Worktree { worktree_id, .. } => {
-                let wt_model = self
+                let wt = self
                     .state
                     .data
                     .worktrees
                     .iter()
-                    .find(|w| &w.id == worktree_id)
-                    .and_then(|w| w.model.clone());
-                let repo_model = self
-                    .state
-                    .data
-                    .worktrees
-                    .iter()
-                    .find(|w| &w.id == worktree_id)
+                    .find(|w| &w.id == worktree_id);
+                let wt_model = wt.and_then(|w| w.model.clone());
+                let repo_model = wt
                     .and_then(|w| self.state.data.repos.iter().find(|r| r.id == w.repo_id))
                     .and_then(|r| r.model.clone());
                 let is_wt = wt_model.is_some();
@@ -673,6 +668,28 @@ impl App {
                 worktree_path,
                 repo_path,
             } => {
+                // Re-check active run at dispatch time to close the race window between
+                // the model picker being shown and the user submitting their selection.
+                {
+                    use conductor_core::workflow::WorkflowManager;
+                    let wf_mgr = WorkflowManager::new(&self.conn);
+                    match wf_mgr.get_active_run_for_worktree(&worktree_id) {
+                        Ok(Some(active)) => {
+                            self.state.status_message = Some(format!(
+                                "Workflow '{}' is already running — cancel it before starting another",
+                                active.workflow_name
+                            ));
+                            return;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            self.state.status_message =
+                                Some(format!("Failed to check active workflow run: {e}"));
+                            return;
+                        }
+                    }
+                }
+
                 let (wt_target_label, wt_ticket_id) = self
                     .state
                     .data
