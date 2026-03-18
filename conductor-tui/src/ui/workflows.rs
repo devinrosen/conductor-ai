@@ -8,7 +8,7 @@ use ratatui::Frame;
 
 use conductor_core::workflow::InputType;
 use conductor_core::workflow::WorkflowNode;
-use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStatus};
+use conductor_core::workflow::{WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep};
 
 use super::common::truncate;
 use super::helpers::{format_condition, shorten_paths, visual_idx_with_headers};
@@ -991,7 +991,7 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
             };
 
             let (status_symbol, status_color) =
-                status_display(&run.status.to_string(), &state.theme);
+                run_status_icon(run, &state.data.workflow_run_steps, &state.theme);
             let duration = if let Some(ref ended) = run.ended_at {
                 format_duration(&run.started_at, ended)
             } else {
@@ -1704,6 +1704,29 @@ fn status_display(status: &str, theme: &Theme) -> (&'static str, Color) {
         "waiting" => ("⏸", theme.status_waiting),
         "skipped" => ("⊘", theme.label_secondary),
         _ => ("?", theme.label_primary),
+    }
+}
+
+fn run_status_icon(
+    run: &WorkflowRun,
+    steps: &HashMap<String, Vec<WorkflowRunStep>>,
+    theme: &Theme,
+) -> (&'static str, Color) {
+    if run.status != WorkflowRunStatus::Waiting {
+        return status_display(&run.status.to_string(), theme);
+    }
+    // For waiting runs, inspect the first waiting step's gate_type.
+    let gate_type = steps
+        .get(&run.id)
+        .and_then(|ss| {
+            ss.iter()
+                .find(|s| s.status.to_string() == "waiting" && s.gate_type.is_some())
+                .and_then(|s| s.gate_type.as_deref())
+        });
+    match gate_type {
+        Some("pr_checks") => ("⏳", theme.status_waiting),
+        Some("pr_approval" | "human_approval" | "human_review") => ("👤", theme.label_warning),
+        _ => ("⏸", theme.status_waiting),
     }
 }
 
