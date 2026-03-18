@@ -1949,8 +1949,18 @@ impl AppState {
         rows
     }
 
-    /// Invalidate the cached dashboard rows. Call this whenever repos, worktrees,
-    /// features_by_repo, or collapsed_features change.
+    /// Invalidate the cached dashboard rows.
+    ///
+    /// # Cache invalidation contract
+    ///
+    /// The following fields feed into `build_dashboard_rows()`. Any mutation
+    /// to them **must** be followed by a call to `invalidate_dashboard_rows()`
+    /// or stale rows will be silently served:
+    ///
+    /// - `data.repos`
+    /// - `data.worktrees`
+    /// - `data.features_by_repo`
+    /// - `collapsed_features`
     pub fn invalidate_dashboard_rows(&self) {
         *self.cached_dashboard_rows.borrow_mut() = None;
     }
@@ -2033,7 +2043,7 @@ impl AppState {
     /// Returns the dashboard row at `dashboard_index`.
     /// Delegates to `dashboard_rows()` to guarantee the two can never diverge.
     pub fn current_dashboard_row(&self) -> Option<DashboardRow> {
-        self.dashboard_rows().into_iter().nth(self.dashboard_index)
+        self.dashboard_rows().get(self.dashboard_index).copied()
     }
 
     /// Look up a feature by repo index and feature index.
