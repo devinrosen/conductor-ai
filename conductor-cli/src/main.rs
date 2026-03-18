@@ -1391,43 +1391,12 @@ fn main() -> Result<()> {
 
                 // Resolve --feature to a feature_id. When --feature is absent and
                 // --ticket is provided, auto-detect from the feature_tickets table.
-                let feature_id: Option<String> = if let Some(ref feat_name) = feature {
-                    // We need a repo slug to look up the feature. Derive it from whichever
-                    // target mode is active.
-                    let repo_slug_for_feature = repo.as_deref().or(repo_flag.as_deref());
-                    let slug = if let Some(s) = repo_slug_for_feature {
-                        s.to_string()
-                    } else if let Some(ref tid) = ticket {
-                        let t = TicketSyncer::new(&conn).get_by_id(tid)?;
-                        let r = RepoManager::new(&conn, &config).get_by_id(&t.repo_id)?;
-                        r.slug
-                    } else {
-                        anyhow::bail!(
-                            "--feature requires a repo context (--repo, positional repo, or --ticket)"
-                        );
-                    };
-                    let fm = FeatureManager::new(&conn, &config);
-                    let f = fm.resolve_active_feature(&slug, feat_name)?;
-                    Some(f.id)
-                } else if let Some(ref tid) = ticket {
-                    // Auto-detect feature from ticket
-                    let fm = FeatureManager::new(&conn, &config);
-                    fm.find_feature_for_ticket(tid)?.map(|f| f.id)
-                } else if let (None, Some(ref repo_s), Some(ref wt_s)) =
-                    (&feature, &repo, &worktree)
-                {
-                    // Auto-detect feature from the worktree's linked ticket
-                    let r = RepoManager::new(&conn, &config).get_by_slug(repo_s)?;
-                    let wt = WorktreeManager::new(&conn, &config).get_by_slug(&r.id, wt_s)?;
-                    if let Some(ref tid) = wt.ticket_id {
-                        let fm = FeatureManager::new(&conn, &config);
-                        fm.find_feature_for_ticket(tid)?.map(|f| f.id)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
+                let feature_id = FeatureManager::new(&conn, &config).resolve_feature_id_for_run(
+                    feature.as_deref(),
+                    repo.as_deref().or(repo_flag.as_deref()),
+                    ticket.as_deref(),
+                    worktree.as_deref(),
+                )?;
 
                 if let Some(pr_url) = pr {
                     // Ephemeral PR run

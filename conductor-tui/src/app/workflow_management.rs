@@ -12,6 +12,21 @@ use super::helpers::{
 use super::App;
 
 impl App {
+    /// Try to auto-detect the feature linked to a ticket. On error (e.g.
+    /// ambiguous features) the message is shown in the status bar and `None`
+    /// is returned so the workflow can still proceed without a feature.
+    fn try_detect_feature_id(&mut self, ticket_id: &str) -> Option<String> {
+        match conductor_core::feature::FeatureManager::new(&self.conn, &self.config)
+            .find_feature_for_ticket(ticket_id)
+        {
+            Ok(opt) => opt.map(|f| f.id),
+            Err(e) => {
+                self.state.status_message = Some(format!("Feature auto-detect failed: {e}"));
+                None
+            }
+        }
+    }
+
     /// Dispatch workflow data loading to a background thread. The result
     /// arrives as a `WorkflowDataRefreshed` action, avoiding synchronous
     /// FS + DB I/O on the main loop tick.
@@ -673,18 +688,9 @@ impl App {
                 // hasn't been refreshed yet (e.g. post-create flow).
                 let ticket_id = wt_ticket_id.or_else(|| inputs.get("ticket_id").cloned());
                 // Auto-detect feature from the worktree's linked ticket.
-                let feature_id = ticket_id.as_deref().and_then(|tid| {
-                    match conductor_core::feature::FeatureManager::new(&self.conn, &self.config)
-                        .find_feature_for_ticket(tid)
-                    {
-                        Ok(opt) => opt.map(|f| f.id),
-                        Err(e) => {
-                            self.state.status_message =
-                                Some(format!("Feature auto-detect failed: {e}"));
-                            None
-                        }
-                    }
-                });
+                let feature_id = ticket_id
+                    .as_deref()
+                    .and_then(|tid| self.try_detect_feature_id(tid));
                 self.spawn_workflow_in_background(
                     def,
                     worktree_id,
@@ -739,17 +745,7 @@ impl App {
                 ..
             } => {
                 // Auto-detect feature from ticket.
-                let feature_id =
-                    match conductor_core::feature::FeatureManager::new(&self.conn, &self.config)
-                        .find_feature_for_ticket(&ticket_id)
-                    {
-                        Ok(opt) => opt.map(|f| f.id),
-                        Err(e) => {
-                            self.state.status_message =
-                                Some(format!("Feature auto-detect failed: {e}"));
-                            None
-                        }
-                    };
+                let feature_id = self.try_detect_feature_id(&ticket_id);
                 self.spawn_ticket_workflow_in_background(
                     def,
                     ticket_id,

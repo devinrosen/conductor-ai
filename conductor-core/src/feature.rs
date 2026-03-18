@@ -11,6 +11,8 @@ use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::git::{check_output, git_in};
 use crate::repo::RepoManager;
+use crate::tickets::TicketSyncer;
+use crate::worktree::WorktreeManager;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -294,6 +296,57 @@ impl<'a> FeatureManager<'a> {
                     .join(", ")
             ))),
         }
+    }
+
+    /// Resolve a feature ID for a workflow run.
+    ///
+    /// Resolution order:
+    /// 1. Explicit feature name → look up by repo slug + name, verify active.
+    /// 2. Ticket ID provided → auto-detect from feature_tickets table.
+    /// 3. Repo + worktree slugs provided → look up worktree's linked ticket, then auto-detect.
+    /// 4. None of the above → `Ok(None)`.
+    ///
+    /// When `feature_name` is `Some`, a repo slug is required — it is derived from
+    /// `repo_slug`, or by looking up the ticket's repo when only `ticket_id` is given.
+    /// Returns an error if no repo context can be determined.
+    pub fn resolve_feature_id_for_run(
+        &self,
+        feature_name: Option<&str>,
+        repo_slug: Option<&str>,
+        ticket_id: Option<&str>,
+        worktree_slug: Option<&str>,
+    ) -> Result<Option<String>> {
+        if let Some(feat_name) = feature_name {
+            // Explicit feature — need a repo slug.
+            let slug = if let Some(s) = repo_slug {
+                s.to_string()
+            } else if let Some(tid) = ticket_id {
+                let t = TicketSyncer::new(self.conn).get_by_id(tid)?;
+                let r = RepoManager::new(self.conn, self.config).get_by_id(&t.repo_id)?;
+                r.slug
+            } else {
+                return Err(ConductorError::Workflow(
+                    "--feature requires a repo context (--repo, positional repo, or --ticket)"
+                        .to_string(),
+                ));
+            };
+            let f = self.resolve_active_feature(&slug, feat_name)?;
+            return Ok(Some(f.id));
+        }
+
+        if let Some(tid) = ticket_id {
+            return Ok(self.find_feature_for_ticket(tid)?.map(|f| f.id));
+        }
+
+        if let (Some(rs), Some(ws)) = (repo_slug, worktree_slug) {
+            let r = RepoManager::new(self.conn, self.config).get_by_slug(rs)?;
+            let wt = WorktreeManager::new(self.conn, self.config).get_by_slug(&r.id, ws)?;
+            if let Some(ref tid) = wt.ticket_id {
+                return Ok(self.find_feature_for_ticket(tid)?.map(|f| f.id));
+            }
+        }
+
+        Ok(None)
     }
 
     /// Unlink tickets (by source_id) from a feature.
