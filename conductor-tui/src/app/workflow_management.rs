@@ -575,56 +575,15 @@ impl App {
             ref worktree_id, ..
         } = target
         {
-            use conductor_core::workflow::WorkflowManager;
-            let wf_mgr = WorkflowManager::new(&self.conn);
-            match wf_mgr.get_active_run_for_worktree(worktree_id) {
-                Ok(Some(active)) => {
-                    self.state.status_message = Some(format!(
-                        "Workflow '{}' is already running — cancel it before starting another",
-                        active.workflow_name
-                    ));
-                    return;
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    self.state.status_message =
-                        Some(format!("Failed to check active workflow run: {e}"));
-                    return;
-                }
+            if self.active_run_blocks_dispatch(worktree_id) {
+                return;
             }
         }
 
         // Resolve the effective model from the per-worktree → per-repo → global config chain
         let (effective_default, effective_source) = match &target {
             WorkflowPickerTarget::Worktree { worktree_id, .. } => {
-                let wt = self
-                    .state
-                    .data
-                    .worktrees
-                    .iter()
-                    .find(|w| &w.id == worktree_id);
-                let wt_model = wt.and_then(|w| w.model.clone());
-                let repo_model = wt
-                    .and_then(|w| self.state.data.repos.iter().find(|r| r.id == w.repo_id))
-                    .and_then(|r| r.model.clone());
-                let is_wt = wt_model.is_some();
-                let is_repo = !is_wt && repo_model.is_some();
-                match wt_model
-                    .or(repo_model)
-                    .or_else(|| self.config.general.model.clone())
-                {
-                    Some(m) => {
-                        let source = if is_wt {
-                            "worktree"
-                        } else if is_repo {
-                            "repo"
-                        } else {
-                            "global config"
-                        };
-                        (Some(m), source.to_string())
-                    }
-                    None => (None, "not set".to_string()),
-                }
+                self.resolve_model_for_worktree(worktree_id)
             }
             _ => match self.config.general.model.clone() {
                 Some(m) => (Some(m), "global config".to_string()),
@@ -670,24 +629,8 @@ impl App {
             } => {
                 // Re-check active run at dispatch time to close the race window between
                 // the model picker being shown and the user submitting their selection.
-                {
-                    use conductor_core::workflow::WorkflowManager;
-                    let wf_mgr = WorkflowManager::new(&self.conn);
-                    match wf_mgr.get_active_run_for_worktree(&worktree_id) {
-                        Ok(Some(active)) => {
-                            self.state.status_message = Some(format!(
-                                "Workflow '{}' is already running — cancel it before starting another",
-                                active.workflow_name
-                            ));
-                            return;
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            self.state.status_message =
-                                Some(format!("Failed to check active workflow run: {e}"));
-                            return;
-                        }
-                    }
+                if self.active_run_blocks_dispatch(&worktree_id) {
+                    return;
                 }
 
                 let (wt_target_label, wt_ticket_id) = self
@@ -1410,6 +1353,67 @@ impl App {
             repo_id: repo.id.clone(),
             repo_path: repo.local_path.clone(),
             repo_name: repo.slug.clone(),
+        }
+    }
+
+    /// Check whether a workflow is already active for `worktree_id`.
+    ///
+    /// Returns `true` and sets `self.state.status_message` when the check detects
+    /// an active run (or fails), signalling the caller to abort the dispatch.
+    /// Returns `false` when no active run is found and dispatch may proceed.
+    fn active_run_blocks_dispatch(&mut self, worktree_id: &str) -> bool {
+        use conductor_core::workflow::WorkflowManager;
+        let wf_mgr = WorkflowManager::new(&self.conn);
+        match wf_mgr.get_active_run_for_worktree(worktree_id) {
+            Ok(Some(active)) => {
+                self.state.status_message = Some(format!(
+                    "Workflow '{}' is already running — cancel it before starting another",
+                    active.workflow_name
+                ));
+                true
+            }
+            Ok(None) => false,
+            Err(e) => {
+                self.state.status_message =
+                    Some(format!("Failed to check active workflow run: {e}"));
+                true
+            }
+        }
+    }
+
+    /// Resolve the effective model for `worktree_id` using the
+    /// per-worktree → per-repo → global config precedence chain.
+    ///
+    /// Returns `(model, source_label)` where `source_label` is one of
+    /// `"worktree"`, `"repo"`, `"global config"`, or `"not set"`.
+    pub(super) fn resolve_model_for_worktree(&self, worktree_id: &str) -> (Option<String>, String) {
+        let wt = self
+            .state
+            .data
+            .worktrees
+            .iter()
+            .find(|w| w.id == worktree_id);
+        let wt_model = wt.and_then(|w| w.model.clone());
+        let repo_model = wt
+            .and_then(|w| self.state.data.repos.iter().find(|r| r.id == w.repo_id))
+            .and_then(|r| r.model.clone());
+        let is_wt = wt_model.is_some();
+        let is_repo = !is_wt && repo_model.is_some();
+        match wt_model
+            .or(repo_model)
+            .or_else(|| self.config.general.model.clone())
+        {
+            Some(m) => {
+                let source = if is_wt {
+                    "worktree"
+                } else if is_repo {
+                    "repo"
+                } else {
+                    "global config"
+                };
+                (Some(m), source.to_string())
+            }
+            None => (None, "not set".to_string()),
         }
     }
 }

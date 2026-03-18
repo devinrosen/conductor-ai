@@ -295,24 +295,7 @@ impl App {
         worktree_slug: String,
     ) {
         // Resolve model: per-worktree → per-repo → global config
-        let wt_model = self
-            .state
-            .data
-            .worktrees
-            .iter()
-            .find(|w| w.id == worktree_id)
-            .and_then(|w| w.model.clone());
-        let repo_model = self
-            .state
-            .data
-            .worktrees
-            .iter()
-            .find(|w| w.id == worktree_id)
-            .and_then(|w| self.state.data.repos.iter().find(|r| r.id == w.repo_id))
-            .and_then(|r| r.model.clone());
-        let model = wt_model
-            .or(repo_model)
-            .or_else(|| self.config.general.model.clone());
+        let (model, _) = self.resolve_model_for_worktree(&worktree_id);
 
         // Create DB record with tmux window name
         let mgr = AgentManager::new(&self.conn);
