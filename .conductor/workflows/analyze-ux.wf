@@ -11,8 +11,12 @@ workflow analyze-ux {
     focus    default = ""
   }
 
-  call read-personas
-  call read-diagrams
+  script read-personas {
+    run = ".conductor/scripts/read-personas.sh"
+  }
+  script read-diagrams {
+    run = ".conductor/scripts/read-diagrams.sh"
+  }
   call analyze-per-persona
   call write-analysis-report
   script push-and-pr {
