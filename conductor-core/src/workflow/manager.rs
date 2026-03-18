@@ -145,6 +145,7 @@ impl<'a> WorkflowManager<'a> {
             default_bot_name: None,
             iteration: 0,
             blocked_on: None,
+            feature_id: None,
         })
     }
 
@@ -153,6 +154,15 @@ impl<'a> WorkflowManager<'a> {
         self.conn.execute(
             "UPDATE workflow_runs SET iteration = ?1 WHERE id = ?2",
             params![iteration, run_id],
+        )?;
+        Ok(())
+    }
+
+    /// Persist the feature_id for a workflow run.
+    pub fn set_workflow_run_feature_id(&self, run_id: &str, feature_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workflow_runs SET feature_id = ?1 WHERE id = ?2",
+            params![feature_id, run_id],
         )?;
         Ok(())
     }
@@ -1498,6 +1508,7 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
             None
         })
     });
+    let feature_id: Option<String> = row.get(19)?;
     Ok(WorkflowRun {
         id,
         workflow_name: row.get(1)?,
@@ -1518,6 +1529,7 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
         default_bot_name,
         iteration,
         blocked_on,
+        feature_id,
     })
 }
 

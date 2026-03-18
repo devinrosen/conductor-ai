@@ -217,6 +217,11 @@ enum WorkflowCommands {
         /// Input variables (key=value pairs)
         #[arg(long = "input", value_name = "KEY=VALUE")]
         inputs: Vec<String>,
+        /// Feature name — sets the feature context for the workflow run.
+        /// When provided, feature_name and feature_branch become available as
+        /// template variables. Auto-detected from the ticket when omitted.
+        #[arg(long)]
+        feature: Option<String>,
     },
     /// Show details of a workflow run
     #[command(name = "run-show", alias = "show")]
@@ -1361,6 +1366,7 @@ fn main() -> Result<()> {
                 no_fail_fast,
                 step_timeout_secs,
                 inputs,
+                feature,
             } => {
                 // Parse input key=value pairs (shared by both paths)
                 let mut input_map = std::collections::HashMap::new();
@@ -1382,6 +1388,62 @@ fn main() -> Result<()> {
                 if dry_run {
                     println!("DRY RUN: Actor steps will show intended changes without committing.");
                 }
+
+                // Resolve --feature to a feature_id. When --feature is absent and
+                // --ticket is provided, auto-detect from the feature_tickets table.
+                let feature_id: Option<String> = if let Some(ref feat_name) = feature {
+                    // We need a repo slug to look up the feature. Derive it from whichever
+                    // target mode is active.
+                    let repo_slug_for_feature = repo.as_deref().or(repo_flag.as_deref());
+                    if let Some(slug) = repo_slug_for_feature {
+                        let fm = FeatureManager::new(&conn, &config);
+                        let f = fm.get_by_name(slug, feat_name)?;
+                        if f.status != conductor_core::feature::FeatureStatus::Active {
+                            anyhow::bail!(
+                                "Feature '{}' is {} — only active features can be used.",
+                                feat_name,
+                                f.status
+                            );
+                        }
+                        Some(f.id)
+                    } else if let Some(ref tid) = ticket {
+                        // Resolve repo from ticket
+                        let t = TicketSyncer::new(&conn).get_by_id(tid)?;
+                        let r = RepoManager::new(&conn, &config).get_by_id(&t.repo_id)?;
+                        let fm = FeatureManager::new(&conn, &config);
+                        let f = fm.get_by_name(&r.slug, feat_name)?;
+                        if f.status != conductor_core::feature::FeatureStatus::Active {
+                            anyhow::bail!(
+                                "Feature '{}' is {} — only active features can be used.",
+                                feat_name,
+                                f.status
+                            );
+                        }
+                        Some(f.id)
+                    } else {
+                        anyhow::bail!(
+                            "--feature requires a repo context (--repo, positional repo, or --ticket)"
+                        );
+                    }
+                } else if let Some(ref tid) = ticket {
+                    // Auto-detect feature from ticket
+                    let fm = FeatureManager::new(&conn, &config);
+                    fm.find_feature_for_ticket(tid)?.map(|f| f.id)
+                } else if let (None, Some(ref repo_s), Some(ref wt_s)) =
+                    (&feature, &repo, &worktree)
+                {
+                    // Auto-detect feature from the worktree's linked ticket
+                    let r = RepoManager::new(&conn, &config).get_by_slug(repo_s)?;
+                    let wt = WorktreeManager::new(&conn, &config).get_by_slug(&r.id, wt_s)?;
+                    if let Some(ref tid) = wt.ticket_id {
+                        let fm = FeatureManager::new(&conn, &config);
+                        fm.find_feature_for_ticket(tid)?.map(|f| f.id)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
 
                 if let Some(pr_url) = pr {
                     // Ephemeral PR run
@@ -1453,6 +1515,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(r.slug.as_str()),
                             default_bot_name: None,
+                            feature_id: feature_id.as_deref(),
                             iteration: 0,
                             run_id_notify: None,
                         },
@@ -1504,6 +1567,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(run_id.as_str()),
                             default_bot_name: None,
+                            feature_id: feature_id.as_deref(),
                             iteration: 0,
                             run_id_notify: None,
                         },
@@ -1555,6 +1619,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(repo.slug.as_str()),
                             default_bot_name: None,
+                            feature_id: feature_id.as_deref(),
                             iteration: 0,
                             run_id_notify: None,
                         },
@@ -1609,6 +1674,7 @@ fn main() -> Result<()> {
                             parent_workflow_run_id: None,
                             target_label: Some(&wt_label),
                             default_bot_name: None,
+                            feature_id: feature_id.as_deref(),
                             iteration: 0,
                             run_id_notify: None,
                         },

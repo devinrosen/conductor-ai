@@ -586,6 +586,7 @@ pub(super) fn execute_call_workflow(
                 .bot_name
                 .clone()
                 .or_else(|| state.default_bot_name.clone()),
+            feature_id: state.feature_id.as_deref(),
             iteration,
             run_id_notify: None,
         };
@@ -2177,6 +2178,7 @@ mod tests {
             block_with: Vec::new(),
             resume_ctx: None,
             default_bot_name: None,
+            feature_id: None,
         }
     }
 

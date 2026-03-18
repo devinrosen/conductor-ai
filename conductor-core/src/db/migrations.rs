@@ -741,6 +741,11 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 43)?;
     }
 
+    if version < 44 {
+        conn.execute_batch(include_str!("migrations/044_workflow_run_feature_id.sql"))?;
+        bump_version(conn, 44)?;
+    }
+
     Ok(())
 }
 

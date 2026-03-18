@@ -68,6 +68,8 @@ pub struct WorkflowRun {
     pub iteration: i64,
     /// What the workflow is currently blocked on (only set when status is `Waiting`).
     pub blocked_on: Option<BlockedOn>,
+    /// Optional feature ID linking this run to a feature branch.
+    pub feature_id: Option<String>,
 }
 
 /// A workflow step execution record from the database.
@@ -333,6 +335,8 @@ pub struct WorkflowExecInput<'a> {
     /// children to show only the latest loop iteration without cross-referencing
     /// parent step records.
     pub iteration: u32,
+    /// Optional feature ID linking this run to a feature branch.
+    pub feature_id: Option<&'a str>,
     /// If set, the workflow run ID is written here immediately after the run record is
     /// created (before any steps execute). Used by callers that need to return the ID
     /// to an external client while execution continues in the background.
@@ -358,6 +362,8 @@ pub struct WorkflowExecStandalone {
     pub inputs: HashMap<String, String>,
     /// Human-readable label for the target (e.g. `repo_slug/wt_slug`, `owner/repo#N`).
     pub target_label: Option<String>,
+    /// Optional feature ID linking this run to a feature branch.
+    pub feature_id: Option<String>,
     /// If set, the workflow run ID is written here immediately after the run record is
     /// created (before any steps execute). See [`WorkflowExecInput::run_id_notify`].
     pub run_id_notify: Option<RunIdSlot>,

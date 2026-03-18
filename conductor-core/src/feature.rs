@@ -236,6 +236,52 @@ impl<'a> FeatureManager<'a> {
         self.link_tickets_internal(&feature.id, &ticket_ids)
     }
 
+    /// Look up a single feature by its internal ULID ID.
+    pub fn get_by_id(&self, id: &str) -> Result<Feature> {
+        self.conn
+            .query_row(
+                "SELECT id, repo_id, name, branch, base_branch, status, created_at, merged_at
+                 FROM features WHERE id = ?1",
+                params![id],
+                map_feature_row,
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ConductorError::FeatureNotFound {
+                    name: id.to_string(),
+                },
+                _ => ConductorError::Database(e),
+            })
+    }
+
+    /// Find the active feature linked to a ticket, if any.
+    ///
+    /// Returns `None` when the ticket is not linked to any feature or when all
+    /// linked features are closed/merged. Returns an error if the ticket is linked
+    /// to multiple *active* features (ambiguous).
+    pub fn find_feature_for_ticket(&self, ticket_id: &str) -> Result<Option<Feature>> {
+        let features: Vec<Feature> = query_collect(
+            self.conn,
+            "SELECT f.id, f.repo_id, f.name, f.branch, f.base_branch, f.status, f.created_at, f.merged_at
+             FROM features f
+             INNER JOIN feature_tickets ft ON ft.feature_id = f.id
+             WHERE ft.ticket_id = ?1 AND f.status = 'active'",
+            params![ticket_id],
+            map_feature_row,
+        )?;
+        match features.len() {
+            0 => Ok(None),
+            1 => Ok(Some(features.into_iter().next().unwrap())),
+            n => Err(ConductorError::Workflow(format!(
+                "Ticket is linked to {n} active features ({}). Use --feature to disambiguate.",
+                features
+                    .iter()
+                    .map(|f| f.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))),
+        }
+    }
+
     /// Unlink tickets (by source_id) from a feature.
     pub fn unlink_tickets(
         &self,
@@ -1097,5 +1143,109 @@ mod tests {
 
         // Name with slash is used as-is
         assert_eq!(derive_branch_name("release/2.0"), "release/2.0");
+    }
+
+    #[test]
+    fn test_find_feature_for_ticket_none() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let ticket_id = insert_ticket(&conn, &repo_id, "100");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let result = mgr.find_feature_for_ticket(&ticket_id).unwrap();
+        assert!(result.is_none(), "no feature linked to ticket");
+    }
+
+    #[test]
+    fn test_find_feature_for_ticket_found() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let ticket_id = insert_ticket(&conn, &repo_id, "200");
+        let feature_id = insert_feature(&conn, &repo_id, "notif", "feat/notif");
+
+        // Link ticket to feature
+        conn.execute(
+            "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+            params![feature_id, ticket_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let result = mgr.find_feature_for_ticket(&ticket_id).unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().name, "notif");
+    }
+
+    #[test]
+    fn test_find_feature_for_ticket_skips_closed() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let ticket_id = insert_ticket(&conn, &repo_id, "300");
+        let feature_id = insert_feature(&conn, &repo_id, "closed-feat", "feat/closed-feat");
+
+        // Close the feature
+        conn.execute(
+            "UPDATE features SET status = 'closed' WHERE id = ?1",
+            params![feature_id],
+        )
+        .unwrap();
+
+        // Link ticket
+        conn.execute(
+            "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+            params![feature_id, ticket_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let result = mgr.find_feature_for_ticket(&ticket_id).unwrap();
+        assert!(result.is_none(), "closed feature should not be returned");
+    }
+
+    #[test]
+    fn test_find_feature_for_ticket_ambiguous() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let ticket_id = insert_ticket(&conn, &repo_id, "400");
+        let feat_a = insert_feature(&conn, &repo_id, "feat-a", "feat/feat-a");
+        let feat_b = insert_feature(&conn, &repo_id, "feat-b", "feat/feat-b");
+
+        // Link ticket to both features
+        conn.execute(
+            "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+            params![feat_a, ticket_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+            params![feat_b, ticket_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let result = mgr.find_feature_for_ticket(&ticket_id);
+        assert!(result.is_err(), "should error when ambiguous");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("disambiguate"),
+            "error should mention disambiguation: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_get_by_id() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let feature_id = insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let result = mgr.get_by_id(&feature_id).unwrap();
+        assert_eq!(result.name, "my-feat");
+        assert_eq!(result.id, feature_id);
     }
 }

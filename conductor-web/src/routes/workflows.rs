@@ -259,6 +259,7 @@ pub async fn run_workflow(
                 parent_workflow_run_id: None,
                 target_label: Some(&wt_target_label),
                 default_bot_name: None,
+                feature_id: None,
                 iteration: 0,
                 run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
             };

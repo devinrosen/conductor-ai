@@ -29,6 +29,9 @@ pub const ENGINE_INJECTED_KEYS: &[&str] = &[
     "repo_id",
     "repo_path",
     "repo_name",
+    "feature_id",
+    "feature_name",
+    "feature_branch",
 ];
 
 /// Pre-loaded context for resuming a workflow run.
@@ -85,6 +88,8 @@ pub(super) struct ExecutionState<'a> {
     pub resume_ctx: Option<ResumeContext>,
     /// Default named GitHub App bot identity inherited from a parent `call workflow { as = "..." }`.
     pub default_bot_name: Option<String>,
+    /// Optional feature ID linking this run to a feature branch.
+    pub feature_id: Option<String>,
 }
 
 /// Resolve a schema by name using the standard search order.
@@ -270,6 +275,11 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         cvar.notify_one();
     }
 
+    // Persist feature_id on the workflow run record.
+    if let Some(fid) = input.feature_id {
+        wf_mgr.set_workflow_run_feature_id(&wf_run.id, fid)?;
+    }
+
     // Persist default_bot_name so it can be restored on resume.
     if let Some(ref bot_name) = input.default_bot_name {
         wf_mgr.set_workflow_run_default_bot_name(&wf_run.id, bot_name)?;
@@ -308,6 +318,37 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         merged_inputs
             .entry("repo_name".to_string())
             .or_insert_with(|| repo.slug.clone());
+    }
+
+    // Inject feature metadata when a feature_id is provided.
+    if let Some(fid) = input.feature_id {
+        let feature = conn
+            .query_row(
+                "SELECT id, name, branch FROM features WHERE id = ?1",
+                rusqlite::params![fid],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    ConductorError::Workflow(format!("Feature not found: {fid}"))
+                }
+                _ => ConductorError::Database(e),
+            })?;
+        merged_inputs
+            .entry("feature_id".to_string())
+            .or_insert_with(|| feature.0);
+        merged_inputs
+            .entry("feature_name".to_string())
+            .or_insert_with(|| feature.1);
+        merged_inputs
+            .entry("feature_branch".to_string())
+            .or_insert_with(|| feature.2);
     }
 
     // Persist inputs so they can be restored on resume
@@ -349,6 +390,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         block_with: Vec::new(),
         resume_ctx: None,
         default_bot_name: input.default_bot_name.clone(),
+        feature_id: input.feature_id.map(String::from),
     };
 
     run_workflow_engine(&mut state, workflow)
@@ -469,6 +511,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         parent_workflow_run_id: None,
         target_label: params.target_label.as_deref(),
         default_bot_name: None,
+        feature_id: params.feature_id.as_deref(),
         iteration: 0,
         run_id_notify: params.run_id_notify.clone(),
     };
@@ -739,6 +782,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         block_with: Vec::new(),
         resume_ctx,
         default_bot_name: wf_run.default_bot_name.clone(),
+        feature_id: wf_run.feature_id.clone(),
     };
 
     run_workflow_engine(&mut state, &workflow)

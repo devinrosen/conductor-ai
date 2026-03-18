@@ -672,6 +672,14 @@ impl App {
                 // Fall back to inputs["ticket_id"] when the worktree's in-memory state
                 // hasn't been refreshed yet (e.g. post-create flow).
                 let ticket_id = wt_ticket_id.or_else(|| inputs.get("ticket_id").cloned());
+                // Auto-detect feature from the worktree's linked ticket.
+                let feature_id = ticket_id.as_deref().and_then(|tid| {
+                    conductor_core::feature::FeatureManager::new(&self.conn, &self.config)
+                        .find_feature_for_ticket(tid)
+                        .ok()
+                        .flatten()
+                        .map(|f| f.id)
+                });
                 self.spawn_workflow_in_background(
                     def,
                     worktree_id,
@@ -681,6 +689,7 @@ impl App {
                     inputs,
                     wt_target_label,
                     model,
+                    feature_id,
                 );
             }
             WorkflowPickerTarget::Pr { pr_number, .. } => {
@@ -724,6 +733,13 @@ impl App {
                 repo_path,
                 ..
             } => {
+                // Auto-detect feature from ticket.
+                let feature_id =
+                    conductor_core::feature::FeatureManager::new(&self.conn, &self.config)
+                        .find_feature_for_ticket(&ticket_id)
+                        .ok()
+                        .flatten()
+                        .map(|f| f.id);
                 self.spawn_ticket_workflow_in_background(
                     def,
                     ticket_id,
@@ -732,6 +748,7 @@ impl App {
                     ticket_title,
                     inputs,
                     model,
+                    feature_id,
                 );
             }
             WorkflowPickerTarget::Repo {
@@ -763,6 +780,7 @@ impl App {
                         run_inputs,
                         format!("workflow_run:{workflow_run_id}"),
                         model,
+                        None,
                     );
                 } else {
                     self.spawn_workflow_run_target_in_background(
@@ -789,6 +807,7 @@ impl App {
         inputs: std::collections::HashMap<String, String>,
         target_label: String,
         model: Option<String>,
+        feature_id: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -815,6 +834,7 @@ impl App {
                 },
                 inputs,
                 target_label: Some(target_label),
+                feature_id,
                 run_id_notify: None,
             };
 
@@ -837,6 +857,7 @@ impl App {
         target_label: String,
         inputs: std::collections::HashMap<String, String>,
         model: Option<String>,
+        feature_id: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -865,6 +886,7 @@ impl App {
                 },
                 inputs,
                 target_label: Some(target_label),
+                feature_id,
                 run_id_notify: None,
             };
 
@@ -911,6 +933,7 @@ impl App {
                 },
                 inputs,
                 target_label: Some(repo_name),
+                feature_id: None,
                 run_id_notify: None,
             };
 
@@ -956,6 +979,7 @@ impl App {
                 },
                 inputs,
                 target_label: Some(target_label),
+                feature_id: None,
                 run_id_notify: None,
             };
 

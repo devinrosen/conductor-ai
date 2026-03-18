@@ -931,6 +931,7 @@ fn test_resume_workflow_repo_target() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        feature_id: None,
         iteration: 0,
         run_id_notify: None,
     };
@@ -985,6 +986,7 @@ fn test_resume_workflow_ticket_target() {
         parent_workflow_run_id: None,
         target_label: None,
         default_bot_name: None,
+        feature_id: None,
         iteration: 0,
         run_id_notify: None,
     };
