@@ -153,7 +153,7 @@ impl<'a> FeatureManager<'a> {
             merged_at: None,
         };
 
-        self.conn.execute(
+        if let Err(e) = self.conn.execute(
             "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
@@ -165,7 +165,16 @@ impl<'a> FeatureManager<'a> {
                 feature.status,
                 feature.created_at,
             ],
-        )?;
+        ) {
+            // Best-effort cleanup of branches created above so the command is retriable
+            let _ = git_in(&repo.local_path)
+                .args(["push", "origin", "--delete", "--", &feature.branch])
+                .output();
+            let _ = git_in(&repo.local_path)
+                .args(["branch", "-D", "--", &feature.branch])
+                .output();
+            return Err(e.into());
+        }
 
         // Link tickets if provided (already resolved to internal IDs)
         if !ticket_ids.is_empty() {
@@ -988,6 +997,52 @@ mod tests {
         );
         assert_eq!(sql, "DELETE FROM ft WHERE fid = ?1 AND tid IN (?2, ?3, ?4)");
         assert_eq!(param_count, 4); // first_param + 3 items
+    }
+
+    #[test]
+    fn test_create_pr_feature_not_found() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let err = mgr.create_pr("test-repo", "nonexistent", false);
+        assert!(err.is_err(), "create_pr should fail for missing feature");
+    }
+
+    #[test]
+    fn test_create_pr_gh_failure() {
+        let (work, _bare) = setup_git_repo();
+        let conn = setup_db();
+        let repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+        insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        // gh pr create will fail because there's no GitHub remote configured,
+        // exercising the non-zero exit / GhCli error path
+        let result = mgr.create_pr("test-repo", "my-feat", false);
+        assert!(result.is_err(), "create_pr should fail when gh errors");
+        let err_msg = format!("{}", result.unwrap_err());
+        // Should be a GhCli error, not a generic git error
+        assert!(
+            err_msg.contains("gh") || err_msg.contains("Gh"),
+            "error should reference gh CLI: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_create_pr_draft_flag() {
+        let (work, _bare) = setup_git_repo();
+        let conn = setup_db();
+        let repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+        insert_feature(&conn, &repo_id, "draft-feat", "feat/draft-feat");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        // With draft=true, gh will also fail (no remote) but exercises the draft code path
+        let result = mgr.create_pr("test-repo", "draft-feat", true);
+        assert!(result.is_err());
     }
 
     #[test]
