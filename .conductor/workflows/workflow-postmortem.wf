@@ -9,7 +9,10 @@ workflow workflow-postmortem {
     workflow_run_id required
   }
 
-  call fetch-run-data
+  script fetch-run-data {
+    run = ".conductor/scripts/fetch-run-data.sh"
+    env = { RUN_ID = "{{workflow_run_id}}" }
+  }
   call analyze-postmortem
   call write-postmortem-report
 }
