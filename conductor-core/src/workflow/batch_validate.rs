@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::agent_config::{self, AgentSpec};
@@ -148,6 +149,22 @@ where
             })
             .collect();
 
+    // Cache sub-workflow loads so each workflow is parsed from disk at most once
+    // across the entire batch (cycle detection + semantic validation both call
+    // the loader for the same sub-workflow names).
+    let loader_cache: RefCell<HashMap<String, std::result::Result<WorkflowDef, String>>> =
+        RefCell::new(HashMap::new());
+    let cached_loader = |name: &str| -> std::result::Result<WorkflowDef, String> {
+        if let Some(cached) = loader_cache.borrow().get(name) {
+            return cached.clone();
+        }
+        let result = loader(name);
+        loader_cache
+            .borrow_mut()
+            .insert(name.to_string(), result.clone());
+        result
+    };
+
     let mut entries = Vec::new();
     for (workflow, wf_refs) in workflows.iter().zip(per_wf_refs.iter()) {
         let wf_name = &workflow.name;
@@ -195,12 +212,12 @@ where
             .collect();
 
         // --- Cycle detection ---
-        if let Err(cycle_msg) = detect_workflow_cycles(wf_name, loader) {
+        if let Err(cycle_msg) = detect_workflow_cycles(wf_name, &cached_loader) {
             wf_errors.push(make_error(format!("cycle detected: {cycle_msg}"), None));
         }
 
         // --- Semantic validation ---
-        let report = validate_workflow_semantics(workflow, loader);
+        let report = validate_workflow_semantics(workflow, &cached_loader);
         for err in report.errors {
             wf_errors.push(err);
         }
@@ -370,6 +387,25 @@ mod tests {
             ),
             "expected unknown bot warning, got: {warnings:?}"
         );
+    }
+
+    #[test]
+    fn batch_parse_errors_affect_total_and_failed_count() {
+        let result = BatchValidationResult {
+            entries: vec![WorkflowValidationEntry {
+                name: "good".to_string(),
+                errors: vec![],
+                warnings: vec![],
+            }],
+            parse_errors: vec![
+                "broken.wf: unexpected token".to_string(),
+                "garbage.wf: parse error".to_string(),
+            ],
+        };
+        // total = 1 entry + 2 parse errors = 3
+        assert_eq!(result.total(), 3);
+        // failed = 0 entry failures + 2 parse errors = 2
+        assert_eq!(result.failed_count(), 2);
     }
 
     #[test]
