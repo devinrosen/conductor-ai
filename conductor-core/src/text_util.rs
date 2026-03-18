@@ -58,12 +58,25 @@ pub fn resolve_conductor_subdir_for_file(
     if !worktree_path.is_empty() {
         let dir = PathBuf::from(worktree_path).join(".conductor").join(subdir);
         if dir.join(filename).is_file() {
-            return Some(dir);
+            // Defense-in-depth: canonicalize and verify the file stays within the directory.
+            if let (Ok(canon_dir), Ok(canon_file)) =
+                (dir.canonicalize(), dir.join(filename).canonicalize())
+            {
+                if canon_file.starts_with(&canon_dir) {
+                    return Some(dir);
+                }
+            }
         }
     }
     let dir = PathBuf::from(repo_path).join(".conductor").join(subdir);
     if dir.join(filename).is_file() {
-        return Some(dir);
+        if let (Ok(canon_dir), Ok(canon_file)) =
+            (dir.canonicalize(), dir.join(filename).canonicalize())
+        {
+            if canon_file.starts_with(&canon_dir) {
+                return Some(dir);
+            }
+        }
     }
     None
 }
@@ -233,6 +246,47 @@ mod tests {
             "deploy.wf",
         );
         assert_eq!(result, Some(repo_dir));
+    }
+
+    #[test]
+    fn test_resolve_for_file_rejects_path_traversal() {
+        let repo = TempDir::new().unwrap();
+        let wf_dir = repo.path().join(".conductor").join("workflows");
+        fs::create_dir_all(&wf_dir).unwrap();
+        // Create a file outside the workflows directory that traversal would reach.
+        fs::write(repo.path().join(".conductor").join("secret.txt"), "secret").unwrap();
+
+        let result = resolve_conductor_subdir_for_file(
+            "",
+            repo.path().to_str().unwrap(),
+            "workflows",
+            "../secret.txt",
+        );
+        assert_eq!(result, None, "path traversal via ../ must be rejected");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_resolve_for_file_rejects_symlink_escape() {
+        let repo = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let wf_dir = repo.path().join(".conductor").join("workflows");
+        fs::create_dir_all(&wf_dir).unwrap();
+        // Create a target file outside the repo.
+        fs::write(outside.path().join("evil.wf"), "pwned").unwrap();
+        // Symlink from inside workflows/ to outside.
+        std::os::unix::fs::symlink(outside.path().join("evil.wf"), wf_dir.join("evil.wf")).unwrap();
+
+        let result = resolve_conductor_subdir_for_file(
+            "",
+            repo.path().to_str().unwrap(),
+            "workflows",
+            "evil.wf",
+        );
+        assert_eq!(
+            result, None,
+            "symlink escaping the directory must be rejected"
+        );
     }
 
     #[test]

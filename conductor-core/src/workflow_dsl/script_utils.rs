@@ -37,9 +37,38 @@ pub fn resolve_script_path(
     repo_path: &str,
     skills_dir: Option<&std::path::Path>,
 ) -> Option<std::path::PathBuf> {
-    script_search_paths(run, working_dir, repo_path, skills_dir)
-        .into_iter()
-        .find(|p| p.exists())
+    let candidates = script_search_paths(run, working_dir, repo_path, skills_dir);
+    let p = std::path::Path::new(run);
+
+    if p.is_absolute() {
+        return candidates.into_iter().find(|c| c.exists());
+    }
+
+    // For relative paths, pair each candidate with its search root so we can
+    // verify the resolved path stays within the root (defense-in-depth).
+    let roots: &[&std::path::Path] = &{
+        let mut r: Vec<&std::path::Path> = vec![
+            std::path::Path::new(working_dir),
+            std::path::Path::new(repo_path),
+        ];
+        if let Some(skills) = skills_dir {
+            r.push(skills);
+        }
+        r
+    };
+
+    for (root, candidate) in roots.iter().zip(candidates.iter()) {
+        if candidate.exists() {
+            if let (Ok(canon_root), Ok(canon_candidate)) =
+                (root.canonicalize(), candidate.canonicalize())
+            {
+                if canon_candidate.starts_with(&canon_root) {
+                    return Some(candidate.clone());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Returns the default skills directory (`$HOME/.claude/skills`), or `None`
@@ -230,6 +259,26 @@ mod tests {
         assert_eq!(paths[0], std::path::PathBuf::from("/working/script.sh"));
         assert_eq!(paths[1], std::path::PathBuf::from("/repository/script.sh"));
         assert_eq!(paths[2], std::path::PathBuf::from("/skills/script.sh"));
+    }
+
+    #[test]
+    fn test_resolve_script_path_rejects_traversal() {
+        // Create a directory structure where ../../etc/passwd style traversal
+        // would escape the working_dir boundary.
+        let root = tempfile::tempdir().unwrap();
+        let working = root.path().join("project").join("subdir");
+        std::fs::create_dir_all(&working).unwrap();
+        // Place a file two levels above working_dir (i.e. at root).
+        let target = root.path().join("secret.txt");
+        std::fs::write(&target, "secret").unwrap();
+
+        let result = resolve_script_path(
+            "../../secret.txt",
+            working.to_str().unwrap(),
+            "/nonexistent",
+            None,
+        );
+        assert_eq!(result, None, "path traversal via ../../ must be rejected");
     }
 
     #[test]

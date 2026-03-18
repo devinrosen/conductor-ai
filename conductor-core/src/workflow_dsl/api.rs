@@ -171,3 +171,29 @@ where
     stack.pop();
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_workflow_name_rejects_path_separators() {
+        assert!(validate_workflow_name("../evil").is_err());
+        assert!(validate_workflow_name("foo/bar").is_err());
+        assert!(validate_workflow_name("..").is_err());
+        assert!(validate_workflow_name(".").is_err());
+    }
+
+    #[test]
+    fn test_validate_workflow_name_rejects_empty() {
+        assert!(validate_workflow_name("").is_err());
+    }
+
+    #[test]
+    fn test_validate_workflow_name_accepts_valid() {
+        assert!(validate_workflow_name("deploy").is_ok());
+        assert!(validate_workflow_name("my-workflow").is_ok());
+        assert!(validate_workflow_name("build_release").is_ok());
+        assert!(validate_workflow_name("ci-2024").is_ok());
+    }
+}
