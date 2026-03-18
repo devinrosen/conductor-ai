@@ -8,6 +8,7 @@ use std::process::Command;
 use crate::config::Config;
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
+use crate::git::{check_output, git_in};
 use crate::repo::RepoManager;
 
 /// Typed representation of the three worktree lifecycle states stored in the DB.
@@ -871,9 +872,6 @@ fn remove_git_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
         Ok(_) => {}
     }
 }
-
-// Re-export git helpers so existing `use crate::worktree::{check_output, git_in}` keeps working.
-pub(crate) use crate::git::{check_output, git_in};
 
 /// Clone a remote repository into `local_path`.
 /// Uses `git clone -- <remote_url> <local_path>` so that a `remote_url`

@@ -20,6 +20,9 @@ pub enum ConductorError {
     #[error("git error: {0}")]
     Git(String),
 
+    #[error("gh cli error: {0}")]
+    GhCli(String),
+
     #[error("config error: {0}")]
     Config(String),
 

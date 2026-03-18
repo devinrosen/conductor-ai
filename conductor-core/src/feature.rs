@@ -265,7 +265,15 @@ impl<'a> FeatureManager<'a> {
             args.push("--draft");
         }
 
-        let output = check_output(Command::new("gh").args(&args).current_dir(&repo.local_path))?;
+        let output = Command::new("gh")
+            .args(&args)
+            .current_dir(&repo.local_path)
+            .output()?;
+        if !output.status.success() {
+            return Err(ConductorError::GhCli(
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
         let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(url)
     }
