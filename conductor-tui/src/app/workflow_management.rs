@@ -460,7 +460,24 @@ impl App {
 
         self.state.modal = Modal::None;
 
-        self.show_workflow_inputs_or_run(target, def, std::collections::HashMap::new());
+        let mut prefill = std::collections::HashMap::new();
+        if let crate::state::WorkflowPickerTarget::Worktree {
+            ref worktree_id, ..
+        } = target
+        {
+            if let Some(wt) = self
+                .state
+                .data
+                .worktrees
+                .iter()
+                .find(|w| &w.id == worktree_id)
+            {
+                if let Some(tid) = &wt.ticket_id {
+                    prefill.insert("ticket_id".to_string(), tid.clone());
+                }
+            }
+        }
+        self.show_workflow_inputs_or_run(target, def, prefill);
     }
 
     pub(super) fn handle_run_workflow(&mut self) {
@@ -515,7 +532,11 @@ impl App {
             self.state.status_message = Some("Repo not found for worktree".to_string());
             return;
         };
-        self.show_workflow_inputs_or_run(target, def, std::collections::HashMap::new());
+        let mut prefill = std::collections::HashMap::new();
+        if let Some(tid) = &wt.ticket_id {
+            prefill.insert("ticket_id".to_string(), tid.clone());
+        }
+        self.show_workflow_inputs_or_run(target, def, prefill);
     }
 
     /// Show the input form if the workflow declares inputs, otherwise dispatch immediately.
