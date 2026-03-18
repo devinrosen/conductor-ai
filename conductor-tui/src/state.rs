@@ -1165,7 +1165,29 @@ fn push_children(
     let Some(children) = children_map.get(parent_id) else {
         return;
     };
+    // Build the set of child run IDs that belong to the latest loop iteration.
+    // Steps at the max iteration (per step name) for the parent run identify which
+    // child runs are current. An empty set means no filtering (safe fallback when
+    // the parent's step data hasn't been loaded yet, or steps have no child_run_id).
+    let latest_child_ids: std::collections::HashSet<&str> =
+        if let Some(steps) = workflow_run_steps.get(parent_id) {
+            let max_iter_by_name = max_iter_by_step_name(steps);
+            steps
+                .iter()
+                .filter(|s| {
+                    s.child_run_id.is_some()
+                        && s.iteration == *max_iter_by_name.get(&s.step_name).unwrap_or(&0)
+                })
+                .filter_map(|s| s.child_run_id.as_deref())
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
     for child in children {
+        // Skip children that belong to an earlier loop iteration.
+        if !latest_child_ids.is_empty() && !latest_child_ids.contains(child.id.as_str()) {
+            continue;
+        }
         let child_count = children_map.get(child.id.as_str()).map_or(0, |v| v.len());
         let collapsed = collapsed_ids.contains(&child.id);
         let max_iteration = max_iteration_for_run(child.id.as_str(), workflow_run_steps);
@@ -3184,5 +3206,152 @@ pub(crate) mod tests {
             }
             other => panic!("expected Child row, got {other:?}"),
         }
+    }
+
+    // --- loop iteration child-filtering tests ---
+
+    fn make_iter_step_with_child(
+        run_id: &str,
+        step_name: &str,
+        iteration: i64,
+        position: i64,
+        child_run_id: &str,
+    ) -> conductor_core::workflow::WorkflowRunStep {
+        let mut s = make_iter_step(run_id, step_name, iteration, position);
+        s.child_run_id = Some(child_run_id.to_string());
+        s
+    }
+
+    /// Two iterations of `iterate-pr`: iter 0 spawned c1/c2/c3, iter 1 spawned d1/d2/d3.
+    /// With parent step data loaded, only iter-1 children (d1/d2/d3) should appear.
+    #[test]
+    fn visible_workflow_run_rows_loop_shows_only_latest_iteration_children() {
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Running, None),
+            // iter 0 children
+            make_wf_run_full("c1", WorkflowRunStatus::Completed, Some("p1")),
+            make_wf_run_full("c2", WorkflowRunStatus::Completed, Some("p1")),
+            make_wf_run_full("c3", WorkflowRunStatus::Completed, Some("p1")),
+            // iter 1 children
+            make_wf_run_full("d1", WorkflowRunStatus::Running, Some("p1")),
+            make_wf_run_full("d2", WorkflowRunStatus::Running, Some("p1")),
+            make_wf_run_full("d3", WorkflowRunStatus::Running, Some("p1")),
+        ];
+        // Parent's steps: each step spawned a child in iter 0 and a different child in iter 1.
+        state.data.workflow_run_steps.insert(
+            "p1".to_string(),
+            vec![
+                make_iter_step_with_child("p1", "review", 0, 0, "c1"),
+                make_iter_step_with_child("p1", "fix", 0, 1, "c2"),
+                make_iter_step_with_child("p1", "test", 0, 2, "c3"),
+                make_iter_step_with_child("p1", "review", 1, 0, "d1"),
+                make_iter_step_with_child("p1", "fix", 1, 1, "d2"),
+                make_iter_step_with_child("p1", "test", 1, 2, "d3"),
+            ],
+        );
+        let rows = state.visible_workflow_run_rows();
+        // Parent row + 3 iter-1 children = 4
+        assert_eq!(
+            rows.len(),
+            4,
+            "expected parent + 3 latest-iteration children"
+        );
+        let child_ids: Vec<_> = rows
+            .iter()
+            .filter_map(|r| {
+                if let WorkflowRunRow::Child { run_id, .. } = r {
+                    Some(run_id.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(child_ids.contains(&"d1"), "d1 should be visible");
+        assert!(child_ids.contains(&"d2"), "d2 should be visible");
+        assert!(child_ids.contains(&"d3"), "d3 should be visible");
+        assert!(!child_ids.contains(&"c1"), "c1 (iter 0) must be hidden");
+        assert!(!child_ids.contains(&"c2"), "c2 (iter 0) must be hidden");
+        assert!(!child_ids.contains(&"c3"), "c3 (iter 0) must be hidden");
+    }
+
+    /// When no step data is available for the parent, all children should be shown
+    /// (safe fallback — data may not have been loaded yet).
+    #[test]
+    fn visible_workflow_run_rows_loop_no_step_data_shows_all_children() {
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Running, None),
+            make_wf_run_full("c1", WorkflowRunStatus::Completed, Some("p1")),
+            make_wf_run_full("c2", WorkflowRunStatus::Running, Some("p1")),
+        ];
+        // No step data for p1 — latest_child_ids will be empty → no filter.
+        let rows = state.visible_workflow_run_rows();
+        assert_eq!(
+            rows.len(),
+            3,
+            "parent + 2 children (no filter without step data)"
+        );
+    }
+
+    /// iter 1 is in-progress (only some steps present for it).
+    /// The per-step max means iter-1 steps link to d1/d2 and iter-0 only has c3.
+    /// Only the latest-iteration children (d1, d2, c3) should appear.
+    #[test]
+    fn visible_workflow_run_rows_loop_partial_iteration_shows_latest() {
+        let mut state = AppState::new();
+        set_worktree_mode(&mut state);
+        state.data.workflow_runs = vec![
+            make_wf_run_full("p1", WorkflowRunStatus::Running, None),
+            make_wf_run_full("c1", WorkflowRunStatus::Completed, Some("p1")),
+            make_wf_run_full("c2", WorkflowRunStatus::Completed, Some("p1")),
+            make_wf_run_full("c3", WorkflowRunStatus::Completed, Some("p1")),
+            make_wf_run_full("d1", WorkflowRunStatus::Running, Some("p1")),
+            make_wf_run_full("d2", WorkflowRunStatus::Running, Some("p1")),
+        ];
+        // review and fix have iter 1; test only has iter 0 (loop still in progress).
+        state.data.workflow_run_steps.insert(
+            "p1".to_string(),
+            vec![
+                make_iter_step_with_child("p1", "review", 0, 0, "c1"),
+                make_iter_step_with_child("p1", "fix", 0, 1, "c2"),
+                make_iter_step_with_child("p1", "test", 0, 2, "c3"),
+                make_iter_step_with_child("p1", "review", 1, 0, "d1"),
+                make_iter_step_with_child("p1", "fix", 1, 1, "d2"),
+                // "test" not yet run in iter 1
+            ],
+        );
+        let rows = state.visible_workflow_run_rows();
+        // Parent + d1 (review iter 1) + d2 (fix iter 1) + c3 (test iter 0, still latest for test)
+        assert_eq!(rows.len(), 4, "expected parent + 3 children (partial iter)");
+        let child_ids: Vec<_> = rows
+            .iter()
+            .filter_map(|r| {
+                if let WorkflowRunRow::Child { run_id, .. } = r {
+                    Some(run_id.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            child_ids.contains(&"d1"),
+            "d1 (review iter 1) should be visible"
+        );
+        assert!(
+            child_ids.contains(&"d2"),
+            "d2 (fix iter 1) should be visible"
+        );
+        assert!(
+            child_ids.contains(&"c3"),
+            "c3 (test iter 0, still latest) should be visible"
+        );
+        assert!(
+            !child_ids.contains(&"c1"),
+            "c1 (review iter 0) must be hidden"
+        );
+        assert!(!child_ids.contains(&"c2"), "c2 (fix iter 0) must be hidden");
     }
 }

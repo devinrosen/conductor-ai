@@ -1766,11 +1766,25 @@ fn time_ago(ts: &str) -> String {
     }
 }
 
+fn ordinal_suffix(n: i64) -> &'static str {
+    let m100 = n % 100;
+    if m100 == 11 || m100 == 12 || m100 == 13 {
+        return "th";
+    }
+    match n % 10 {
+        1 => "st",
+        2 => "nd",
+        3 => "rd",
+        _ => "th",
+    }
+}
+
 /// Push an iteration counter badge span onto `spans` when `max_iteration > 0`.
 fn push_iteration_badge(spans: &mut Vec<Span<'static>>, max_iteration: i64, accent_color: Color) {
     if max_iteration > 0 {
+        let n = max_iteration + 1;
         spans.push(Span::styled(
-            format!("  (iter {})", max_iteration + 1),
+            format!("  {}{} iteration", n, ordinal_suffix(n)),
             Style::default().fg(accent_color),
         ));
     }
