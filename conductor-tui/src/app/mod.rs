@@ -769,7 +769,6 @@ impl App {
                     payload.active_non_worktree_workflow_runs;
                 self.state.data.live_turns_by_worktree = payload.live_turns_by_worktree;
                 self.state.data.features_by_repo = payload.features_by_repo;
-                self.state.invalidate_dashboard_rows();
                 self.refresh_pending_feedback();
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();
@@ -929,7 +928,6 @@ impl App {
 
         self.state.data.latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
 
-        self.state.invalidate_dashboard_rows();
         self.refresh_pending_feedback();
 
         self.state.data.rebuild_maps();

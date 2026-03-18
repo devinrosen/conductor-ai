@@ -76,7 +76,7 @@ pub enum DashboardRow {
         merged: usize,
     },
     /// Index into `AppState::data.worktrees`.
-    Worktree { idx: usize, is_feature_child: bool },
+    Worktree(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -768,9 +768,7 @@ pub enum InputAction {
 
 #[derive(Debug, Clone, Default)]
 pub struct DataCache {
-    /// Changing this field requires calling `AppState::invalidate_dashboard_rows()`.
     pub repos: Vec<Repo>,
-    /// Changing this field requires calling `AppState::invalidate_dashboard_rows()`.
     pub worktrees: Vec<Worktree>,
     pub tickets: Vec<Ticket>,
     /// ticket_id -> labels with colors (populated by DB poller)
@@ -830,7 +828,6 @@ pub struct DataCache {
     pub live_turns_by_worktree: HashMap<String, i64>,
     /// Active features per repo (repo_id → active FeatureRows).
     /// Populated by the background poller each tick.
-    /// Changing this field requires calling `AppState::invalidate_dashboard_rows()`.
     pub features_by_repo: HashMap<String, Vec<FeatureRow>>,
 }
 
@@ -1030,7 +1027,6 @@ pub struct AppState {
     /// Set of parent workflow run IDs that are currently collapsed in the runs pane.
     pub collapsed_workflow_run_ids: HashSet<String>,
     /// Set of feature IDs that are currently collapsed in the dashboard view.
-    /// Changing this field requires calling `invalidate_dashboard_rows()`.
     pub collapsed_features: HashSet<String>,
     /// Set of repo slugs whose group header is collapsed in global mode.
     pub collapsed_repo_headers: HashSet<String>,
@@ -1040,10 +1036,6 @@ pub struct AppState {
     collapse_initialized: HashSet<String>,
     /// Set of leaf run IDs whose steps are currently expanded inline.
     pub expanded_step_run_ids: HashSet<String>,
-
-    /// Cached result of `dashboard_rows()`. Invalidated when repos, worktrees,
-    /// features_by_repo, or collapsed_features change.
-    cached_dashboard_rows: RefCell<Option<Vec<DashboardRow>>>,
 
     pub should_quit: bool,
 
@@ -1425,7 +1417,6 @@ impl AppState {
             selected_workflow_run_id: None,
             collapsed_workflow_run_ids: HashSet::new(),
             collapsed_features: HashSet::new(),
-            cached_dashboard_rows: RefCell::new(None),
             collapsed_repo_headers: HashSet::new(),
             collapsed_target_headers: HashSet::new(),
             collapse_initialized: HashSet::new(),
@@ -1942,34 +1933,6 @@ impl AppState {
     /// Builds a per-repo worktree index up-front so the inner loop is O(W) total
     /// rather than O(F×W).
     pub fn dashboard_rows(&self) -> Vec<DashboardRow> {
-        {
-            let cache = self.cached_dashboard_rows.borrow();
-            if let Some(ref rows) = *cache {
-                return rows.clone();
-            }
-        }
-        let rows = self.build_dashboard_rows();
-        *self.cached_dashboard_rows.borrow_mut() = Some(rows.clone());
-        rows
-    }
-
-    /// Invalidate the cached dashboard rows.
-    ///
-    /// # Cache invalidation contract
-    ///
-    /// The following fields feed into `build_dashboard_rows()`. Any mutation
-    /// to them **must** be followed by a call to `invalidate_dashboard_rows()`
-    /// or stale rows will be silently served:
-    ///
-    /// - `data.repos`
-    /// - `data.worktrees`
-    /// - `data.features_by_repo`
-    /// - `collapsed_features`
-    pub fn invalidate_dashboard_rows(&self) {
-        *self.cached_dashboard_rows.borrow_mut() = None;
-    }
-
-    fn build_dashboard_rows(&self) -> Vec<DashboardRow> {
         // Build an index: repo_id → [(global_wt_idx, &Worktree)]
         let mut wts_by_repo: HashMap<&str, Vec<(usize, &conductor_core::worktree::Worktree)>> =
             HashMap::new();
@@ -2023,10 +1986,7 @@ impl AppState {
 
                 if !self.collapsed_features.contains(&feature.id) {
                     for wt_idx in children {
-                        rows.push(DashboardRow::Worktree {
-                            idx: wt_idx,
-                            is_feature_child: true,
-                        });
+                        rows.push(DashboardRow::Worktree(wt_idx));
                     }
                 }
             }
@@ -2034,10 +1994,7 @@ impl AppState {
             // Ungrouped worktrees (not under any feature)
             for &(wt_idx, _) in repo_wts {
                 if !grouped_wt_indices.contains(&wt_idx) {
-                    rows.push(DashboardRow::Worktree {
-                        idx: wt_idx,
-                        is_feature_child: false,
-                    });
+                    rows.push(DashboardRow::Worktree(wt_idx));
                 }
             }
         }
@@ -2063,7 +2020,7 @@ impl AppState {
         match self.current_dashboard_row()? {
             DashboardRow::Repo(idx) => self.data.repos.get(idx),
             DashboardRow::Feature { repo_idx, .. } => self.data.repos.get(repo_idx),
-            DashboardRow::Worktree { idx, .. } => {
+            DashboardRow::Worktree(idx) => {
                 let wt = self.data.worktrees.get(idx)?;
                 self.data.repos.iter().find(|r| r.id == wt.repo_id)
             }
@@ -3802,14 +3759,8 @@ pub(crate) mod tests {
             rows,
             vec![
                 DashboardRow::Repo(0),
-                DashboardRow::Worktree {
-                    idx: 0,
-                    is_feature_child: false
-                },
-                DashboardRow::Worktree {
-                    idx: 1,
-                    is_feature_child: false
-                },
+                DashboardRow::Worktree(0),
+                DashboardRow::Worktree(1),
             ]
         );
     }
@@ -3847,14 +3798,8 @@ pub(crate) mod tests {
                     total: 1,
                     merged: 0,
                 },
-                DashboardRow::Worktree {
-                    idx: 0,
-                    is_feature_child: true
-                }, // grouped under feature
-                DashboardRow::Worktree {
-                    idx: 1,
-                    is_feature_child: false
-                }, // ungrouped
+                DashboardRow::Worktree(0), // grouped under feature
+                DashboardRow::Worktree(1), // ungrouped
             ]
         );
     }
@@ -3894,10 +3839,7 @@ pub(crate) mod tests {
                     merged: 0,
                 },
                 // wt1 is hidden (collapsed)
-                DashboardRow::Worktree {
-                    idx: 1,
-                    is_feature_child: false
-                }, // ungrouped still shows
+                DashboardRow::Worktree(1), // ungrouped still shows
             ]
         );
     }
@@ -3922,10 +3864,7 @@ pub(crate) mod tests {
         state.dashboard_index = 1;
         assert_eq!(
             state.current_dashboard_row(),
-            Some(DashboardRow::Worktree {
-                idx: 0,
-                is_feature_child: false
-            })
+            Some(DashboardRow::Worktree(0))
         );
     }
 
@@ -3964,10 +3903,7 @@ pub(crate) mod tests {
         state.dashboard_index = 2;
         assert_eq!(
             state.current_dashboard_row(),
-            Some(DashboardRow::Worktree {
-                idx: 1,
-                is_feature_child: false
-            })
+            Some(DashboardRow::Worktree(1))
         );
     }
 
@@ -4003,7 +3939,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn dashboard_rows_cache_invalidation_round_trip() {
+    fn dashboard_rows_always_reflects_current_data() {
         let mut state = AppState::new();
         state.data.repos = vec![make_repo("r1", "repo-a")];
         state.data.worktrees = vec![make_worktree(
@@ -4013,7 +3949,6 @@ pub(crate) mod tests {
             conductor_core::worktree::WorktreeStatus::Active,
         )];
 
-        // First call populates the cache
         let rows1 = state.dashboard_rows();
         assert_eq!(rows1.len(), 2); // Repo + Worktree
 
@@ -4025,22 +3960,9 @@ pub(crate) mod tests {
             conductor_core::worktree::WorktreeStatus::Active,
         ));
 
-        // Without invalidation, cache returns stale data
-        let stale = state.dashboard_rows();
-        assert_eq!(
-            stale.len(),
-            2,
-            "cache should still return stale 2-row result"
-        );
-
-        // After invalidation, fresh data is returned
-        state.invalidate_dashboard_rows();
+        // dashboard_rows() always recomputes — no stale cache possible
         let rows2 = state.dashboard_rows();
-        assert_eq!(
-            rows2.len(),
-            3,
-            "after invalidation should see Repo + 2 Worktrees"
-        );
+        assert_eq!(rows2.len(), 3, "should immediately see Repo + 2 Worktrees");
     }
 
     #[test]

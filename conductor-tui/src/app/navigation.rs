@@ -657,7 +657,6 @@ impl App {
                             if !self.state.collapsed_features.remove(&fid) {
                                 self.state.collapsed_features.insert(fid);
                             }
-                            self.state.invalidate_dashboard_rows();
                         } else {
                             tracing::warn!(
                                 repo_idx,
@@ -666,7 +665,7 @@ impl App {
                             );
                         }
                     }
-                    Some(&DashboardRow::Worktree { idx: wt_idx, .. }) => {
+                    Some(&DashboardRow::Worktree(wt_idx)) => {
                         if let Some(wt) = self.state.data.worktrees.get(wt_idx).cloned() {
                             self.state.selected_worktree_id = Some(wt.id.clone());
                             self.state.selected_repo_id = None;

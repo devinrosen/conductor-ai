@@ -267,7 +267,7 @@ impl App {
                     };
                     self.repo_picker_target(&repo)
                 }
-                Some(&DashboardRow::Worktree { idx: wt_idx, .. }) => {
+                Some(&DashboardRow::Worktree(wt_idx)) => {
                     let wt = match self.state.data.worktrees.get(wt_idx) {
                         Some(w) => w.clone(),
                         None => {
