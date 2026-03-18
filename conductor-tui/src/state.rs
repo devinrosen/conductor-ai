@@ -1970,11 +1970,7 @@ impl AppState {
                     if wt.belongs_to_feature(&repo.id, &feature.branch) {
                         grouped_wt_indices.insert(wt_idx);
                         total += 1;
-                        if matches!(
-                            wt.status,
-                            conductor_core::worktree::WorktreeStatus::Merged
-                                | conductor_core::worktree::WorktreeStatus::Abandoned
-                        ) {
+                        if wt.status.is_done() {
                             merged += 1;
                         }
                         children.push(wt_idx);
@@ -2015,6 +2011,13 @@ impl AppState {
     /// Delegates to `dashboard_rows()` to guarantee the two can never diverge.
     pub fn current_dashboard_row(&self) -> Option<DashboardRow> {
         self.dashboard_rows().into_iter().nth(self.dashboard_index)
+    }
+
+    /// Look up a feature by repo index and feature index.
+    /// Resolves the three-level lookup: repo_idx → repo.id → features_by_repo → feature.
+    pub fn feature_at(&self, repo_idx: usize, feature_idx: usize) -> Option<&FeatureRow> {
+        let repo = self.data.repos.get(repo_idx)?;
+        self.data.features_by_repo.get(&repo.id)?.get(feature_idx)
     }
 
     /// Get the currently selected repo, if any.

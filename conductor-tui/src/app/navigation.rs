@@ -652,14 +652,10 @@ impl App {
                         ..
                     }) => {
                         // Enter on a feature header toggles collapse
-                        if let Some(repo) = self.state.data.repos.get(*repo_idx) {
-                            if let Some(features) = self.state.data.features_by_repo.get(&repo.id) {
-                                if let Some(feature) = features.get(*feature_idx) {
-                                    let fid = feature.id.clone();
-                                    if !self.state.collapsed_features.remove(&fid) {
-                                        self.state.collapsed_features.insert(fid);
-                                    }
-                                }
+                        if let Some(feature) = self.state.feature_at(*repo_idx, *feature_idx) {
+                            let fid = feature.id.clone();
+                            if !self.state.collapsed_features.remove(&fid) {
+                                self.state.collapsed_features.insert(fid);
                             }
                         }
                     }

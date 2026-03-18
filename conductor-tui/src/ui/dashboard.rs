@@ -52,12 +52,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                 total,
                 merged,
             } => {
-                let Some(repo) = state.data.repos.get(*repo_idx) else {
-                    return ListItem::new(Line::from(""));
-                };
-                let empty = Vec::new();
-                let features = state.data.features_by_repo.get(&repo.id).unwrap_or(&empty);
-                let Some(feature) = features.get(*feature_idx) else {
+                let Some(feature) = state.feature_at(*repo_idx, *feature_idx) else {
                     return ListItem::new(Line::from(""));
                 };
                 let collapsed = state.collapsed_features.contains(&feature.id);

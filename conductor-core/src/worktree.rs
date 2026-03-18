@@ -21,6 +21,11 @@ pub enum WorktreeStatus {
 }
 
 impl WorktreeStatus {
+    /// Returns `true` for terminal states (`Merged` or `Abandoned`).
+    pub fn is_done(&self) -> bool {
+        matches!(self, Self::Merged | Self::Abandoned)
+    }
+
     /// Return the canonical lowercase string stored in the database.
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -1245,6 +1250,13 @@ mod tests {
 
         // Verify we're now on main and have the extra file
         assert!(local.join("extra.txt").exists());
+    }
+
+    #[test]
+    fn test_worktree_status_is_done() {
+        assert!(!WorktreeStatus::Active.is_done());
+        assert!(WorktreeStatus::Merged.is_done());
+        assert!(WorktreeStatus::Abandoned.is_done());
     }
 
     #[test]
