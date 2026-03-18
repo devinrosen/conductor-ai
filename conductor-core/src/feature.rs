@@ -169,7 +169,7 @@ impl<'a> FeatureManager<'a> {
 
         // Link tickets if provided (already resolved to internal IDs)
         if !ticket_ids.is_empty() {
-            self.link_tickets_internal(&repo.id, &feature.id, &ticket_ids)?;
+            self.link_tickets_internal(&feature.id, &ticket_ids)?;
         }
 
         Ok(feature)
@@ -219,7 +219,7 @@ impl<'a> FeatureManager<'a> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
         let feature = self.get_feature_by_repo_id(&repo.id, feature_name)?;
         let ticket_ids = self.resolve_ticket_ids(&repo.id, ticket_source_ids)?;
-        self.link_tickets_internal(&repo.id, &feature.id, &ticket_ids)
+        self.link_tickets_internal(&feature.id, &ticket_ids)
     }
 
     /// Unlink tickets (by source_id) from a feature.
@@ -353,12 +353,7 @@ impl<'a> FeatureManager<'a> {
         Ok(ids)
     }
 
-    fn link_tickets_internal(
-        &self,
-        _repo_id: &str,
-        feature_id: &str,
-        ticket_ids: &[String],
-    ) -> Result<()> {
+    fn link_tickets_internal(&self, feature_id: &str, ticket_ids: &[String]) -> Result<()> {
         let mut stmt = self.conn.prepare(
             "INSERT OR IGNORE INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
         )?;
@@ -769,6 +764,40 @@ mod tests {
             result,
             Err(ConductorError::FeatureNotFound { .. })
         ));
+    }
+
+    #[test]
+    fn test_create_feature_happy_path() {
+        let (work, _bare) = setup_git_repo();
+        let conn = setup_db();
+        let _repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let feature = mgr.create("test-repo", "my-feature", None, &[]).unwrap();
+
+        assert_eq!(feature.name, "my-feature");
+        assert_eq!(feature.branch, "feat/my-feature");
+        assert_eq!(feature.base_branch, "main");
+        assert!(matches!(feature.status, FeatureStatus::Active));
+        assert!(feature.merged_at.is_none());
+
+        // Verify the branch exists in git
+        let output = std::process::Command::new("git")
+            .args(["branch", "--list", "feat/my-feature"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        let branches = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            branches.contains("feat/my-feature"),
+            "branch should exist in git"
+        );
+
+        // Verify DB record via get_by_name
+        let fetched = mgr.get_by_name("test-repo", "my-feature").unwrap();
+        assert_eq!(fetched.id, feature.id);
     }
 
     #[test]
