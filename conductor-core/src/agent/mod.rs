@@ -30,8 +30,8 @@ pub use types::{
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::log_parsing::scan_log_for_result_at;
+    use super::*;
 
     #[test]
     fn test_claude_json_result_deserialization() {

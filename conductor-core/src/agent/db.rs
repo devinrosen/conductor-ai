@@ -1,7 +1,5 @@
 use super::status::StepStatus;
-use super::types::{
-    AgentCreatedIssue, AgentRun, AgentRunEvent, FeedbackRequest, PlanStep,
-};
+use super::types::{AgentCreatedIssue, AgentRun, AgentRunEvent, FeedbackRequest, PlanStep};
 use crate::error::Result;
 
 /// Shared SELECT column list for the `feedback_requests` table.

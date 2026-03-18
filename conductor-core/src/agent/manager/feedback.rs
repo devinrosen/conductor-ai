@@ -5,8 +5,8 @@ use crate::db::query_collect;
 use crate::error::Result;
 
 use super::super::db::{optional_row, row_to_feedback_request, FEEDBACK_SELECT};
-use super::super::status::{FeedbackStatus, FEEDBACK_MAX_LEN};
 use super::super::status::truncate_utf8;
+use super::super::status::{FeedbackStatus, FEEDBACK_MAX_LEN};
 use super::super::types::FeedbackRequest;
 use super::AgentManager;
 
