@@ -1783,12 +1783,21 @@ fn main() -> Result<()> {
                     )?];
                 };
 
+                let known_bots: std::collections::HashSet<String> =
+                    config.github.apps.keys().cloned().collect();
+                let wt_ref = wt_path.clone();
+                let repo_ref = repo_path.clone();
+                let loader = |name: &str| {
+                    conductor_core::workflow::load_workflow_by_name(&wt_ref, &repo_ref, name)
+                        .map_err(|e| e.to_string())
+                };
                 let result = conductor_core::workflow::validate_workflows_batch(
                     &workflows,
                     &parse_errors,
                     &wt_path,
                     &repo_path,
-                    &config,
+                    &known_bots,
+                    &loader,
                 );
 
                 // Report parse failures first.

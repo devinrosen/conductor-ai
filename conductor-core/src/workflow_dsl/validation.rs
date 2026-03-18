@@ -1,7 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::agent_config::{self, AgentSpec};
-use crate::config::Config;
 use crate::prompt_config;
 use crate::schema_config;
 
@@ -422,23 +421,27 @@ impl BatchValidationResult {
 /// This function encapsulates all the orchestration logic for the `workflow validate`
 /// command: deduplication, global caching, per-workflow refinement, and result
 /// collection.
-pub fn validate_workflows_batch(
+///
+/// The `loader` callback loads a workflow definition by name (used for cycle
+/// detection and semantic sub-workflow validation). The `known_bots` set
+/// contains bot names from `[github.apps]` config — any bot referenced in a
+/// workflow but absent from this set produces a warning.
+pub fn validate_workflows_batch<F>(
     workflows: &[WorkflowDef],
     parse_errors: &[String],
     wt_path: &str,
     repo_path: &str,
-    config: &Config,
-) -> BatchValidationResult {
+    known_bots: &HashSet<String>,
+    loader: &F,
+) -> BatchValidationResult
+where
+    F: Fn(&str) -> std::result::Result<WorkflowDef, String>,
+{
     let script_resolver = make_script_resolver(
         wt_path.to_string(),
         repo_path.to_string(),
         default_skills_dir(),
     );
-
-    let loader = |name: &str| {
-        crate::workflow::WorkflowManager::load_def_by_name(wt_path, repo_path, name)
-            .map_err(|e| e.to_string())
-    };
 
     let format_hint_error = |msg: &str, hint: &Option<String>| -> String {
         match hint {
@@ -468,97 +471,54 @@ pub fn validate_workflows_batch(
     all_schema_names.dedup();
 
     let global_agent_specs: Vec<AgentSpec> = all_agent_refs.iter().map(AgentSpec::from).collect();
-    let globally_found_agents: HashSet<String> = {
-        let missing: HashSet<String> =
-            agent_config::find_missing_agents(wt_path, repo_path, &global_agent_specs, None)
-                .into_iter()
-                .collect();
-        global_agent_specs
+    let globally_missing_agents: HashSet<String> =
+        agent_config::find_missing_agents(wt_path, repo_path, &global_agent_specs, None)
+            .into_iter()
+            .collect();
+    let globally_missing_snippets: HashSet<String> =
+        prompt_config::find_missing_snippets(wt_path, repo_path, &all_snippet_names, None)
+            .into_iter()
+            .collect();
+    let global_schema_issues: Vec<schema_config::SchemaIssue> =
+        schema_config::check_schemas(wt_path, repo_path, &all_schema_names, None);
+    let global_schema_issue_map: HashMap<String, &schema_config::SchemaIssue> =
+        global_schema_issues
             .iter()
-            .map(|s| s.label().to_string())
-            .filter(|l| !missing.contains(l))
-            .collect()
-    };
-    let globally_found_snippets: HashSet<String> = {
-        let missing: HashSet<String> =
-            prompt_config::find_missing_snippets(wt_path, repo_path, &all_snippet_names, None)
-                .into_iter()
-                .collect();
-        all_snippet_names
-            .iter()
-            .filter(|s| !missing.contains(*s))
-            .cloned()
-            .collect()
-    };
-    let globally_ok_schemas: HashSet<String> = {
-        let issues = schema_config::check_schemas(wt_path, repo_path, &all_schema_names, None);
-        let problematic: HashSet<String> = issues
-            .iter()
-            .map(|i| match i {
-                schema_config::SchemaIssue::Missing(n) => n.clone(),
-                schema_config::SchemaIssue::Invalid { name, .. } => name.clone(),
+            .map(|i| {
+                let name = match i {
+                    schema_config::SchemaIssue::Missing(n) => n.clone(),
+                    schema_config::SchemaIssue::Invalid { name, .. } => name.clone(),
+                };
+                (name, i)
             })
             .collect();
-        all_schema_names
-            .iter()
-            .filter(|s| !problematic.contains(*s))
-            .cloned()
-            .collect()
-    };
-
-    let known_bots: HashSet<&str> = config.github.apps.keys().map(|k| k.as_str()).collect();
 
     let mut entries = Vec::new();
     for workflow in workflows {
         let wf_name = &workflow.name;
         let mut wf_errors: Vec<String> = Vec::new();
 
-        // --- Agents ---
+        // --- Agents: emit errors directly from pre-computed missing set ---
         let mut agent_refs = collect_agent_names(&workflow.body);
         agent_refs.extend(collect_agent_names(&workflow.always));
         agent_refs.sort();
         agent_refs.dedup();
-
-        let uncached_refs: Vec<_> = agent_refs
-            .iter()
-            .filter(|r| !globally_found_agents.contains(r.label()))
-            .collect();
-        if !uncached_refs.is_empty() {
-            let specs: Vec<AgentSpec> = uncached_refs.iter().map(|r| AgentSpec::from(*r)).collect();
-            for agent in
-                agent_config::find_missing_agents(wt_path, repo_path, &specs, Some(wf_name))
-            {
-                wf_errors.push(format!("missing agent: {agent}"));
+        for r in &agent_refs {
+            if globally_missing_agents.contains(r.label()) {
+                wf_errors.push(format!("missing agent: {}", r.label()));
             }
         }
 
-        // --- Snippets ---
-        let uncached_snippets: Vec<String> = workflow
-            .collect_all_snippet_refs()
-            .into_iter()
-            .filter(|s| !globally_found_snippets.contains(s))
-            .collect();
-        if !uncached_snippets.is_empty() {
-            for snippet in prompt_config::find_missing_snippets(
-                wt_path,
-                repo_path,
-                &uncached_snippets,
-                Some(wf_name),
-            ) {
+        // --- Snippets: emit errors directly from pre-computed missing set ---
+        for snippet in workflow.collect_all_snippet_refs() {
+            if globally_missing_snippets.contains(&snippet) {
                 wf_errors.push(format!("missing prompt snippet: {snippet}"));
             }
         }
 
-        // --- Schemas ---
-        let uncached_schemas: Vec<String> = workflow
-            .collect_all_schema_refs()
-            .into_iter()
-            .filter(|s| !globally_ok_schemas.contains(s))
-            .collect();
-        if !uncached_schemas.is_empty() {
-            for issue in
-                schema_config::check_schemas(wt_path, repo_path, &uncached_schemas, Some(wf_name))
-            {
+        // --- Schemas: emit errors directly from pre-computed issue map ---
+        for schema in workflow.collect_all_schema_refs() {
+            if let Some(issue) = global_schema_issue_map.get(&schema) {
                 match issue {
                     schema_config::SchemaIssue::Missing(s) => {
                         wf_errors.push(format!("missing schema: {s}"));
@@ -578,12 +538,12 @@ pub fn validate_workflows_batch(
             .collect();
 
         // --- Cycle detection ---
-        if let Err(cycle_msg) = detect_workflow_cycles(wf_name, &loader) {
+        if let Err(cycle_msg) = detect_workflow_cycles(wf_name, loader) {
             wf_errors.push(format!("cycle detected: {cycle_msg}"));
         }
 
         // --- Semantic validation ---
-        let report = validate_workflow_semantics(workflow, &loader);
+        let report = validate_workflow_semantics(workflow, loader);
         for err in &report.errors {
             wf_errors.push(format_hint_error(&err.message, &err.hint));
         }
@@ -641,6 +601,159 @@ mod tests {
         assert!(
             msg.contains("/nonexistent/path/to/script.sh"),
             "error should include the path, got: {msg}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_workflows_batch unit tests
+    // -----------------------------------------------------------------------
+
+    /// Build a minimal WorkflowDef by parsing a .wf string.
+    fn parse_wf(src: &str) -> WorkflowDef {
+        super::super::parse_workflow_str(src, "<test>").expect("test workflow should parse")
+    }
+
+    /// A loader that always fails — useful when we don't care about sub-workflows.
+    fn failing_loader(name: &str) -> std::result::Result<WorkflowDef, String> {
+        Err(format!("workflow '{name}' not found"))
+    }
+
+    #[test]
+    fn batch_missing_snippet() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+
+        // Workflow references a prompt snippet that doesn't exist on disk.
+        let wf = parse_wf(
+            r#"workflow snip-test {
+                meta { trigger = "manual" targets = ["worktree"] }
+                call some-agent { with = ["nonexistent-snippet"] }
+            }"#,
+        );
+
+        let known_bots = HashSet::new();
+        let result = validate_workflows_batch(&[wf], &[], path, path, &known_bots, &failing_loader);
+
+        assert_eq!(result.entries.len(), 1);
+        let errs = &result.entries[0].errors;
+        assert!(
+            errs.iter().any(|e| e.contains("missing prompt snippet")),
+            "expected missing snippet error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn batch_missing_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+
+        let wf = parse_wf(
+            r#"workflow schema-test {
+                meta { trigger = "manual" targets = ["worktree"] }
+                call some-agent { output = "nonexistent-schema" }
+            }"#,
+        );
+
+        let known_bots = HashSet::new();
+        let result = validate_workflows_batch(&[wf], &[], path, path, &known_bots, &failing_loader);
+
+        assert_eq!(result.entries.len(), 1);
+        let errs = &result.entries[0].errors;
+        assert!(
+            errs.iter().any(|e| e.contains("missing schema")),
+            "expected missing schema error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn batch_invalid_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+
+        // Create a schema file with invalid YAML content.
+        let schema_dir = dir.path().join(".conductor").join("schemas");
+        std::fs::create_dir_all(&schema_dir).unwrap();
+        std::fs::write(
+            schema_dir.join("bad-schema.yaml"),
+            "not: valid: schema: {{{",
+        )
+        .unwrap();
+
+        let wf = parse_wf(
+            r#"workflow schema-test {
+                meta { trigger = "manual" targets = ["worktree"] }
+                call some-agent { output = "bad-schema" }
+            }"#,
+        );
+
+        let known_bots = HashSet::new();
+        let result = validate_workflows_batch(&[wf], &[], path, path, &known_bots, &failing_loader);
+
+        assert_eq!(result.entries.len(), 1);
+        let errs = &result.entries[0].errors;
+        assert!(
+            errs.iter().any(|e| e.contains("invalid schema")),
+            "expected invalid schema error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn batch_unknown_bot_name_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+
+        let wf = parse_wf(
+            r#"workflow bot-test {
+                meta { trigger = "manual" targets = ["worktree"] }
+                call some-agent { as = "unknown-bot" }
+            }"#,
+        );
+
+        // known_bots does NOT contain "unknown-bot".
+        let known_bots = HashSet::from(["real-bot".to_string()]);
+        let result = validate_workflows_batch(&[wf], &[], path, path, &known_bots, &failing_loader);
+
+        assert_eq!(result.entries.len(), 1);
+        // Should be a warning, not an error.
+        let warnings = &result.entries[0].warnings;
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("unknown bot name") && w.contains("unknown-bot")),
+            "expected unknown bot warning, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn batch_self_referencing_workflow_cycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+
+        let wf = parse_wf(
+            r#"workflow cyclic {
+                meta { trigger = "manual" targets = ["worktree"] }
+                call workflow cyclic {}
+            }"#,
+        );
+
+        // Loader that returns the same workflow for "cyclic", creating a cycle.
+        let wf_clone = wf.clone();
+        let loader = move |name: &str| -> std::result::Result<WorkflowDef, String> {
+            if name == "cyclic" {
+                Ok(wf_clone.clone())
+            } else {
+                Err(format!("not found: {name}"))
+            }
+        };
+
+        let known_bots = HashSet::new();
+        let result = validate_workflows_batch(&[wf], &[], path, path, &known_bots, &loader);
+
+        assert_eq!(result.entries.len(), 1);
+        let errs = &result.entries[0].errors;
+        assert!(
+            errs.iter().any(|e| e.contains("cycle")),
+            "expected cycle detection error, got: {errs:?}"
         );
     }
 }
