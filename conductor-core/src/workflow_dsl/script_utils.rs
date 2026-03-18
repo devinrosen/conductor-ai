@@ -3,32 +3,47 @@
 //! This module is the single source of truth for the script lookup algorithm
 //! used at both runtime (workflow executor) and validation time.
 
-/// Returns the ordered list of candidate paths for a script name.
+use crate::text_util::path_is_within_dir;
+
+/// Returns the ordered list of `(search_root, candidate_path)` pairs for a
+/// script name.
 ///
-/// For absolute paths: single-element vec with the path as-is.
-/// For relative paths: `[working_dir/run, repo_path/run, skills_dir/run]`.
+/// For absolute paths the root is the same as the candidate (no boundary check
+/// applies).  For relative paths the order is
+/// `working_dir → repo_path → skills_dir`.
 pub(crate) fn script_search_paths(
     run: &str,
     working_dir: &str,
     repo_path: &str,
     skills_dir: Option<&std::path::Path>,
-) -> Vec<std::path::PathBuf> {
+) -> Vec<(std::path::PathBuf, std::path::PathBuf)> {
     let p = std::path::Path::new(run);
     if p.is_absolute() {
-        return vec![p.to_path_buf()];
+        return vec![(p.to_path_buf(), p.to_path_buf())];
     }
-    let mut paths = vec![
-        std::path::Path::new(working_dir).join(run),
-        std::path::Path::new(repo_path).join(run),
+    let wd = std::path::Path::new(working_dir);
+    let rp = std::path::Path::new(repo_path);
+    let mut pairs = vec![
+        (wd.to_path_buf(), wd.join(run)),
+        (rp.to_path_buf(), rp.join(run)),
     ];
     if let Some(skills) = skills_dir {
-        paths.push(skills.join(run));
+        pairs.push((skills.to_path_buf(), skills.join(run)));
     }
-    paths
+    pairs
 }
 
 /// Resolve a script name to an existing path using the standard search order:
 /// `working_dir` → `repo_path` → `skills_dir`.
+///
+/// For relative paths, every candidate is verified to stay within its search
+/// root after canonicalization (defense-in-depth against path traversal and
+/// symlink escapes).
+///
+/// Absolute paths are permitted as-is because they originate from workflow
+/// authors who already control file-system layout; imposing a boundary check
+/// would break legitimate use-cases (e.g. `/usr/local/bin/jq`) without
+/// meaningful security benefit.
 ///
 /// Returns `None` if no candidate path exists on the filesystem.
 pub fn resolve_script_path(
@@ -37,34 +52,17 @@ pub fn resolve_script_path(
     repo_path: &str,
     skills_dir: Option<&std::path::Path>,
 ) -> Option<std::path::PathBuf> {
-    let candidates = script_search_paths(run, working_dir, repo_path, skills_dir);
-    let p = std::path::Path::new(run);
+    let pairs = script_search_paths(run, working_dir, repo_path, skills_dir);
+    let is_absolute = std::path::Path::new(run).is_absolute();
 
-    if p.is_absolute() {
-        return candidates.into_iter().find(|c| c.exists());
-    }
-
-    // For relative paths, pair each candidate with its search root so we can
-    // verify the resolved path stays within the root (defense-in-depth).
-    let roots: &[&std::path::Path] = &{
-        let mut r: Vec<&std::path::Path> = vec![
-            std::path::Path::new(working_dir),
-            std::path::Path::new(repo_path),
-        ];
-        if let Some(skills) = skills_dir {
-            r.push(skills);
-        }
-        r
-    };
-
-    for (root, candidate) in roots.iter().zip(candidates.iter()) {
+    for (root, candidate) in &pairs {
         if candidate.exists() {
-            if let (Ok(canon_root), Ok(canon_candidate)) =
-                (root.canonicalize(), candidate.canonicalize())
-            {
-                if canon_candidate.starts_with(&canon_root) {
-                    return Some(candidate.clone());
-                }
+            // Absolute paths are trusted — see doc-comment above.
+            if is_absolute {
+                return Some(candidate.clone());
+            }
+            if path_is_within_dir(root, candidate) {
+                return Some(candidate.clone());
             }
         }
     }
@@ -92,11 +90,16 @@ pub fn make_script_resolver(
             if p.is_absolute() {
                 run.to_string()
             } else {
-                let sd = skills_dir
-                    .as_ref()
-                    .map(|s| s.join(run).display().to_string())
-                    .unwrap_or_else(|| format!("~/.claude/skills/{run}"));
-                format!("{working_dir}/{run}, {repo_path}/{run}, {sd}")
+                let pairs =
+                    script_search_paths(run, &working_dir, &repo_path, skills_dir.as_deref());
+                let mut searched: Vec<String> =
+                    pairs.iter().map(|(_, c)| c.display().to_string()).collect();
+                // When no explicit skills_dir is configured, still hint the
+                // default location so users know where to place skill scripts.
+                if skills_dir.is_none() {
+                    searched.push(format!("~/.claude/skills/{run}"));
+                }
+                searched.join(", ")
             }
         })
     }
@@ -222,15 +225,20 @@ mod tests {
 
     #[test]
     fn test_script_search_paths_absolute() {
-        let paths = script_search_paths("/abs/path/script.sh", "/wd", "/repo", None);
-        assert_eq!(paths, vec![std::path::PathBuf::from("/abs/path/script.sh")]);
+        let pairs = script_search_paths("/abs/path/script.sh", "/wd", "/repo", None);
+        let candidates: Vec<_> = pairs.iter().map(|(_, c)| c.clone()).collect();
+        assert_eq!(
+            candidates,
+            vec![std::path::PathBuf::from("/abs/path/script.sh")]
+        );
     }
 
     #[test]
     fn test_script_search_paths_relative_no_skills() {
-        let paths = script_search_paths("run.sh", "/wd", "/repo", None);
+        let pairs = script_search_paths("run.sh", "/wd", "/repo", None);
+        let candidates: Vec<_> = pairs.iter().map(|(_, c)| c.clone()).collect();
         assert_eq!(
-            paths,
+            candidates,
             vec![
                 std::path::PathBuf::from("/wd/run.sh"),
                 std::path::PathBuf::from("/repo/run.sh"),
@@ -241,9 +249,10 @@ mod tests {
     #[test]
     fn test_script_search_paths_relative_with_skills() {
         let skills = std::path::Path::new("/home/user/.claude/skills");
-        let paths = script_search_paths("my-skill.sh", "/wd", "/repo", Some(skills));
+        let pairs = script_search_paths("my-skill.sh", "/wd", "/repo", Some(skills));
+        let candidates: Vec<_> = pairs.iter().map(|(_, c)| c.clone()).collect();
         assert_eq!(
-            paths,
+            candidates,
             vec![
                 std::path::PathBuf::from("/wd/my-skill.sh"),
                 std::path::PathBuf::from("/repo/my-skill.sh"),
@@ -255,10 +264,22 @@ mod tests {
     #[test]
     fn test_script_search_paths_ordering() {
         let skills = std::path::Path::new("/skills");
-        let paths = script_search_paths("script.sh", "/working", "/repository", Some(skills));
-        assert_eq!(paths[0], std::path::PathBuf::from("/working/script.sh"));
-        assert_eq!(paths[1], std::path::PathBuf::from("/repository/script.sh"));
-        assert_eq!(paths[2], std::path::PathBuf::from("/skills/script.sh"));
+        let pairs = script_search_paths("script.sh", "/working", "/repository", Some(skills));
+        assert_eq!(pairs[0].1, std::path::PathBuf::from("/working/script.sh"));
+        assert_eq!(
+            pairs[1].1,
+            std::path::PathBuf::from("/repository/script.sh")
+        );
+        assert_eq!(pairs[2].1, std::path::PathBuf::from("/skills/script.sh"));
+    }
+
+    #[test]
+    fn test_script_search_paths_roots_match_candidates() {
+        let skills = std::path::Path::new("/skills");
+        let pairs = script_search_paths("script.sh", "/working", "/repository", Some(skills));
+        assert_eq!(pairs[0].0, std::path::PathBuf::from("/working"));
+        assert_eq!(pairs[1].0, std::path::PathBuf::from("/repository"));
+        assert_eq!(pairs[2].0, std::path::PathBuf::from("/skills"));
     }
 
     #[test]
@@ -284,9 +305,9 @@ mod tests {
     #[test]
     fn test_script_search_paths_no_filesystem_access() {
         // Paths are returned even when files do not exist — pure construction
-        let paths = script_search_paths("nonexistent.sh", "/no/such/dir", "/also/missing", None);
-        assert_eq!(paths.len(), 2);
-        assert!(paths[0].ends_with("nonexistent.sh"));
-        assert!(paths[1].ends_with("nonexistent.sh"));
+        let pairs = script_search_paths("nonexistent.sh", "/no/such/dir", "/also/missing", None);
+        assert_eq!(pairs.len(), 2);
+        assert!(pairs[0].1.ends_with("nonexistent.sh"));
+        assert!(pairs[1].1.ends_with("nonexistent.sh"));
     }
 }

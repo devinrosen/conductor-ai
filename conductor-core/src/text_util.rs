@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Expand a leading `~` in a path string to the user's home directory.
 ///
@@ -16,6 +16,18 @@ pub fn expand_tilde(path: &str) -> Result<PathBuf, String> {
         Ok(home)
     } else {
         Ok(PathBuf::from(path))
+    }
+}
+
+/// Returns `true` if `file` is contained within `dir` after canonicalizing both paths.
+///
+/// This is a defense-in-depth check that detects path traversal (`../`) and symlink
+/// escapes by resolving to physical paths before comparing.  Returns `false` when
+/// either path cannot be canonicalized (e.g. does not exist on disk).
+pub fn path_is_within_dir(dir: &Path, file: &Path) -> bool {
+    match (dir.canonicalize(), file.canonicalize()) {
+        (Ok(canon_dir), Ok(canon_file)) => canon_file.starts_with(&canon_dir),
+        _ => false,
     }
 }
 
@@ -57,26 +69,13 @@ pub fn resolve_conductor_subdir_for_file(
 ) -> Option<PathBuf> {
     if !worktree_path.is_empty() {
         let dir = PathBuf::from(worktree_path).join(".conductor").join(subdir);
-        if dir.join(filename).is_file() {
-            // Defense-in-depth: canonicalize and verify the file stays within the directory.
-            if let (Ok(canon_dir), Ok(canon_file)) =
-                (dir.canonicalize(), dir.join(filename).canonicalize())
-            {
-                if canon_file.starts_with(&canon_dir) {
-                    return Some(dir);
-                }
-            }
+        if dir.join(filename).is_file() && path_is_within_dir(&dir, &dir.join(filename)) {
+            return Some(dir);
         }
     }
     let dir = PathBuf::from(repo_path).join(".conductor").join(subdir);
-    if dir.join(filename).is_file() {
-        if let (Ok(canon_dir), Ok(canon_file)) =
-            (dir.canonicalize(), dir.join(filename).canonicalize())
-        {
-            if canon_file.starts_with(&canon_dir) {
-                return Some(dir);
-            }
-        }
+    if dir.join(filename).is_file() && path_is_within_dir(&dir, &dir.join(filename)) {
+        return Some(dir);
     }
     None
 }
@@ -246,6 +245,52 @@ mod tests {
             "deploy.wf",
         );
         assert_eq!(result, Some(repo_dir));
+    }
+
+    #[test]
+    fn test_resolve_for_file_rejects_path_traversal_via_worktree() {
+        let wt = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        let wf_dir = wt.path().join(".conductor").join("workflows");
+        fs::create_dir_all(&wf_dir).unwrap();
+        // Create a file outside the workflows directory that traversal would reach.
+        fs::write(wt.path().join(".conductor").join("secret.txt"), "secret").unwrap();
+
+        let result = resolve_conductor_subdir_for_file(
+            wt.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "workflows",
+            "../secret.txt",
+        );
+        assert_eq!(
+            result, None,
+            "path traversal via ../ in worktree branch must be rejected"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_resolve_for_file_rejects_symlink_escape_via_worktree() {
+        let wt = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let wf_dir = wt.path().join(".conductor").join("workflows");
+        fs::create_dir_all(&wf_dir).unwrap();
+        // Create a target file outside the worktree.
+        fs::write(outside.path().join("evil.wf"), "pwned").unwrap();
+        // Symlink from inside worktree workflows/ to outside.
+        std::os::unix::fs::symlink(outside.path().join("evil.wf"), wf_dir.join("evil.wf")).unwrap();
+
+        let result = resolve_conductor_subdir_for_file(
+            wt.path().to_str().unwrap(),
+            repo.path().to_str().unwrap(),
+            "workflows",
+            "evil.wf",
+        );
+        assert_eq!(
+            result, None,
+            "symlink escaping the worktree directory must be rejected"
+        );
     }
 
     #[test]
