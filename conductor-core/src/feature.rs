@@ -1046,6 +1046,51 @@ mod tests {
     }
 
     #[test]
+    fn test_create_feature_cleans_up_branches_on_db_failure() {
+        let (work, _bare) = setup_git_repo();
+        let conn = setup_db();
+        let _repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+
+        // Add a trigger that makes INSERT INTO features fail, simulating a DB
+        // error after git branch + push have already succeeded.
+        conn.execute_batch(
+            "CREATE TRIGGER fail_feature_insert BEFORE INSERT ON features
+             BEGIN SELECT RAISE(ABORT, 'simulated DB failure'); END;",
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr.create("test-repo", "cleanup-test", None, &[]);
+        assert!(result.is_err(), "create should fail due to trigger");
+
+        // Verify the local branch was cleaned up
+        let output = std::process::Command::new("git")
+            .args(["branch", "--list", "feat/cleanup-test"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        let branches = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !branches.contains("feat/cleanup-test"),
+            "local branch should be cleaned up after DB failure"
+        );
+
+        // Verify the remote branch was cleaned up
+        let output = std::process::Command::new("git")
+            .args(["ls-remote", "--heads", "origin", "feat/cleanup-test"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        let remote_refs = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !remote_refs.contains("feat/cleanup-test"),
+            "remote branch should be cleaned up after DB failure"
+        );
+    }
+
+    #[test]
     fn test_branch_name_derivation() {
         // Simple name gets feat/ prefix
         assert_eq!(
