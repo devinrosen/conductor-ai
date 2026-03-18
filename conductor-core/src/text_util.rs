@@ -334,6 +334,93 @@ mod tests {
         );
     }
 
+    // ── path_is_within_dir ────────────────────────────────────────────────
+
+    #[test]
+    fn test_path_is_within_dir_child() {
+        let dir = TempDir::new().unwrap();
+        let child = dir.path().join("child.txt");
+        fs::write(&child, "data").unwrap();
+        assert!(path_is_within_dir(dir.path(), &child));
+    }
+
+    #[test]
+    fn test_path_is_within_dir_nested_child() {
+        let dir = TempDir::new().unwrap();
+        let nested = dir.path().join("a").join("b");
+        fs::create_dir_all(&nested).unwrap();
+        let file = nested.join("file.txt");
+        fs::write(&file, "data").unwrap();
+        assert!(path_is_within_dir(dir.path(), &file));
+    }
+
+    #[test]
+    fn test_path_is_within_dir_same_dir() {
+        let dir = TempDir::new().unwrap();
+        assert!(path_is_within_dir(dir.path(), dir.path()));
+    }
+
+    #[test]
+    fn test_path_is_within_dir_outside() {
+        let dir1 = TempDir::new().unwrap();
+        let dir2 = TempDir::new().unwrap();
+        let file = dir2.path().join("outside.txt");
+        fs::write(&file, "data").unwrap();
+        assert!(!path_is_within_dir(dir1.path(), &file));
+    }
+
+    #[test]
+    fn test_path_is_within_dir_traversal() {
+        let dir = TempDir::new().unwrap();
+        let sub = dir.path().join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        // File is in parent via traversal
+        let file = dir.path().join("secret.txt");
+        fs::write(&file, "secret").unwrap();
+        let traversal = sub.join("../secret.txt");
+        assert!(
+            !path_is_within_dir(&sub, &traversal),
+            "traversal via ../ must be detected"
+        );
+    }
+
+    #[test]
+    fn test_path_is_within_dir_nonexistent_file() {
+        let dir = TempDir::new().unwrap();
+        let missing = dir.path().join("does_not_exist.txt");
+        assert!(
+            !path_is_within_dir(dir.path(), &missing),
+            "nonexistent file cannot be canonicalized, should return false"
+        );
+    }
+
+    #[test]
+    fn test_path_is_within_dir_nonexistent_dir() {
+        let file = TempDir::new().unwrap();
+        let f = file.path().join("f.txt");
+        fs::write(&f, "x").unwrap();
+        let fake_dir = std::path::PathBuf::from("/nonexistent_dir_abc123");
+        assert!(
+            !path_is_within_dir(&fake_dir, &f),
+            "nonexistent dir cannot be canonicalized, should return false"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_path_is_within_dir_symlink_escape() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let outside_file = outside.path().join("evil.txt");
+        fs::write(&outside_file, "pwned").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&outside_file, &link).unwrap();
+        assert!(
+            !path_is_within_dir(dir.path(), &link),
+            "symlink escaping the directory must be detected"
+        );
+    }
+
     #[test]
     fn test_truncate_str_multibyte() {
         assert_eq!(truncate_str("ééé", 3), "é"); // 3 < 4, backs up to 2

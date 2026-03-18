@@ -302,6 +302,26 @@ mod tests {
         assert_eq!(result, None, "path traversal via ../../ must be rejected");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_resolve_script_path_rejects_symlink_escape() {
+        // A symlink inside working_dir that points outside it must be rejected.
+        let root = tempfile::tempdir().unwrap();
+        let working = root.path().join("project");
+        std::fs::create_dir_all(&working).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("evil.sh");
+        std::fs::write(&target, "#!/bin/sh\necho pwned").unwrap();
+        std::os::unix::fs::symlink(&target, working.join("evil.sh")).unwrap();
+
+        let result =
+            resolve_script_path("evil.sh", working.to_str().unwrap(), "/nonexistent", None);
+        assert_eq!(
+            result, None,
+            "symlink escaping the working directory must be rejected"
+        );
+    }
+
     #[test]
     fn test_script_search_paths_no_filesystem_access() {
         // Paths are returned even when files do not exist — pure construction
