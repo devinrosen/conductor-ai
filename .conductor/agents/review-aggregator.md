@@ -37,11 +37,11 @@ Steps:
 3. Produce your CONDUCTOR_OUTPUT with the correct structured fields so the workflow engine can derive outcome markers automatically from the schema:
 
    - Set `overall_approved: false` if **any** reviewer is classified as blocking in Phase 1 (i.e. has `has_review_issues` marker OR has critical/warning findings in `structured_output`). Set `overall_approved: true` only if no reviewer is blocking.
-   - Populate `reviewers` with one entry per reviewer: `name`, `approved` (true/false), `finding_count` (number of blocking findings for this reviewer), and `summary` (one-sentence description of their verdict).
+   - Populate `reviewed_by` with a flat list of human-readable reviewer display names (e.g. "DB Migrations", "Security", "Performance") for each reviewer that ran and returned results.
    - Populate `blocking_findings` with every critical and warning finding collected across all reviewers. Include warnings here — use `severity: "warning"` for warning-level items and `severity: "critical"` for critical items. Leave the array empty if there are no blocking findings.
    - Set `off_diff_findings` to the deduplicated list of off-diff findings collected in Phase 1 (each with `file`, `line`, `severity`, `title`, `message`, `reviewer` fields). Leave the array empty if there are none.
 
-   The script step will build the review body programmatically from `reviewers[]` and `blocking_findings`.
+   The script step will build the review body from `reviewed_by` and `blocking_findings`.
 
    The engine will derive markers from those fields automatically:
    - `overall_approved == true` → emits `approved`

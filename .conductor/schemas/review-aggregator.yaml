@@ -1,11 +1,7 @@
 fields:
-  reviewers:
+  reviewed_by:
     type: array
-    items:
-      name: string
-      approved: boolean
-      finding_count: number
-      summary: string
+    items: string
   blocking_findings:
     type: array
     items:
