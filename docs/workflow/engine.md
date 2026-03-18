@@ -21,7 +21,9 @@ reading the agent prompts.
 
 Workflow files live in `.conductor/workflows/<name>.wf`. The format is a
 minimal custom DSL parsed by a hand-written recursive descent parser
-(`workflow_dsl.rs`, ~400 lines of Rust).
+(the `workflow_dsl` module in `conductor-core/src/workflow_dsl/`, split across
+`lexer.rs`, `parser.rs`, `types.rs`, `validation.rs`, `api.rs`, and
+`script_utils.rs`).
 
 **Why a custom DSL instead of TOML/YAML/JSON?**
 
@@ -39,11 +41,12 @@ workflow ticket-to-pr {
   meta {
     description = "Full development cycle"
     trigger     = "manual"
+    targets     = ["worktree"]
   }
 
   inputs {
     ticket_id  required
-    skip_tests default = "false"
+    skip_tests boolean
   }
 
   call plan { output = "task-plan" }
@@ -106,9 +109,13 @@ workflow ticket-to-pr {
 ```
 workflow_file  := "workflow" IDENT "{" meta? inputs? node* "}"
 meta           := "meta" "{" kv* "}"
+                  # requires: targets = [STRING+]
+                  # optional: description = STRING, trigger = STRING
 inputs         := "inputs" "{" input_decl* "}"
-input_decl     := IDENT ("required" | "default" "=" STRING)
-node           := call | if | unless | while | do_while | do | parallel | gate | always
+input_decl     := IDENT input_modifier*
+input_modifier := "required" | "boolean" | "default" "=" STRING | "description" "=" STRING
+                  # boolean inputs are never required; absence = "false"
+node           := call | if | unless | while | do_while | do | parallel | gate | always | script
 call           := "call" IDENT ("{" kv* "}")?
 if             := "if" condition "{" kv* node* "}"
 unless         := "unless" condition "{" kv* node* "}"
@@ -116,13 +123,18 @@ while          := "while" condition "{" kv* node* "}"
 do_while       := "do" "{" kv* node* "}" "while" condition
 do             := "do" "{" kv* node* "}"
 parallel       := "parallel" "{" kv* call* "}"
-gate           := "gate" gate_type "{" kv* "}"
+gate           := "gate" gate_name "{" kv* "}"
 always         := "always" "{" node* "}"
-condition      := IDENT "." IDENT
-gate_type      := "human_approval" | "human_review" | "pr_approval" | "pr_checks"
+script         := "script" IDENT "{" kv* "}"
+                  # requires: run = STRING (script path)
+                  # optional: env = { KEY = STRING }, timeout = NUMBER, retries = NUMBER, on_fail = IDENT
+condition      := IDENT "." IDENT   # step.marker
+               | IDENT              # bare boolean input name
+gate_name      := "human_approval" | "human_review" | "pr_approval" | "pr_checks"
 kv             := IDENT "=" value
-value          := STRING | NUMBER | IDENT | array
+value          := STRING | NUMBER | IDENT | array | map
 array          := "[" (STRING ("," STRING)*)? "]"
+map            := "{" (IDENT "=" STRING)* "}"
 ```
 
 Identifiers allow `[a-zA-Z0-9_-]`. This is intentional — agent names like
@@ -153,13 +165,18 @@ after variable substitution. See [Prompt snippets](#prompt-snippets) below.
 ### `if` / `unless` / `while`
 
 Conditional and looping control flow based on **markers** emitted by a prior
-step.
+step, or on **boolean inputs**.
 
 ```
 if review.has_review_issues { ... }
 
 unless build.has_errors {
   call deploy
+}
+
+# Boolean input condition: bare identifier (no dot)
+if skip_tests {
+  call skip-test-suite
 }
 
 while review.has_review_issues {
@@ -170,10 +187,12 @@ while review.has_review_issues {
 }
 ```
 
-Conditions reference `<step>.<marker>`. For `if`, the engine checks whether the
+A condition is either `<step>.<marker>` or a bare identifier naming a boolean
+input. For `if` with a `step.marker` condition, the engine checks whether the
 named step's most recent `CONDUCTOR_OUTPUT` includes that marker string in its
-`markers` array. `unless` is the inverse — the body executes when the marker is
-**absent**.
+`markers` array. For a boolean input condition, the body executes when the
+input value is `"true"`. `unless` is the inverse — the body executes when the
+condition is **absent** or **false**.
 
 | `while` option | Required | Description |
 |---|---|---|
@@ -757,12 +776,13 @@ gate-blocked runs.
 
 ```
 conductor workflow list                              # name, trigger, step count
-conductor workflow show <name>                       # ASCII step graph
 conductor workflow validate <name>                   # check agents, inputs, cycles, snippets
 conductor workflow run <name> [--input k=v] [--dry-run]
 conductor workflow cancel <run-id>
-conductor workflow runs [--worktree id]              # run history
-conductor workflow run-show <run-id>                 # per-step detail
+conductor workflow runs <repo> [worktree]            # run history
+conductor workflow run-show <run-id>                 # per-step detail (alias: show)
+conductor workflow resume <run-id> [--from-step <step>] [--restart]
+conductor workflow purge [--repo <repo>] [--status <status>] [--dry-run]
 conductor workflow gate-approve  <run-id>
 conductor workflow gate-reject   <run-id>
 conductor workflow gate-feedback <run-id> "<text>"
@@ -784,23 +804,54 @@ show an inline approval form.
 
 ## AST representation
 
+The AST types live in `conductor-core/src/workflow_dsl/types.rs`. Key variants:
+
 ```rust
-WorkflowNode::Call     { agent: AgentRef, retries: u32, on_fail: Option<AgentRef>,
-                         with: Vec<String> }
-WorkflowNode::CallWf   { workflow: String, inputs: HashMap<String, String>,
-                          retries: u32, on_fail: Option<AgentRef> }
-WorkflowNode::If       { step: String, marker: String, body: Vec<WorkflowNode> }
-WorkflowNode::While    { step: String, marker: String, max_iter: u32,
+enum WorkflowNode {
+    Call(CallNode),          // single agent step
+    CallWorkflow(CallWorkflowNode), // sub-workflow invocation
+    If(IfNode),              // conditional (step.marker or bool input)
+    Unless(UnlessNode),      // inverse conditional
+    While(WhileNode),        // pre-condition loop
+    DoWhile(DoWhileNode),    // post-condition loop
+    Do(DoNode),              // sequential grouping block
+    Parallel(ParallelNode),  // concurrent agent steps
+    Gate(GateNode),          // human or automated gate
+    Always(AlwaysNode),      // cleanup block
+    Script(ScriptNode),      // shell script step (no LLM)
+}
+
+// Conditions for if/unless
+enum Condition {
+    StepMarker { step: String, marker: String }, // step.marker syntax
+    BoolInput  { input: String },                // bare boolean input name
+}
+
+struct CallNode        { agent: AgentRef, retries: u32, on_fail: Option<AgentRef>,
+                         output: Option<String>, with: Vec<String>, bot_name: Option<String> }
+struct CallWorkflowNode{ workflow: String, inputs: HashMap<String, String>,
+                         retries: u32, on_fail: Option<AgentRef>, bot_name: Option<String> }
+struct IfNode          { condition: Condition, body: Vec<WorkflowNode> }
+struct UnlessNode      { condition: Condition, body: Vec<WorkflowNode> }
+struct WhileNode       { step: String, marker: String, max_iterations: u32,
                          stuck_after: Option<u32>, on_max_iter: OnMaxIter,
                          body: Vec<WorkflowNode> }
-WorkflowNode::Parallel { fail_fast: bool, min_success: Option<u32>,
-                         calls: Vec<AgentRef>, with: Vec<String>,
-                         call_with: HashMap<usize, Vec<String>> }
-WorkflowNode::Gate     { gate_type: GateType, prompt: Option<String>,
-                         min_approvals: u32, timeout: Duration,
-                         on_timeout: OnTimeout }
-WorkflowNode::Always   { body: Vec<WorkflowNode> }
+struct DoWhileNode     { step: String, marker: String, max_iterations: u32,
+                         stuck_after: Option<u32>, on_max_iter: OnMaxIter,
+                         body: Vec<WorkflowNode> }
+struct DoNode          { output: Option<String>, with: Vec<String>, body: Vec<WorkflowNode> }
+struct ParallelNode    { fail_fast: bool, min_success: Option<u32>,
+                         calls: Vec<AgentRef>, output: Option<String>,
+                         with: Vec<String>, call_with: HashMap<String, Vec<String>>,
+                         call_outputs: HashMap<String, String>,
+                         call_if: HashMap<String, (String, String)> }
+struct GateNode        { name: String, gate_type: GateType, prompt: Option<String>,
+                         min_approvals: u32, approval_mode: ApprovalMode,
+                         timeout_secs: u64, on_timeout: OnTimeout, bot_name: Option<String> }
+struct ScriptNode      { name: String, run: String, env: HashMap<String, String>,
+                         timeout: Option<u64>, retries: u32, on_fail: Option<AgentRef>,
+                         bot_name: Option<String> }
 ```
 
 `AgentRef` is either a short name (bare identifier) or an explicit path
-(quoted string). See [agent-path-resolution.md](./agent-path-resolution.md).
+(quoted string containing `/`). See [agent-path-resolution.md](./agent-path-resolution.md).
