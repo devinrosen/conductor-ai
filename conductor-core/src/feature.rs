@@ -78,10 +78,11 @@ pub struct FeatureRow {
 // Shared SQL fragments & row mapper for FeatureRow queries
 // ---------------------------------------------------------------------------
 
-/// Column list for FeatureRow queries (without the leading `SELECT`).
-/// When used in `list_all_active`, prefix with `f.repo_id, ` so the repo_id
-/// appears at column 0 and FeatureRow columns start at offset 1.
-const FEATURE_ROW_COLUMNS: &str = "\
+/// SQL fragment: column list through `FROM features f` (no leading `SELECT`,
+/// no `WHERE`/`ORDER`). When used in `list_all_active`, prefix with
+/// `f.repo_id, ` so the repo_id appears at column 0 and FeatureRow columns
+/// start at offset 1.
+const FEATURE_ROW_FRAGMENT: &str = "\
     f.id, f.name, f.branch, f.base_branch, f.status, f.created_at, \
     (SELECT COUNT(*) FROM worktrees w WHERE w.repo_id = f.repo_id AND w.base_branch = f.branch) AS wt_count, \
     (SELECT COUNT(*) FROM feature_tickets ft WHERE ft.feature_id = f.id) AS ticket_count \
@@ -231,7 +232,7 @@ impl<'a> FeatureManager<'a> {
     /// List active features for all repos in a single query, keyed by repo_id.
     pub fn list_all_active(&self) -> Result<std::collections::HashMap<String, Vec<FeatureRow>>> {
         let sql = format!(
-            "SELECT f.repo_id, {FEATURE_ROW_COLUMNS} WHERE f.status = ?1{FEATURE_ROW_ORDER}"
+            "SELECT f.repo_id, {FEATURE_ROW_FRAGMENT} WHERE f.status = ?1{FEATURE_ROW_ORDER}"
         );
 
         let pairs: Vec<(String, FeatureRow)> = query_collect(
@@ -267,13 +268,14 @@ impl<'a> FeatureManager<'a> {
         match status {
             Some(s) => {
                 let sql = format!(
-                    "SELECT {FEATURE_ROW_COLUMNS} WHERE f.repo_id = ?1 AND f.status = ?2{FEATURE_ROW_ORDER}"
+                    "SELECT {FEATURE_ROW_FRAGMENT} WHERE f.repo_id = ?1 AND f.status = ?2{FEATURE_ROW_ORDER}"
                 );
                 query_collect(self.conn, &sql, params![repo.id, s], row_mapper)
             }
             None => {
-                let sql =
-                    format!("SELECT {FEATURE_ROW_COLUMNS} WHERE f.repo_id = ?1{FEATURE_ROW_ORDER}");
+                let sql = format!(
+                    "SELECT {FEATURE_ROW_FRAGMENT} WHERE f.repo_id = ?1{FEATURE_ROW_ORDER}"
+                );
                 query_collect(self.conn, &sql, params![repo.id], row_mapper)
             }
         }
