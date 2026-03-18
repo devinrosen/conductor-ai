@@ -6,7 +6,8 @@ use crate::db::query_collect;
 use crate::error::Result;
 
 use super::super::db::{
-    row_to_agent_run, AGENT_RUN_COLS_A, AGENT_RUN_COLS_A_NULL_PLAN, AGENT_RUN_SELECT,
+    row_to_agent_run, AGENT_RUN_COLS_A, AGENT_RUN_COLS_A_NULL_PLAN, AGENT_RUN_COLS_AR,
+    AGENT_RUN_SELECT,
 };
 use super::super::status::AgentRunStatus;
 use super::super::types::AgentRun;
@@ -238,13 +239,6 @@ impl<'a> AgentManager<'a> {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<AgentRun>> {
-        // Column list with `ar.` alias for JOIN queries.
-        const AR_COLS: &str = "ar.id, ar.worktree_id, ar.claude_session_id, ar.prompt, ar.status, \
-             ar.result_text, ar.cost_usd, ar.num_turns, ar.duration_ms, ar.started_at, \
-             ar.ended_at, ar.tmux_window, ar.log_file, ar.model, ar.plan, ar.parent_run_id, \
-             ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, \
-             ar.cache_creation_input_tokens, ar.bot_name";
-
         let mut runs = match (worktree_id, repo_id, status) {
             // 1. worktree_id + status
             (Some(wt_id), _, Some(s)) => {
@@ -275,7 +269,7 @@ impl<'a> AgentManager<'a> {
                 query_collect(
                     self.conn,
                     &format!(
-                        "SELECT {AR_COLS} FROM agent_runs ar \
+                        "SELECT {AGENT_RUN_COLS_AR} FROM agent_runs ar \
                          JOIN worktrees w ON w.id = ar.worktree_id \
                          WHERE w.repo_id = ?1 AND ar.status = ?2 \
                          ORDER BY ar.started_at DESC LIMIT {limit} OFFSET {offset}"
@@ -288,7 +282,7 @@ impl<'a> AgentManager<'a> {
             (None, Some(r_id), None) => query_collect(
                 self.conn,
                 &format!(
-                    "SELECT {AR_COLS} FROM agent_runs ar \
+                    "SELECT {AGENT_RUN_COLS_AR} FROM agent_runs ar \
                      JOIN worktrees w ON w.id = ar.worktree_id \
                      WHERE w.repo_id = ?1 \
                      ORDER BY ar.started_at DESC LIMIT {limit} OFFSET {offset}"

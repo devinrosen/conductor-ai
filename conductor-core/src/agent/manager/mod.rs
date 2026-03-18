@@ -5,6 +5,7 @@ pub mod lifecycle;
 pub mod orphans;
 pub mod plan_steps;
 pub mod queries;
+pub mod tmux;
 
 use rusqlite::Connection;
 

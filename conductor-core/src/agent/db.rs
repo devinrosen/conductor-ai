@@ -23,6 +23,15 @@ pub(super) const AGENT_RUN_COLS_A: &str =
      a.input_tokens, a.output_tokens, a.cache_read_input_tokens, \
      a.cache_creation_input_tokens, a.bot_name";
 
+/// Column list for `agent_runs` with the `ar.` table alias, including `ar.plan`.
+/// Use this in JOINs where the table is aliased as `ar` (e.g. `list_agent_runs`).
+pub(super) const AGENT_RUN_COLS_AR: &str =
+    "ar.id, ar.worktree_id, ar.claude_session_id, ar.prompt, ar.status, ar.result_text, \
+     ar.cost_usd, ar.num_turns, ar.duration_ms, ar.started_at, ar.ended_at, ar.tmux_window, \
+     ar.log_file, ar.model, ar.plan, ar.parent_run_id, \
+     ar.input_tokens, ar.output_tokens, ar.cache_read_input_tokens, \
+     ar.cache_creation_input_tokens, ar.bot_name";
+
 /// Like [`AGENT_RUN_COLS_A`] but substitutes `NULL` for the `plan` column.
 /// Use this when plan steps are intentionally omitted (populated separately via
 /// `populate_plans` to avoid loading steps for every row in a JOIN).

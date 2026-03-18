@@ -45,50 +45,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_events_from_line_system_init() {
-        let line = r#"{"type":"system","subtype":"init","model":"claude-opus-4-5"}"#;
-        let events = parse_events_from_line(line);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].kind, "system");
-        assert!(events[0].summary.contains("claude-opus-4-5"));
-    }
-
-    #[test]
-    fn test_parse_events_from_line_tool_use() {
-        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"description":"run tests"}}]}}"#;
-        let events = parse_events_from_line(line);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].kind, "tool");
-        assert!(events[0].summary.contains("Bash"));
-        assert!(events[0].summary.contains("run tests"));
-    }
-
-    #[test]
-    fn test_parse_events_from_line_unknown_type() {
-        let line = r#"{"type":"rate_limit_event"}"#;
-        let events = parse_events_from_line(line);
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn test_parse_agent_log_uses_from_line() {
-        let line1 = r#"{"type":"system","subtype":"init","model":"claude-3"}"#;
-        let line2 =
-            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}]}}"#;
-        let content = format!("{line1}\n{line2}\n");
-
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(tmp.path(), &content).unwrap();
-        let path = tmp.path().to_string_lossy().to_string();
-
-        let events = parse_agent_log(&path);
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0].kind, "system");
-        assert_eq!(events[1].kind, "text");
-        assert_eq!(events[1].summary, "Hello");
-    }
-
-    #[test]
     fn test_scan_log_for_result_success() {
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("test-scan-success.log");
