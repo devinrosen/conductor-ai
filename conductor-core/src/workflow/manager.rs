@@ -1286,7 +1286,7 @@ impl<'a> WorkflowManager<'a> {
         repo_path: &str,
         workflow: &crate::workflow_dsl::WorkflowDef,
         known_bots: &HashSet<String>,
-    ) -> Option<super::batch_validate::WorkflowValidationEntry> {
+    ) -> super::batch_validate::WorkflowValidationEntry {
         let wt = wt_path.to_string();
         let rp = repo_path.to_string();
         let loader = |name: &str| -> std::result::Result<crate::workflow_dsl::WorkflowDef, String> {
@@ -1300,7 +1300,13 @@ impl<'a> WorkflowManager<'a> {
             known_bots,
             &loader,
         );
-        result.entries.into_iter().next()
+        // validate_workflows_batch produces exactly one entry per input workflow,
+        // so with a single-item slice this always yields one element.
+        result
+            .entries
+            .into_iter()
+            .next()
+            .expect("batch produced one entry per input workflow")
     }
 
     const SQL_RESET_FAILED: &'static str = "UPDATE workflow_run_steps \

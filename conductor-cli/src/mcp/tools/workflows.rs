@@ -75,15 +75,19 @@ pub(super) fn tool_validate_workflow(
     let known_bots: std::collections::HashSet<String> =
         config.github.apps.keys().cloned().collect();
 
-    let entry = match WorkflowManager::validate_single(wt_path, repo_path, &workflow, &known_bots) {
-        Some(e) => e,
-        None => {
-            return tool_err(format!(
-                "validation produced no result for workflow '{workflow_name}'"
-            ))
-        }
-    };
+    let entry = WorkflowManager::validate_single(wt_path, repo_path, &workflow, &known_bots);
 
+    format_validation_result(workflow_name, &entry)
+}
+
+/// Format a [`WorkflowValidationEntry`] into a [`CallToolResult`].
+///
+/// Extracted so that each branch (pass, warnings-only, errors) is independently
+/// testable without needing a full repo + DB setup.
+fn format_validation_result(
+    workflow_name: &str,
+    entry: &conductor_core::workflow::WorkflowValidationEntry,
+) -> CallToolResult {
     let mut errors: Vec<String> = Vec::new();
     for err in &entry.errors {
         if let Some(hint) = &err.hint {
@@ -745,5 +749,73 @@ workflow w {
         a.insert("workflow".into(), Value::String("deploy".into()));
         let result = tool_validate_workflow(&db, &a);
         assert_eq!(result.is_error, Some(true));
+    }
+
+    // -----------------------------------------------------------------------
+    // format_validation_result tests
+    // -----------------------------------------------------------------------
+
+    fn make_entry(
+        errors: Vec<conductor_core::workflow::ValidationError>,
+        warnings: Vec<conductor_core::workflow::BatchValidationWarning>,
+    ) -> conductor_core::workflow::WorkflowValidationEntry {
+        conductor_core::workflow::WorkflowValidationEntry {
+            name: "test-wf".to_string(),
+            errors,
+            warnings,
+        }
+    }
+
+    #[test]
+    fn test_format_validation_result_pass_no_warnings() {
+        let entry = make_entry(vec![], vec![]);
+        let result = format_validation_result("test-wf", &entry);
+        assert_eq!(result.is_error, Some(false));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("status: PASS"), "got: {text}");
+        assert!(text.contains("is valid"), "got: {text}");
+        assert!(!text.contains("Warnings"), "got: {text}");
+    }
+
+    #[test]
+    fn test_format_validation_result_pass_with_warnings() {
+        let entry = make_entry(
+            vec![],
+            vec![conductor_core::workflow::BatchValidationWarning {
+                message: "unknown bot name 'foo-bot'".to_string(),
+            }],
+        );
+        let result = format_validation_result("test-wf", &entry);
+        assert_eq!(result.is_error, Some(false));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("status: PASS"), "got: {text}");
+        assert!(text.contains("Warnings"), "got: {text}");
+        assert!(text.contains("unknown bot name 'foo-bot'"), "got: {text}");
+    }
+
+    #[test]
+    fn test_format_validation_result_fail_with_errors() {
+        let entry = make_entry(
+            vec![conductor_core::workflow::ValidationError {
+                message: "missing agent 'deployer'".to_string(),
+                hint: Some("add an agent config".to_string()),
+            }],
+            vec![],
+        );
+        let result = format_validation_result("test-wf", &entry);
+        assert_eq!(result.is_error, Some(false)); // tool_ok even for FAIL
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(text.contains("status: FAIL"), "got: {text}");
+        assert!(text.contains("missing agent 'deployer'"), "got: {text}");
+        assert!(text.contains("hint: add an agent config"), "got: {text}");
     }
 }
