@@ -1417,3 +1417,98 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conductor_core::{config::Config, repo::Repo, worktree::Worktree};
+    use crate::theme::Theme;
+
+    fn make_app() -> App {
+        let conn = conductor_core::test_helpers::create_test_conn();
+        App::new(conn, Config::default(), Theme::default())
+    }
+
+    fn make_worktree(id: &str, repo_id: &str, model: Option<&str>) -> Worktree {
+        Worktree {
+            id: id.to_string(),
+            repo_id: repo_id.to_string(),
+            slug: "feat-test".to_string(),
+            branch: "feat/test".to_string(),
+            path: "/tmp/wt".to_string(),
+            ticket_id: None,
+            status: conductor_core::worktree::WorktreeStatus::Active,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            completed_at: None,
+            model: model.map(String::from),
+            base_branch: None,
+        }
+    }
+
+    fn make_repo(id: &str, model: Option<&str>) -> Repo {
+        Repo {
+            id: id.to_string(),
+            slug: "test-repo".to_string(),
+            local_path: "/tmp/repo".to_string(),
+            remote_url: "https://github.com/test/repo.git".to_string(),
+            default_branch: "main".to_string(),
+            workspace_dir: "/tmp/ws".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            model: model.map(String::from),
+            allow_agent_issue_creation: false,
+        }
+    }
+
+    #[test]
+    fn resolve_model_worktree_level_wins_over_repo_and_global() {
+        let mut app = make_app();
+        app.config.general.model = Some("haiku".to_string());
+        app.state.data.repos = vec![make_repo("r1", Some("sonnet"))];
+        app.state.data.worktrees = vec![make_worktree("w1", "r1", Some("opus"))];
+        let (model, source) = app.resolve_model_for_worktree("w1");
+        assert_eq!(model.as_deref(), Some("opus"));
+        assert_eq!(source, "worktree");
+    }
+
+    #[test]
+    fn resolve_model_repo_level_when_no_worktree_model() {
+        let mut app = make_app();
+        app.config.general.model = Some("haiku".to_string());
+        app.state.data.repos = vec![make_repo("r1", Some("sonnet"))];
+        app.state.data.worktrees = vec![make_worktree("w1", "r1", None)];
+        let (model, source) = app.resolve_model_for_worktree("w1");
+        assert_eq!(model.as_deref(), Some("sonnet"));
+        assert_eq!(source, "repo");
+    }
+
+    #[test]
+    fn resolve_model_global_config_fallback_when_no_wt_or_repo_model() {
+        let mut app = make_app();
+        app.config.general.model = Some("haiku".to_string());
+        app.state.data.repos = vec![make_repo("r1", None)];
+        app.state.data.worktrees = vec![make_worktree("w1", "r1", None)];
+        let (model, source) = app.resolve_model_for_worktree("w1");
+        assert_eq!(model.as_deref(), Some("haiku"));
+        assert_eq!(source, "global config");
+    }
+
+    #[test]
+    fn resolve_model_not_set_when_nothing_configured() {
+        let mut app = make_app();
+        app.state.data.repos = vec![make_repo("r1", None)];
+        app.state.data.worktrees = vec![make_worktree("w1", "r1", None)];
+        let (model, source) = app.resolve_model_for_worktree("w1");
+        assert!(model.is_none());
+        assert_eq!(source, "not set");
+    }
+
+    #[test]
+    fn resolve_model_unknown_worktree_id_returns_not_set() {
+        let mut app = make_app();
+        app.state.data.repos = vec![make_repo("r1", Some("opus"))];
+        app.state.data.worktrees = vec![make_worktree("w1", "r1", Some("sonnet"))];
+        let (model, source) = app.resolve_model_for_worktree("nonexistent");
+        assert!(model.is_none());
+        assert_eq!(source, "not set");
+    }
+}

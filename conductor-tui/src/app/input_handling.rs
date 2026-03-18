@@ -698,3 +698,121 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conductor_core::{config::Config, models::KNOWN_MODELS};
+    use crate::state::{InputAction, Modal};
+    use crate::theme::Theme;
+
+    /// Creates an App backed by an in-memory DB that already contains:
+    /// - repo `r1` (slug `test-repo`)
+    /// - worktree `w1` (slug `feat-test`, branch `feat/test`, status `active`)
+    fn make_app() -> App {
+        let conn = conductor_core::test_helpers::setup_db();
+        App::new(conn, Config::default(), Theme::default())
+    }
+
+    /// on_submit action that targets the pre-seeded worktree so DB writes succeed.
+    fn set_wt_model_action() -> InputAction {
+        InputAction::SetWorktreeModel {
+            worktree_id: "w1".to_string(),
+            repo_slug: "test-repo".to_string(),
+            slug: "feat-test".to_string(),
+        }
+    }
+
+    fn model_picker(selected: usize, allow_default: bool) -> Modal {
+        Modal::ModelPicker {
+            context_label: "test".to_string(),
+            effective_default: None,
+            effective_source: "not set".to_string(),
+            selected,
+            custom_input: String::new(),
+            custom_active: false,
+            suggested: None,
+            on_submit: set_wt_model_action(),
+            allow_default,
+        }
+    }
+
+    // allow_default=false, selected=0 → offset=0, picks models[0]
+    #[test]
+    fn model_picker_no_default_selected_0_picks_first_known_model() {
+        let mut app = make_app();
+        app.state.modal = model_picker(0, false);
+        app.handle_input_submit();
+        let expected = format!("Model for feat-test set to: {}", KNOWN_MODELS[0].alias);
+        assert_eq!(app.state.status_message.as_deref(), Some(expected.as_str()));
+    }
+
+    // allow_default=false, selected=1 → offset=0, picks models[1]
+    #[test]
+    fn model_picker_no_default_selected_1_picks_second_known_model() {
+        let mut app = make_app();
+        app.state.modal = model_picker(1, false);
+        app.handle_input_submit();
+        let expected = format!("Model for feat-test set to: {}", KNOWN_MODELS[1].alias);
+        assert_eq!(app.state.status_message.as_deref(), Some(expected.as_str()));
+    }
+
+    // allow_default=true, selected=0 → "Default" row → empty string → model cleared
+    #[test]
+    fn model_picker_with_default_selected_0_clears_model() {
+        let mut app = make_app();
+        app.state.modal = model_picker(0, true);
+        app.handle_input_submit();
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Model for feat-test cleared")
+        );
+    }
+
+    // allow_default=true, selected=1 → offset=1, picks models[0] (first known model)
+    #[test]
+    fn model_picker_with_default_selected_1_picks_first_known_model() {
+        let mut app = make_app();
+        app.state.modal = model_picker(1, true);
+        app.handle_input_submit();
+        let expected = format!("Model for feat-test set to: {}", KNOWN_MODELS[0].alias);
+        assert_eq!(app.state.status_message.as_deref(), Some(expected.as_str()));
+    }
+
+    // selected at the "custom…" row → re-opens picker with custom_active=true
+    #[test]
+    fn model_picker_custom_row_reopens_picker_with_custom_active() {
+        let mut app = make_app();
+        let offset = 1_usize; // allow_default=true
+        let custom_row_index = offset + KNOWN_MODELS.len();
+        app.state.modal = model_picker(custom_row_index, true);
+        app.handle_input_submit();
+        assert!(
+            matches!(app.state.modal, Modal::ModelPicker { custom_active: true, .. }),
+            "expected picker to re-open with custom_active=true, got {:?}",
+            app.state.modal
+        );
+    }
+
+    // custom_active=true → value comes from custom_input, not the selected index
+    #[test]
+    fn model_picker_custom_active_submits_custom_input_value() {
+        let mut app = make_app();
+        app.state.modal = Modal::ModelPicker {
+            context_label: "test".to_string(),
+            effective_default: None,
+            effective_source: "not set".to_string(),
+            selected: 99, // index is irrelevant when custom_active=true
+            custom_input: "my-custom-model".to_string(),
+            custom_active: true,
+            suggested: None,
+            on_submit: set_wt_model_action(),
+            allow_default: false,
+        };
+        app.handle_input_submit();
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Model for feat-test set to: my-custom-model")
+        );
+    }
+}
