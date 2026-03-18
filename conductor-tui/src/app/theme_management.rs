@@ -182,6 +182,7 @@ impl App {
                             custom_input: String::new(),
                             custom_active: false,
                             suggested: None,
+                            allow_default: false,
                             on_submit: InputAction::SetWorktreeModel {
                                 worktree_id: wt.id.clone(),
                                 repo_slug,
@@ -209,6 +210,7 @@ impl App {
                             custom_input: String::new(),
                             custom_active: false,
                             suggested: None,
+                            allow_default: false,
                             on_submit: InputAction::SetRepoModel {
                                 repo_id: repo.id.clone(),
                                 slug: repo.slug.clone(),
@@ -246,6 +248,7 @@ impl App {
                     custom_input: String::new(),
                     custom_active: false,
                     suggested: None,
+                    allow_default: false,
                     on_submit: InputAction::SetWorktreeModel {
                         worktree_id: wt.id.clone(),
                         repo_slug,
@@ -279,6 +282,7 @@ impl App {
                     custom_input: String::new(),
                     custom_active: false,
                     suggested: None,
+                    allow_default: false,
                     on_submit: InputAction::SetRepoModel {
                         repo_id: repo.id.clone(),
                         slug: repo.slug.clone(),

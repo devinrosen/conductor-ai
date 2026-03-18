@@ -269,13 +269,18 @@ impl App {
                 custom_active,
                 suggested,
                 on_submit,
+                allow_default,
             } => {
                 let models = conductor_core::models::KNOWN_MODELS;
+                let offset = usize::from(allow_default);
                 let value = if custom_active {
                     custom_input
-                } else if selected < models.len() {
+                } else if allow_default && selected == 0 {
+                    // "Default" row selected — empty string maps to model: None
+                    String::new()
+                } else if selected < offset + models.len() {
                     // Selected a known model — use its alias
-                    models[selected].alias.to_string()
+                    models[selected - offset].alias.to_string()
                 } else {
                     // "custom…" was highlighted but Enter pressed without typing:
                     // re-open the picker with custom mode active
@@ -288,6 +293,7 @@ impl App {
                         custom_active: true,
                         suggested,
                         on_submit,
+                        allow_default,
                     };
                     return;
                 };
@@ -483,6 +489,7 @@ impl App {
                     custom_input: String::new(),
                     custom_active: false,
                     suggested: Some(suggested.to_string()),
+                    allow_default: true,
                     on_submit: InputAction::AgentModelOverride {
                         prompt: value,
                         worktree_id,
@@ -515,6 +522,15 @@ impl App {
                     resume_session_id,
                     model,
                 );
+            }
+            InputAction::WorkflowModelOverride { action, inputs } => {
+                // Empty value means "Default" — use per-agent frontmatter / no override
+                let model = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(value)
+                };
+                self.do_dispatch_workflow(action.target, action.workflow_def, inputs, model);
             }
             InputAction::OrchestratePrompt {
                 worktree_id,

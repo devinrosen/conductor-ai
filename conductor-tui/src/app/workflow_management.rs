@@ -570,33 +570,109 @@ impl App {
     ) {
         use crate::state::WorkflowPickerTarget;
 
+        // Active-run check must happen before showing the model picker
+        if let WorkflowPickerTarget::Worktree {
+            ref worktree_id, ..
+        } = target
+        {
+            use conductor_core::workflow::WorkflowManager;
+            let wf_mgr = WorkflowManager::new(&self.conn);
+            match wf_mgr.get_active_run_for_worktree(worktree_id) {
+                Ok(Some(active)) => {
+                    self.state.status_message = Some(format!(
+                        "Workflow '{}' is already running — cancel it before starting another",
+                        active.workflow_name
+                    ));
+                    return;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    self.state.status_message =
+                        Some(format!("Failed to check active workflow run: {e}"));
+                    return;
+                }
+            }
+        }
+
+        // Resolve the effective model from the per-worktree → per-repo → global config chain
+        let (effective_default, effective_source) = match &target {
+            WorkflowPickerTarget::Worktree { worktree_id, .. } => {
+                let wt_model = self
+                    .state
+                    .data
+                    .worktrees
+                    .iter()
+                    .find(|w| &w.id == worktree_id)
+                    .and_then(|w| w.model.clone());
+                let repo_model = self
+                    .state
+                    .data
+                    .worktrees
+                    .iter()
+                    .find(|w| &w.id == worktree_id)
+                    .and_then(|w| self.state.data.repos.iter().find(|r| r.id == w.repo_id))
+                    .and_then(|r| r.model.clone());
+                let is_wt = wt_model.is_some();
+                let is_repo = !is_wt && repo_model.is_some();
+                match wt_model
+                    .or(repo_model)
+                    .or_else(|| self.config.general.model.clone())
+                {
+                    Some(m) => {
+                        let source = if is_wt {
+                            "worktree"
+                        } else if is_repo {
+                            "repo"
+                        } else {
+                            "global config"
+                        };
+                        (Some(m), source.to_string())
+                    }
+                    None => (None, "not set".to_string()),
+                }
+            }
+            _ => match self.config.general.model.clone() {
+                Some(m) => (Some(m), "global config".to_string()),
+                None => (None, "not set".to_string()),
+            },
+        };
+
+        self.state.modal = Modal::ModelPicker {
+            context_label: format!("workflow: {}", def.name),
+            effective_default,
+            effective_source,
+            selected: 0, // "Default" row pre-selected
+            custom_input: String::new(),
+            custom_active: false,
+            suggested: None,
+            allow_default: true,
+            on_submit: crate::state::InputAction::WorkflowModelOverride {
+                action: Box::new(crate::state::RunWorkflowAction {
+                    target,
+                    workflow_def: def,
+                }),
+                inputs,
+            },
+        };
+    }
+
+    /// Dispatch a workflow to the appropriate spawn function based on the target type.
+    /// Called from the WorkflowModelOverride input handler after the model picker is submitted.
+    pub(super) fn do_dispatch_workflow(
+        &mut self,
+        target: crate::state::WorkflowPickerTarget,
+        def: conductor_core::workflow::WorkflowDef,
+        inputs: std::collections::HashMap<String, String>,
+        model: Option<String>,
+    ) {
+        use crate::state::WorkflowPickerTarget;
+
         match target {
             WorkflowPickerTarget::Worktree {
                 worktree_id,
                 worktree_path,
                 repo_path,
             } => {
-                // Block if a workflow run is already active on this worktree
-                {
-                    use conductor_core::workflow::WorkflowManager;
-                    let wf_mgr = WorkflowManager::new(&self.conn);
-                    match wf_mgr.get_active_run_for_worktree(&worktree_id) {
-                        Ok(Some(active)) => {
-                            self.state.status_message = Some(format!(
-                                "Workflow '{}' is already running — cancel it before starting another",
-                                active.workflow_name
-                            ));
-                            return;
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            self.state.status_message =
-                                Some(format!("Failed to check active workflow run: {e}"));
-                            return;
-                        }
-                    }
-                }
-
                 let (wt_target_label, wt_ticket_id) = self
                     .state
                     .data
@@ -623,6 +699,7 @@ impl App {
                     ticket_id,
                     inputs,
                     wt_target_label,
+                    model,
                 );
             }
             WorkflowPickerTarget::Pr { pr_number, .. } => {
@@ -657,7 +734,7 @@ impl App {
                     repo,
                     number: pr_number as u64,
                 };
-                self.spawn_pr_workflow_in_background(pr_ref, def, inputs);
+                self.spawn_pr_workflow_in_background(pr_ref, def, inputs, model);
             }
             WorkflowPickerTarget::Ticket {
                 ticket_id,
@@ -673,6 +750,7 @@ impl App {
                     repo_path,
                     ticket_title,
                     inputs,
+                    model,
                 );
             }
             WorkflowPickerTarget::Repo {
@@ -680,7 +758,9 @@ impl App {
                 repo_path,
                 repo_name,
             } => {
-                self.spawn_repo_workflow_in_background(def, repo_id, repo_path, repo_name, inputs);
+                self.spawn_repo_workflow_in_background(
+                    def, repo_id, repo_path, repo_name, inputs, model,
+                );
             }
             WorkflowPickerTarget::WorkflowRun {
                 workflow_run_id,
@@ -701,6 +781,7 @@ impl App {
                         None,
                         run_inputs,
                         format!("workflow_run:{workflow_run_id}"),
+                        model,
                     );
                 } else {
                     self.spawn_workflow_run_target_in_background(
@@ -708,6 +789,7 @@ impl App {
                         repo_path,
                         run_inputs,
                         workflow_run_id,
+                        model,
                     );
                 }
             }
@@ -725,6 +807,7 @@ impl App {
         ticket_id: Option<String>,
         inputs: std::collections::HashMap<String, String>,
         target_label: String,
+        model: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -744,7 +827,7 @@ impl App {
                 repo_path,
                 ticket_id,
                 repo_id: None,
-                model: None,
+                model,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
@@ -763,6 +846,7 @@ impl App {
         self.state.status_message = Some(format!("Starting workflow '{workflow_name}'…"));
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn spawn_ticket_workflow_in_background(
         &mut self,
         def: conductor_core::workflow::WorkflowDef,
@@ -771,6 +855,7 @@ impl App {
         repo_path: String,
         target_label: String,
         inputs: std::collections::HashMap<String, String>,
+        model: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -792,7 +877,7 @@ impl App {
                 repo_path,
                 ticket_id: Some(ticket_id),
                 repo_id: Some(repo_id),
-                model: None,
+                model,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
@@ -818,6 +903,7 @@ impl App {
         repo_path: String,
         repo_name: String,
         inputs: std::collections::HashMap<String, String>,
+        model: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -837,7 +923,7 @@ impl App {
                 repo_path,
                 ticket_id: None,
                 repo_id: Some(repo_id),
-                model: None,
+                model,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
@@ -862,6 +948,7 @@ impl App {
         repo_path: String,
         inputs: std::collections::HashMap<String, String>,
         target_label: String,
+        model: Option<String>,
     ) {
         let config = self.config.clone();
         let bg_tx = self.bg_tx.clone();
@@ -881,7 +968,7 @@ impl App {
                 repo_path,
                 ticket_id: None,
                 repo_id: None,
-                model: None,
+                model,
                 exec_config: WorkflowExecConfig {
                     shutdown: Some(shutdown),
                     ..WorkflowExecConfig::default()
@@ -986,6 +1073,7 @@ impl App {
         pr_ref: conductor_core::workflow_ephemeral::PrRef,
         def: conductor_core::workflow::WorkflowDef,
         inputs: std::collections::HashMap<String, String>,
+        model: Option<String>,
     ) {
         use conductor_core::config::db_path;
         use conductor_core::db::open_database;
@@ -1027,7 +1115,7 @@ impl App {
                 &config,
                 &pr_ref,
                 &def.name,
-                None,
+                model.as_deref(),
                 exec_config,
                 inputs,
                 false,

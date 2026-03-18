@@ -832,6 +832,7 @@ pub fn render_model_picker(
     custom_input: &str,
     custom_active: bool,
     suggested: Option<&str>,
+    allow_default: bool,
     theme: &Theme,
 ) {
     use conductor_core::models::KNOWN_MODELS;
@@ -868,9 +869,31 @@ pub fn render_model_picker(
     )));
     lines.push(Line::from(""));
 
+    // "Default" row — only shown in run-time pickers (allow_default: true)
+    let offset = if allow_default { 1 } else { 0 };
+    if allow_default {
+        let is_selected = !custom_active && selected == 0;
+        let style = if is_selected {
+            Style::default()
+                .fg(theme.label_warning)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.label_primary)
+        };
+        let prefix = if is_selected { "\u{25b8} " } else { "  " };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {prefix}"), style),
+            Span::styled("Default", style),
+            Span::styled(
+                "  \u{2014} use each agent's frontmatter / claude default",
+                dim,
+            ),
+        ]));
+    }
+
     // Known models list
     for (i, model) in KNOWN_MODELS.iter().enumerate() {
-        let is_selected = !custom_active && i == selected;
+        let is_selected = !custom_active && i + offset == selected;
         let is_current = effective_default.is_some_and(|d| d == model.id || d == model.alias);
 
         let prefix = if is_selected { "\u{25b8} " } else { "  " };
@@ -914,7 +937,7 @@ pub fn render_model_picker(
     }
 
     // Custom input option
-    let custom_idx = KNOWN_MODELS.len();
+    let custom_idx = KNOWN_MODELS.len() + offset;
     let custom_selected = !custom_active && selected == custom_idx;
     let custom_prefix = if custom_selected || custom_active {
         "\u{25b8} "
