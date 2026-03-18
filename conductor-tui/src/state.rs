@@ -1236,11 +1236,9 @@ fn push_children(
                     s.iteration == *max_iter.get(&s.step_name).unwrap_or(&0)
                 })
                 .filter(|s| {
-                    // Exclude sub-workflow steps (those whose child_run_id is a known child workflow run).
-                    match s.child_run_id.as_deref() {
-                        Some(cid) => !child_wf_run_ids.contains(cid),
-                        None => true,
-                    }
+                    // Exclude sub-workflow steps — they already appear as child run rows.
+                    // The engine names these "workflow:<name>" in execute_call_workflow.
+                    !s.step_name.starts_with("workflow:")
                 })
                 .collect()
         } else {
