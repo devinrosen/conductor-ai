@@ -130,9 +130,10 @@ Action::PushComplete { result } => {
 ```
 
 Reference implementations already using this pattern correctly:
-- `has_merged_pr()` check before worktree delete (`app.rs` ~line 2827)
-- Workflow execution and resume (`app.rs` ~lines 4893, 1705)
-- PR fetch background task (`background.rs`)
+- `has_merged_pr()` check before worktree delete (`conductor-tui/src/app/crud_operations.rs`)
+- Workflow execution (`conductor-tui/src/app/workflow_management.rs` — `spawn_workflow_in_background`)
+- Workflow resume (`conductor-tui/src/app/workflow_management.rs` — `handle_resume_workflow`)
+- PR fetch background task (`conductor-tui/src/background.rs`)
 
 ## Worktree Workflow (REQUIRED)
 
