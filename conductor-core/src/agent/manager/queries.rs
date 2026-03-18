@@ -809,4 +809,71 @@ mod tests {
             "worktree with only child runs should return None"
         );
     }
+
+    #[test]
+    fn test_latest_for_worktree_vs_latest_run_for_worktree_child_only() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a parent run on w1
+        let parent = mgr
+            .create_run(Some("w1"), "Parent task", None, None)
+            .unwrap();
+
+        // Create a child run on w2, parented to the w1 run
+        let child = mgr
+            .create_child_run(Some("w2"), "Child task", None, None, &parent.id, None)
+            .unwrap();
+
+        // latest_for_worktree sees all runs — returns the child
+        let any_latest = mgr.latest_for_worktree("w2").unwrap();
+        assert_eq!(
+            any_latest.as_ref().map(|r| &r.id),
+            Some(&child.id),
+            "latest_for_worktree should return the child run"
+        );
+
+        // latest_run_for_worktree filters to parent_run_id IS NULL — returns None
+        let top_level_latest = mgr.latest_run_for_worktree("w2").unwrap();
+        assert!(
+            top_level_latest.is_none(),
+            "latest_run_for_worktree should return None when only child runs exist"
+        );
+    }
+
+    #[test]
+    fn test_latest_for_worktree_vs_latest_run_for_worktree_newest_is_child() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a top-level parent run on w1
+        let parent = mgr
+            .create_run(Some("w1"), "Parent task", None, None)
+            .unwrap();
+
+        // Create a child run on w1 (newer) parented to the same parent
+        let child = mgr
+            .create_child_run(Some("w1"), "Child task", None, None, &parent.id, None)
+            .unwrap();
+
+        // latest_for_worktree sees all runs — returns the child (newest)
+        let any_latest = mgr.latest_for_worktree("w1").unwrap().unwrap();
+        assert_eq!(
+            any_latest.id, child.id,
+            "latest_for_worktree should return the newest run (child)"
+        );
+
+        // latest_run_for_worktree filters to top-level only — returns the parent
+        let top_level_latest = mgr.latest_run_for_worktree("w1").unwrap().unwrap();
+        assert_eq!(
+            top_level_latest.id, parent.id,
+            "latest_run_for_worktree should return the parent (newest top-level)"
+        );
+
+        // The two functions return different runs on the same worktree
+        assert_ne!(
+            any_latest.id, top_level_latest.id,
+            "the two functions must diverge when newest run is a child"
+        );
+    }
 }
