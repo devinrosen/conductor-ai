@@ -642,9 +642,15 @@ mod tests {
         ).unwrap();
 
         let mgr = AgentManager::new(&conn);
-        let r1_running = mgr.create_run(Some("w1"), "r1 running task", None, None).unwrap();
-        let r1_completed = mgr.create_run(Some("w1"), "r1 completed task", None, None).unwrap();
-        let _r2_running = mgr.create_run(Some("w3"), "r2 running task", None, None).unwrap();
+        let r1_running = mgr
+            .create_run(Some("w1"), "r1 running task", None, None)
+            .unwrap();
+        let r1_completed = mgr
+            .create_run(Some("w1"), "r1 completed task", None, None)
+            .unwrap();
+        let _r2_running = mgr
+            .create_run(Some("w3"), "r2 running task", None, None)
+            .unwrap();
 
         mgr.update_run_completed(
             &r1_completed.id,
