@@ -58,6 +58,9 @@ pub struct DataRefreshedPayload {
     pub pending_feedback_requests: Vec<FeedbackRequest>,
     /// All waiting gate steps with their workflow name and optional target label (for cross-process notifications).
     pub waiting_gate_steps: Vec<(WorkflowRunStep, String, Option<String>)>,
+    /// Live turn count for currently running agents, keyed by worktree_id.
+    /// Computed in the background poller to avoid blocking the main thread.
+    pub live_turns_by_worktree: HashMap<String, i64>,
 }
 
 /// Every user intent or background result flows through this enum.

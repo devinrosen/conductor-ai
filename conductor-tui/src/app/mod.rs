@@ -716,6 +716,7 @@ impl App {
                 self.state.data.workflow_step_summaries = payload.workflow_step_summaries;
                 self.state.data.active_non_worktree_workflow_runs =
                     payload.active_non_worktree_workflow_runs;
+                self.state.data.live_turns_by_worktree = payload.live_turns_by_worktree;
                 self.refresh_pending_feedback();
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();
@@ -922,9 +923,7 @@ impl App {
     }
 
     fn reload_agent_events(&mut self) {
-        use conductor_core::agent::{
-            count_turns_in_log, parse_agent_log, AgentManager, AgentRunEvent,
-        };
+        use conductor_core::agent::{parse_agent_log, AgentManager, AgentRunEvent};
 
         use crate::state::AgentTotals;
 
@@ -955,11 +954,11 @@ impl App {
             totals.total_output_tokens += run.output_tokens.unwrap_or(0);
         }
 
-        // For running agents, count live turns from the log file
+        // For running agents, use the live turn count from the background poller
         if let Some(run) = runs.last() {
             if run.status == conductor_core::agent::AgentRunStatus::Running {
-                if let Some(ref path) = run.log_file {
-                    totals.live_turns = count_turns_in_log(path);
+                if let Some(turns) = self.state.data.live_turns_by_worktree.get(wt_id) {
+                    totals.live_turns = *turns;
                 }
             }
         }
@@ -1425,6 +1424,7 @@ mod action_handler_tests {
                 active_non_worktree_workflow_runs: vec![],
                 pending_feedback_requests: vec![],
                 waiting_gate_steps: vec![],
+                live_turns_by_worktree: std::collections::HashMap::new(),
             },
         )));
 
