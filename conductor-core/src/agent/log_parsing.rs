@@ -248,6 +248,46 @@ pub fn count_turns_in_log(path: &str) -> i64 {
     count
 }
 
+/// Extract a human-readable summary for a tool_use event.
+fn tool_summary(tool_name: &str, input: Option<&serde_json::Value>) -> String {
+    let input = match input {
+        Some(v) => v,
+        None => return format!("[{tool_name}]"),
+    };
+
+    // Try description first (Bash always has this)
+    if let Some(d) = input.get("description").and_then(|v| v.as_str()) {
+        return format!("[{tool_name}] {d}");
+    }
+
+    // Try command (Bash fallback)
+    if let Some(c) = input.get("command").and_then(|v| v.as_str()) {
+        // Commands can be multi-line; take just the first line
+        let first = c.lines().next().unwrap_or(c);
+        return format!("[{tool_name}] {first}");
+    }
+
+    // Tool-specific field extraction
+    let detail = match tool_name {
+        "Read" | "Write" => input.get("file_path").and_then(|v| v.as_str()),
+        "Edit" => input.get("file_path").and_then(|v| v.as_str()),
+        "Glob" => input.get("pattern").and_then(|v| v.as_str()),
+        "Grep" => input.get("pattern").and_then(|v| v.as_str()),
+        "Agent" => input
+            .get("description")
+            .or_else(|| input.get("prompt"))
+            .and_then(|v| v.as_str()),
+        "WebFetch" => input.get("url").and_then(|v| v.as_str()),
+        "WebSearch" => input.get("query").and_then(|v| v.as_str()),
+        _ => None,
+    };
+
+    match detail {
+        Some(d) => format!("[{tool_name}] {d}"),
+        None => format!("[{tool_name}]"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,45 +334,5 @@ mod tests {
         assert_eq!(events[0].kind, "system");
         assert_eq!(events[1].kind, "text");
         assert_eq!(events[1].summary, "Hello");
-    }
-}
-
-/// Extract a human-readable summary for a tool_use event.
-fn tool_summary(tool_name: &str, input: Option<&serde_json::Value>) -> String {
-    let input = match input {
-        Some(v) => v,
-        None => return format!("[{tool_name}]"),
-    };
-
-    // Try description first (Bash always has this)
-    if let Some(d) = input.get("description").and_then(|v| v.as_str()) {
-        return format!("[{tool_name}] {d}");
-    }
-
-    // Try command (Bash fallback)
-    if let Some(c) = input.get("command").and_then(|v| v.as_str()) {
-        // Commands can be multi-line; take just the first line
-        let first = c.lines().next().unwrap_or(c);
-        return format!("[{tool_name}] {first}");
-    }
-
-    // Tool-specific field extraction
-    let detail = match tool_name {
-        "Read" | "Write" => input.get("file_path").and_then(|v| v.as_str()),
-        "Edit" => input.get("file_path").and_then(|v| v.as_str()),
-        "Glob" => input.get("pattern").and_then(|v| v.as_str()),
-        "Grep" => input.get("pattern").and_then(|v| v.as_str()),
-        "Agent" => input
-            .get("description")
-            .or_else(|| input.get("prompt"))
-            .and_then(|v| v.as_str()),
-        "WebFetch" => input.get("url").and_then(|v| v.as_str()),
-        "WebSearch" => input.get("query").and_then(|v| v.as_str()),
-        _ => None,
-    };
-
-    match detail {
-        Some(d) => format!("[{tool_name}] {d}"),
-        None => format!("[{tool_name}]"),
     }
 }
