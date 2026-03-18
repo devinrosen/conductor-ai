@@ -465,34 +465,27 @@ mod tests {
 
     #[test]
     fn test_create_feature_duplicate_via_manager() {
+        let (work, _bare) = setup_git_repo();
         let conn = setup_db();
-        let repo_id = insert_repo(&conn);
-
-        // Insert the first feature directly (bypassing git)
-        insert_feature(
-            &conn,
-            &repo_id,
-            "notif-improvements",
-            "feat/notif-improvements",
-        );
+        let _repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
 
         let config = Config::default();
         let mgr = FeatureManager::new(&conn, &config);
 
-        // The manager's duplicate check should fire before any git ops
-        let exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM features WHERE repo_id = ?1 AND name = ?2)",
-                params![repo_id, "notif-improvements"],
-                |row| row.get(0),
-            )
+        // First create succeeds
+        let feature = mgr
+            .create("test-repo", "notif-improvements", None, &[])
             .unwrap();
-        assert!(exists, "feature should already exist in DB");
+        assert_eq!(feature.name, "notif-improvements");
 
-        // Also test via get_by_name that the original is found
-        let f = mgr.get_by_name("test-repo", "notif-improvements").unwrap();
-        assert_eq!(f.name, "notif-improvements");
-        assert!(matches!(f.status, FeatureStatus::Active));
+        // Second create with the same name should return FeatureAlreadyExists
+        let err = mgr
+            .create("test-repo", "notif-improvements", None, &[])
+            .unwrap_err();
+        assert!(
+            matches!(err, ConductorError::FeatureAlreadyExists { .. }),
+            "expected FeatureAlreadyExists, got: {err:?}"
+        );
     }
 
     #[test]
