@@ -93,7 +93,7 @@ impl<'a> AgentManager<'a> {
 
         // Build a set of run IDs and fetch all steps at once.
         let ids: Vec<&str> = runs.iter().map(|r| r.id.as_str()).collect();
-        let placeholders: String = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let placeholders = crate::db::sql_placeholders(ids.len());
         let sql = format!(
             "{AGENT_RUN_STEPS_SELECT} WHERE run_id IN ({placeholders}) ORDER BY position ASC"
         );

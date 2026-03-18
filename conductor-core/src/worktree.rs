@@ -247,12 +247,7 @@ impl<'a> WorktreeManager<'a> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
-        let placeholders = ids
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", i + 1))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let placeholders = crate::db::sql_placeholders(ids.len());
         let sql = format!("SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE id IN ({placeholders})");
         query_collect(
             self.conn,

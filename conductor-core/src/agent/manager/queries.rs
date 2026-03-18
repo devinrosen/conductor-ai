@@ -49,7 +49,7 @@ impl<'a> AgentManager<'a> {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let placeholders: String = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let placeholders = crate::db::sql_placeholders(ids.len());
         let sql = format!("{AGENT_RUN_SELECT} WHERE id IN ({placeholders})");
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), row_to_agent_run)?;

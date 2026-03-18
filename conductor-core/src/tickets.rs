@@ -171,15 +171,12 @@ impl<'a> TicketSyncer<'a> {
         }
 
         let now = Utc::now().to_rfc3339();
-        let placeholders: Vec<String> = (0..synced_source_ids.len())
-            .map(|i| format!("?{}", i + 4))
-            .collect();
+        let placeholders = crate::db::sql_placeholders_from(synced_source_ids.len(), 4);
         let sql = format!(
             "UPDATE tickets SET state = 'closed', synced_at = ?1
              WHERE repo_id = ?2 AND source_type = ?3
              AND state != 'closed'
-             AND source_id NOT IN ({})",
-            placeholders.join(", ")
+             AND source_id NOT IN ({placeholders})"
         );
 
         let mut stmt = self.conn.prepare(&sql)?;

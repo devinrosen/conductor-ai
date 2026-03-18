@@ -429,11 +429,8 @@ fn with_in_clause<T>(
         !items.is_empty(),
         "with_in_clause called with empty items — produces invalid SQL `IN ()`"
     );
-    let placeholders: Vec<String> = (0..items.len()).map(|i| format!("?{}", i + 2)).collect();
-    let sql = format!(
-        "{prefix} ({placeholders})",
-        placeholders = placeholders.join(", ")
-    );
+    let placeholders = crate::db::sql_placeholders_from(items.len(), 2);
+    let sql = format!("{prefix} ({placeholders})");
     let first = first_param.to_string();
     let mut params: Vec<&dyn rusqlite::types::ToSql> = vec![&first];
     for item in items {

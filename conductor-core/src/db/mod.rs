@@ -27,6 +27,25 @@ pub(crate) fn prefix_columns(cols: &str, prefix: &str) -> String {
         .join(", ")
 }
 
+/// Build a comma-separated list of numbered SQLite positional placeholders:
+/// `?1, ?2, …, ?n`.  Returns an empty string when `n == 0`.
+pub(crate) fn sql_placeholders(n: usize) -> String {
+    sql_placeholders_from(n, 1)
+}
+
+/// `?start, ?{start+1}, …, ?{start+n-1}`.  Returns an empty string when `n == 0`.
+pub(crate) fn sql_placeholders_from(n: usize, start: usize) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(n.saturating_mul(4));
+    for i in start..start + n {
+        if i > start {
+            s.push_str(", ");
+        }
+        write!(s, "?{i}").unwrap();
+    }
+    s
+}
+
 /// Prepare a query, map each row, and collect results into a `Vec`.
 pub fn query_collect<T, P, F>(conn: &Connection, sql: &str, params: P, f: F) -> Result<Vec<T>>
 where

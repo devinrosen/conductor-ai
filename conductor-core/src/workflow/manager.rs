@@ -6,7 +6,7 @@ use serde_json;
 
 use crate::agent::AgentManager;
 use crate::config::Config;
-use crate::db::query_collect;
+use crate::db::{query_collect, sql_placeholders, sql_placeholders_from};
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl;
 
@@ -1449,27 +1449,6 @@ impl<'a> WorkflowManager<'a> {
         }
         Ok(map)
     }
-}
-
-/// Build the WHERE clause and owned parameter list for purge / purge_count queries.
-///
-/// Returns a comma-separated list of numbered SQLite positional placeholders:
-/// `?1, ?2, …, ?n`.  Returns an empty string when `n == 0`.
-fn sql_placeholders(n: usize) -> String {
-    sql_placeholders_from(n, 1)
-}
-
-/// `?start, ?{start+1}, …, ?{start+n-1}`.  Returns an empty string when `n == 0`.
-fn sql_placeholders_from(n: usize, start: usize) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(n.saturating_mul(4));
-    for i in start..start + n {
-        if i > start {
-            s.push_str(", ");
-        }
-        write!(s, "?{i}").unwrap();
-    }
-    s
 }
 
 /// Returns `(where_clause, params)` where `params` is a `Vec<String>` whose
