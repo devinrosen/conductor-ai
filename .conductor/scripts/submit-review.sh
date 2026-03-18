@@ -25,8 +25,8 @@ fi
 # ---------------------------------------------------------------------------
 if [ "${DRY_RUN:-false}" = "true" ]; then
   echo "DRY_RUN=true — would submit formal GitHub review for PR #${PR_NUMBER}."
-  echo "reviewers:"
-  echo "${PRIOR_OUTPUT}" | jq '.reviewers // []'
+  echo "reviewed_by:"
+  echo "${PRIOR_OUTPUT}" | jq -r '.reviewed_by // ""'
   echo "blocking_findings:"
   echo "${PRIOR_OUTPUT}" | jq '.blocking_findings // []'
   echo "off_diff_findings:"
@@ -138,16 +138,12 @@ else
   HEADING="## Conductor Review Swarm — Changes Requested"
 fi
 
-# Build reviewer table
-REVIEWER_TABLE=$(echo "${PRIOR_OUTPUT}" | jq -r '
-  (.reviewers // []) |
-  "| Reviewer | Verdict |\n|----------|---------|",
-  (.[] | "| \(.name) | \(if .approved then ":white_check_mark: approve" else ":x: changes requested" end) |")
-')
+# Build compact reviewed-by line
+REVIEWED_BY=$(echo "${PRIOR_OUTPUT}" | jq -r '.reviewed_by // ""')
 
 REVIEW_BODY="${HEADING}
 
-${REVIEWER_TABLE}"
+**Reviewed by:** ${REVIEWED_BY}"
 
 # Append blocking findings section if any
 if [ "${HAS_BLOCKING_CHECK}" = "true" ]; then
