@@ -1,7 +1,5 @@
 fields:
-  reviewed_by:
-    type: array
-    items: string
+  reviewed_by: string
   blocking_findings:
     type: array
     items:

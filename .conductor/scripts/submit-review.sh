@@ -26,7 +26,7 @@ fi
 if [ "${DRY_RUN:-false}" = "true" ]; then
   echo "DRY_RUN=true — would submit formal GitHub review for PR #${PR_NUMBER}."
   echo "reviewed_by:"
-  echo "${PRIOR_OUTPUT}" | jq '.reviewed_by // []'
+  echo "${PRIOR_OUTPUT}" | jq -r '.reviewed_by // ""'
   echo "blocking_findings:"
   echo "${PRIOR_OUTPUT}" | jq '.blocking_findings // []'
   echo "off_diff_findings:"
@@ -139,7 +139,7 @@ else
 fi
 
 # Build compact reviewed-by line
-REVIEWED_BY=$(echo "${PRIOR_OUTPUT}" | jq -r '(.reviewed_by // []) | join(", ")')
+REVIEWED_BY=$(echo "${PRIOR_OUTPUT}" | jq -r '.reviewed_by // ""')
 
 REVIEW_BODY="${HEADING}
 
