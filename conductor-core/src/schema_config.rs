@@ -502,6 +502,17 @@ fn generate_field_hints(fields: &[FieldDef], prefix: &str) -> String {
 
         let optional_tag = if !field.required { " (optional)" } else { "" };
 
+        let push_examples = |hints: &mut Vec<std::string::String>, field: &FieldDef| {
+            if let Some(ref examples) = field.examples {
+                let examples_str = examples
+                    .iter()
+                    .map(|e| format!("\"{e}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                hints.push(format!("  examples: [{examples_str}]"));
+            }
+        };
+
         match &field.field_type {
             FieldType::Array {
                 item_type: Some(ft),
@@ -526,14 +537,7 @@ fn generate_field_hints(fields: &[FieldDef], prefix: &str) -> String {
                         "\"{full_name}\"{optional_tag}: array of {type_label}"
                     ));
                 }
-                if let Some(ref examples) = field.examples {
-                    let examples_str = examples
-                        .iter()
-                        .map(|e| format!("\"{e}\""))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    hints.push(format!("  examples: [{examples_str}]"));
-                }
+                push_examples(&mut hints, field);
             }
             FieldType::Array { items, .. } if !items.is_empty() => {
                 if let Some(ref desc) = field.desc {
@@ -557,14 +561,7 @@ fn generate_field_hints(fields: &[FieldDef], prefix: &str) -> String {
                 if let Some(ref desc) = field.desc {
                     hints.push(format!("\"{full_name}\"{optional_tag}: {desc}"));
                 }
-                if let Some(ref examples) = field.examples {
-                    let examples_str = examples
-                        .iter()
-                        .map(|e| format!("\"{e}\""))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    hints.push(format!("  examples: [{examples_str}]"));
-                }
+                push_examples(&mut hints, field);
                 if field.desc.is_none() && !field.required {
                     hints.push(format!("\"{full_name}\" is optional and may be omitted."));
                 }
@@ -2225,6 +2222,38 @@ fields:
         assert!(hints.contains("array of string"), "got: {hints}");
         // Without a desc, the hint should NOT contain a colon-separated description
         assert!(!hints.contains("list of"), "got: {hints}");
+    }
+
+    #[test]
+    fn test_parse_invalid_scalar_item_type() {
+        let yaml = "fields:\n  tags:\n    type: array\n    items: bad_type\n";
+        let result = parse_schema_content(yaml, "test");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Unknown field type"),
+            "expected 'Unknown field type' error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_hints_scalar_array_with_examples() {
+        let yaml = r#"
+fields:
+  tags:
+    type: array
+    items: string
+    examples: ["foo", "bar"]
+"#;
+        let schema = parse_schema_content(yaml, "test").unwrap();
+        let hints = generate_field_hints(&schema.fields, "");
+        assert!(hints.contains("array of string"), "got: {hints}");
+        assert!(
+            hints.contains("examples: ["),
+            "expected examples line, got: {hints}"
+        );
+        assert!(hints.contains("\"foo\""), "got: {hints}");
+        assert!(hints.contains("\"bar\""), "got: {hints}");
     }
 
     /// Regression: when a field value contains the start marker string, the real block is still found.
