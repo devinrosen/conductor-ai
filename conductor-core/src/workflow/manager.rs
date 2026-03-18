@@ -184,8 +184,9 @@ impl<'a> WorkflowManager<'a> {
 
     /// Update workflow run status.
     ///
-    /// **Panics** if called with `Waiting` — use [`set_waiting_blocked_on`] instead
-    /// to atomically set both status and blocked_on context.
+    /// Returns [`ConductorError::InvalidInput`] if called with `Waiting` —
+    /// use [`set_waiting_blocked_on`] instead to atomically set both status
+    /// and blocked_on context.
     pub fn update_workflow_status(
         &self,
         workflow_run_id: &str,
