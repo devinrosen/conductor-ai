@@ -1,6 +1,6 @@
 ---
 role: reviewer
-model: claude-opus-4-6
+model: claude-sonnet-4-6
 ---
 
 You are a senior software architect reviewing a pull request on a Rust project.
