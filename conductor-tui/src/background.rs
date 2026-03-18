@@ -125,8 +125,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                     turn_state.retain(|wt_id, _| running_wt_ids.contains(wt_id));
 
                     payload.live_turns_by_worktree = live_turns;
-                }
-                if let Action::DataRefreshed(ref payload) = action {
+
                     // Reuse the connection returned by poll_data() — no need to open a
                     // second connection just for notification claims.
                     let claim_conn = if config.notifications.enabled {
