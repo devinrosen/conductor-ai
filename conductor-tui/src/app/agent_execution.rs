@@ -364,35 +364,13 @@ impl App {
                 let db = conductor_core::config::db_path();
                 let conn = conductor_core::db::open_database(&db)?;
                 let wt_mgr = WorktreeManager::new(&conn, &config);
-                let (wt, mut warnings) = wt_mgr.create(
+                let (wt, warnings) = wt_mgr.create(
                     &repo_slug,
                     &name,
                     from_branch.as_deref(),
                     ticket_id.as_deref(),
                     from_pr,
                 )?;
-
-                // Auto-register feature if targeting a non-default branch
-                if let Some(ref base_branch) = wt.base_branch {
-                    let repo_obj = conductor_core::repo::RepoManager::new(&conn, &config)
-                        .get_by_slug(&repo_slug)?;
-                    let fm = conductor_core::feature::FeatureManager::new(&conn, &config);
-                    match fm.ensure_feature_for_branch(&repo_obj, base_branch, None) {
-                        Ok(Some(feature)) => {
-                            warnings.push(format!(
-                                "Auto-registered feature '{}' for branch '{}'",
-                                feature.name, feature.branch
-                            ));
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            warnings.push(format!(
-                                "Warning: failed to auto-register feature for branch '{}': {}",
-                                base_branch, e
-                            ));
-                        }
-                    }
-                }
 
                 Ok((wt, warnings))
             })();

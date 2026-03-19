@@ -803,34 +803,13 @@ fn main() -> Result<()> {
                     };
 
                     let mgr = WorktreeManager::new(&conn, &config);
-                    let (wt, mut warnings) = mgr.create(
+                    let (wt, warnings) = mgr.create(
                         &repo,
                         &name,
                         effective_from.as_deref(),
                         ticket.as_deref(),
                         from_pr,
                     )?;
-
-                    // Auto-register feature if targeting a non-default branch
-                    if let Some(ref base_branch) = wt.base_branch {
-                        let repo_obj = RepoManager::new(&conn, &config).get_by_slug(&repo)?;
-                        let fm = FeatureManager::new(&conn, &config);
-                        match fm.ensure_feature_for_branch(&repo_obj, base_branch, None) {
-                            Ok(Some(feature)) => {
-                                warnings.push(format!(
-                                    "Auto-registered feature '{}' for branch '{}'",
-                                    feature.name, feature.branch
-                                ));
-                            }
-                            Ok(None) => {}
-                            Err(e) => {
-                                warnings.push(format!(
-                                    "Warning: failed to auto-register feature for branch '{}': {}",
-                                    base_branch, e
-                                ));
-                            }
-                        }
-                    }
 
                     for warning in &warnings {
                         eprintln!("warning: {warning}");

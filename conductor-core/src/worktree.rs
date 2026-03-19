@@ -170,7 +170,7 @@ impl<'a> WorktreeManager<'a> {
         std::fs::create_dir_all(&repo.workspace_dir)?;
 
         // (branch_name, base_branch_for_db, warnings)
-        let (branch, base_for_db, warnings) = if let Some(pr_number) = from_pr {
+        let (branch, base_for_db, mut warnings) = if let Some(pr_number) = from_pr {
             // --from-pr path: fetch the PR branch and record the PR's base branch
             // so that create_pr can target the correct base.
             let (pr_branch, pr_base) = fetch_pr_branch(&repo.local_path, pr_number)?;
@@ -233,6 +233,26 @@ impl<'a> WorktreeManager<'a> {
                 worktree.base_branch,
             ],
         )?;
+
+        // Auto-register feature if targeting a non-default branch
+        if let Some(ref base_branch) = worktree.base_branch {
+            let fm = crate::feature::FeatureManager::new(self.conn, self.config);
+            match fm.ensure_feature_for_branch(&repo, base_branch, None) {
+                Ok(Some(feature)) => {
+                    warnings.push(format!(
+                        "Auto-registered feature '{}' for branch '{}'",
+                        feature.name, feature.branch
+                    ));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    warnings.push(format!(
+                        "Warning: failed to auto-register feature for branch '{}': {}",
+                        base_branch, e
+                    ));
+                }
+            }
+        }
 
         Ok((worktree, warnings))
     }
@@ -2001,27 +2021,19 @@ mod tests {
         // Worktree should have feat/parent as its base branch
         assert_eq!(wt.base_branch.as_deref(), Some("feat/parent"));
 
-        // Consumer-side auto-registration (mirrors CLI/TUI/MCP pattern)
-        let repo = repo_mgr.get_by_slug("myrepo").unwrap();
+        // Auto-registration should have happened inside create()
         let fm = crate::feature::FeatureManager::new(&conn, &config);
-        let result = fm
-            .ensure_feature_for_branch(&repo, wt.base_branch.as_deref().unwrap(), None)
-            .expect("ensure_feature_for_branch should succeed");
-        assert!(result.is_some(), "expected a new feature to be created");
-
-        // Verify the feature was actually created in the database
         let features = fm.list_active("myrepo").unwrap();
         assert!(
             features.iter().any(|f| f.branch == "feat/parent"),
-            "expected a feature for 'feat/parent', got: {features:?}"
+            "expected a feature for 'feat/parent' to be auto-registered, got: {features:?}"
         );
     }
 
     #[test]
     fn test_create_skips_auto_registration_for_default_branch() {
         // Creating a worktree from the default branch should not trigger
-        // auto-registration of a feature. The consumer should check
-        // wt.base_branch before calling ensure_feature_for_branch.
+        // auto-registration of a feature.
         let (tmp, remote, local) = setup_repo_with_remote();
 
         let conn = crate::test_helpers::setup_db();
@@ -2044,8 +2056,7 @@ mod tests {
             .create("myrepo", "feat-on-main", None, None, None)
             .expect("create should succeed");
 
-        // base_branch is None for default branch, so consumer would not call
-        // ensure_feature_for_branch — verify no feature was registered
+        // base_branch should be "main" (default) — auto-registration should skip it
         assert!(
             wt.base_branch.is_none() || wt.base_branch.as_deref() == Some("main"),
             "expected no non-default base_branch"

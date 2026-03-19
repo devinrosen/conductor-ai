@@ -186,29 +186,7 @@ pub(super) fn tool_create_worktree(
 
     let wt_mgr = WorktreeManager::new(&conn, &config);
     match wt_mgr.create(repo_slug, name, None, resolved_ticket_id.as_deref(), None) {
-        Ok((wt, mut warnings)) => {
-            // Auto-register feature if targeting a non-default branch
-            if let Some(ref base_branch) = wt.base_branch {
-                if let Ok(repo_obj) = RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
-                    let fm = conductor_core::feature::FeatureManager::new(&conn, &config);
-                    match fm.ensure_feature_for_branch(&repo_obj, base_branch, None) {
-                        Ok(Some(feature)) => {
-                            warnings.push(format!(
-                                "Auto-registered feature '{}' for branch '{}'",
-                                feature.name, feature.branch
-                            ));
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            warnings.push(format!(
-                                "Warning: failed to auto-register feature for branch '{}': {}",
-                                base_branch, e
-                            ));
-                        }
-                    }
-                }
-            }
-
+        Ok((wt, warnings)) => {
             let mut msg = format!(
                 "Worktree created.\nslug: {}\nbranch: {}\npath: {}\n",
                 wt.slug, wt.branch, wt.path

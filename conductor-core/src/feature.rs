@@ -3,7 +3,7 @@ use std::process::Command;
 use std::str::FromStr;
 
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -542,8 +542,40 @@ impl<'a> FeatureManager<'a> {
 
         let base_name = branch_to_feature_name(branch);
 
-        // Disambiguate if a feature with this name already exists (e.g. from a
-        // closed/merged feature on a different branch).
+        // Use the caller-supplied base_branch, or fall back to the repo default.
+        let resolved_base: String = base_branch
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| repo.default_branch.clone());
+
+        // Check if a non-active feature with the base name exists — if so,
+        // reactivate it rather than creating a suffixed duplicate.
+        let maybe_inactive: Option<(String, String)> = self
+            .conn
+            .query_row(
+                "SELECT id, status FROM features WHERE repo_id = ?1 AND name = ?2 AND status != 'active'",
+                params![repo.id, base_name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((inactive_id, _status)) = maybe_inactive {
+            self.conn.execute(
+                "UPDATE features SET branch = ?1, base_branch = ?2, status = 'active', merged_at = NULL WHERE id = ?3",
+                params![branch, resolved_base, inactive_id],
+            )?;
+            return Ok(Some(Feature {
+                id: inactive_id,
+                repo_id: repo.id.clone(),
+                name: base_name.to_string(),
+                branch: branch.to_string(),
+                base_branch: resolved_base,
+                status: FeatureStatus::Active,
+                created_at: String::new(), // not used by caller
+                merged_at: None,
+            }));
+        }
+
+        // Disambiguate if an active feature with this name already exists (on a
+        // different branch).
         let mut name = base_name.to_string();
         let mut suffix = 2u32;
         loop {
@@ -559,11 +591,6 @@ impl<'a> FeatureManager<'a> {
             suffix += 1;
         }
 
-        // Use the caller-supplied base_branch, or fall back to the repo default.
-        let base_branch: String = base_branch
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| repo.default_branch.clone());
-
         let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
 
@@ -572,7 +599,7 @@ impl<'a> FeatureManager<'a> {
             repo_id: repo.id.clone(),
             name,
             branch: branch.to_string(),
-            base_branch,
+            base_branch: resolved_base,
             status: FeatureStatus::Active,
             created_at: now,
             merged_at: None,
@@ -1890,6 +1917,37 @@ mod tests {
             "should skip taken suffixes and use the next available one"
         );
         assert_eq!(feature.branch, "feat/notifications");
+    }
+
+    #[test]
+    fn test_ensure_feature_for_branch_reactivates_closed_feature() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let repo = make_repo(&repo_id);
+
+        // Insert a feature with name "notifications" but mark it as merged (non-active).
+        let feat_id = insert_feature(&conn, &repo_id, "notifications", "feat/notifications-old");
+        conn.execute(
+            "UPDATE features SET status = 'merged' WHERE id = ?1",
+            params![feat_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .ensure_feature_for_branch(&repo, "feat/notifications", None)
+            .unwrap();
+        assert!(result.is_some());
+        let feature = result.unwrap();
+        assert_eq!(
+            feature.name, "notifications",
+            "should reuse the name by reactivating the closed feature"
+        );
+        assert_eq!(feature.branch, "feat/notifications");
+        assert_eq!(feature.status, FeatureStatus::Active);
+        assert_eq!(feature.id, feat_id, "should reactivate the same record");
     }
 
     #[test]
