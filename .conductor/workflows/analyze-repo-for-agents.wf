@@ -2,7 +2,7 @@ workflow analyze-repo-for-agents {
   meta {
     description = "Analyze a repo for large files and produce AI-optimized refactor recommendations"
     trigger     = "manual"
-    targets     = ["worktree"]
+    targets     = ["repo"]
   }
 
   inputs {
