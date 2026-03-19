@@ -886,10 +886,6 @@ fn main() -> Result<()> {
                     let mgr = WorktreeManager::new(&conn, &config);
                     let wt = mgr.delete(&repo, &name)?;
                     println!("Worktree {name} marked as {} ✓", wt.status);
-                    let fm = FeatureManager::new(&conn, &config);
-                    if let Err(e) = fm.auto_close_after_worktree_delete(&wt) {
-                        eprintln!("warning: failed to auto-close orphaned feature: {e}");
-                    }
                 }
                 WorktreeCommands::Purge { repo, name } => {
                     let mgr = WorktreeManager::new(&conn, &config);

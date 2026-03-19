@@ -214,13 +214,7 @@ pub(super) fn tool_delete_worktree(
     };
     let wt_mgr = WorktreeManager::new(&conn, &config);
     match wt_mgr.delete(repo_slug, slug) {
-        Ok(wt) => {
-            let fm = conductor_core::feature::FeatureManager::new(&conn, &config);
-            if let Err(e) = fm.auto_close_after_worktree_delete(&wt) {
-                eprintln!("warning: failed to auto-close orphaned feature: {e}");
-            }
-            tool_ok(format!("Deleted worktree {}.", wt.slug))
-        }
+        Ok(wt) => tool_ok(format!("Deleted worktree {}.", wt.slug)),
         Err(e) => tool_err(e),
     }
 }

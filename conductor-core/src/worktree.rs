@@ -500,11 +500,20 @@ impl<'a> WorktreeManager<'a> {
             params![new_status.as_str(), now, worktree.id],
         )?;
 
-        Ok(Worktree {
+        let deleted_wt = Worktree {
             status: new_status,
             completed_at: Some(now),
             ..worktree
-        })
+        };
+
+        // Auto-close orphaned feature if the branch is gone.
+        // Best-effort: log but don't propagate errors so the delete itself succeeds.
+        let fm = crate::feature::FeatureManager::new(self.conn, self.config);
+        if let Err(e) = fm.auto_close_after_worktree_delete(&deleted_wt) {
+            tracing::warn!(error = %e, "failed to auto-close orphaned feature");
+        }
+
+        Ok(deleted_wt)
     }
 
     /// Remove the git worktree directory and delete the associated branch (best-effort).
@@ -2166,9 +2175,8 @@ mod tests {
     }
 
     /// Integration: deleting the last active worktree for a feature whose
-    /// branch is gone should auto-close the feature when the caller invokes
-    /// `FeatureManager::auto_close_after_worktree_delete` (mirrors what
-    /// CLI/TUI/web do after `WorktreeManager::delete`).
+    /// branch is gone should auto-close the feature automatically (the
+    /// auto-close call is inside `delete_internal`).
     #[test]
     fn test_delete_then_auto_close_orphaned_feature() {
         let (_tmp, _remote, local) = setup_repo_with_remote();
@@ -2204,13 +2212,9 @@ mod tests {
 
         let config = Config::default();
         let wt_mgr = WorktreeManager::new(&conn, &config);
-        let wt = wt_mgr.delete("test-repo", "wt-eph").unwrap();
+        let _wt = wt_mgr.delete("test-repo", "wt-eph").unwrap();
 
-        // Caller-side auto-close (mirrors CLI/TUI/web pattern)
-        let fm = crate::feature::FeatureManager::new(&conn, &config);
-        fm.auto_close_after_worktree_delete(&wt).unwrap();
-
-        // The feature should now be closed
+        // The feature should now be auto-closed by delete_internal
         let status: String = conn
             .query_row(
                 "SELECT status FROM features WHERE id = ?1",

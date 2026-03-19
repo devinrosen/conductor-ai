@@ -59,7 +59,14 @@ pub(crate) fn local_branch_exists(repo_path: &str, branch: &str) -> Result<bool>
                 "failed to spawn `git branch --list -- {branch}`: {e}"
             ))
         })?;
-    Ok(output.status.success() && !output.stdout.is_empty())
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ConductorError::Git(format!(
+            "`git branch --list -- {branch}` exited with {}: {stderr}",
+            output.status
+        )));
+    }
+    Ok(!output.stdout.is_empty())
 }
 
 /// Check if `branch` has been merged into `default_branch` using local refs
