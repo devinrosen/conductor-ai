@@ -169,7 +169,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                 crate::notify::fire_gate_notification(
                                     conn,
                                     &config.notifications,
-                                    &conductor_core::notify::GateNotificationParams {
+                                    &crate::notify::GateNotificationParams {
                                         step_id: &step.id,
                                         step_name: &step.step_name,
                                         workflow_name,
