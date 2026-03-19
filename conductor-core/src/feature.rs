@@ -578,8 +578,8 @@ impl<'a> FeatureManager<'a> {
             Some(ref b) => b,
             None => return Ok(()),
         };
-        let repo = crate::repo::RepoManager::new(self.conn, self.config)
-            .get_by_id(&worktree.repo_id)?;
+        let repo =
+            crate::repo::RepoManager::new(self.conn, self.config).get_by_id(&worktree.repo_id)?;
         if base_branch != &repo.default_branch {
             return self.auto_close_if_orphaned(&repo, base_branch);
         }
