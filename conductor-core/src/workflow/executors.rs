@@ -1749,7 +1749,17 @@ fn execute_quality_gate(
             if let Some(ref json_str) = result.structured_output {
                 // Parse JSON and extract confidence field
                 match serde_json::from_str::<serde_json::Value>(json_str) {
-                    Ok(val) => val.get("confidence").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                    Ok(val) => match val.get("confidence").and_then(|v| v.as_u64()) {
+                        Some(c) => c as u32,
+                        None => {
+                            tracing::warn!(
+                                "quality_gate '{}': 'confidence' key missing or not a number in structured output from '{}'",
+                                node.name,
+                                source
+                            );
+                            0
+                        }
+                    },
                     Err(e) => {
                         tracing::warn!(
                             "quality_gate '{}': failed to parse structured output from '{}': {}",
@@ -3023,5 +3033,98 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("missing required `source`"), "got: {err}");
+    }
+
+    #[test]
+    fn test_quality_gate_malformed_json_treats_as_zero_confidence() {
+        let conn = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+
+        state.step_results.insert(
+            "review".to_string(),
+            StepResult {
+                step_name: "review".to_string(),
+                status: WorkflowStepStatus::Completed,
+                result_text: None,
+                cost_usd: None,
+                num_turns: None,
+                duration_ms: None,
+                markers: vec![],
+                context: String::new(),
+                child_run_id: None,
+                structured_output: Some("not valid json".to_string()),
+                output_file: None,
+            },
+        );
+
+        // threshold=0 so even confidence=0 passes
+        let node = make_quality_gate_node("qg", Some("review"), Some(0), OnFailAction::Fail);
+        let result = execute_quality_gate(&mut state, &node, 0, 0);
+        assert!(
+            result.is_ok(),
+            "malformed JSON → confidence=0, threshold=0 should pass: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_quality_gate_missing_confidence_key_treats_as_zero() {
+        let conn = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+
+        state.step_results.insert(
+            "review".to_string(),
+            StepResult {
+                step_name: "review".to_string(),
+                status: WorkflowStepStatus::Completed,
+                result_text: None,
+                cost_usd: None,
+                num_turns: None,
+                duration_ms: None,
+                markers: vec![],
+                context: String::new(),
+                child_run_id: None,
+                structured_output: Some(r#"{"score": 95}"#.to_string()),
+                output_file: None,
+            },
+        );
+
+        // JSON is valid but has no "confidence" key — should fail at threshold 70
+        let node = make_quality_gate_node("qg", Some("review"), Some(70), OnFailAction::Fail);
+        let result = execute_quality_gate(&mut state, &node, 0, 0);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("below threshold"), "got: {err}");
+    }
+
+    #[test]
+    fn test_quality_gate_no_structured_output_treats_as_zero() {
+        let conn = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+
+        state.step_results.insert(
+            "review".to_string(),
+            StepResult {
+                step_name: "review".to_string(),
+                status: WorkflowStepStatus::Completed,
+                result_text: None,
+                cost_usd: None,
+                num_turns: None,
+                duration_ms: None,
+                markers: vec![],
+                context: String::new(),
+                child_run_id: None,
+                structured_output: None,
+                output_file: None,
+            },
+        );
+
+        let node = make_quality_gate_node("qg", Some("review"), Some(50), OnFailAction::Fail);
+        let result = execute_quality_gate(&mut state, &node, 0, 0);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("below threshold"), "got: {err}");
     }
 }
