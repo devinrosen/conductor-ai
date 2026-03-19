@@ -894,6 +894,9 @@ mod tests {
             workflows: conductor_core::config::WorkflowNotificationConfig {
                 on_success: true,
                 on_failure: true,
+                on_gate_human: true,
+                on_gate_ci: false,
+                on_gate_pr_review: true,
             },
         };
 
@@ -963,6 +966,9 @@ mod tests {
             workflows: conductor_core::config::WorkflowNotificationConfig {
                 on_success: true,
                 on_failure: true,
+                on_gate_human: true,
+                on_gate_ci: false,
+                on_gate_pr_review: true,
             },
         };
 
