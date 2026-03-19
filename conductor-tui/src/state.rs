@@ -59,6 +59,29 @@ pub struct TreePosition {
     pub ancestors_are_last: Vec<bool>,
 }
 
+impl TreePosition {
+    /// Build the tree-drawing prefix string (e.g. "│ └ ") for this position.
+    pub fn to_prefix(&self) -> String {
+        if self.depth == 0 {
+            return String::new();
+        }
+        let mut p = String::new();
+        for &ancestor_is_last in &self.ancestors_are_last {
+            if ancestor_is_last {
+                p.push_str("  ");
+            } else {
+                p.push_str("│ ");
+            }
+        }
+        if self.is_last_sibling {
+            p.push_str("└ ");
+        } else {
+            p.push_str("├ ");
+        }
+        p
+    }
+}
+
 /// Reorder worktrees into tree order based on `base_branch` parent-child relationships.
 ///
 /// A worktree is a child of another worktree when its `base_branch` matches the other's `branch`.

@@ -2024,6 +2024,7 @@ mod tests {
         assert_eq!(orphans.len(), 1);
         assert_eq!(orphans[0].branch, "feat/orphan");
         assert_eq!(orphans[0].worktree_count, 1);
+        assert_eq!(orphans[0].base_branch.as_deref(), Some("main"));
     }
 
     #[test]
@@ -2063,6 +2064,7 @@ mod tests {
         assert_eq!(orphans.len(), 1);
         assert_eq!(orphans[0].branch, "feat/active-orphan");
         assert_eq!(orphans[0].worktree_count, 1);
+        assert_eq!(orphans[0].base_branch.as_deref(), Some("main"));
     }
 
     #[test]
