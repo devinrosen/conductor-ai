@@ -46,7 +46,7 @@ fn run_command(
 /// (`git branch --merged`). Fast but may be stale if the remote has advanced.
 pub(crate) fn is_branch_merged_local(repo_path: &str, branch: &str, default_branch: &str) -> bool {
     let output = git_in(repo_path)
-        .args(["branch", "--merged", default_branch])
+        .args(["branch", &format!("--merged={default_branch}")])
         .output();
     match output {
         Ok(o) if o.status.success() => {
