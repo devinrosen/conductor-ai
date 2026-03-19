@@ -4566,4 +4566,69 @@ pub(crate) mod tests {
         assert!(ordered[0].branch.is_none());
         assert_eq!(positions[0].depth, 0);
     }
+
+    // ── TreePosition::to_prefix tests ──────────────────────────────────
+
+    #[test]
+    fn tree_position_to_prefix_depth_zero_returns_empty() {
+        let pos = TreePosition {
+            depth: 0,
+            is_last_sibling: false,
+            ancestors_are_last: vec![],
+        };
+        assert_eq!(pos.to_prefix(), "");
+    }
+
+    #[test]
+    fn tree_position_to_prefix_non_last_sibling() {
+        let pos = TreePosition {
+            depth: 1,
+            is_last_sibling: false,
+            ancestors_are_last: vec![],
+        };
+        assert_eq!(pos.to_prefix(), "├ ");
+    }
+
+    #[test]
+    fn tree_position_to_prefix_last_sibling() {
+        let pos = TreePosition {
+            depth: 1,
+            is_last_sibling: true,
+            ancestors_are_last: vec![],
+        };
+        assert_eq!(pos.to_prefix(), "└ ");
+    }
+
+    #[test]
+    fn tree_position_to_prefix_nested_with_non_last_ancestor() {
+        // Inner ancestor that is NOT last → vertical bar continuation
+        let pos = TreePosition {
+            depth: 2,
+            is_last_sibling: false,
+            ancestors_are_last: vec![false],
+        };
+        assert_eq!(pos.to_prefix(), "│ ├ ");
+    }
+
+    #[test]
+    fn tree_position_to_prefix_nested_with_last_ancestor() {
+        // Last sibling whose ancestor is also last → spaces only
+        let pos = TreePosition {
+            depth: 2,
+            is_last_sibling: true,
+            ancestors_are_last: vec![true],
+        };
+        assert_eq!(pos.to_prefix(), "  └ ");
+    }
+
+    #[test]
+    fn tree_position_to_prefix_deep_mixed_ancestors() {
+        // depth 3: ancestors [false, true] → "│   " then "├ "
+        let pos = TreePosition {
+            depth: 3,
+            is_last_sibling: false,
+            ancestors_are_last: vec![false, true],
+        };
+        assert_eq!(pos.to_prefix(), "│   ├ ");
+    }
 }
