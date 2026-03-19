@@ -147,6 +147,115 @@ pub fn build_worktree_tree(
 
     (result, positions)
 }
+
+/// Reorder branch picker items into tree order based on `base_branch` parent-child relationships.
+///
+/// The first item (default branch, `branch: None`) is always excluded from tree-building
+/// and stays at index 0 with depth 0. The remaining items are ordered via DFS using the
+/// same logic as `build_worktree_tree()`.
+pub fn build_branch_picker_tree(
+    items: &[BranchPickerItem],
+) -> (Vec<BranchPickerItem>, Vec<TreePosition>) {
+    if items.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    // Separate the default-branch sentinel (index 0, branch: None) from the rest.
+    let mut result: Vec<BranchPickerItem> = Vec::with_capacity(items.len());
+    let mut positions: Vec<TreePosition> = Vec::with_capacity(items.len());
+
+    // Always keep the default branch entry at index 0.
+    result.push(items[0].clone());
+    positions.push(TreePosition::default());
+
+    let rest = &items[1..];
+    if rest.is_empty() {
+        return (result, positions);
+    }
+
+    // Map branch name → indices (within `rest`) whose base_branch matches that branch.
+    let mut children_of: HashMap<&str, Vec<usize>> = HashMap::new();
+    let branch_set: HashSet<&str> = rest
+        .iter()
+        .filter_map(|item| item.branch.as_deref())
+        .collect();
+
+    for (i, item) in rest.iter().enumerate() {
+        let parent = item.base_branch.as_deref().unwrap_or("");
+        children_of.entry(parent).or_default().push(i);
+    }
+
+    // Identify roots: items whose base_branch is empty, absent, or doesn't match any
+    // other item's branch in the list.
+    let mut roots: Vec<usize> = Vec::new();
+    for (i, item) in rest.iter().enumerate() {
+        let parent = item.base_branch.as_deref().unwrap_or("");
+        if parent.is_empty() || !branch_set.contains(parent) {
+            roots.push(i);
+        }
+    }
+    roots.sort_by(|a, b| {
+        rest[*a]
+            .branch
+            .as_deref()
+            .unwrap_or("")
+            .cmp(rest[*b].branch.as_deref().unwrap_or(""))
+    });
+
+    // Sort each child group by branch name.
+    for children in children_of.values_mut() {
+        children.sort_by(|a, b| {
+            rest[*a]
+                .branch
+                .as_deref()
+                .unwrap_or("")
+                .cmp(rest[*b].branch.as_deref().unwrap_or(""))
+        });
+    }
+
+    let mut visited: HashSet<usize> = HashSet::new();
+
+    // DFS via explicit stack: (index_in_rest, depth, is_last_sibling, ancestors_are_last)
+    let mut stack: Vec<(usize, usize, bool, Vec<bool>)> = Vec::new();
+
+    let root_count = roots.len();
+    for (ri, &root_idx) in roots.iter().enumerate().rev() {
+        stack.push((root_idx, 0, ri == root_count - 1, Vec::new()));
+    }
+
+    while let Some((idx, depth, is_last, ancestors_are_last)) = stack.pop() {
+        if !visited.insert(idx) {
+            continue;
+        }
+        positions.push(TreePosition {
+            depth,
+            is_last_sibling: is_last,
+            ancestors_are_last: ancestors_are_last.clone(),
+        });
+        result.push(rest[idx].clone());
+
+        let branch = rest[idx].branch.as_deref().unwrap_or("");
+        if let Some(children) = children_of.get(branch) {
+            let len = children.len();
+            let mut child_ancestors = ancestors_are_last;
+            child_ancestors.push(is_last);
+            for (ci, &child_idx) in children.iter().enumerate().rev() {
+                stack.push((child_idx, depth + 1, ci == len - 1, child_ancestors.clone()));
+            }
+        }
+    }
+
+    // Append any unvisited items (cycle members) as roots.
+    for (i, item) in rest.iter().enumerate() {
+        if !visited.contains(&i) {
+            positions.push(TreePosition::default());
+            result.push(item.clone());
+            visited.insert(i);
+        }
+    }
+
+    (result, positions)
+}
 use tui_textarea::TextArea;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -473,6 +582,8 @@ pub struct BranchPickerItem {
     pub worktree_count: i64,
     /// Number of linked tickets (0 for default branch entry).
     pub ticket_count: i64,
+    /// The base branch this item is based on (`None` for default branch entry).
+    pub base_branch: Option<String>,
 }
 
 impl BranchPickerItem {
@@ -486,12 +597,14 @@ impl BranchPickerItem {
             branch: None,
             worktree_count: 0,
             ticket_count: 0,
+            base_branch: None,
         }];
         for f in features {
             items.push(Self {
                 branch: Some(f.branch.clone()),
                 worktree_count: f.worktree_count,
                 ticket_count: f.ticket_count,
+                base_branch: Some(f.base_branch.clone()),
             });
         }
         for orphan in orphans {
@@ -499,6 +612,7 @@ impl BranchPickerItem {
                 branch: Some(orphan.branch.clone()),
                 worktree_count: orphan.worktree_count,
                 ticket_count: 0,
+                base_branch: orphan.base_branch.clone(),
             });
         }
         items
@@ -647,6 +761,7 @@ pub enum Modal {
         wt_name: String,
         ticket_id: Option<String>,
         items: Vec<BranchPickerItem>,
+        tree_positions: Vec<TreePosition>,
         selected: usize,
     },
     /// Branch picker for changing worktree base branch (separate from creation-flow BranchPicker).
@@ -654,6 +769,7 @@ pub enum Modal {
         repo_slug: String,
         wt_slug: String,
         items: Vec<BranchPickerItem>,
+        tree_positions: Vec<TreePosition>,
         selected: usize,
     },
     /// In-TUI theme picker: browse named themes with live preview.
@@ -4339,5 +4455,92 @@ pub(crate) mod tests {
             assert!(pos.is_last_sibling);
             assert!(pos.ancestors_are_last.is_empty());
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // build_branch_picker_tree tests
+    // -----------------------------------------------------------------------
+
+    fn make_picker_item(branch: Option<&str>, base_branch: Option<&str>) -> BranchPickerItem {
+        BranchPickerItem {
+            branch: branch.map(|s| s.to_string()),
+            worktree_count: 0,
+            ticket_count: 0,
+            base_branch: base_branch.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn build_branch_picker_tree_flat() {
+        let items = vec![
+            make_picker_item(None, None), // default branch
+            make_picker_item(Some("feat/a"), Some("main")),
+            make_picker_item(Some("feat/b"), Some("main")),
+        ];
+        let (ordered, positions) = build_branch_picker_tree(&items);
+        assert_eq!(ordered.len(), 3);
+        assert_eq!(positions.len(), 3);
+        // Default branch at index 0, depth 0
+        assert!(ordered[0].branch.is_none());
+        assert_eq!(positions[0].depth, 0);
+        // Both features are roots (base_branch=main, not in the set)
+        assert_eq!(positions[1].depth, 0);
+        assert_eq!(positions[2].depth, 0);
+    }
+
+    #[test]
+    fn build_branch_picker_tree_parent_child() {
+        let items = vec![
+            make_picker_item(None, None),                              // default
+            make_picker_item(Some("feat/parent"), Some("main")),       // root
+            make_picker_item(Some("feat/child"), Some("feat/parent")), // child of parent
+        ];
+        let (ordered, positions) = build_branch_picker_tree(&items);
+        assert_eq!(ordered.len(), 3);
+        // default at 0
+        assert!(ordered[0].branch.is_none());
+        assert_eq!(positions[0].depth, 0);
+        // feat/parent is the only root (feat/child's base is feat/parent, which is in the set)
+        assert_eq!(ordered[1].branch.as_deref(), Some("feat/parent"));
+        assert_eq!(positions[1].depth, 0);
+        // feat/child is a child of feat/parent at depth 1
+        assert_eq!(ordered[2].branch.as_deref(), Some("feat/child"));
+        assert_eq!(positions[2].depth, 1);
+        assert!(positions[2].is_last_sibling);
+    }
+
+    #[test]
+    fn build_branch_picker_tree_nested() {
+        let items = vec![
+            make_picker_item(None, None),
+            make_picker_item(Some("feat/root"), Some("main")),
+            make_picker_item(Some("feat/mid"), Some("feat/root")),
+            make_picker_item(Some("feat/leaf"), Some("feat/mid")),
+        ];
+        let (ordered, positions) = build_branch_picker_tree(&items);
+        assert_eq!(ordered.len(), 4);
+        assert_eq!(ordered[1].branch.as_deref(), Some("feat/root"));
+        assert_eq!(positions[1].depth, 0);
+        assert_eq!(ordered[2].branch.as_deref(), Some("feat/mid"));
+        assert_eq!(positions[2].depth, 1);
+        assert_eq!(ordered[3].branch.as_deref(), Some("feat/leaf"));
+        assert_eq!(positions[3].depth, 2);
+    }
+
+    #[test]
+    fn build_branch_picker_tree_empty() {
+        let (ordered, positions) = build_branch_picker_tree(&[]);
+        assert!(ordered.is_empty());
+        assert!(positions.is_empty());
+    }
+
+    #[test]
+    fn build_branch_picker_tree_only_default() {
+        let items = vec![make_picker_item(None, None)];
+        let (ordered, positions) = build_branch_picker_tree(&items);
+        assert_eq!(ordered.len(), 1);
+        assert_eq!(positions.len(), 1);
+        assert!(ordered[0].branch.is_none());
+        assert_eq!(positions[0].depth, 0);
     }
 }

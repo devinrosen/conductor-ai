@@ -100,11 +100,19 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             );
         }
         Modal::BranchPicker {
-            items, selected, ..
+            items,
+            tree_positions,
+            selected,
+            ..
         }
         | Modal::BaseBranchPicker {
-            items, selected, ..
-        } => modal::render_branch_picker(frame, area, items, *selected, &state.theme),
+            items,
+            tree_positions,
+            selected,
+            ..
+        } => {
+            modal::render_branch_picker(frame, area, items, tree_positions, *selected, &state.theme)
+        }
         Modal::PostCreatePicker {
             items,
             selected,

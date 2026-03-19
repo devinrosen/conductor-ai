@@ -725,6 +725,7 @@ mod tests {
                 branch: None,
                 worktree_count: 0,
                 ticket_count: 0,
+                base_branch: None,
             });
         }
         for i in 1..item_count {
@@ -732,14 +733,17 @@ mod tests {
                 branch: Some(format!("feat/branch-{i}")),
                 worktree_count: 0,
                 ticket_count: 0,
+                base_branch: Some("main".into()),
             });
         }
+        let (ordered, tree_positions) = crate::state::build_branch_picker_tree(&items);
         let mut state = AppState::new();
         state.modal = Modal::BranchPicker {
             repo_slug: "test-repo".into(),
             wt_name: "wt-name".into(),
             ticket_id: None,
-            items,
+            items: ordered,
+            tree_positions,
             selected: 0,
         };
         state

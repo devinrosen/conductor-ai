@@ -769,11 +769,13 @@ impl App {
             // No features → skip branch picker, go straight to PR step.
             self.state.modal = pr_step_modal(repo_slug, wt_name, ticket_id, None);
         } else {
+            let (ordered, tree_positions) = crate::state::build_branch_picker_tree(&items);
             self.state.modal = Modal::BranchPicker {
                 repo_slug,
                 wt_name,
                 ticket_id,
-                items,
+                items: ordered,
+                tree_positions,
                 selected: 0,
             };
         }
@@ -866,10 +868,12 @@ impl App {
         wt_slug: String,
         items: Vec<BranchPickerItem>,
     ) {
+        let (ordered, tree_positions) = crate::state::build_branch_picker_tree(&items);
         self.state.modal = Modal::BaseBranchPicker {
             repo_slug,
             wt_slug,
-            items,
+            items: ordered,
+            tree_positions,
             selected: 0,
         };
     }
@@ -912,6 +916,7 @@ impl App {
             ticket_id,
             items,
             selected,
+            ..
         } = modal
         {
             let idx = index.unwrap_or(selected);
@@ -1053,21 +1058,26 @@ mod tests {
                 branch: None,
                 worktree_count: 0,
                 ticket_count: 0,
+                base_branch: None,
             },
             crate::state::BranchPickerItem {
                 branch: Some("feat/notifications".to_string()),
                 worktree_count: 0,
                 ticket_count: 0,
+                base_branch: Some("main".to_string()),
             },
         ]
     }
 
     fn branch_picker_modal(selected: usize) -> Modal {
+        let items = branch_picker_items();
+        let (ordered, tree_positions) = crate::state::build_branch_picker_tree(&items);
         Modal::BranchPicker {
             repo_slug: "test-repo".to_string(),
             wt_name: "my-wt".to_string(),
             ticket_id: None,
-            items: branch_picker_items(),
+            items: ordered,
+            tree_positions,
             selected,
         }
     }
@@ -1187,11 +1197,13 @@ mod tests {
                 branch: None,
                 worktree_count: 0,
                 ticket_count: 0,
+                base_branch: None,
             },
             BranchPickerItem {
                 branch: Some("feat/notifications".to_string()),
                 worktree_count: 2,
                 ticket_count: 1,
+                base_branch: Some("main".to_string()),
             },
         ];
         app.handle_feature_branches_loaded(

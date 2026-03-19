@@ -614,33 +614,60 @@ pub fn render_branch_picker(
     frame: &mut Frame,
     area: Rect,
     items: &[crate::state::BranchPickerItem],
+    tree_positions: &[crate::state::TreePosition],
     selected: usize,
     theme: &Theme,
 ) {
     let label_strings: Vec<String> = items
         .iter()
-        .map(|item| match &item.branch {
-            None => "default branch".to_string(),
-            Some(branch) => {
-                let mut parts = Vec::new();
-                if item.worktree_count > 0 {
-                    parts.push(format!(
-                        "{} worktree{}",
-                        item.worktree_count,
-                        if item.worktree_count == 1 { "" } else { "s" }
-                    ));
-                }
-                if item.ticket_count > 0 {
-                    parts.push(format!(
-                        "{} ticket{}",
-                        item.ticket_count,
-                        if item.ticket_count == 1 { "" } else { "s" }
-                    ));
-                }
-                if parts.is_empty() {
-                    branch.clone()
+        .enumerate()
+        .map(|(i, item)| {
+            let tree_prefix = if let Some(pos) = tree_positions.get(i) {
+                if pos.depth == 0 {
+                    String::new()
                 } else {
-                    format!("{} ({})", branch, parts.join(", "))
+                    let mut p = String::new();
+                    for &ancestor_is_last in &pos.ancestors_are_last {
+                        if ancestor_is_last {
+                            p.push_str("  ");
+                        } else {
+                            p.push_str("│ ");
+                        }
+                    }
+                    if pos.is_last_sibling {
+                        p.push_str("└ ");
+                    } else {
+                        p.push_str("├ ");
+                    }
+                    p
+                }
+            } else {
+                String::new()
+            };
+            match &item.branch {
+                None => "default branch".to_string(),
+                Some(branch) => {
+                    let mut parts = Vec::new();
+                    if item.worktree_count > 0 {
+                        parts.push(format!(
+                            "{} worktree{}",
+                            item.worktree_count,
+                            if item.worktree_count == 1 { "" } else { "s" }
+                        ));
+                    }
+                    if item.ticket_count > 0 {
+                        parts.push(format!(
+                            "{} ticket{}",
+                            item.ticket_count,
+                            if item.ticket_count == 1 { "" } else { "s" }
+                        ));
+                    }
+                    let label = if parts.is_empty() {
+                        branch.clone()
+                    } else {
+                        format!("{} ({})", branch, parts.join(", "))
+                    };
+                    format!("{tree_prefix}{label}")
                 }
             }
         })
