@@ -3,7 +3,7 @@ use std::process::Command;
 use std::str::FromStr;
 
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -516,6 +516,7 @@ impl<'a> FeatureManager<'a> {
         &self,
         repo: &crate::repo::Repo,
         branch: &str,
+        base_branch: Option<&str>,
     ) -> Result<Option<Feature>> {
         // No feature for the default branch.
         if branch == repo.default_branch {
@@ -551,16 +552,9 @@ impl<'a> FeatureManager<'a> {
             suffix += 1;
         }
 
-        // Infer base_branch from an existing worktree on this branch, or fall
-        // back to the repo default.
-        let base_branch: String = self
-            .conn
-            .query_row(
-                "SELECT base_branch FROM worktrees WHERE repo_id = ?1 AND branch = ?2 AND base_branch IS NOT NULL LIMIT 1",
-                params![repo.id, branch],
-                |row| row.get(0),
-            )
-            .optional()?
+        // Use the caller-supplied base_branch, or fall back to the repo default.
+        let base_branch: String = base_branch
+            .map(|s| s.to_string())
             .unwrap_or_else(|| repo.default_branch.clone());
 
         let id = crate::new_id();
@@ -1797,7 +1791,7 @@ mod tests {
         let mgr = FeatureManager::new(&conn, &config);
 
         let result = mgr
-            .ensure_feature_for_branch(&repo, "feat/notifications")
+            .ensure_feature_for_branch(&repo, "feat/notifications", None)
             .unwrap();
         assert!(result.is_some(), "should create a new feature");
         let feature = result.unwrap();
@@ -1818,7 +1812,7 @@ mod tests {
         let mgr = FeatureManager::new(&conn, &config);
 
         let result = mgr
-            .ensure_feature_for_branch(&repo, "feat/notifications")
+            .ensure_feature_for_branch(&repo, "feat/notifications", None)
             .unwrap();
         assert!(
             result.is_none(),
@@ -1834,7 +1828,7 @@ mod tests {
         let config = Config::default();
         let mgr = FeatureManager::new(&conn, &config);
 
-        let result = mgr.ensure_feature_for_branch(&repo, "main").unwrap();
+        let result = mgr.ensure_feature_for_branch(&repo, "main", None).unwrap();
         assert!(result.is_none(), "should be no-op for default branch");
     }
 
@@ -1851,7 +1845,7 @@ mod tests {
         let mgr = FeatureManager::new(&conn, &config);
 
         let result = mgr
-            .ensure_feature_for_branch(&repo, "feat/notifications")
+            .ensure_feature_for_branch(&repo, "feat/notifications", None)
             .unwrap();
         assert!(result.is_some());
         let feature = result.unwrap();
@@ -1875,7 +1869,7 @@ mod tests {
         let mgr = FeatureManager::new(&conn, &config);
 
         let result = mgr
-            .ensure_feature_for_branch(&repo, "feat/notifications")
+            .ensure_feature_for_branch(&repo, "feat/notifications", None)
             .unwrap();
         assert!(result.is_some());
         let feature = result.unwrap();
@@ -1887,30 +1881,42 @@ mod tests {
     }
 
     #[test]
-    fn test_ensure_feature_for_branch_infers_base_from_worktree() {
+    fn test_ensure_feature_for_branch_uses_supplied_base_branch() {
         let conn = setup_db();
         let repo_id = insert_repo(&conn);
         let repo = make_repo(&repo_id);
-
-        // Create a worktree that was based on "feat/notifications"
-        let wt_id = crate::new_id();
-        conn.execute(
-            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, created_at)
-             VALUES (?1, ?2, 'wt-x', 'feat/notifications', 'develop', '/tmp/wt', '2024-01-01T00:00:00Z')",
-            params![wt_id, repo_id],
-        ).unwrap();
 
         let config = Config::default();
         let mgr = FeatureManager::new(&conn, &config);
 
         let result = mgr
-            .ensure_feature_for_branch(&repo, "feat/notifications")
+            .ensure_feature_for_branch(&repo, "feat/notifications", Some("develop"))
             .unwrap();
         assert!(result.is_some());
         let feature = result.unwrap();
         assert_eq!(
             feature.base_branch, "develop",
-            "should infer base from existing worktree"
+            "should use caller-supplied base_branch"
+        );
+    }
+
+    #[test]
+    fn test_ensure_feature_for_branch_defaults_to_repo_default_branch() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let repo = make_repo(&repo_id);
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .ensure_feature_for_branch(&repo, "feat/notifications", None)
+            .unwrap();
+        assert!(result.is_some());
+        let feature = result.unwrap();
+        assert_eq!(
+            feature.base_branch, "main",
+            "should fall back to repo default_branch when base_branch is None"
         );
     }
 

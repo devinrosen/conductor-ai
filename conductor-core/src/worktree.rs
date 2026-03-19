@@ -237,7 +237,7 @@ impl<'a> WorktreeManager<'a> {
         // Auto-register feature if targeting a non-default branch
         if let Some(ref base) = base_for_db {
             let fm = crate::feature::FeatureManager::new(self.conn, self.config);
-            match fm.ensure_feature_for_branch(&repo, base) {
+            match fm.ensure_feature_for_branch(&repo, base, None) {
                 Ok(Some(feature)) => {
                     warnings.push(format!(
                         "Auto-registered feature '{}' for branch '{}'",
