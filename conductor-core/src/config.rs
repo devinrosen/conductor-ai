@@ -25,6 +25,14 @@ pub struct NotificationConfig {
     pub enabled: bool,
     #[serde(default)]
     pub workflows: WorkflowNotificationConfig,
+    #[serde(default)]
+    pub slack: SlackConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SlackConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -740,6 +748,25 @@ app_id = 123456
         assert!(config.notifications.workflows.on_gate_human);
         assert!(!config.notifications.workflows.on_gate_ci);
         assert!(config.notifications.workflows.on_gate_pr_review);
+        assert!(config.notifications.slack.webhook_url.is_none());
+    }
+
+    #[test]
+    fn test_notification_slack_config() {
+        let config: Config = toml::from_str(
+            r#"
+            [notifications]
+            enabled = true
+            [notifications.slack]
+            webhook_url = "https://hooks.slack.com/services/T00/B00/xxx"
+        "#,
+        )
+        .unwrap();
+        assert!(config.notifications.enabled);
+        assert_eq!(
+            config.notifications.slack.webhook_url.as_deref(),
+            Some("https://hooks.slack.com/services/T00/B00/xxx")
+        );
     }
 
     #[test]

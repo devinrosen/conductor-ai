@@ -1,6 +1,48 @@
+use crate::agent::{AgentRun, AgentRunStatus};
 use crate::config::NotificationConfig;
 use crate::notification_manager::{CreateNotification, NotificationManager, NotificationSeverity};
+use crate::workflow::WorkflowRun;
+use crate::workflow::WorkflowRunStatus;
 use crate::workflow_dsl::GateType;
+
+/// Send a plain-text message to a Slack incoming webhook URL.
+///
+/// Fire-and-forget on a spawned thread — never blocks the caller, never
+/// panics, never propagates errors. Logs a warning on failure.
+fn send_slack_message(webhook_url: &str, text: &str) {
+    let url = webhook_url.to_string();
+    let body = serde_json::json!({ "text": text });
+    std::thread::spawn(move || {
+        let agent = ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_secs(10))
+            .build();
+        if let Err(e) = agent.post(&url).send_json(&body) {
+            tracing::warn!("Slack webhook failed: {e}");
+        }
+    });
+}
+
+/// Escape Slack mrkdwn special characters in user-supplied content.
+///
+/// Slack treats `<…>` as link/mention markup, so we must escape all `<`
+/// characters — not just `<!`, `<@`, `<#` — to prevent hyperlink injection
+/// (e.g. `<http://evil.com|Click here>`) from LLM-sourced agent output.
+/// Also escapes `&` which Slack requires as `&amp;`.
+fn escape_slack_mrkdwn(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// If Slack is configured, dispatch `text` to the webhook.
+fn maybe_send_slack(config: &NotificationConfig, text: &str) {
+    if let Some(ref url) = config.slack.webhook_url {
+        if !url.is_empty() {
+            let escaped = escape_slack_mrkdwn(text);
+            send_slack_message(url, &escaped);
+        }
+    }
+}
 
 /// Persist an in-app notification record. Logs a warning on failure.
 fn persist_notification(conn: &rusqlite::Connection, params: &CreateNotification<'_>) {
@@ -119,6 +161,15 @@ pub fn fire_workflow_notification(
     if let Err(e) = show_desktop_notification(title, &body) {
         tracing::warn!(run_id, workflow_name, "desktop notification failed: {e}");
     }
+
+    let status_word = if succeeded { "completed" } else { "failed" };
+    let slack_text = match target_label {
+        Some(label) => {
+            format!("[conductor] workflow \"{workflow_name}\" {status_word} for {label}")
+        }
+        None => format!("[conductor] workflow \"{workflow_name}\" {status_word}"),
+    };
+    maybe_send_slack(config, &slack_text);
 }
 
 /// Fire a desktop notification for an agent feedback request.
@@ -158,6 +209,82 @@ pub fn fire_feedback_notification(
     if let Err(e) = show_desktop_notification(title, prompt_preview) {
         tracing::warn!(request_id, "desktop notification failed: {e}");
     }
+
+    let slack_text = format!("[conductor] agent run waiting for feedback: {prompt_preview}");
+    maybe_send_slack(config, &slack_text);
+}
+
+/// Fire a notification for a standalone agent run that reached a terminal state.
+///
+/// Gated on `config.enabled` and per-event `on_success`/`on_failure` guards.
+/// Uses `(run_id, "agent_completed"|"agent_failed")` as the dedup key.
+pub fn fire_agent_run_notification(
+    conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    run_id: &str,
+    worktree_slug: Option<&str>,
+    succeeded: bool,
+    error_msg: Option<&str>,
+) {
+    if !should_notify(config, succeeded) {
+        return;
+    }
+
+    let event_type = if succeeded {
+        "agent_completed"
+    } else {
+        "agent_failed"
+    };
+    if !try_claim_notification(conn, run_id, event_type) {
+        return;
+    }
+
+    let title = if succeeded {
+        "Conductor \u{2014} Agent Run Finished"
+    } else {
+        "Conductor \u{2014} Agent Run Failed"
+    };
+
+    let body = match (worktree_slug, error_msg) {
+        (Some(slug), Some(err)) => format!("{slug}: {err}"),
+        (Some(slug), None) => slug.to_string(),
+        (None, Some(err)) => err.to_string(),
+        (None, None) => {
+            if succeeded {
+                "Agent run completed".to_string()
+            } else {
+                "Agent run failed".to_string()
+            }
+        }
+    };
+
+    let severity = if succeeded {
+        NotificationSeverity::Info
+    } else {
+        NotificationSeverity::ActionRequired
+    };
+    persist_notification(
+        conn,
+        &CreateNotification {
+            kind: event_type,
+            title,
+            body: &body,
+            severity,
+            entity_id: Some(run_id),
+            entity_type: Some("agent_run"),
+        },
+    );
+
+    if let Err(e) = show_desktop_notification(title, &body) {
+        tracing::warn!(run_id, "desktop notification failed: {e}");
+    }
+
+    let status_word = if succeeded { "completed" } else { "failed" };
+    let slack_text = match worktree_slug {
+        Some(slug) => format!("[conductor] agent run {status_word} on {slug}"),
+        None => format!("[conductor] agent run {status_word}"),
+    };
+    maybe_send_slack(config, &slack_text);
 }
 
 /// Build the notification title and body for a gate based on its type.
@@ -284,6 +411,9 @@ pub fn fire_gate_notification(
             "desktop notification failed: {e}"
         );
     }
+
+    let slack_text = format!("[conductor] {title}: {body}");
+    maybe_send_slack(config, &slack_text);
 }
 
 /// Determine the most "actionable" gate type from a slice of optional gate types.
@@ -389,6 +519,116 @@ pub fn fire_grouped_gate_notification(
             "grouped desktop notification failed: {e}"
         );
     }
+
+    let slack_text = format!("[conductor] {title}: {body}");
+    maybe_send_slack(config, &slack_text);
+}
+
+/// A workflow run that freshly transitioned to a terminal state.
+pub struct WorkflowTerminalTransition {
+    pub run_id: String,
+    pub workflow_name: String,
+    pub target_label: Option<String>,
+    pub succeeded: bool,
+}
+
+/// Detect workflow runs that have freshly transitioned to a terminal status.
+///
+/// `seen` is updated in-place, stale entries are pruned, and `initialized`
+/// prevents spurious notifications on the first call.
+pub fn detect_workflow_terminal_transitions<'a>(
+    runs: impl Iterator<Item = &'a WorkflowRun>,
+    seen: &mut std::collections::HashMap<String, WorkflowRunStatus>,
+    initialized: &mut bool,
+) -> Vec<WorkflowTerminalTransition> {
+    let runs: Vec<_> = runs.collect();
+    let mut transitions = Vec::new();
+
+    for run in &runs {
+        let now_terminal = matches!(
+            run.status,
+            WorkflowRunStatus::Completed | WorkflowRunStatus::Failed
+        );
+        if *initialized {
+            let prev_status = seen.get(&run.id);
+            let status_changed = prev_status.map(|s| s != &run.status).unwrap_or(true);
+            if now_terminal && status_changed {
+                transitions.push(WorkflowTerminalTransition {
+                    run_id: run.id.clone(),
+                    workflow_name: run.workflow_name.clone(),
+                    target_label: run.target_label.clone(),
+                    succeeded: matches!(run.status, WorkflowRunStatus::Completed),
+                });
+            }
+        }
+        seen.insert(run.id.clone(), run.status.clone());
+    }
+
+    *initialized = true;
+
+    // Prune stale entries to prevent unbounded growth
+    let current_ids: std::collections::HashSet<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+    seen.retain(|id, _| current_ids.contains(id.as_str()));
+
+    transitions
+}
+
+/// An agent run that freshly transitioned to a terminal state.
+pub struct AgentTerminalTransition {
+    pub run_id: String,
+    pub worktree_slug: Option<String>,
+    pub succeeded: bool,
+    pub error_msg: Option<String>,
+}
+
+/// Detect agent runs that have freshly transitioned to a terminal status.
+///
+/// Works identically to `detect_new_terminal_transitions` for workflow runs:
+/// `seen` is updated in-place, stale entries are pruned, and `initialized`
+/// prevents spurious notifications on the first call.
+///
+/// `runs` is an iterator of `(worktree_slug, &AgentRun)` pairs.
+pub fn detect_agent_terminal_transitions<'a>(
+    runs: impl Iterator<Item = (Option<&'a str>, &'a AgentRun)>,
+    seen: &mut std::collections::HashMap<String, AgentRunStatus>,
+    initialized: &mut bool,
+) -> Vec<AgentTerminalTransition> {
+    let runs: Vec<_> = runs.collect();
+    let mut transitions = Vec::new();
+
+    for (slug, run) in &runs {
+        let now_terminal = matches!(
+            run.status,
+            AgentRunStatus::Completed | AgentRunStatus::Failed | AgentRunStatus::Cancelled
+        );
+        if *initialized {
+            let prev = seen.get(&run.id);
+            let changed = prev.map(|s| s != &run.status).unwrap_or(true);
+            if now_terminal && changed {
+                let succeeded = run.status == AgentRunStatus::Completed;
+                transitions.push(AgentTerminalTransition {
+                    run_id: run.id.clone(),
+                    worktree_slug: slug.map(|s| s.to_string()),
+                    succeeded,
+                    error_msg: if !succeeded {
+                        run.result_text.clone()
+                    } else {
+                        None
+                    },
+                });
+            }
+        }
+        seen.insert(run.id.clone(), run.status.clone());
+    }
+
+    *initialized = true;
+
+    // Prune stale entries to prevent unbounded growth
+    let current_ids: std::collections::HashSet<&str> =
+        runs.iter().map(|(_, r)| r.id.as_str()).collect();
+    seen.retain(|id, _| current_ids.contains(id.as_str()));
+
+    transitions
 }
 
 fn show_desktop_notification(title: &str, body: &str) -> Result<(), String> {
@@ -409,7 +649,7 @@ fn show_desktop_notification(title: &str, body: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{NotificationConfig, WorkflowNotificationConfig};
+    use crate::config::{NotificationConfig, SlackConfig, WorkflowNotificationConfig};
     use rusqlite::Connection;
 
     fn config(enabled: bool, on_success: bool, on_failure: bool) -> NotificationConfig {
@@ -422,6 +662,7 @@ mod tests {
                 on_gate_ci: false,
                 on_gate_pr_review: true,
             },
+            slack: SlackConfig::default(),
         }
     }
 
@@ -1121,5 +1362,294 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1, "grouped notification must claim exactly once");
+    }
+
+    // --- fire_agent_run_notification ---
+
+    #[test]
+    fn fire_agent_run_notification_disabled_does_not_claim() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true);
+        fire_agent_run_notification(&conn, &cfg, "agent-1", Some("my-wt"), true, None);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "disabled config must not write to notification_log"
+        );
+    }
+
+    #[test]
+    fn fire_agent_run_notification_success_claims_once() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        fire_agent_run_notification(&conn, &cfg, "agent-2", Some("feat/foo"), true, None);
+        fire_agent_run_notification(&conn, &cfg, "agent-2", Some("feat/foo"), true, None);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-2' AND event_type = 'agent_completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let mgr = NotificationManager::new(&conn);
+        let unread = mgr.list_unread().unwrap();
+        assert_eq!(unread.len(), 1);
+        assert_eq!(unread[0].kind, "agent_completed");
+        assert_eq!(unread[0].entity_id.as_deref(), Some("agent-2"));
+    }
+
+    #[test]
+    fn fire_agent_run_notification_failure_claims_once() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        fire_agent_run_notification(
+            &conn,
+            &cfg,
+            "agent-3",
+            Some("fix/bar"),
+            false,
+            Some("out of memory"),
+        );
+        fire_agent_run_notification(
+            &conn,
+            &cfg,
+            "agent-3",
+            Some("fix/bar"),
+            false,
+            Some("out of memory"),
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-3' AND event_type = 'agent_failed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let mgr = NotificationManager::new(&conn);
+        let unread = mgr.list_unread().unwrap();
+        assert_eq!(unread.len(), 1);
+        assert_eq!(unread[0].kind, "agent_failed");
+    }
+
+    #[test]
+    fn fire_agent_run_notification_on_success_false_suppresses_success() {
+        let conn = in_memory_db();
+        let cfg = config(true, false, true);
+        fire_agent_run_notification(&conn, &cfg, "agent-4", None, true, None);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-4'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn fire_agent_run_notification_on_failure_false_suppresses_failure() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, false);
+        fire_agent_run_notification(&conn, &cfg, "agent-5", None, false, Some("err"));
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-5'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    // --- Slack config deserialization ---
+
+    #[test]
+    fn slack_config_default_is_none() {
+        let cfg: NotificationConfig = toml::from_str("enabled = true").unwrap();
+        assert!(cfg.slack.webhook_url.is_none());
+    }
+
+    #[test]
+    fn slack_config_with_webhook_url() {
+        let cfg: NotificationConfig = toml::from_str(
+            r#"
+            enabled = true
+            [slack]
+            webhook_url = "https://hooks.slack.com/services/T00/B00/xxx"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.slack.webhook_url.as_deref(),
+            Some("https://hooks.slack.com/services/T00/B00/xxx")
+        );
+    }
+
+    #[test]
+    fn maybe_send_slack_does_nothing_when_unconfigured() {
+        // Just verify it doesn't panic — no Slack server to hit in tests.
+        let cfg = config(true, true, true);
+        maybe_send_slack(&cfg, "test message");
+    }
+
+    // --- escape_slack_mrkdwn ---
+
+    #[test]
+    fn escape_slack_mrkdwn_escapes_hyperlink_injection() {
+        let input = "<http://evil.com|Click here>";
+        let escaped = escape_slack_mrkdwn(input);
+        assert!(
+            !escaped.contains("<http"),
+            "hyperlinks must be escaped: {escaped}"
+        );
+        assert!(escaped.contains("&lt;http"));
+    }
+
+    #[test]
+    fn escape_slack_mrkdwn_escapes_ampersand() {
+        assert_eq!(escape_slack_mrkdwn("a & b"), "a &amp; b");
+    }
+
+    #[test]
+    fn escape_slack_mrkdwn_escapes_angle_brackets() {
+        assert_eq!(escape_slack_mrkdwn("<>"), "&lt;&gt;");
+    }
+
+    // --- detect_agent_terminal_transitions ---
+
+    fn make_agent_run(id: &str, status: AgentRunStatus) -> AgentRun {
+        AgentRun {
+            id: id.to_string(),
+            worktree_id: None,
+            claude_session_id: None,
+            prompt: String::new(),
+            status,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            ended_at: None,
+            tmux_window: None,
+            log_file: None,
+            model: None,
+            plan: None,
+            parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            bot_name: None,
+        }
+    }
+
+    #[test]
+    fn agent_transitions_first_tick_suppresses_all() {
+        let runs = [make_agent_run("a1", AgentRunStatus::Completed)];
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+        let iter = runs.iter().map(|r| (None, r));
+        let t = detect_agent_terminal_transitions(iter, &mut seen, &mut initialized);
+        assert!(t.is_empty(), "first tick must suppress transitions");
+        assert!(initialized);
+        assert_eq!(seen.len(), 1);
+    }
+
+    #[test]
+    fn agent_transitions_running_to_completed_fires() {
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+
+        let tick1 = [make_agent_run("a1", AgentRunStatus::Running)];
+        let iter1 = tick1.iter().map(|r| (Some("my-wt"), r));
+        detect_agent_terminal_transitions(iter1, &mut seen, &mut initialized);
+
+        let tick2 = [make_agent_run("a1", AgentRunStatus::Completed)];
+        let iter2 = tick2.iter().map(|r| (Some("my-wt"), r));
+        let t = detect_agent_terminal_transitions(iter2, &mut seen, &mut initialized);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].run_id, "a1");
+        assert!(t[0].succeeded);
+        assert_eq!(t[0].worktree_slug.as_deref(), Some("my-wt"));
+    }
+
+    #[test]
+    fn agent_transitions_already_seen_terminal_does_not_refire() {
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+
+        let tick1 = [make_agent_run("a1", AgentRunStatus::Completed)];
+        let iter1 = tick1.iter().map(|r| (None, r));
+        detect_agent_terminal_transitions(iter1, &mut seen, &mut initialized);
+
+        let tick2 = [make_agent_run("a1", AgentRunStatus::Completed)];
+        let iter2 = tick2.iter().map(|r| (None, r));
+        let t = detect_agent_terminal_transitions(iter2, &mut seen, &mut initialized);
+        assert!(t.is_empty(), "completed→completed must not re-fire");
+    }
+
+    #[test]
+    fn agent_transitions_stale_entries_pruned() {
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+
+        let tick1 = [
+            make_agent_run("a1", AgentRunStatus::Running),
+            make_agent_run("a2", AgentRunStatus::Running),
+        ];
+        let iter1 = tick1.iter().map(|r| (None, r));
+        detect_agent_terminal_transitions(iter1, &mut seen, &mut initialized);
+        assert_eq!(seen.len(), 2);
+
+        let tick2 = [make_agent_run("a1", AgentRunStatus::Completed)];
+        let iter2 = tick2.iter().map(|r| (None, r));
+        detect_agent_terminal_transitions(iter2, &mut seen, &mut initialized);
+        assert_eq!(seen.len(), 1);
+        assert!(!seen.contains_key("a2"), "a2 should have been pruned");
+    }
+
+    #[test]
+    fn agent_transitions_cancelled_is_terminal() {
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+
+        let tick1 = [make_agent_run("a1", AgentRunStatus::Running)];
+        let iter1 = tick1.iter().map(|r| (None, r));
+        detect_agent_terminal_transitions(iter1, &mut seen, &mut initialized);
+
+        let tick2 = [make_agent_run("a1", AgentRunStatus::Cancelled)];
+        let iter2 = tick2.iter().map(|r| (None, r));
+        let t = detect_agent_terminal_transitions(iter2, &mut seen, &mut initialized);
+        assert_eq!(t.len(), 1);
+        assert!(!t[0].succeeded, "Cancelled must report succeeded=false");
+    }
+
+    #[test]
+    fn agent_transitions_failed_includes_error_msg() {
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+
+        let tick1 = [make_agent_run("a1", AgentRunStatus::Running)];
+        let iter1 = tick1.iter().map(|r| (None, r));
+        detect_agent_terminal_transitions(iter1, &mut seen, &mut initialized);
+
+        let mut failed_run = make_agent_run("a1", AgentRunStatus::Failed);
+        failed_run.result_text = Some("out of memory".to_string());
+        let tick2 = [failed_run];
+        let iter2 = tick2.iter().map(|r| (None, r));
+        let t = detect_agent_terminal_transitions(iter2, &mut seen, &mut initialized);
+        assert_eq!(t.len(), 1);
+        assert!(!t[0].succeeded);
+        assert_eq!(t[0].error_msg.as_deref(), Some("out of memory"));
     }
 }
