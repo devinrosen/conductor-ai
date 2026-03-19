@@ -2,6 +2,29 @@ use crate::config::NotificationConfig;
 use crate::notification_manager::{CreateNotification, NotificationManager, NotificationSeverity};
 use crate::workflow_dsl::GateType;
 
+/// Send a plain-text message to a Slack incoming webhook URL.
+///
+/// Fire-and-forget on a spawned thread — never blocks the caller, never
+/// panics, never propagates errors. Logs a warning on failure.
+fn send_slack_message(webhook_url: &str, text: &str) {
+    let url = webhook_url.to_string();
+    let body = serde_json::json!({ "text": text });
+    std::thread::spawn(move || {
+        if let Err(e) = ureq::post(&url).send_json(&body) {
+            tracing::warn!("Slack webhook failed: {e}");
+        }
+    });
+}
+
+/// If Slack is configured, dispatch `text` to the webhook.
+fn maybe_send_slack(config: &NotificationConfig, text: &str) {
+    if let Some(ref url) = config.slack.webhook_url {
+        if !url.is_empty() {
+            send_slack_message(url, text);
+        }
+    }
+}
+
 /// Persist an in-app notification record. Logs a warning on failure.
 fn persist_notification(conn: &rusqlite::Connection, params: &CreateNotification<'_>) {
     let mgr = NotificationManager::new(conn);
@@ -119,6 +142,15 @@ pub fn fire_workflow_notification(
     if let Err(e) = show_desktop_notification(title, &body) {
         tracing::warn!(run_id, workflow_name, "desktop notification failed: {e}");
     }
+
+    let status_word = if succeeded { "completed" } else { "failed" };
+    let slack_text = match target_label {
+        Some(label) => {
+            format!("[conductor] workflow \"{workflow_name}\" {status_word} for {label}")
+        }
+        None => format!("[conductor] workflow \"{workflow_name}\" {status_word}"),
+    };
+    maybe_send_slack(config, &slack_text);
 }
 
 /// Fire a desktop notification for an agent feedback request.
@@ -158,6 +190,87 @@ pub fn fire_feedback_notification(
     if let Err(e) = show_desktop_notification(title, prompt_preview) {
         tracing::warn!(request_id, "desktop notification failed: {e}");
     }
+
+    let slack_text = format!("[conductor] agent run waiting for feedback: {prompt_preview}");
+    maybe_send_slack(config, &slack_text);
+}
+
+/// Fire a notification for a standalone agent run that reached a terminal state.
+///
+/// Gated on `config.enabled` and per-event `on_success`/`on_failure` guards.
+/// Uses `(run_id, "agent_completed"|"agent_failed")` as the dedup key.
+pub fn fire_agent_run_notification(
+    conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    run_id: &str,
+    worktree_slug: Option<&str>,
+    succeeded: bool,
+    error_msg: Option<&str>,
+) {
+    if !should_notify(config, succeeded) {
+        return;
+    }
+
+    let event_type = if succeeded {
+        "agent_completed"
+    } else {
+        "agent_failed"
+    };
+    if !try_claim_notification(conn, run_id, event_type) {
+        return;
+    }
+
+    let title = if succeeded {
+        "Conductor \u{2014} Agent Run Finished"
+    } else {
+        "Conductor \u{2014} Agent Run Failed"
+    };
+
+    let body = match (worktree_slug, error_msg) {
+        (Some(slug), Some(err)) => format!("{slug}: {err}"),
+        (Some(slug), None) => slug.to_string(),
+        (None, Some(err)) => err.to_string(),
+        (None, None) => {
+            if succeeded {
+                "Agent run completed".to_string()
+            } else {
+                "Agent run failed".to_string()
+            }
+        }
+    };
+
+    let severity = if succeeded {
+        NotificationSeverity::Info
+    } else {
+        NotificationSeverity::ActionRequired
+    };
+    let kind = if succeeded {
+        "agent_completed"
+    } else {
+        "agent_failed"
+    };
+    persist_notification(
+        conn,
+        &CreateNotification {
+            kind,
+            title,
+            body: &body,
+            severity,
+            entity_id: Some(run_id),
+            entity_type: Some("agent_run"),
+        },
+    );
+
+    if let Err(e) = show_desktop_notification(title, &body) {
+        tracing::warn!(run_id, "desktop notification failed: {e}");
+    }
+
+    let status_word = if succeeded { "completed" } else { "failed" };
+    let slack_text = match worktree_slug {
+        Some(slug) => format!("[conductor] agent run {status_word} on {slug}"),
+        None => format!("[conductor] agent run {status_word}"),
+    };
+    maybe_send_slack(config, &slack_text);
 }
 
 /// Build the notification title and body for a gate based on its type.
@@ -284,6 +397,9 @@ pub fn fire_gate_notification(
             "desktop notification failed: {e}"
         );
     }
+
+    let slack_text = format!("[conductor] {title}: {body}");
+    maybe_send_slack(config, &slack_text);
 }
 
 /// Determine the most "actionable" gate type from a slice of optional gate types.
@@ -389,6 +505,9 @@ pub fn fire_grouped_gate_notification(
             "grouped desktop notification failed: {e}"
         );
     }
+
+    let slack_text = format!("[conductor] {title}: {body}");
+    maybe_send_slack(config, &slack_text);
 }
 
 fn show_desktop_notification(title: &str, body: &str) -> Result<(), String> {
@@ -409,7 +528,7 @@ fn show_desktop_notification(title: &str, body: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{NotificationConfig, WorkflowNotificationConfig};
+    use crate::config::{NotificationConfig, SlackConfig, WorkflowNotificationConfig};
     use rusqlite::Connection;
 
     fn config(enabled: bool, on_success: bool, on_failure: bool) -> NotificationConfig {
@@ -422,6 +541,7 @@ mod tests {
                 on_gate_ci: false,
                 on_gate_pr_review: true,
             },
+            slack: SlackConfig::default(),
         }
     }
 
@@ -1121,5 +1241,143 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1, "grouped notification must claim exactly once");
+    }
+
+    // --- fire_agent_run_notification ---
+
+    #[test]
+    fn fire_agent_run_notification_disabled_does_not_claim() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true);
+        fire_agent_run_notification(&conn, &cfg, "agent-1", Some("my-wt"), true, None);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "disabled config must not write to notification_log"
+        );
+    }
+
+    #[test]
+    fn fire_agent_run_notification_success_claims_once() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        fire_agent_run_notification(&conn, &cfg, "agent-2", Some("feat/foo"), true, None);
+        fire_agent_run_notification(&conn, &cfg, "agent-2", Some("feat/foo"), true, None);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-2' AND event_type = 'agent_completed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let mgr = NotificationManager::new(&conn);
+        let unread = mgr.list_unread().unwrap();
+        assert_eq!(unread.len(), 1);
+        assert_eq!(unread[0].kind, "agent_completed");
+        assert_eq!(unread[0].entity_id.as_deref(), Some("agent-2"));
+    }
+
+    #[test]
+    fn fire_agent_run_notification_failure_claims_once() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        fire_agent_run_notification(
+            &conn,
+            &cfg,
+            "agent-3",
+            Some("fix/bar"),
+            false,
+            Some("out of memory"),
+        );
+        fire_agent_run_notification(
+            &conn,
+            &cfg,
+            "agent-3",
+            Some("fix/bar"),
+            false,
+            Some("out of memory"),
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-3' AND event_type = 'agent_failed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let mgr = NotificationManager::new(&conn);
+        let unread = mgr.list_unread().unwrap();
+        assert_eq!(unread.len(), 1);
+        assert_eq!(unread[0].kind, "agent_failed");
+    }
+
+    #[test]
+    fn fire_agent_run_notification_on_success_false_suppresses_success() {
+        let conn = in_memory_db();
+        let cfg = config(true, false, true);
+        fire_agent_run_notification(&conn, &cfg, "agent-4", None, true, None);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-4'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn fire_agent_run_notification_on_failure_false_suppresses_failure() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, false);
+        fire_agent_run_notification(&conn, &cfg, "agent-5", None, false, Some("err"));
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'agent-5'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    // --- Slack config deserialization ---
+
+    #[test]
+    fn slack_config_default_is_none() {
+        let cfg: NotificationConfig = toml::from_str("enabled = true").unwrap();
+        assert!(cfg.slack.webhook_url.is_none());
+    }
+
+    #[test]
+    fn slack_config_with_webhook_url() {
+        let cfg: NotificationConfig = toml::from_str(
+            r#"
+            enabled = true
+            [slack]
+            webhook_url = "https://hooks.slack.com/services/T00/B00/xxx"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.slack.webhook_url.as_deref(),
+            Some("https://hooks.slack.com/services/T00/B00/xxx")
+        );
+    }
+
+    #[test]
+    fn maybe_send_slack_does_nothing_when_unconfigured() {
+        // Just verify it doesn't panic — no Slack server to hit in tests.
+        let cfg = config(true, true, true);
+        maybe_send_slack(&cfg, "test message");
     }
 }

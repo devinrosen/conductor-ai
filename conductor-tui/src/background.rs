@@ -89,6 +89,10 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
         let mut notified_feedback_ids: HashSet<String> = HashSet::new();
         let mut notified_gate_ids: HashSet<String> = HashSet::new();
         let mut notified_grouped_run_ids: HashSet<String> = HashSet::new();
+        // Agent run terminal transition tracking (similar to workflow transitions).
+        let mut seen_agent_statuses: HashMap<String, conductor_core::agent::AgentRunStatus> =
+            HashMap::new();
+        let mut agent_initialized = false;
         // Incremental turn-counting state: run_id → (byte_offset, turn_count).
         // Keyed by run ID (not worktree ID) so that a new run on the same
         // worktree starts with a fresh offset instead of inheriting a stale one.
@@ -230,6 +234,54 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     }
                                 }
                             }
+                        }
+
+                        // Detect agent run terminal transitions and fire notifications.
+                        {
+                            use conductor_core::agent::AgentRunStatus;
+
+                            // Build worktree_id → slug lookup for notification text.
+                            let wt_slugs: HashMap<&str, &str> = payload
+                                .worktrees
+                                .iter()
+                                .map(|wt| (wt.id.as_str(), wt.slug.as_str()))
+                                .collect();
+
+                            let mut current_agent_ids = HashSet::new();
+                            for (wt_id, run) in &payload.latest_agent_runs {
+                                current_agent_ids.insert(run.id.clone());
+                                let now_terminal = matches!(
+                                    run.status,
+                                    AgentRunStatus::Completed
+                                        | AgentRunStatus::Failed
+                                        | AgentRunStatus::Cancelled
+                                );
+                                if agent_initialized {
+                                    let prev = seen_agent_statuses.get(&run.id);
+                                    let changed = prev.map(|s| s != &run.status).unwrap_or(true);
+                                    if now_terminal && changed {
+                                        let succeeded = run.status == AgentRunStatus::Completed;
+                                        let slug = wt_slugs.get(wt_id.as_str()).copied();
+                                        let error_msg = if !succeeded {
+                                            run.result_text.as_deref()
+                                        } else {
+                                            None
+                                        };
+                                        crate::notify::fire_agent_run_notification(
+                                            conn,
+                                            &config.notifications,
+                                            &run.id,
+                                            slug,
+                                            succeeded,
+                                            error_msg,
+                                        );
+                                    }
+                                }
+                                seen_agent_statuses.insert(run.id.clone(), run.status.clone());
+                            }
+                            agent_initialized = true;
+                            // Prune stale entries
+                            seen_agent_statuses.retain(|id, _| current_agent_ids.contains(id));
                         }
 
                         // Prune resolved feedback requests to prevent unbounded growth.
