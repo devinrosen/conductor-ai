@@ -110,22 +110,14 @@ pub fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
 /// Both the dashboard and repo-detail worktree panes use this so the
 /// format stays consistent.  Pass `repo_prefix` to prepend the repo
 /// slug (dashboard style) and `show_branch` to append the branch name
-/// (repo-detail style).
-pub fn worktree_list_item(
-    wt: &Worktree,
-    state: &AppState,
-    repo_prefix: Option<&str>,
-    show_branch: bool,
-) -> ListItem<'static> {
-    worktree_list_item_with_prefix(wt, state, repo_prefix, show_branch, "")
-}
-
+/// (repo-detail style).  `list_prefix` is prepended as-is (used for
+/// tree-indent connectors).
 pub fn worktree_list_item_with_prefix(
     wt: &Worktree,
     state: &AppState,
     repo_prefix: Option<&str>,
     show_branch: bool,
-    list_prefix: &'static str,
+    list_prefix: &str,
 ) -> ListItem<'static> {
     let is_active = wt.is_active();
     let status_color = match wt.status {
@@ -142,7 +134,7 @@ pub fn worktree_list_item_with_prefix(
     let mut spans: Vec<Span<'static>> = Vec::new();
 
     if !list_prefix.is_empty() {
-        spans.push(Span::raw(list_prefix));
+        spans.push(Span::raw(list_prefix.to_string()));
     }
 
     if let Some(prefix) = repo_prefix {

@@ -182,7 +182,32 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
     let wt_items: Vec<ListItem> = state
         .detail_worktrees
         .iter()
-        .map(|wt| super::common::worktree_list_item(wt, state, None, true))
+        .enumerate()
+        .map(|(i, wt)| {
+            let prefix = if let Some(pos) = state.detail_wt_tree_positions.get(i) {
+                if pos.depth == 0 {
+                    String::new()
+                } else {
+                    let mut p = String::new();
+                    for &ancestor_is_last in &pos.ancestors_are_last {
+                        if ancestor_is_last {
+                            p.push_str("  ");
+                        } else {
+                            p.push_str("│ ");
+                        }
+                    }
+                    if pos.is_last_sibling {
+                        p.push_str("└ ");
+                    } else {
+                        p.push_str("├ ");
+                    }
+                    p
+                }
+            } else {
+                String::new()
+            };
+            super::common::worktree_list_item_with_prefix(wt, state, None, true, &prefix)
+        })
         .collect();
 
     let wt_list = List::new(wt_items)

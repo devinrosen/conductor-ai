@@ -612,7 +612,7 @@ impl App {
                             let repo_id = repo.id.clone();
                             let remote_url = repo.remote_url.clone();
                             self.state.selected_repo_id = Some(repo_id.clone());
-                            self.state.detail_worktrees = self
+                            let filtered_wts: Vec<_> = self
                                 .state
                                 .data
                                 .worktrees
@@ -620,6 +620,11 @@ impl App {
                                 .filter(|wt| wt.repo_id == repo_id)
                                 .cloned()
                                 .collect();
+                            let repo_default = repo.default_branch.as_str();
+                            let (ordered, positions) =
+                                crate::state::build_worktree_tree(&filtered_wts, repo_default);
+                            self.state.detail_worktrees = ordered;
+                            self.state.detail_wt_tree_positions = positions;
                             self.state.detail_tickets = self
                                 .state
                                 .data
