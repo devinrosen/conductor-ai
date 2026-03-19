@@ -74,6 +74,13 @@ pub struct FeatureRow {
     pub ticket_count: i64,
 }
 
+/// A branch that has active worktrees but no matching feature record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnregisteredBranch {
+    pub branch: String,
+    pub worktree_count: i64,
+}
+
 // ---------------------------------------------------------------------------
 // Shared SQL fragments & row mapper for FeatureRow queries
 // ---------------------------------------------------------------------------
@@ -594,7 +601,7 @@ impl<'a> FeatureManager<'a> {
         &self,
         repo_id: &str,
         default_branch: &str,
-    ) -> Result<Vec<(String, i64)>> {
+    ) -> Result<Vec<UnregisteredBranch>> {
         query_collect(
             self.conn,
             "SELECT DISTINCT w.base_branch, COUNT(*) as worktree_count
@@ -606,7 +613,12 @@ impl<'a> FeatureManager<'a> {
                AND w.base_branch NOT IN (SELECT f.branch FROM features f WHERE f.repo_id = ?1 AND f.status = 'active')
              GROUP BY w.base_branch",
             params![repo_id, default_branch],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| {
+                Ok(UnregisteredBranch {
+                    branch: row.get(0)?,
+                    worktree_count: row.get(1)?,
+                })
+            },
         )
     }
 
@@ -1951,8 +1963,8 @@ mod tests {
         let orphans = mgr.list_unregistered_branches(&repo_id, "main").unwrap();
 
         assert_eq!(orphans.len(), 1);
-        assert_eq!(orphans[0].0, "feat/orphan");
-        assert_eq!(orphans[0].1, 1);
+        assert_eq!(orphans[0].branch, "feat/orphan");
+        assert_eq!(orphans[0].worktree_count, 1);
     }
 
     #[test]
@@ -1990,8 +2002,8 @@ mod tests {
 
         // Only the active worktree's branch should be returned
         assert_eq!(orphans.len(), 1);
-        assert_eq!(orphans[0].0, "feat/active-orphan");
-        assert_eq!(orphans[0].1, 1);
+        assert_eq!(orphans[0].branch, "feat/active-orphan");
+        assert_eq!(orphans[0].worktree_count, 1);
     }
 
     #[test]

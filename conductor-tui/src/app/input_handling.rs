@@ -387,10 +387,10 @@ impl App {
                                 });
                             }
                             // Append orphan branches after registered features.
-                            for (branch, wt_count) in &orphans {
+                            for orphan in &orphans {
                                 items.push(BranchPickerItem {
-                                    branch: Some(branch.clone()),
-                                    worktree_count: *wt_count,
+                                    branch: Some(orphan.branch.clone()),
+                                    worktree_count: orphan.worktree_count,
                                     ticket_count: 0,
                                 });
                             }
