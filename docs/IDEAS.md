@@ -27,3 +27,21 @@ Show PR check status (passing/failing/pending) without leaving the TUI.
 - Only relevant for worktrees with an open PR.
 
 ---
+
+## Containerized workflow execution (Docker / Kubernetes)
+
+Run conductor workflows and agent steps in containers instead of local tmux sessions. Enables conductor in CI/CD pipelines, teams using Docker/K8s, and full isolation without local tool dependencies.
+
+**Two levels:**
+1. **Agent runtime** — a `DockerRuntime` (or `KubernetesRuntime`) implementing the `AgentRuntime` trait from RFC 007. Individual agent steps run in containers with the repo mounted. No tmux needed.
+2. **Workflow executor** — the entire workflow runs in a container. Conductor becomes an orchestrator that submits jobs rather than running them locally.
+
+**Open questions:**
+- Does the daemon (#9) need to land first? Probably yes — a local-only tool can't submit remote jobs.
+- Image management: pre-built images with conductor + tools baked in, or dynamic images per-repo?
+- Credential injection: how do containers get GitHub tokens, API keys? K8s secrets, Docker env vars, mounted credential files?
+- State: containerized runs need a DB. Per-run ephemeral DB (seeded, like #1316)? Or a shared DB service?
+- Builds on RFC 007 (multi-runtime agents) — Docker is just another runtime alongside claude, gemini, openai, script.
+- This is v3+ territory. Solve local isolation with per-worktree DBs (#1316) first.
+
+---
