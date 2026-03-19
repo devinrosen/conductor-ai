@@ -549,15 +549,15 @@ impl<'a> FeatureManager<'a> {
 
         // Check if a non-active feature with the base name exists — if so,
         // reactivate it rather than creating a suffixed duplicate.
-        let maybe_inactive: Option<(String, String)> = self
+        let maybe_inactive: Option<(String, String, String)> = self
             .conn
             .query_row(
-                "SELECT id, status FROM features WHERE repo_id = ?1 AND name = ?2 AND status != 'active'",
+                "SELECT id, status, created_at FROM features WHERE repo_id = ?1 AND name = ?2 AND status != 'active'",
                 params![repo.id, base_name],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        if let Some((inactive_id, _status)) = maybe_inactive {
+        if let Some((inactive_id, _status, created_at)) = maybe_inactive {
             self.conn.execute(
                 "UPDATE features SET branch = ?1, base_branch = ?2, status = 'active', merged_at = NULL WHERE id = ?3",
                 params![branch, resolved_base, inactive_id],
@@ -569,7 +569,7 @@ impl<'a> FeatureManager<'a> {
                 branch: branch.to_string(),
                 base_branch: resolved_base,
                 status: FeatureStatus::Active,
-                created_at: String::new(), // not used by caller
+                created_at,
                 merged_at: None,
             }));
         }
