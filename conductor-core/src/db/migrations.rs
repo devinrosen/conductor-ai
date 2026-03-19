@@ -843,30 +843,22 @@ pub fn run(conn: &Connection) -> Result<()> {
             [],
             |row| row.get(0),
         )?;
-        let needs_swap = !schema_sql.contains("'hook'");
-        if needs_swap {
+        let needs_table_swap =
+            !schema_sql.contains("'hook'") || schema_sql.contains("triggered_by_hook");
+        if needs_table_swap {
+            // Either the CHECK is missing 'hook' or the old `triggered_by_hook`
+            // column still exists — both require a full table swap.
             with_foreign_keys_off(conn, || {
                 conn.execute_batch(include_str!("migrations/047_workflow_run_hooks.sql"))?;
                 Ok(())
             })?;
         } else {
-            // Table already has the updated CHECK. If the old `triggered_by_hook`
-            // column exists (from a prior version of this migration), drop it via
-            // table swap. Otherwise just ensure indexes exist.
-            let has_old_column = schema_sql.contains("triggered_by_hook");
-            if has_old_column {
-                with_foreign_keys_off(conn, || {
-                    conn.execute_batch(include_str!("migrations/047_workflow_run_hooks.sql"))?;
-                    Ok(())
-                })?;
-            } else {
-                // Just ensure indexes exist (idempotent).
-                conn.execute_batch(
-                    "CREATE INDEX IF NOT EXISTS idx_workflow_runs_ticket ON workflow_runs(ticket_id);
-                     CREATE INDEX IF NOT EXISTS idx_workflow_runs_repo ON workflow_runs(repo_id);
-                     CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_wf ON workflow_runs(parent_workflow_run_id);",
-                )?;
-            }
+            // Table is up-to-date — just ensure indexes exist (idempotent).
+            conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_workflow_runs_ticket ON workflow_runs(ticket_id);
+                 CREATE INDEX IF NOT EXISTS idx_workflow_runs_repo ON workflow_runs(repo_id);
+                 CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_wf ON workflow_runs(parent_workflow_run_id);",
+            )?;
         }
         bump_version(conn, 47)?;
     }
@@ -1118,5 +1110,225 @@ mod tests {
 
         // Should not panic.
         migrate_repo_columns_to_config(&conn);
+    }
+
+    // -----------------------------------------------------------------------
+    // Migration 047 tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: create a minimal v46 schema with the given `workflow_runs` DDL.
+    /// Returns a connection positioned at version 46, ready for migration 047.
+    fn setup_v46_schema(conn: &Connection, workflow_runs_ddl: &str) {
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE repos (
+                 id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE,
+                 local_path TEXT NOT NULL, remote_url TEXT NOT NULL,
+                 workspace_dir TEXT NOT NULL, created_at TEXT NOT NULL
+             );
+             CREATE TABLE worktrees (
+                 id TEXT PRIMARY KEY, repo_id TEXT NOT NULL,
+                 slug TEXT NOT NULL, branch TEXT NOT NULL, path TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL,
+                 base_branch TEXT NOT NULL DEFAULT 'main'
+             );
+             CREATE TABLE tickets (
+                 id TEXT PRIMARY KEY, repo_id TEXT NOT NULL,
+                 source_type TEXT NOT NULL, source_id TEXT NOT NULL,
+                 title TEXT NOT NULL, body TEXT, url TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'open', priority TEXT,
+                 labels TEXT, assignee TEXT, created_at TEXT NOT NULL,
+                 updated_at TEXT NOT NULL
+             );
+             CREATE TABLE agent_runs (
+                 id TEXT PRIMARY KEY, worktree_id TEXT,
+                 claude_session_id TEXT, prompt TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'running', result_text TEXT,
+                 cost_usd REAL, num_turns INTEGER, duration_ms INTEGER,
+                 started_at TEXT NOT NULL, ended_at TEXT, tmux_window TEXT,
+                 log_file TEXT, model TEXT, plan TEXT, parent_run_id TEXT
+             );
+             CREATE TABLE features (
+                 id TEXT PRIMARY KEY, name TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+        conn.execute_batch(workflow_runs_ddl).unwrap();
+        conn.execute_batch(
+            "INSERT INTO _conductor_meta VALUES ('schema_version', '46');
+             INSERT INTO repos VALUES ('r1', 'test-repo', '/tmp/repo',
+                 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
+             INSERT INTO agent_runs (id, prompt, started_at)
+                 VALUES ('ar1', 'workflow', '2024-01-01T00:00:00Z');",
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    }
+
+    #[test]
+    fn test_migration_047_table_swap_adds_hook_trigger() {
+        // Path 1: table CHECK does not include 'hook' — full table swap required.
+        let conn = Connection::open_in_memory().unwrap();
+        let old_ddl = "CREATE TABLE workflow_runs (
+            id TEXT PRIMARY KEY, workflow_name TEXT NOT NULL,
+            worktree_id TEXT REFERENCES worktrees(id) ON DELETE CASCADE,
+            parent_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending','running','waiting','completed','failed','cancelled','timed_out')),
+            dry_run INTEGER NOT NULL DEFAULT 0,
+            trigger TEXT NOT NULL DEFAULT 'manual'
+                CHECK (trigger IN ('manual','pr','scheduled')),
+            started_at TEXT NOT NULL, ended_at TEXT, result_summary TEXT,
+            definition_snapshot TEXT, inputs TEXT,
+            ticket_id TEXT REFERENCES tickets(id),
+            repo_id TEXT REFERENCES repos(id),
+            parent_workflow_run_id TEXT,
+            target_label TEXT, default_bot_name TEXT,
+            iteration INTEGER NOT NULL DEFAULT 0, blocked_on TEXT,
+            feature_id TEXT REFERENCES features(id)
+        );
+        CREATE INDEX idx_workflow_runs_ticket ON workflow_runs(ticket_id);
+        CREATE INDEX idx_workflow_runs_repo ON workflow_runs(repo_id);
+        CREATE INDEX idx_workflow_runs_parent_wf ON workflow_runs(parent_workflow_run_id);
+        INSERT INTO workflow_runs (id, workflow_name, parent_run_id, status, trigger, started_at)
+            VALUES ('wfr1', 'my-flow', 'ar1', 'completed', 'manual', '2024-01-01T00:00:00Z');";
+        setup_v46_schema(&conn, old_ddl);
+
+        run(&conn).unwrap();
+
+        // 'hook' trigger must now be accepted.
+        conn.execute(
+            "INSERT INTO workflow_runs (id, workflow_name, parent_run_id, trigger, started_at)
+             VALUES ('wfr2', 'hook-flow', 'ar1', 'hook', '2024-01-02T00:00:00Z')",
+            [],
+        )
+        .expect("trigger='hook' should be accepted after migration 047");
+
+        // Original row must survive.
+        let name: String = conn
+            .query_row(
+                "SELECT workflow_name FROM workflow_runs WHERE id = 'wfr1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "my-flow");
+
+        // Indexes must be recreated.
+        let idx_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index'
+                 AND name IN ('idx_workflow_runs_ticket','idx_workflow_runs_repo','idx_workflow_runs_parent_wf')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx_count, 3, "all three indexes must be recreated");
+    }
+
+    #[test]
+    fn test_migration_047_drops_triggered_by_hook_column() {
+        // Path 2: table already has 'hook' CHECK but still has old
+        // `triggered_by_hook` column — table swap should drop it.
+        let conn = Connection::open_in_memory().unwrap();
+        let ddl_with_old_column = "CREATE TABLE workflow_runs (
+            id TEXT PRIMARY KEY, workflow_name TEXT NOT NULL,
+            worktree_id TEXT REFERENCES worktrees(id) ON DELETE CASCADE,
+            parent_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending','running','waiting','completed','failed','cancelled','timed_out')),
+            dry_run INTEGER NOT NULL DEFAULT 0,
+            trigger TEXT NOT NULL DEFAULT 'manual'
+                CHECK (trigger IN ('manual','pr','scheduled','hook')),
+            triggered_by_hook INTEGER NOT NULL DEFAULT 0,
+            started_at TEXT NOT NULL, ended_at TEXT, result_summary TEXT,
+            definition_snapshot TEXT, inputs TEXT,
+            ticket_id TEXT REFERENCES tickets(id),
+            repo_id TEXT REFERENCES repos(id),
+            parent_workflow_run_id TEXT,
+            target_label TEXT, default_bot_name TEXT,
+            iteration INTEGER NOT NULL DEFAULT 0, blocked_on TEXT,
+            feature_id TEXT REFERENCES features(id)
+        );
+        INSERT INTO workflow_runs (id, workflow_name, parent_run_id, trigger, started_at)
+            VALUES ('wfr1', 'old-flow', 'ar1', 'hook', '2024-01-01T00:00:00Z');";
+        setup_v46_schema(&conn, ddl_with_old_column);
+
+        run(&conn).unwrap();
+
+        // `triggered_by_hook` column must be gone.
+        let schema: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='workflow_runs'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            !schema.contains("triggered_by_hook"),
+            "triggered_by_hook column should be removed"
+        );
+
+        // Original row must survive (trigger value preserved).
+        let trigger: String = conn
+            .query_row(
+                "SELECT trigger FROM workflow_runs WHERE id = 'wfr1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(trigger, "hook");
+    }
+
+    #[test]
+    fn test_migration_047_index_only_when_up_to_date() {
+        // Path 3: table is already fully up-to-date (has 'hook' CHECK,
+        // no `triggered_by_hook` column) — only indexes should be created.
+        let conn = Connection::open_in_memory().unwrap();
+        let up_to_date_ddl = "CREATE TABLE workflow_runs (
+            id TEXT PRIMARY KEY, workflow_name TEXT NOT NULL,
+            worktree_id TEXT REFERENCES worktrees(id) ON DELETE CASCADE,
+            parent_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending','running','waiting','completed','failed','cancelled','timed_out')),
+            dry_run INTEGER NOT NULL DEFAULT 0,
+            trigger TEXT NOT NULL DEFAULT 'manual'
+                CHECK (trigger IN ('manual','pr','scheduled','hook')),
+            started_at TEXT NOT NULL, ended_at TEXT, result_summary TEXT,
+            definition_snapshot TEXT, inputs TEXT,
+            ticket_id TEXT REFERENCES tickets(id),
+            repo_id TEXT REFERENCES repos(id),
+            parent_workflow_run_id TEXT,
+            target_label TEXT, default_bot_name TEXT,
+            iteration INTEGER NOT NULL DEFAULT 0, blocked_on TEXT,
+            feature_id TEXT REFERENCES features(id)
+        );
+        INSERT INTO workflow_runs (id, workflow_name, parent_run_id, trigger, started_at)
+            VALUES ('wfr1', 'ok-flow', 'ar1', 'hook', '2024-01-01T00:00:00Z');";
+        setup_v46_schema(&conn, up_to_date_ddl);
+
+        run(&conn).unwrap();
+
+        // Indexes must exist.
+        let idx_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index'
+                 AND name IN ('idx_workflow_runs_ticket','idx_workflow_runs_repo','idx_workflow_runs_parent_wf')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx_count, 3, "indexes must be created in index-only path");
+
+        // Data must be intact (no table swap).
+        let name: String = conn
+            .query_row(
+                "SELECT workflow_name FROM workflow_runs WHERE id = 'wfr1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "ok-flow");
     }
 }

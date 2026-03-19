@@ -3075,6 +3075,93 @@ fn test_call_workflow_propagates_feature_id_to_child() {
     );
 }
 
+#[test]
+fn test_call_workflow_propagates_triggered_by_hook_to_child() {
+    let conn = setup_db();
+    let config = Config::default();
+    let exec_config = WorkflowExecConfig::default();
+
+    // Create a temp dir with a child workflow file.
+    let tmp = tempfile::tempdir().unwrap();
+    let wf_dir = tmp.path().join(".conductor/workflows");
+    std::fs::create_dir_all(&wf_dir).unwrap();
+    std::fs::write(
+        wf_dir.join("child.wf"),
+        "workflow child { meta { targets = [\"worktree\"] } }",
+    )
+    .unwrap();
+    let working_dir = tmp.path().to_str().unwrap();
+
+    // Parent workflow that calls the child, triggered by hook.
+    let mut parent = make_empty_workflow();
+    parent
+        .body
+        .push(WorkflowNode::CallWorkflow(CallWorkflowNode {
+            workflow: "child".into(),
+            inputs: HashMap::new(),
+            retries: 0,
+            on_fail: None,
+            bot_name: None,
+        }));
+
+    let input = WorkflowExecInput {
+        conn: &conn,
+        config: &config,
+        workflow: &parent,
+        worktree_id: None,
+        working_dir,
+        repo_path: "",
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: &exec_config,
+        inputs: HashMap::new(),
+        depth: 0,
+        parent_workflow_run_id: None,
+        target_label: None,
+        default_bot_name: None,
+        feature_id: None,
+        iteration: 0,
+        run_id_notify: None,
+        triggered_by_hook: true,
+    };
+    let result = execute_workflow(&input).unwrap();
+    assert!(result.all_succeeded);
+
+    // Parent run must have trigger='hook'.
+    let wf_mgr = WorkflowManager::new(&conn);
+    let parent_run = wf_mgr
+        .get_workflow_run(&result.workflow_run_id)
+        .unwrap()
+        .expect("parent run should exist");
+    assert!(
+        parent_run.is_triggered_by_hook(),
+        "parent run should have trigger='hook'"
+    );
+
+    // Child run must also have trigger='hook' (propagated via triggered_by_hook).
+    use rusqlite::params;
+    let child_run_id: String = conn
+        .query_row(
+            "SELECT id FROM workflow_runs WHERE parent_workflow_run_id = ?1",
+            params![result.workflow_run_id],
+            |row| row.get(0),
+        )
+        .expect("child run should exist");
+    let child_run = wf_mgr
+        .get_workflow_run(&child_run_id)
+        .unwrap()
+        .expect("child run should exist");
+    assert_eq!(
+        child_run.trigger, "hook",
+        "child run should inherit trigger='hook' from parent"
+    );
+    assert!(
+        child_run.is_triggered_by_hook(),
+        "child run should be marked as triggered by hook"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // evaluate_hooks integration tests
 // ---------------------------------------------------------------------------
