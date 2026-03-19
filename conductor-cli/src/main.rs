@@ -2034,8 +2034,7 @@ fn main() -> Result<()> {
             DevCommands::Seed { reset } => {
                 let db_path = conductor_core::config::db_path();
                 if reset && db_path.exists() {
-                    std::fs::remove_file(&db_path)
-                        .context("failed to remove existing database")?;
+                    std::fs::remove_file(&db_path).context("failed to remove existing database")?;
                     println!("Removed {}", db_path.display());
                 }
                 let conn = open_database(&db_path)?;
