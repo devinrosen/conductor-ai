@@ -170,10 +170,14 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                 crate::notify::fire_gate_notification(
                                     conn,
                                     &config.notifications,
-                                    &step.id,
-                                    &step.step_name,
-                                    workflow_name,
-                                    target_label.as_deref(),
+                                    &crate::notify::GateNotificationParams {
+                                        step_id: &step.id,
+                                        step_name: &step.step_name,
+                                        workflow_name,
+                                        target_label: target_label.as_deref(),
+                                        gate_type: step.gate_type.as_ref(),
+                                        gate_prompt: step.gate_prompt.as_deref(),
+                                    },
                                 );
                             }
                         }
