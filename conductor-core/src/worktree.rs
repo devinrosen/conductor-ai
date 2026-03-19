@@ -2138,8 +2138,7 @@ mod tests {
         assert_eq!(wt.as_deref(), Some("develop"));
 
         // Clear base branch (reset to repo default)
-        mgr.set_base_branch("test-repo", "feat-test", None)
-            .unwrap();
+        mgr.set_base_branch("test-repo", "feat-test", None).unwrap();
         let wt: Option<String> = conn
             .query_row(
                 "SELECT base_branch FROM worktrees WHERE slug = 'feat-test'",
