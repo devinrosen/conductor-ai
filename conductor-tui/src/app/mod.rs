@@ -53,6 +53,7 @@ impl App {
     pub fn new(conn: Connection, config: Config, theme: Theme) -> Self {
         let mut state = AppState::new();
         state.theme = theme;
+        state.global_default_branch = config.defaults.default_branch.clone();
         Self {
             state,
             conn,

@@ -871,4 +871,36 @@ pre_commit = "cargo fmt"
         let raw: toml::Value = toml::from_str(&raw_contents).unwrap();
         assert!(raw.get("hooks").is_some(), "[hooks] should survive save");
     }
+
+    #[test]
+    fn test_repo_config_bot_name_resolution() {
+        // Simulate the effective_bot_name resolution pattern used in workflow engine:
+        // explicit input → repo config → None
+
+        // Case 1: explicit input wins over repo config
+        let explicit = Some("explicit-bot".to_string());
+        let repo_bot_name = Some("repo-bot".to_string());
+        let effective = explicit.clone().or(repo_bot_name.clone());
+        assert_eq!(effective.as_deref(), Some("explicit-bot"));
+
+        // Case 2: repo config used when no explicit input
+        let effective = None::<String>.or(repo_bot_name);
+        assert_eq!(effective.as_deref(), Some("repo-bot"));
+
+        // Case 3: None when neither set
+        let effective = None::<String>.or(None);
+        assert!(effective.is_none());
+
+        // Case 4: bot_name round-trips through save/load
+        let dir = tempfile::tempdir().unwrap();
+        let config = RepoConfig {
+            defaults: RepoDefaultsConfig {
+                bot_name: Some("my-bot".to_string()),
+                ..Default::default()
+            },
+        };
+        config.save(dir.path()).unwrap();
+        let reloaded = RepoConfig::load(dir.path()).unwrap();
+        assert_eq!(reloaded.defaults.bot_name.as_deref(), Some("my-bot"));
+    }
 }

@@ -57,6 +57,7 @@ impl App {
             View::RepoDetail => {
                 self.state.view = View::Dashboard;
                 self.state.selected_repo_id = None;
+                self.state.cached_repo_config = None;
             }
             View::WorktreeDetail => {
                 if self.state.selected_repo_id.is_some() {
@@ -612,6 +613,12 @@ impl App {
                             let repo_id = repo.id.clone();
                             let remote_url = repo.remote_url.clone();
                             self.state.selected_repo_id = Some(repo_id.clone());
+                            self.state.cached_repo_config = Some(
+                                conductor_core::config::RepoConfig::load(std::path::Path::new(
+                                    &repo.local_path,
+                                ))
+                                .unwrap_or_default(),
+                            );
                             self.state.detail_worktrees = self
                                 .state
                                 .data

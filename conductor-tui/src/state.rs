@@ -977,6 +977,12 @@ pub struct AppState {
     pub selected_repo_id: Option<String>,
     pub selected_worktree_id: Option<String>,
 
+    /// Global default branch from config (e.g. "main"), used as fallback when per-repo config
+    /// doesn't override it.
+    pub global_default_branch: String,
+    /// Cached per-repo config for the currently selected repo (avoids file I/O on every render).
+    pub cached_repo_config: Option<conductor_core::config::RepoConfig>,
+
     // Scoped lists for detail views
     pub detail_worktrees: Vec<Worktree>,
     pub detail_tickets: Vec<Ticket>,
@@ -1388,6 +1394,8 @@ impl AppState {
             ticket_index: 0,
             selected_repo_id: None,
             selected_worktree_id: None,
+            global_default_branch: "main".to_string(),
+            cached_repo_config: None,
             detail_worktrees: Vec::new(),
             detail_tickets: Vec::new(),
             detail_prs: Vec::new(),

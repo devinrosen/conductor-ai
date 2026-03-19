@@ -106,6 +106,21 @@ impl<'a> WorktreeManager<'a> {
         Self { conn, config }
     }
 
+    /// Resolve the effective default branch for a repo by loading its per-repo
+    /// config and falling back to the global config value.
+    fn resolve_default_branch(&self, repo_local_path: &str) -> String {
+        let repo_config = RepoConfig::load(Path::new(repo_local_path)).unwrap_or_else(|e| {
+            tracing::warn!(
+                "Failed to load .conductor/config.toml at '{repo_local_path}': {e}; using defaults"
+            );
+            RepoConfig::default()
+        });
+        repo_config
+            .defaults
+            .default_branch
+            .unwrap_or_else(|| self.config.defaults.default_branch.clone())
+    }
+
     /// Create a new worktree, ensuring the base branch is up to date first.
     ///
     /// Returns the created worktree and a list of non-fatal warnings
@@ -170,12 +185,7 @@ impl<'a> WorktreeManager<'a> {
         std::fs::create_dir_all(&repo.workspace_dir)?;
 
         // Resolve the default branch from repo config → global config → "main"
-        let repo_config = RepoConfig::load(Path::new(&repo.local_path)).unwrap_or_default();
-        let default_branch = repo_config
-            .defaults
-            .default_branch
-            .as_deref()
-            .unwrap_or(&self.config.defaults.default_branch);
+        let default_branch = self.resolve_default_branch(&repo.local_path);
 
         // (branch_name, base_branch_for_db, warnings)
         let (branch, base_for_db, warnings) = if let Some(pr_number) = from_pr {
@@ -187,7 +197,7 @@ impl<'a> WorktreeManager<'a> {
             // Normal path: resolve base, ensure it's up to date, create a new branch.
             let base = from_branch
                 .map(|b| b.to_string())
-                .unwrap_or_else(|| resolve_base_branch(&repo.local_path, default_branch));
+                .unwrap_or_else(|| resolve_base_branch(&repo.local_path, &default_branch));
             let warnings = ensure_base_up_to_date(&repo.local_path, &base)?;
             check_output(git_in(&repo.local_path).args([
                 "branch",
@@ -462,17 +472,12 @@ impl<'a> WorktreeManager<'a> {
                 })
                 .unwrap_or(false)
         });
-        let repo_config = RepoConfig::load(Path::new(&repo.local_path)).unwrap_or_default();
-        let default_branch = repo_config
-            .defaults
-            .default_branch
-            .as_deref()
-            .unwrap_or(&self.config.defaults.default_branch);
+        let default_branch = self.resolve_default_branch(&repo.local_path);
         let is_merged = ticket_closed
             || crate::git::is_branch_merged_local(
                 &repo.local_path,
                 &worktree.branch,
-                default_branch,
+                &default_branch,
             );
         let new_status = if is_merged {
             WorktreeStatus::Merged
@@ -549,13 +554,8 @@ impl<'a> WorktreeManager<'a> {
     pub fn create_pr(&self, repo_slug: &str, name: &str, draft: bool) -> Result<String> {
         let (repo, worktree) = self.get_active_worktree(repo_slug, name)?;
 
-        let repo_config = RepoConfig::load(Path::new(&repo.local_path)).unwrap_or_default();
-        let default_branch = repo_config
-            .defaults
-            .default_branch
-            .as_deref()
-            .unwrap_or(&self.config.defaults.default_branch);
-        let base = worktree.effective_base(default_branch);
+        let default_branch = self.resolve_default_branch(&repo.local_path);
+        let base = worktree.effective_base(&default_branch);
         let mut args = vec![
             "pr",
             "create",

@@ -192,21 +192,26 @@ impl App {
             .as_ref()
             .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id));
         let Some(repo) = repo else { return };
-        let repo_config =
-            conductor_core::config::RepoConfig::load(std::path::Path::new(&repo.local_path))
-                .unwrap_or_default();
+        let default_rc = conductor_core::config::RepoConfig::default();
+        let repo_config = self
+            .state
+            .cached_repo_config
+            .as_ref()
+            .unwrap_or(&default_rc);
         let text = match row {
             repo_info_row::SLUG => repo.slug.clone(),
             repo_info_row::REMOTE => repo.remote_url.clone(),
             repo_info_row::BRANCH => repo_config
                 .defaults
                 .default_branch
-                .unwrap_or_else(|| "main".to_string()),
+                .clone()
+                .unwrap_or_else(|| self.state.global_default_branch.clone()),
             repo_info_row::PATH => repo.local_path.clone(),
             repo_info_row::WORKTREES_DIR => repo.workspace_dir.clone(),
             repo_info_row::MODEL => repo_config
                 .defaults
                 .model
+                .clone()
                 .unwrap_or_else(|| "(not set)".to_string()),
             _ => return,
         };

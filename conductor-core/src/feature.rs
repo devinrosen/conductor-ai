@@ -154,7 +154,13 @@ impl<'a> FeatureManager<'a> {
         let branch = derive_branch_name(name);
 
         let repo_config =
-            RepoConfig::load(std::path::Path::new(&repo.local_path)).unwrap_or_default();
+            RepoConfig::load(std::path::Path::new(&repo.local_path)).unwrap_or_else(|e| {
+                tracing::warn!(
+                    "Failed to load .conductor/config.toml for repo '{}': {e}; using defaults",
+                    repo.slug,
+                );
+                RepoConfig::default()
+            });
         let default_branch = repo_config
             .defaults
             .default_branch

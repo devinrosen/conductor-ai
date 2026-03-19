@@ -23,7 +23,14 @@ pub struct RepoResponse {
 }
 
 fn repo_to_response(repo: Repo, global_default_branch: &str) -> RepoResponse {
-    let repo_config = RepoConfig::load(std::path::Path::new(&repo.local_path)).unwrap_or_default();
+    let repo_config =
+        RepoConfig::load(std::path::Path::new(&repo.local_path)).unwrap_or_else(|e| {
+            tracing::warn!(
+                "Failed to load .conductor/config.toml for repo '{}': {e}; using defaults",
+                repo.slug,
+            );
+            RepoConfig::default()
+        });
     let default_branch = repo_config
         .defaults
         .default_branch
@@ -47,15 +54,25 @@ pub struct RegisterRepoRequest {
 pub async fn list_repos(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<RepoResponse>>, ApiError> {
-    let db = state.db.lock().await;
-    let config = state.config.read().await;
-    let mgr = RepoManager::new(&db, &config);
-    let repos = mgr.list()?;
-    let default_branch = &config.defaults.default_branch;
-    let responses: Vec<RepoResponse> = repos
-        .into_iter()
-        .map(|r| repo_to_response(r, default_branch))
-        .collect();
+    let (repos, default_branch) = {
+        let db = state.db.lock().await;
+        let config = state.config.read().await;
+        let mgr = RepoManager::new(&db, &config);
+        (mgr.list()?, config.defaults.default_branch.clone())
+    };
+    // RepoConfig::load performs file I/O — run off the tokio worker thread.
+    let responses = tokio::task::spawn_blocking(move || {
+        repos
+            .into_iter()
+            .map(|r| repo_to_response(r, &default_branch))
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|e| {
+        ApiError(conductor_core::error::ConductorError::Config(format!(
+            "spawn_blocking join failed: {e}"
+        )))
+    })?;
     Ok(Json(responses))
 }
 
@@ -114,11 +131,7 @@ pub async fn patch_repo_model(
     let config = state.config.read().await;
     let mgr = RepoManager::new(&db, &config);
     let repo = mgr.get_by_id(&id)?;
-    // Write model to .conductor/config.toml
-    let repo_path = std::path::Path::new(&repo.local_path);
-    let mut repo_config = RepoConfig::load(repo_path).unwrap_or_default();
-    repo_config.defaults.model = body.model;
-    repo_config.save(repo_path)?;
+    mgr.set_model(&repo, body.model)?;
     let default_branch = &config.defaults.default_branch;
     Ok(Json(repo_to_response(repo, default_branch)))
 }

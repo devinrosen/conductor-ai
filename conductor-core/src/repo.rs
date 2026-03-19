@@ -130,9 +130,20 @@ impl<'a> RepoManager<'a> {
             })
     }
 
-    /// Load the per-repo config from `.conductor/config.toml` in the repo's local path.
-    pub fn load_repo_config(&self, repo: &Repo) -> RepoConfig {
-        RepoConfig::load(Path::new(&repo.local_path)).unwrap_or_default()
+    /// Set the per-repo model override via `.conductor/config.toml`.
+    ///
+    /// Encapsulates the load → patch → save cycle so callers don't duplicate it.
+    pub fn set_model(&self, repo: &Repo, model: Option<String>) -> Result<()> {
+        let repo_path = Path::new(&repo.local_path);
+        let mut repo_config = RepoConfig::load(repo_path).unwrap_or_else(|e| {
+            tracing::warn!(
+                "Failed to load .conductor/config.toml for repo '{}': {e}; using defaults",
+                repo.slug,
+            );
+            RepoConfig::default()
+        });
+        repo_config.defaults.model = model;
+        repo_config.save(repo_path)
     }
 
     /// Set whether agents can create issues for this repo.
