@@ -70,12 +70,19 @@ async fn main() -> Result<()> {
             conductor_core::agent::AgentRunStatus,
         > = std::collections::HashMap::new();
         let mut agent_initialized = false;
+        let mut seen_workflow_statuses: std::collections::HashMap<
+            String,
+            conductor_core::workflow::WorkflowRunStatus,
+        > = std::collections::HashMap::new();
+        let mut workflow_initialized = false;
         loop {
             interval.tick().await;
             let db = reaper_state.db.clone();
             let cfg = reaper_config.clone();
-            let mut seen = seen_agent_statuses.clone();
+            let mut seen = std::mem::take(&mut seen_agent_statuses);
             let mut init = agent_initialized;
+            let mut wf_seen = std::mem::take(&mut seen_workflow_statuses);
+            let mut wf_init = workflow_initialized;
             let result = tokio::task::spawn_blocking(move || {
                 let conn = db.blocking_lock();
                 let mgr = AgentManager::new(&conn);
@@ -111,13 +118,34 @@ async fn main() -> Result<()> {
                     );
                 }
 
-                Ok::<_, conductor_core::error::ConductorError>((seen, init))
+                // Detect workflow run terminal transitions and fire notifications.
+                let workflow_runs = wf_mgr.list_all_workflow_runs(200)?;
+                let wf_transitions =
+                    conductor_core::notify::detect_workflow_terminal_transitions(
+                        workflow_runs.iter(),
+                        &mut wf_seen,
+                        &mut wf_init,
+                    );
+                for t in &wf_transitions {
+                    conductor_core::notify::fire_workflow_notification(
+                        &conn,
+                        &cfg.notifications,
+                        &t.run_id,
+                        &t.workflow_name,
+                        t.target_label.as_deref(),
+                        t.succeeded,
+                    );
+                }
+
+                Ok::<_, conductor_core::error::ConductorError>((seen, init, wf_seen, wf_init))
             })
             .await;
             match result {
-                Ok(Ok((new_seen, new_init))) => {
+                Ok(Ok((new_seen, new_init, new_wf_seen, new_wf_init))) => {
                     seen_agent_statuses = new_seen;
                     agent_initialized = new_init;
+                    seen_workflow_statuses = new_wf_seen;
+                    workflow_initialized = new_wf_init;
                 }
                 Ok(Err(e)) => tracing::warn!("periodic reaper failed: {e}"),
                 Err(join_err) => tracing::warn!("periodic reaper panicked: {join_err}"),

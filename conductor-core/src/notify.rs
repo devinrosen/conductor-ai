@@ -1,6 +1,8 @@
 use crate::agent::{AgentRun, AgentRunStatus};
 use crate::config::NotificationConfig;
 use crate::notification_manager::{CreateNotification, NotificationManager, NotificationSeverity};
+use crate::workflow::WorkflowRun;
+use crate::workflow::WorkflowRunStatus;
 use crate::workflow_dsl::GateType;
 
 /// Send a plain-text message to a Slack incoming webhook URL.
@@ -20,12 +22,16 @@ fn send_slack_message(webhook_url: &str, text: &str) {
     });
 }
 
-/// Escape Slack mrkdwn sequences that could trigger broadcast @-mentions
-/// or unexpected link formatting from user-supplied content.
+/// Escape Slack mrkdwn special characters in user-supplied content.
+///
+/// Slack treats `<…>` as link/mention markup, so we must escape all `<`
+/// characters — not just `<!`, `<@`, `<#` — to prevent hyperlink injection
+/// (e.g. `<http://evil.com|Click here>`) from LLM-sourced agent output.
+/// Also escapes `&` which Slack requires as `&amp;`.
 fn escape_slack_mrkdwn(text: &str) -> String {
-    text.replace("<!", "&lt;!")
-        .replace("<@", "&lt;@")
-        .replace("<#", "&lt;#")
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// If Slack is configured, dispatch `text` to the webhook.
@@ -516,6 +522,56 @@ pub fn fire_grouped_gate_notification(
 
     let slack_text = format!("[conductor] {title}: {body}");
     maybe_send_slack(config, &slack_text);
+}
+
+/// A workflow run that freshly transitioned to a terminal state.
+pub struct WorkflowTerminalTransition {
+    pub run_id: String,
+    pub workflow_name: String,
+    pub target_label: Option<String>,
+    pub succeeded: bool,
+}
+
+/// Detect workflow runs that have freshly transitioned to a terminal status.
+///
+/// `seen` is updated in-place, stale entries are pruned, and `initialized`
+/// prevents spurious notifications on the first call.
+pub fn detect_workflow_terminal_transitions<'a>(
+    runs: impl Iterator<Item = &'a WorkflowRun>,
+    seen: &mut std::collections::HashMap<String, WorkflowRunStatus>,
+    initialized: &mut bool,
+) -> Vec<WorkflowTerminalTransition> {
+    let runs: Vec<_> = runs.collect();
+    let mut transitions = Vec::new();
+
+    for run in &runs {
+        let now_terminal = matches!(
+            run.status,
+            WorkflowRunStatus::Completed | WorkflowRunStatus::Failed
+        );
+        if *initialized {
+            let prev_status = seen.get(&run.id);
+            let status_changed = prev_status.map(|s| s != &run.status).unwrap_or(true);
+            if now_terminal && status_changed {
+                transitions.push(WorkflowTerminalTransition {
+                    run_id: run.id.clone(),
+                    workflow_name: run.workflow_name.clone(),
+                    target_label: run.target_label.clone(),
+                    succeeded: matches!(run.status, WorkflowRunStatus::Completed),
+                });
+            }
+        }
+        seen.insert(run.id.clone(), run.status.clone());
+    }
+
+    *initialized = true;
+
+    // Prune stale entries to prevent unbounded growth
+    let current_ids: std::collections::HashSet<&str> =
+        runs.iter().map(|r| r.id.as_str()).collect();
+    seen.retain(|id, _| current_ids.contains(id.as_str()));
+
+    transitions
 }
 
 /// An agent run that freshly transitioned to a terminal state.
@@ -1445,5 +1501,156 @@ mod tests {
         // Just verify it doesn't panic — no Slack server to hit in tests.
         let cfg = config(true, true, true);
         maybe_send_slack(&cfg, "test message");
+    }
+
+    // --- escape_slack_mrkdwn ---
+
+    #[test]
+    fn escape_slack_mrkdwn_escapes_hyperlink_injection() {
+        let input = "<http://evil.com|Click here>";
+        let escaped = escape_slack_mrkdwn(input);
+        assert!(
+            !escaped.contains("<http"),
+            "hyperlinks must be escaped: {escaped}"
+        );
+        assert!(escaped.contains("&lt;http"));
+    }
+
+    #[test]
+    fn escape_slack_mrkdwn_escapes_ampersand() {
+        assert_eq!(escape_slack_mrkdwn("a & b"), "a &amp; b");
+    }
+
+    #[test]
+    fn escape_slack_mrkdwn_escapes_angle_brackets() {
+        assert_eq!(escape_slack_mrkdwn("<>"), "&lt;&gt;");
+    }
+
+    // --- detect_agent_terminal_transitions ---
+
+    fn make_agent_run(id: &str, status: AgentRunStatus) -> AgentRun {
+        AgentRun {
+            id: id.to_string(),
+            worktree_id: None,
+            claude_session_id: None,
+            prompt: String::new(),
+            status,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            ended_at: None,
+            tmux_window: None,
+            log_file: None,
+            model: None,
+            plan: None,
+            parent_run_id: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            bot_name: None,
+        }
+    }
+
+    #[test]
+    fn agent_transitions_first_tick_suppresses_all() {
+        let runs = [make_agent_run("a1", AgentRunStatus::Completed)];
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+        let iter = runs.iter().map(|r| (None, r));
+        let t = detect_agent_terminal_transitions(iter, &mut seen, &mut initialized);
+        assert!(t.is_empty(), "first tick must suppress transitions");
+        assert!(initialized);
+        assert_eq!(seen.len(), 1);
+    }
+
+    #[test]
+    fn agent_transitions_running_to_completed_fires() {
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+
+        let tick1 = [make_agent_run("a1", AgentRunStatus::Running)];
+        let iter1 = tick1.iter().map(|r| (Some("my-wt"), r));
+        detect_agent_terminal_transitions(iter1, &mut seen, &mut initialized);
+
+        let tick2 = [make_agent_run("a1", AgentRunStatus::Completed)];
+        let iter2 = tick2.iter().map(|r| (Some("my-wt"), r));
+        let t = detect_agent_terminal_transitions(iter2, &mut seen, &mut initialized);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].run_id, "a1");
+        assert!(t[0].succeeded);
+        assert_eq!(t[0].worktree_slug.as_deref(), Some("my-wt"));
+    }
+
+    #[test]
+    fn agent_transitions_already_seen_terminal_does_not_refire() {
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+
+        let tick1 = [make_agent_run("a1", AgentRunStatus::Completed)];
+        let iter1 = tick1.iter().map(|r| (None, r));
+        detect_agent_terminal_transitions(iter1, &mut seen, &mut initialized);
+
+        let tick2 = [make_agent_run("a1", AgentRunStatus::Completed)];
+        let iter2 = tick2.iter().map(|r| (None, r));
+        let t = detect_agent_terminal_transitions(iter2, &mut seen, &mut initialized);
+        assert!(t.is_empty(), "completed→completed must not re-fire");
+    }
+
+    #[test]
+    fn agent_transitions_stale_entries_pruned() {
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+
+        let tick1 = [
+            make_agent_run("a1", AgentRunStatus::Running),
+            make_agent_run("a2", AgentRunStatus::Running),
+        ];
+        let iter1 = tick1.iter().map(|r| (None, r));
+        detect_agent_terminal_transitions(iter1, &mut seen, &mut initialized);
+        assert_eq!(seen.len(), 2);
+
+        let tick2 = [make_agent_run("a1", AgentRunStatus::Completed)];
+        let iter2 = tick2.iter().map(|r| (None, r));
+        detect_agent_terminal_transitions(iter2, &mut seen, &mut initialized);
+        assert_eq!(seen.len(), 1);
+        assert!(!seen.contains_key("a2"), "a2 should have been pruned");
+    }
+
+    #[test]
+    fn agent_transitions_cancelled_is_terminal() {
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+
+        let tick1 = [make_agent_run("a1", AgentRunStatus::Running)];
+        let iter1 = tick1.iter().map(|r| (None, r));
+        detect_agent_terminal_transitions(iter1, &mut seen, &mut initialized);
+
+        let tick2 = [make_agent_run("a1", AgentRunStatus::Cancelled)];
+        let iter2 = tick2.iter().map(|r| (None, r));
+        let t = detect_agent_terminal_transitions(iter2, &mut seen, &mut initialized);
+        assert_eq!(t.len(), 1);
+        assert!(!t[0].succeeded, "Cancelled must report succeeded=false");
+    }
+
+    #[test]
+    fn agent_transitions_failed_includes_error_msg() {
+        let mut seen = std::collections::HashMap::new();
+        let mut initialized = false;
+
+        let tick1 = [make_agent_run("a1", AgentRunStatus::Running)];
+        let iter1 = tick1.iter().map(|r| (None, r));
+        detect_agent_terminal_transitions(iter1, &mut seen, &mut initialized);
+
+        let mut failed_run = make_agent_run("a1", AgentRunStatus::Failed);
+        failed_run.result_text = Some("out of memory".to_string());
+        let tick2 = [failed_run];
+        let iter2 = tick2.iter().map(|r| (None, r));
+        let t = detect_agent_terminal_transitions(iter2, &mut seen, &mut initialized);
+        assert_eq!(t.len(), 1);
+        assert!(!t[0].succeeded);
+        assert_eq!(t[0].error_msg.as_deref(), Some("out of memory"));
     }
 }
