@@ -93,8 +93,11 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                         .latest_workflow_runs_by_worktree
                         .values()
                         .chain(payload.active_non_worktree_workflow_runs.iter());
-                    let transitions =
-                        conductor_core::notify::detect_workflow_terminal_transitions(all_runs, &mut seen, &mut initialized);
+                    let transitions = conductor_core::notify::detect_workflow_terminal_transitions(
+                        all_runs,
+                        &mut seen,
+                        &mut initialized,
+                    );
                     if let Some(ref conn) = claim_conn {
                         for t in transitions {
                             crate::notify::fire_workflow_notification(
@@ -902,7 +905,8 @@ mod tests {
         let mut seen = HashMap::new();
         let mut initialized = false;
 
-        let transitions = detect_workflow_terminal_transitions(runs.iter(), &mut seen, &mut initialized);
+        let transitions =
+            detect_workflow_terminal_transitions(runs.iter(), &mut seen, &mut initialized);
 
         assert!(
             transitions.is_empty(),

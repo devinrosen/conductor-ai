@@ -567,8 +567,7 @@ pub fn detect_workflow_terminal_transitions<'a>(
     *initialized = true;
 
     // Prune stale entries to prevent unbounded growth
-    let current_ids: std::collections::HashSet<&str> =
-        runs.iter().map(|r| r.id.as_str()).collect();
+    let current_ids: std::collections::HashSet<&str> = runs.iter().map(|r| r.id.as_str()).collect();
     seen.retain(|id, _| current_ids.contains(id.as_str()));
 
     transitions

@@ -120,12 +120,11 @@ async fn main() -> Result<()> {
 
                 // Detect workflow run terminal transitions and fire notifications.
                 let workflow_runs = wf_mgr.list_all_workflow_runs(200)?;
-                let wf_transitions =
-                    conductor_core::notify::detect_workflow_terminal_transitions(
-                        workflow_runs.iter(),
-                        &mut wf_seen,
-                        &mut wf_init,
-                    );
+                let wf_transitions = conductor_core::notify::detect_workflow_terminal_transitions(
+                    workflow_runs.iter(),
+                    &mut wf_seen,
+                    &mut wf_init,
+                );
                 for t in &wf_transitions {
                     conductor_core::notify::fire_workflow_notification(
                         &conn,
