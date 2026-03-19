@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fmt;
 
 use super::types::{Condition, InputType, ScriptNode, WorkflowDef, WorkflowNode};
 
@@ -12,6 +13,15 @@ pub struct ValidationError {
     pub message: String,
     /// Optional hint to help the user fix the error.
     pub hint: Option<String>,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.hint {
+            Some(h) => write!(f, "{} (hint: {h})", self.message),
+            None => write!(f, "{}", self.message),
+        }
+    }
 }
 
 /// The result of running `validate_workflow_semantics`.

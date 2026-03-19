@@ -1831,10 +1831,7 @@ fn main() -> Result<()> {
                     } else {
                         println!("FAIL  {}", entry.name);
                         for e in &entry.errors {
-                            match &e.hint {
-                                Some(h) => println!("      \u{2717} {} (hint: {h})", e.message),
-                                None => println!("      \u{2717} {}", e.message),
-                            }
+                            println!("      \u{2717} {e}");
                         }
                     }
                     for w in &entry.warnings {

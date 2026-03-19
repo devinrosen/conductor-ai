@@ -90,11 +90,7 @@ fn format_validation_result(
 ) -> CallToolResult {
     let mut errors: Vec<String> = Vec::new();
     for err in &entry.errors {
-        if let Some(hint) = &err.hint {
-            errors.push(format!("{} (hint: {hint})", err.message));
-        } else {
-            errors.push(err.message.clone());
-        }
+        errors.push(err.to_string());
     }
 
     let mut warnings: Vec<String> = Vec::new();
