@@ -328,6 +328,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             {
                 return Action::ToggleWorkflowDefsCollapse;
             }
+            KeyCode::Char('w') if state.workflows_focus == crate::state::WorkflowsFocus::Runs => {
+                return Action::PickWorkflow;
+            }
             // Right / l: enter or exit the step tree pane when viewing defs.
             KeyCode::Right | KeyCode::Char('l')
                 if state.workflows_focus == crate::state::WorkflowsFocus::Defs =>
@@ -1279,6 +1282,17 @@ mod tests {
         assert!(matches!(
             map_key(key(KeyCode::Char(']')), &state),
             Action::FocusWorkflowColumn
+        ));
+    }
+
+    #[test]
+    fn w_maps_to_pick_workflow_in_workflow_column_runs() {
+        let mut state = AppState::new();
+        state.column_focus = crate::state::ColumnFocus::Workflow;
+        state.workflows_focus = crate::state::WorkflowsFocus::Runs;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('w')), &state),
+            Action::PickWorkflow
         ));
     }
 }

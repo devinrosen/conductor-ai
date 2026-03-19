@@ -232,6 +232,42 @@ impl App {
                 }
             };
             self.repo_picker_target(&repo)
+        } else if self.state.column_focus == crate::state::ColumnFocus::Workflow
+            && self.state.workflows_focus == crate::state::WorkflowsFocus::Runs
+        {
+            // Workflow runs pane: resolve the selected row to a WorkflowRun
+            let rows = self.state.visible_workflow_run_rows();
+            let run_id = match rows
+                .get(self.state.workflow_run_index)
+                .and_then(|r| r.run_id())
+            {
+                Some(id) => id.to_string(),
+                None => {
+                    self.state.status_message = Some("No workflow run selected".to_string());
+                    return;
+                }
+            };
+            let run = match self
+                .state
+                .data
+                .workflow_runs
+                .iter()
+                .find(|r| r.id == run_id)
+            {
+                Some(r) => r.clone(),
+                None => {
+                    self.state.status_message = Some("Workflow run not found".to_string());
+                    return;
+                }
+            };
+            match self.workflow_run_picker_target(&run) {
+                Some(t) => t,
+                None => {
+                    self.state.status_message =
+                        Some("Cannot determine repo for this workflow run".to_string());
+                    return;
+                }
+            }
         } else if self.state.view == View::RepoDetail
             && self.state.repo_detail_focus == RepoDetailFocus::Worktrees
         {
@@ -302,53 +338,13 @@ impl App {
                     return;
                 }
             };
-            // Resolve repo_path from worktree or repo_id
-            let repo_path = if let Some(wt_id) = &run.worktree_id {
-                self.state
-                    .data
-                    .worktrees
-                    .iter()
-                    .find(|w| &w.id == wt_id)
-                    .and_then(|wt| {
-                        self.state
-                            .data
-                            .repos
-                            .iter()
-                            .find(|r| r.id == wt.repo_id)
-                            .map(|r| r.local_path.clone())
-                    })
-            } else if let Some(repo_id) = &run.repo_id {
-                self.state
-                    .data
-                    .repos
-                    .iter()
-                    .find(|r| &r.id == repo_id)
-                    .map(|r| r.local_path.clone())
-            } else {
-                None
-            };
-            let repo_path = match repo_path {
-                Some(p) => p,
+            match self.workflow_run_picker_target(&run) {
+                Some(t) => t,
                 None => {
                     self.state.status_message =
                         Some("Cannot determine repo for this workflow run".to_string());
                     return;
                 }
-            };
-            let worktree_path = run.worktree_id.as_ref().and_then(|wt_id| {
-                self.state
-                    .data
-                    .worktrees
-                    .iter()
-                    .find(|w| &w.id == wt_id)
-                    .map(|w| w.path.clone())
-            });
-            WorkflowPickerTarget::WorkflowRun {
-                workflow_run_id: run.id.clone(),
-                workflow_name: run.workflow_name.clone(),
-                worktree_id: run.worktree_id.clone(),
-                worktree_path,
-                repo_path,
             }
         } else {
             // Ticket list contexts: target is the selected ticket itself (RepoDetail only)
@@ -509,6 +505,57 @@ impl App {
     }
 
     pub(super) fn handle_run_workflow(&mut self) {
+        // When the runs pane is focused, resolve the selected workflow run as the target
+        if self.state.column_focus == crate::state::ColumnFocus::Workflow
+            && self.state.workflows_focus == crate::state::WorkflowsFocus::Runs
+        {
+            let def = match self
+                .state
+                .data
+                .workflow_defs
+                .get(self.state.workflow_def_index)
+            {
+                Some(d) => d.clone(),
+                None => {
+                    self.state.status_message = Some("No workflow definition selected".to_string());
+                    return;
+                }
+            };
+            let rows = self.state.visible_workflow_run_rows();
+            let run_id = match rows
+                .get(self.state.workflow_run_index)
+                .and_then(|r| r.run_id())
+            {
+                Some(id) => id.to_string(),
+                None => {
+                    self.state.status_message = Some("No workflow run selected".to_string());
+                    return;
+                }
+            };
+            let run = match self
+                .state
+                .data
+                .workflow_runs
+                .iter()
+                .find(|r| r.id == run_id)
+            {
+                Some(r) => r.clone(),
+                None => {
+                    self.state.status_message = Some("Workflow run not found".to_string());
+                    return;
+                }
+            };
+            let Some(target) = self.workflow_run_picker_target(&run) else {
+                self.state.status_message =
+                    Some("Cannot determine repo for this workflow run".to_string());
+                return;
+            };
+            let mut prefill = std::collections::HashMap::new();
+            prefill.insert("workflow_run_id".to_string(), run.id.clone());
+            self.show_workflow_inputs_or_run(target, def, prefill);
+            return;
+        }
+
         let def = match self
             .state
             .data
@@ -1472,6 +1519,52 @@ impl App {
             repo_path: repo.local_path.clone(),
             repo_name: repo.slug.clone(),
         }
+    }
+
+    /// Build a `WorkflowPickerTarget::WorkflowRun` from a `WorkflowRun`, resolving repo_path.
+    pub(super) fn workflow_run_picker_target(
+        &self,
+        run: &conductor_core::workflow::WorkflowRun,
+    ) -> Option<crate::state::WorkflowPickerTarget> {
+        let repo_path = if let Some(wt_id) = &run.worktree_id {
+            self.state
+                .data
+                .worktrees
+                .iter()
+                .find(|w| &w.id == wt_id)
+                .and_then(|wt| {
+                    self.state
+                        .data
+                        .repos
+                        .iter()
+                        .find(|r| r.id == wt.repo_id)
+                        .map(|r| r.local_path.clone())
+                })
+        } else if let Some(repo_id) = &run.repo_id {
+            self.state
+                .data
+                .repos
+                .iter()
+                .find(|r| &r.id == repo_id)
+                .map(|r| r.local_path.clone())
+        } else {
+            None
+        }?;
+        let worktree_path = run.worktree_id.as_ref().and_then(|wt_id| {
+            self.state
+                .data
+                .worktrees
+                .iter()
+                .find(|w| &w.id == wt_id)
+                .map(|w| w.path.clone())
+        });
+        Some(crate::state::WorkflowPickerTarget::WorkflowRun {
+            workflow_run_id: run.id.clone(),
+            workflow_name: run.workflow_name.clone(),
+            worktree_id: run.worktree_id.clone(),
+            worktree_path,
+            repo_path,
+        })
     }
 
     /// Check whether a workflow is already active for `worktree_id`.
