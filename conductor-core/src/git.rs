@@ -156,6 +156,16 @@ mod tests {
             .output()
             .unwrap();
         Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        Command::new("git")
             .args(["commit", "--allow-empty", "-m", "init"])
             .current_dir(repo)
             .output()
@@ -178,6 +188,16 @@ mod tests {
 
         Command::new("git")
             .args(["init", "-b", "main"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
             .current_dir(repo)
             .output()
             .unwrap();
