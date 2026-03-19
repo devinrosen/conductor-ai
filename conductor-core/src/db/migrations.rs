@@ -826,6 +826,12 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 45)?;
     }
 
+    // Migration 046: notifications table for in-app notification system.
+    if version < 46 {
+        conn.execute_batch(include_str!("migrations/046_notifications.sql"))?;
+        bump_version(conn, 46)?;
+    }
+
     Ok(())
 }
 

@@ -1,5 +1,6 @@
 import { NavLink } from "react-router";
 import { useRepos } from "./AppShell";
+import { NotificationBell } from "../notifications/NotificationBell";
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   `block px-3 py-2 rounded-md text-sm ${
@@ -27,6 +28,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
     >
       <div className="px-4 py-4 border-b border-gray-200 flex items-center justify-between">
         <h1 className="text-lg font-bold text-gray-900">Conductor</h1>
+        <div className="hidden md:block">
+          <NotificationBell />
+        </div>
         {/* Close button only shown on mobile */}
         <button
           onClick={onClose}

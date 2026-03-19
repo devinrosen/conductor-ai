@@ -2,6 +2,7 @@ pub mod agents;
 pub mod events;
 pub mod issue_sources;
 pub mod model_config;
+pub mod notifications;
 pub mod repos;
 pub mod tickets;
 pub mod workflows;
@@ -162,6 +163,20 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/repos/{id}/sources/{source_id}",
             delete(issue_sources::delete_issue_source),
+        )
+        // Notifications
+        .route("/api/notifications", get(notifications::list_notifications))
+        .route(
+            "/api/notifications/unread-count",
+            get(notifications::unread_count),
+        )
+        .route(
+            "/api/notifications/read-all",
+            post(notifications::mark_all_read),
+        )
+        .route(
+            "/api/notifications/{id}/read",
+            post(notifications::mark_read),
         )
         // Model Config
         .route(

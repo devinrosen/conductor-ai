@@ -253,3 +253,16 @@ export interface FeedbackRequest {
   status: "pending" | "responded" | "dismissed";
   created_at: string;
 }
+
+export interface Notification {
+  id: string;
+  kind: string;
+  title: string;
+  body: string;
+  severity: "info" | "warning" | "action_required";
+  entity_id: string | null;
+  entity_type: string | null;
+  read: boolean;
+  created_at: string;
+  read_at: string | null;
+}

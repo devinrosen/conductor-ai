@@ -248,6 +248,42 @@ impl App {
             Action::ShowHelp => {
                 self.state.modal = Modal::Help;
             }
+            Action::ShowNotifications => {
+                // Load recent notifications from DB off-thread to avoid blocking.
+                if let Some(ref bg_tx) = self.bg_tx {
+                    let tx = bg_tx.clone();
+                    std::thread::spawn(move || {
+                        use conductor_core::config::db_path;
+                        use conductor_core::db::open_database;
+                        use conductor_core::notification_manager::NotificationManager;
+                        match open_database(&db_path()) {
+                            Ok(conn) => {
+                                let mgr = NotificationManager::new(&conn);
+                                let notifications = mgr.list_recent(50, 0).unwrap_or_default();
+                                // Mark all as read when viewing
+                                let _ = mgr.mark_all_read();
+                                let _ = tx.send(Action::NotificationsLoaded { notifications });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(Action::NotificationsLoaded {
+                                    notifications: vec![],
+                                });
+                                tracing::warn!("failed to open database for notifications: {e}");
+                            }
+                        }
+                    });
+                    self.state.modal = Modal::Progress {
+                        message: "Loading notifications\u{2026}".into(),
+                    };
+                }
+            }
+            Action::NotificationsLoaded { notifications } => {
+                self.state.unread_notification_count = 0;
+                self.state.modal = Modal::Notifications {
+                    notifications,
+                    selected: 0,
+                };
+            }
             Action::DismissModal => {
                 if matches!(self.state.modal, Modal::Progress { .. }) {
                     return true;
@@ -752,6 +788,7 @@ impl App {
                     payload.active_non_worktree_workflow_runs;
                 self.state.data.live_turns_by_worktree = payload.live_turns_by_worktree;
                 self.state.data.features_by_repo = payload.features_by_repo;
+                self.state.unread_notification_count = payload.unread_notification_count;
                 self.refresh_pending_feedback();
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();
@@ -1475,6 +1512,7 @@ mod action_handler_tests {
                 waiting_gate_steps: vec![],
                 live_turns_by_worktree: std::collections::HashMap::new(),
                 features_by_repo: std::collections::HashMap::new(),
+                unread_notification_count: 0,
             },
         )));
 

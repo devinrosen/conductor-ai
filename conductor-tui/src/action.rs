@@ -64,6 +64,8 @@ pub struct DataRefreshedPayload {
     pub live_turns_by_worktree: HashMap<String, i64>,
     /// Active features per repo (repo_id → active FeatureRows).
     pub features_by_repo: HashMap<String, Vec<FeatureRow>>,
+    /// Number of unread in-app notifications.
+    pub unread_notification_count: usize,
 }
 
 /// Every user intent or background result flows through this enum.
@@ -199,6 +201,7 @@ pub enum Action {
 
     // Modal
     ShowHelp,
+    ShowNotifications,
     DismissModal,
     OpenTicketUrl,
     CopyErrorMessage,
@@ -343,6 +346,11 @@ pub enum Action {
     GateInputChar(char),
     GateInputBackspace,
     WorkflowDataRefreshed(Box<WorkflowDataPayload>),
+
+    // Notification modal loaded
+    NotificationsLoaded {
+        notifications: Vec<conductor_core::notification_manager::Notification>,
+    },
 
     // Timer tick — also triggers workflow data refresh on workflow views
     Tick,

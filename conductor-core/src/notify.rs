@@ -1,5 +1,19 @@
 use crate::config::NotificationConfig;
+use crate::notification_manager::{CreateNotification, NotificationManager, NotificationSeverity};
 use crate::workflow_dsl::GateType;
+
+/// Persist an in-app notification record. Logs a warning on failure.
+fn persist_notification(conn: &rusqlite::Connection, params: &CreateNotification<'_>) {
+    let mgr = NotificationManager::new(conn);
+    if let Err(e) = mgr.create_notification(params) {
+        tracing::warn!(
+            kind = params.kind,
+            entity_id = params.entity_id,
+            entity_type = params.entity_type,
+            "persist notification failed: {e}"
+        );
+    }
+}
 
 /// Returns `true` if a notification should fire given the config and run outcome.
 ///
@@ -78,6 +92,30 @@ pub fn fire_workflow_notification(
         "Conductor \u{2014} Workflow Failed"
     };
     let body = notification_body(workflow_name, target_label);
+
+    // Persist in-app notification
+    let severity = if succeeded {
+        NotificationSeverity::Info
+    } else {
+        NotificationSeverity::ActionRequired
+    };
+    let kind = if succeeded {
+        "workflow_completed"
+    } else {
+        "workflow_failed"
+    };
+    persist_notification(
+        conn,
+        &CreateNotification {
+            kind,
+            title,
+            body: &body,
+            severity,
+            entity_id: Some(run_id),
+            entity_type: Some("workflow_run"),
+        },
+    );
+
     if let Err(e) = show_desktop_notification(title, &body) {
         tracing::warn!(run_id, workflow_name, "desktop notification failed: {e}");
     }
@@ -102,9 +140,22 @@ pub fn fire_feedback_notification(
         return;
     }
 
-    if let Err(e) =
-        show_desktop_notification("Conductor \u{2014} Agent Needs Input", prompt_preview)
-    {
+    let title = "Conductor \u{2014} Agent Needs Input";
+
+    // Persist in-app notification
+    persist_notification(
+        conn,
+        &CreateNotification {
+            kind: "feedback_requested",
+            title,
+            body: prompt_preview,
+            severity: NotificationSeverity::Warning,
+            entity_id: Some(request_id),
+            entity_type: Some("agent_run"),
+        },
+    );
+
+    if let Err(e) = show_desktop_notification(title, prompt_preview) {
         tracing::warn!(request_id, "desktop notification failed: {e}");
     }
 }
@@ -205,6 +256,26 @@ pub fn fire_gate_notification(
         params.target_label,
         params.gate_prompt,
     );
+
+    // Persist in-app notification
+    let severity = match params.gate_type {
+        Some(GateType::HumanApproval | GateType::HumanReview) => {
+            NotificationSeverity::ActionRequired
+        }
+        _ => NotificationSeverity::Warning,
+    };
+    persist_notification(
+        conn,
+        &CreateNotification {
+            kind: "gate_waiting",
+            title,
+            body: &body,
+            severity,
+            entity_id: Some(params.step_id),
+            entity_type: Some("workflow_step"),
+        },
+    );
+
     if let Err(e) = show_desktop_notification(title, &body) {
         tracing::warn!(
             step_id = params.step_id,
@@ -297,6 +368,20 @@ pub fn fire_grouped_gate_notification(
         params.target_label,
         params.count,
     );
+
+    // Persist in-app notification
+    persist_notification(
+        conn,
+        &CreateNotification {
+            kind: "gate_waiting",
+            title,
+            body: &body,
+            severity: NotificationSeverity::ActionRequired,
+            entity_id: Some(params.run_id),
+            entity_type: Some("workflow_run"),
+        },
+    );
+
     if let Err(e) = show_desktop_notification(title, &body) {
         tracing::warn!(
             run_id = params.run_id,
@@ -351,6 +436,8 @@ mod tests {
             );",
         )
         .unwrap();
+        conn.execute_batch(include_str!("db/migrations/046_notifications.sql"))
+            .unwrap();
         conn
     }
 
@@ -549,6 +636,13 @@ mod tests {
             count, 1,
             "notification_log must contain exactly one row for dedup"
         );
+
+        // Verify notification was persisted in notifications table
+        let mgr = NotificationManager::new(&conn);
+        let unread = mgr.list_unread().unwrap();
+        assert_eq!(unread.len(), 1, "one notification must be persisted");
+        assert_eq!(unread[0].kind, "workflow_completed");
+        assert_eq!(unread[0].entity_id.as_deref(), Some("run-3"));
     }
 
     #[test]
@@ -606,6 +700,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1, "notification_log must contain exactly one row");
+
+        // Verify notification was persisted
+        let mgr = NotificationManager::new(&conn);
+        let unread = mgr.list_unread().unwrap();
+        assert_eq!(unread.len(), 1, "one notification must be persisted");
+        assert_eq!(unread[0].kind, "feedback_requested");
+        assert_eq!(unread[0].entity_id.as_deref(), Some("req-2"));
     }
 
     // --- gate_notification_text ---

@@ -252,5 +252,9 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         } => {
             modal::render_theme_picker(frame, area, themes, *selected, original_name, &state.theme)
         }
+        Modal::Notifications {
+            notifications,
+            selected,
+        } => modal::render_notifications(frame, area, notifications, *selected, &state.theme),
     }
 }

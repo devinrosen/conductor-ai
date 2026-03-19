@@ -13,6 +13,7 @@ export type ConductorEventType =
   | "feedback_requested"
   | "feedback_submitted"
   | "issue_sources_changed"
+  | "notification_created"
   | "lagged";
 
 export interface ConductorEventData {
@@ -63,6 +64,7 @@ export function useConductorEvents(
       "feedback_requested",
       "feedback_submitted",
       "issue_sources_changed",
+      "notification_created",
       "lagged",
     ];
 
