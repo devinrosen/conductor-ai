@@ -374,27 +374,9 @@ impl App {
                             if features.is_empty() && orphans.is_empty() {
                                 return Ok(Vec::new());
                             }
-                            let mut items = vec![BranchPickerItem {
-                                branch: None,
-                                worktree_count: 0,
-                                ticket_count: 0,
-                            }];
-                            for f in &features {
-                                items.push(BranchPickerItem {
-                                    branch: Some(f.branch.clone()),
-                                    worktree_count: f.worktree_count,
-                                    ticket_count: f.ticket_count,
-                                });
-                            }
-                            // Append orphan branches after registered features.
-                            for orphan in &orphans {
-                                items.push(BranchPickerItem {
-                                    branch: Some(orphan.branch.clone()),
-                                    worktree_count: orphan.worktree_count,
-                                    ticket_count: 0,
-                                });
-                            }
-                            Ok::<Vec<BranchPickerItem>, String>(items)
+                            Ok::<Vec<BranchPickerItem>, String>(
+                                BranchPickerItem::from_features_and_orphans(&features, &orphans),
+                            )
                         })();
                         match result {
                             Ok(items) => {
@@ -800,6 +782,128 @@ impl App {
     /// Handle branch selection from the BranchPicker modal.
     /// `index = None` means use the modal's `selected` field (Enter key);
     /// `index = Some(i)` means a direct numeric pick.
+    /// Trigger the base branch change flow: fetch branches off-thread, then open picker.
+    pub(super) fn handle_set_base_branch(&mut self) {
+        // Only valid in WorktreeDetail view
+        if self.state.view != crate::state::View::WorktreeDetail {
+            return;
+        }
+
+        // Find the current worktree & its repo slug
+        let wt = self
+            .state
+            .selected_worktree_id
+            .as_ref()
+            .and_then(|wt_id| self.state.data.worktrees.iter().find(|w| w.id == *wt_id))
+            .cloned();
+        let Some(wt) = wt else { return };
+
+        let repo_slug = self
+            .state
+            .data
+            .repo_slug_map
+            .get(&wt.repo_id)
+            .cloned()
+            .unwrap_or_default();
+
+        if let Some(ref tx) = self.bg_tx {
+            let tx = tx.clone();
+            let slug = repo_slug.clone();
+            let wt_slug = wt.slug.clone();
+            std::thread::spawn(move || {
+                use crate::action::Action;
+                use crate::state::BranchPickerItem;
+                use conductor_core::config::{db_path, load_config};
+                use conductor_core::db::open_database;
+                use conductor_core::feature::FeatureManager;
+                use conductor_core::repo::RepoManager;
+
+                let db = db_path();
+                let result = (|| {
+                    let conn =
+                        open_database(&db).map_err(|e| format!("Failed to open database: {e}"))?;
+                    let config =
+                        load_config().map_err(|e| format!("Failed to load config: {e}"))?;
+                    let fm = FeatureManager::new(&conn, &config);
+                    let features = fm
+                        .list_active(&slug)
+                        .map_err(|e| format!("Failed to list features: {e}"))?;
+
+                    let repo = RepoManager::new(&conn, &config)
+                        .get_by_slug(&slug)
+                        .map_err(|e| format!("Failed to get repo '{slug}': {e}"))?;
+                    let orphans = fm
+                        .list_unregistered_branches(&repo.id, &repo.default_branch)
+                        .map_err(|e| format!("Failed to list unregistered branches: {e}"))?;
+
+                    Ok::<Vec<BranchPickerItem>, String>(
+                        BranchPickerItem::from_features_and_orphans(&features, &orphans),
+                    )
+                })();
+                match result {
+                    Ok(items) => {
+                        let _ = tx.send(Action::BaseBranchesLoaded {
+                            repo_slug: slug,
+                            wt_slug,
+                            items,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = tx.send(Action::BaseBranchesFailed { error });
+                    }
+                }
+            });
+            self.state.modal = Modal::Progress {
+                message: "Loading branches…".into(),
+            };
+        }
+    }
+
+    /// Handle the result of loading branches for base branch change.
+    pub(super) fn handle_base_branches_loaded(
+        &mut self,
+        repo_slug: String,
+        wt_slug: String,
+        items: Vec<BranchPickerItem>,
+    ) {
+        self.state.modal = Modal::BaseBranchPicker {
+            repo_slug,
+            wt_slug,
+            items,
+            selected: 0,
+        };
+    }
+
+    /// Handle base branch selection from the BaseBranchPicker modal.
+    pub(super) fn handle_base_branch_pick(&mut self, index: Option<usize>) {
+        let modal = std::mem::replace(&mut self.state.modal, Modal::None);
+        if let Modal::BaseBranchPicker {
+            repo_slug,
+            wt_slug,
+            items,
+            selected,
+            ..
+        } = modal
+        {
+            let idx = index.unwrap_or(selected);
+            let new_base = items.get(idx).and_then(|item| item.branch.clone());
+
+            let wm = WorktreeManager::new(&self.conn, &self.config);
+            match wm.set_base_branch(&repo_slug, &wt_slug, new_base.as_deref()) {
+                Ok(()) => {
+                    let label = new_base.as_deref().unwrap_or("(repo default)");
+                    self.state.status_message = Some(format!("Base branch set to {label}"));
+                    self.refresh_data();
+                }
+                Err(e) => {
+                    self.state.modal = Modal::Error {
+                        message: format!("Failed to set base branch: {e}"),
+                    };
+                }
+            }
+        }
+    }
+
     pub(super) fn handle_branch_pick(&mut self, index: Option<usize>) {
         let modal = std::mem::replace(&mut self.state.modal, Modal::None);
         if let Modal::BranchPicker {

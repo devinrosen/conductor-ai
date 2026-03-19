@@ -475,6 +475,36 @@ pub struct BranchPickerItem {
     pub ticket_count: i64,
 }
 
+impl BranchPickerItem {
+    /// Build the picker list from features and unregistered (orphan) branches.
+    /// The first entry is always `None` (repo default branch sentinel).
+    pub fn from_features_and_orphans(
+        features: &[conductor_core::feature::FeatureRow],
+        orphans: &[conductor_core::feature::UnregisteredBranch],
+    ) -> Vec<Self> {
+        let mut items = vec![Self {
+            branch: None,
+            worktree_count: 0,
+            ticket_count: 0,
+        }];
+        for f in features {
+            items.push(Self {
+                branch: Some(f.branch.clone()),
+                worktree_count: f.worktree_count,
+                ticket_count: f.ticket_count,
+            });
+        }
+        for orphan in orphans {
+            items.push(Self {
+                branch: Some(orphan.branch.clone()),
+                worktree_count: orphan.worktree_count,
+                ticket_count: 0,
+            });
+        }
+        items
+    }
+}
+
 #[derive(Clone)]
 pub enum Modal {
     None,
@@ -619,6 +649,13 @@ pub enum Modal {
         items: Vec<BranchPickerItem>,
         selected: usize,
     },
+    /// Branch picker for changing worktree base branch (separate from creation-flow BranchPicker).
+    BaseBranchPicker {
+        repo_slug: String,
+        wt_slug: String,
+        items: Vec<BranchPickerItem>,
+        selected: usize,
+    },
     /// In-TUI theme picker: browse named themes with live preview.
     ThemePicker {
         /// Snapshot of all available themes at picker-open time (built-ins + custom).
@@ -674,6 +711,7 @@ impl fmt::Debug for Modal {
                     "Modal::GithubDiscover(owner={owner:?}, loading={loading})"
                 )
             }
+            Modal::BaseBranchPicker { .. } => write!(f, "Modal::BaseBranchPicker"),
             Modal::BranchPicker { .. } => write!(f, "Modal::BranchPicker"),
             Modal::PostCreatePicker { .. } => write!(f, "Modal::PostCreatePicker"),
             Modal::PrWorkflowPicker {

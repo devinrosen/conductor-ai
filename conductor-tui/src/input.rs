@@ -212,6 +212,23 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::BaseBranchPicker { ref items, .. } => {
+            return match key.code {
+                KeyCode::Esc => Action::DismissModal,
+                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
+                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
+                KeyCode::Enter => Action::SelectBaseBranch(None),
+                KeyCode::Char(c) if c.is_ascii_digit() => {
+                    let n = c.to_digit(10).unwrap() as usize;
+                    if n >= 1 && n <= items.len() {
+                        Action::SelectBaseBranch(Some(n - 1))
+                    } else {
+                        Action::None
+                    }
+                }
+                _ => Action::None,
+            };
+        }
         Modal::PostCreatePicker { ref items, .. } => {
             return match key.code {
                 KeyCode::Esc => Action::DismissModal,
@@ -414,6 +431,12 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                     && state.worktree_detail_selected_row == crate::state::info_row::MODEL =>
             {
                 return Action::SetModel
+            }
+            KeyCode::Enter
+                if focus == WorktreeDetailFocus::InfoPanel
+                    && state.worktree_detail_selected_row == crate::state::info_row::BASE =>
+            {
+                return Action::SetBaseBranch
             }
             KeyCode::Enter
                 if focus == WorktreeDetailFocus::InfoPanel
