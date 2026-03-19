@@ -1863,6 +1863,30 @@ mod tests {
     }
 
     #[test]
+    fn test_ensure_feature_for_branch_disambiguates_chained_suffix() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let repo = make_repo(&repo_id);
+        // Pre-insert both "notifications" and "notifications-2" on different branches
+        insert_feature(&conn, &repo_id, "notifications", "feat/notifications-old");
+        insert_feature(&conn, &repo_id, "notifications-2", "feat/notifications-v2");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .ensure_feature_for_branch(&repo, "feat/notifications")
+            .unwrap();
+        assert!(result.is_some());
+        let feature = result.unwrap();
+        assert_eq!(
+            feature.name, "notifications-3",
+            "should skip taken suffixes and use the next available one"
+        );
+        assert_eq!(feature.branch, "feat/notifications");
+    }
+
+    #[test]
     fn test_ensure_feature_for_branch_infers_base_from_worktree() {
         let conn = setup_db();
         let repo_id = insert_repo(&conn);

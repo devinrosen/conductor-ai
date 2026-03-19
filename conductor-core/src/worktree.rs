@@ -2039,9 +2039,9 @@ mod tests {
     }
 
     #[test]
-    fn test_create_reports_warning_on_feature_registration_error() {
-        // This test verifies that errors from ensure_feature_for_branch are
-        // surfaced as warnings rather than silently swallowed.
+    fn test_create_skips_auto_registration_for_default_branch() {
+        // Creating a worktree from the default branch should not trigger
+        // auto-registration of a feature.
         let (tmp, remote, local) = setup_repo_with_remote();
 
         let conn = crate::test_helpers::setup_db();
