@@ -639,23 +639,37 @@ impl App {
                             self.state.view = View::RepoDetail;
                         }
                     }
-                    Some(DashboardRow::Feature {
-                        repo_idx,
-                        feature_idx,
-                        ..
-                    }) => {
-                        // Enter on a feature header toggles collapse
-                        if let Some(feature) = self.state.feature_at(*repo_idx, *feature_idx) {
-                            let fid = feature.id.clone();
-                            if !self.state.collapsed_features.remove(&fid) {
-                                self.state.collapsed_features.insert(fid);
+                    Some(&DashboardRow::Feature { repo_idx, .. }) => {
+                        // Enter on a feature header navigates to the parent repo's detail view
+                        if let Some(repo) = self.state.data.repos.get(repo_idx).cloned() {
+                            let repo_id = repo.id.clone();
+                            let remote_url = repo.remote_url.clone();
+                            self.state.selected_repo_id = Some(repo_id.clone());
+                            self.state.rebuild_detail_worktree_tree(&repo_id);
+                            self.state.detail_tickets = self
+                                .state
+                                .data
+                                .tickets
+                                .iter()
+                                .filter(|t| t.repo_id == repo_id)
+                                .cloned()
+                                .collect();
+                            self.state.detail_wt_index = 0;
+                            self.state.detail_ticket_index = 0;
+                            self.state.detail_prs = Vec::new();
+                            self.state.detail_pr_index = 0;
+                            self.state.pr_last_fetched_at = None;
+                            if let Some(ref tx) = self.bg_tx {
+                                crate::background::spawn_pr_fetch_once(
+                                    tx.clone(),
+                                    remote_url,
+                                    repo_id.clone(),
+                                );
                             }
-                        } else {
-                            tracing::warn!(
-                                repo_idx,
-                                feature_idx,
-                                "Enter on Feature row: feature_at() returned None — stale dashboard row"
-                            );
+                            self.rebuild_detail_gates();
+                            self.state.rebuild_filtered_tickets();
+                            self.state.repo_detail_focus = RepoDetailFocus::Worktrees;
+                            self.state.view = View::RepoDetail;
                         }
                     }
                     Some(&DashboardRow::Worktree { idx: wt_idx, .. }) => {

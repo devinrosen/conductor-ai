@@ -54,6 +54,16 @@ pub fn render(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
         help_line("L", "Filter tickets by label (repo detail)", theme),
         Line::from(""),
         Line::from(Span::styled(
+            "Dashboard — Feature Rows",
+            Style::default()
+                .fg(theme.label_accent)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        help_line("Space", "Collapse/expand feature group", theme),
+        help_line("d", "Feature detail popup", theme),
+        Line::from(""),
+        Line::from(Span::styled(
             "Repo Detail — Tickets",
             Style::default()
                 .fg(theme.label_accent)

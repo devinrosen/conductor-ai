@@ -326,6 +326,8 @@ pub enum Action {
     WorkflowDataRefreshed(Box<WorkflowDataPayload>),
 
     // Feature actions (dashboard feature header rows)
+    /// Toggle collapse/expand for a feature header row (Space key).
+    ToggleFeatureCollapse,
     FeatureDetail {
         repo_idx: usize,
         feature_idx: usize,
