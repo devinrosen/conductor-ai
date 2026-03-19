@@ -126,16 +126,11 @@ pub fn gate_notification_text(
     };
 
     match gate_type {
-        Some(GateType::HumanApproval) => {
-            let title = "Conductor \u{2014} Awaiting Your Approval";
-            let body = match gate_prompt {
-                Some(prompt) => format!("{wf} \u{2192} {step_name}: {prompt}"),
-                None => format!("{wf} \u{2192} {step_name}"),
+        Some(GateType::HumanApproval) | Some(GateType::HumanReview) => {
+            let title = match gate_type {
+                Some(GateType::HumanApproval) => "Conductor \u{2014} Awaiting Your Approval",
+                _ => "Conductor \u{2014} Review Requested",
             };
-            (title, body)
-        }
-        Some(GateType::HumanReview) => {
-            let title = "Conductor \u{2014} Review Requested";
             let body = match gate_prompt {
                 Some(prompt) => format!("{wf} \u{2192} {step_name}: {prompt}"),
                 None => format!("{wf} \u{2192} {step_name}"),
@@ -160,40 +155,44 @@ pub fn gate_notification_text(
     }
 }
 
+/// Parameters for [`fire_gate_notification`].
+pub struct GateNotificationParams<'a> {
+    pub step_id: &'a str,
+    pub step_name: &'a str,
+    pub workflow_name: &'a str,
+    pub target_label: Option<&'a str>,
+    pub gate_type: Option<&'a GateType>,
+    pub gate_prompt: Option<&'a str>,
+}
+
 /// Fire a desktop notification for a workflow gate waiting for action.
 ///
 /// Gated on `config.enabled`. Uses `(step_id, "gate_waiting")` as the dedup key.
-#[allow(clippy::too_many_arguments)]
 pub fn fire_gate_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
-    step_id: &str,
-    step_name: &str,
-    workflow_name: &str,
-    target_label: Option<&str>,
-    gate_type: Option<&GateType>,
-    gate_prompt: Option<&str>,
+    params: &GateNotificationParams<'_>,
 ) {
     if !config.enabled {
         return;
     }
 
-    if !try_claim_notification(conn, step_id, "gate_waiting") {
+    if !try_claim_notification(conn, params.step_id, "gate_waiting") {
         return;
     }
 
     let (title, body) = gate_notification_text(
-        gate_type,
-        step_name,
-        workflow_name,
-        target_label,
-        gate_prompt,
+        params.gate_type,
+        params.step_name,
+        params.workflow_name,
+        params.target_label,
+        params.gate_prompt,
     );
     if let Err(e) = show_desktop_notification(title, &body) {
         tracing::warn!(
-            step_id,
-            step_name,
-            workflow_name,
+            step_id = params.step_id,
+            step_name = params.step_name,
+            workflow_name = params.workflow_name,
             "desktop notification failed: {e}"
         );
     }
@@ -626,12 +625,14 @@ mod tests {
         fire_gate_notification(
             &conn,
             &cfg,
-            "step-1",
-            "Deploy to prod",
-            "release",
-            None,
-            None,
-            None,
+            &GateNotificationParams {
+                step_id: "step-1",
+                step_name: "Deploy to prod",
+                workflow_name: "release",
+                target_label: None,
+                gate_type: None,
+                gate_prompt: None,
+            },
         );
         let count: i64 = conn
             .query_row(
@@ -647,26 +648,16 @@ mod tests {
     fn fire_gate_notification_enabled_claims_once() {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
-        fire_gate_notification(
-            &conn,
-            &cfg,
-            "step-2",
-            "Deploy to prod",
-            "release",
-            None,
-            Some(&GateType::HumanApproval),
-            Some("Ready?"),
-        );
-        fire_gate_notification(
-            &conn,
-            &cfg,
-            "step-2",
-            "Deploy to prod",
-            "release",
-            None,
-            Some(&GateType::HumanApproval),
-            Some("Ready?"),
-        );
+        let params = GateNotificationParams {
+            step_id: "step-2",
+            step_name: "Deploy to prod",
+            workflow_name: "release",
+            target_label: None,
+            gate_type: Some(&GateType::HumanApproval),
+            gate_prompt: Some("Ready?"),
+        };
+        fire_gate_notification(&conn, &cfg, &params);
+        fire_gate_notification(&conn, &cfg, &params);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'step-2' AND event_type = 'gate_waiting'",
@@ -681,26 +672,16 @@ mod tests {
     fn fire_gate_notification_with_target_label_claims_once() {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
-        fire_gate_notification(
-            &conn,
-            &cfg,
-            "step-3",
-            "Deploy to prod",
-            "release",
-            Some("conductor-ai/feat-1095"),
-            None,
-            None,
-        );
-        fire_gate_notification(
-            &conn,
-            &cfg,
-            "step-3",
-            "Deploy to prod",
-            "release",
-            Some("conductor-ai/feat-1095"),
-            None,
-            None,
-        );
+        let params = GateNotificationParams {
+            step_id: "step-3",
+            step_name: "Deploy to prod",
+            workflow_name: "release",
+            target_label: Some("conductor-ai/feat-1095"),
+            gate_type: None,
+            gate_prompt: None,
+        };
+        fire_gate_notification(&conn, &cfg, &params);
+        fire_gate_notification(&conn, &cfg, &params);
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'step-3' AND event_type = 'gate_waiting'",
