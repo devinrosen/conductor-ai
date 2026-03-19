@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use crate::error::{ConductorError, Result};
@@ -369,6 +369,90 @@ pub fn ensure_dirs(config: &Config) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Per-repo .conductor/config.toml
+// ---------------------------------------------------------------------------
+
+/// Per-repo configuration loaded from `<repo_root>/.conductor/config.toml`.
+///
+/// All fields are optional — absent keys fall through to global [`Config`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RepoConfig {
+    #[serde(default)]
+    pub defaults: RepoDefaults,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RepoDefaults {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_merge_strategy: Option<String>,
+}
+
+impl RepoConfig {
+    /// Load repo-level config from `<repo_root>/.conductor/config.toml`.
+    /// Returns defaults (all-None) if the file doesn't exist.
+    pub fn load(repo_path: &Path) -> Result<RepoConfig> {
+        let path = repo_path.join(".conductor").join("config.toml");
+        if !path.exists() {
+            return Ok(RepoConfig::default());
+        }
+        let contents = std::fs::read_to_string(&path)?;
+        let config: RepoConfig =
+            toml::from_str(&contents).map_err(|e| ConductorError::Config(e.to_string()))?;
+        Ok(config)
+    }
+
+    /// Save repo-level config to `<repo_root>/.conductor/config.toml`.
+    /// Creates the `.conductor/` directory if needed.
+    pub fn save(&self, repo_path: &Path) -> Result<()> {
+        let dir = repo_path.join(".conductor");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("config.toml");
+
+        // Patch-write: preserve unknown sections
+        let mut merged: toml::Value = if path.exists() {
+            let existing = std::fs::read_to_string(&path)?;
+            toml::from_str(&existing).map_err(|e| {
+                ConductorError::Config(format!("existing repo config is malformed: {e}"))
+            })?
+        } else {
+            toml::Value::Table(toml::map::Map::new())
+        };
+
+        let new_value: toml::Value = toml::Value::try_from(self)
+            .map_err(|e| ConductorError::Config(format!("serialize repo config: {e}")))?;
+        merge_toml(&mut merged, new_value);
+
+        // Explicitly remove keys that are None in the struct but survived merge
+        // (because skip_serializing_if omits them, so merge_toml preserves stale keys).
+        if let Some(defaults) = merged.get_mut("defaults").and_then(|d| d.as_table_mut()) {
+            if self.defaults.model.is_none() {
+                defaults.remove("model");
+            }
+            if self.defaults.default_branch.is_none() {
+                defaults.remove("default_branch");
+            }
+            if self.defaults.bot_name.is_none() {
+                defaults.remove("bot_name");
+            }
+            if self.defaults.feature_merge_strategy.is_none() {
+                defaults.remove("feature_merge_strategy");
+            }
+        }
+
+        let contents = toml::to_string_pretty(&merged)
+            .map_err(|e| ConductorError::Config(format!("serialize repo config: {e}")))?;
+        std::fs::write(&path, contents)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -728,5 +812,126 @@ some_key = "some_value"
                 .and_then(|v| v.as_str()),
             Some("some_value")
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // RepoConfig tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_repo_config_load_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let rc = RepoConfig::load(dir.path()).unwrap();
+        assert!(rc.defaults.model.is_none());
+        assert!(rc.defaults.default_branch.is_none());
+        assert!(rc.defaults.bot_name.is_none());
+        assert!(rc.defaults.feature_merge_strategy.is_none());
+    }
+
+    #[test]
+    fn test_repo_config_load_valid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let conductor_dir = dir.path().join(".conductor");
+        std::fs::create_dir_all(&conductor_dir).unwrap();
+        std::fs::write(
+            conductor_dir.join("config.toml"),
+            r#"
+[defaults]
+model = "claude-opus-4-6"
+default_branch = "develop"
+"#,
+        )
+        .unwrap();
+
+        let rc = RepoConfig::load(dir.path()).unwrap();
+        assert_eq!(rc.defaults.model.as_deref(), Some("claude-opus-4-6"));
+        assert_eq!(rc.defaults.default_branch.as_deref(), Some("develop"));
+        assert!(rc.defaults.bot_name.is_none());
+    }
+
+    #[test]
+    fn test_repo_config_load_partial_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let conductor_dir = dir.path().join(".conductor");
+        std::fs::create_dir_all(&conductor_dir).unwrap();
+        std::fs::write(
+            conductor_dir.join("config.toml"),
+            r#"
+[defaults]
+bot_name = "my-bot"
+"#,
+        )
+        .unwrap();
+
+        let rc = RepoConfig::load(dir.path()).unwrap();
+        assert!(rc.defaults.model.is_none());
+        assert!(rc.defaults.default_branch.is_none());
+        assert_eq!(rc.defaults.bot_name.as_deref(), Some("my-bot"));
+    }
+
+    #[test]
+    fn test_repo_config_save_and_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let rc = RepoConfig {
+            defaults: RepoDefaults {
+                model: Some("sonnet".to_string()),
+                default_branch: Some("main".to_string()),
+                bot_name: None,
+                feature_merge_strategy: Some("merge".to_string()),
+            },
+        };
+        rc.save(dir.path()).unwrap();
+
+        let loaded = RepoConfig::load(dir.path()).unwrap();
+        assert_eq!(loaded.defaults.model.as_deref(), Some("sonnet"));
+        assert_eq!(loaded.defaults.default_branch.as_deref(), Some("main"));
+        assert!(loaded.defaults.bot_name.is_none());
+        assert_eq!(
+            loaded.defaults.feature_merge_strategy.as_deref(),
+            Some("merge")
+        );
+    }
+
+    #[test]
+    fn test_repo_config_save_creates_conductor_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let rc = RepoConfig::default();
+        rc.save(dir.path()).unwrap();
+        assert!(dir.path().join(".conductor").join("config.toml").exists());
+    }
+
+    #[test]
+    fn test_repo_config_save_clears_option_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        // First, save a config with model set.
+        let rc = RepoConfig {
+            defaults: RepoDefaults {
+                model: Some("opus".to_string()),
+                default_branch: Some("develop".to_string()),
+                bot_name: None,
+                feature_merge_strategy: None,
+            },
+        };
+        rc.save(dir.path()).unwrap();
+        let loaded = RepoConfig::load(dir.path()).unwrap();
+        assert_eq!(loaded.defaults.model.as_deref(), Some("opus"));
+        assert_eq!(loaded.defaults.default_branch.as_deref(), Some("develop"));
+
+        // Now clear model by saving with None — it must actually be removed.
+        let rc2 = RepoConfig {
+            defaults: RepoDefaults {
+                model: None,
+                default_branch: Some("develop".to_string()),
+                bot_name: None,
+                feature_merge_strategy: None,
+            },
+        };
+        rc2.save(dir.path()).unwrap();
+        let loaded2 = RepoConfig::load(dir.path()).unwrap();
+        assert!(
+            loaded2.defaults.model.is_none(),
+            "model should be cleared after saving with None"
+        );
+        assert_eq!(loaded2.defaults.default_branch.as_deref(), Some("develop"));
     }
 }

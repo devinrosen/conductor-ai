@@ -24,14 +24,13 @@ pub fn seed_database(conn: &Connection) -> Result<()> {
 
 fn seed_repos(conn: &Connection) -> Result<()> {
     conn.execute(
-        "INSERT OR IGNORE INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT OR IGNORE INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
             "seed-repo-001",
             "acme-app",
             "/tmp/conductor-seed/acme-app",
             "https://github.com/acme/acme-app.git",
-            "main",
             "/tmp/conductor-seed/workspaces/acme-app",
             "2025-01-15T10:00:00+00:00",
         ],

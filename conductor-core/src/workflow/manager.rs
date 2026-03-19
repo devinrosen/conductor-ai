@@ -1632,8 +1632,8 @@ mod tests {
         let conn = crate::test_helpers::setup_db();
         // Add a second repo and worktrees for cross-repo filtering tests
         conn.execute(
-            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
-             VALUES ('r2', 'other-repo', '/tmp/repo2', 'https://github.com/test/repo2.git', 'main', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r2', 'other-repo', '/tmp/repo2', 'https://github.com/test/repo2.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
             [],
         ).unwrap();
         conn.execute(

@@ -78,6 +78,7 @@ pub async fn patch_repo_model(
     let mgr = RepoManager::new(&db, &config);
     let repo = mgr.get_by_id(&id)?;
     mgr.set_model(&repo.slug, body.model.as_deref())?;
+    // Re-read to get updated computed fields
     let updated = mgr.get_by_id(&id)?;
     Ok(Json(updated))
 }

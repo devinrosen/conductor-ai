@@ -473,13 +473,13 @@ mod tests {
 
             // Register two repos (make_test_db only runs migrations, no seed data)
             conn.execute(
-                "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
-                 VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+                 VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
                 [],
             ).unwrap();
             conn.execute(
-                "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
-                 VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', 'main', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+                 VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
                 [],
             ).unwrap();
             // Add active worktrees for both repos

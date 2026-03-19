@@ -133,8 +133,8 @@ mod tests {
             // Register a non-GitHub repo (no open PRs can be fetched).
             let conn = open_database(&db).expect("open db");
             conn.execute(
-                "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
-                 VALUES ('r1', 'local-repo', '/tmp/repo', 'file:///tmp/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+                 VALUES ('r1', 'local-repo', '/tmp/repo', 'file:///tmp/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
                 [],
             ).unwrap();
         }
@@ -164,8 +164,8 @@ mod tests {
 
         // Insert a repo and a matching worktree.
         conn.execute(
-            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
-             VALUES ('r1', 'my-repo', '/tmp/repo', 'file:///tmp/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r1', 'my-repo', '/tmp/repo', 'file:///tmp/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
             [],
         ).unwrap();
         conn.execute(
@@ -205,8 +205,8 @@ mod tests {
         let conn = open_database(&db).expect("open db");
 
         conn.execute(
-            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
-             VALUES ('r1', 'my-repo', '/tmp/repo', 'file:///tmp/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r1', 'my-repo', '/tmp/repo', 'file:///tmp/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
             [],
         ).unwrap();
 

@@ -1036,7 +1036,6 @@ pub enum InputAction {
     },
     /// Set (or clear) the default model for a repo.
     SetRepoModel {
-        repo_id: String,
         slug: String,
     },
     /// Submit a response to a pending feedback request.

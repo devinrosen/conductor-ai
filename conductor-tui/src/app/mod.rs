@@ -881,6 +881,24 @@ impl App {
                     }
                 }
             }
+            Action::SetRepoModelComplete { slug, result } => {
+                self.state.modal = Modal::None;
+                match result {
+                    Ok(model) => {
+                        let msg = match &model {
+                            Some(m) => format!("Model for {slug} set to: {m}"),
+                            None => format!("Model for {slug} cleared"),
+                        };
+                        self.state.status_message = Some(msg);
+                        self.refresh_data();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error {
+                            message: format!("Failed to set model: {e}"),
+                        };
+                    }
+                }
+            }
             Action::GithubImportComplete { imported, errors } => {
                 self.state.modal = Modal::None;
                 self.handle_github_back_to_orgs();

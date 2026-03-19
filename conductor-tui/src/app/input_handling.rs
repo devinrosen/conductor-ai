@@ -629,29 +629,13 @@ impl App {
                 }
                 let _ = worktree_id;
             }
-            InputAction::SetRepoModel { repo_id, slug } => {
+            InputAction::SetRepoModel { slug } => {
                 let model = if value.trim().is_empty() {
                     None
                 } else {
                     Some(value.trim().to_string())
                 };
-                let mgr = RepoManager::new(&self.conn, &self.config);
-                match mgr.set_model(&slug, model.as_deref()) {
-                    Ok(()) => {
-                        let msg = match &model {
-                            Some(m) => format!("Model for {slug} set to: {m}"),
-                            None => format!("Model for {slug} cleared"),
-                        };
-                        self.state.status_message = Some(msg);
-                        self.refresh_data();
-                    }
-                    Err(e) => {
-                        self.state.modal = Modal::Error {
-                            message: format!("Failed to set model: {e}"),
-                        };
-                    }
-                }
-                let _ = repo_id;
+                self.spawn_set_repo_model(slug, model);
             }
             InputAction::FeedbackResponse { feedback_id } => {
                 if value.is_empty() {
@@ -707,29 +691,13 @@ impl App {
                 }
                 let _ = worktree_id;
             }
-            InputAction::SetRepoModel { repo_id, slug } => {
+            InputAction::SetRepoModel { slug } => {
                 let model = if value.trim().is_empty() {
                     None
                 } else {
                     Some(value.trim().to_string())
                 };
-                let mgr = RepoManager::new(&self.conn, &self.config);
-                match mgr.set_model(&slug, model.as_deref()) {
-                    Ok(()) => {
-                        let msg = match &model {
-                            Some(m) => format!("Model for {slug} set to: {m}"),
-                            None => format!("Model for {slug} cleared"),
-                        };
-                        self.state.status_message = Some(msg);
-                        self.refresh_data();
-                    }
-                    Err(e) => {
-                        self.state.modal = Modal::Error {
-                            message: format!("Failed to set model: {e}"),
-                        };
-                    }
-                }
-                let _ = repo_id;
+                self.spawn_set_repo_model(slug, model);
             }
             InputAction::AgentModelOverride {
                 prompt,
@@ -923,6 +891,56 @@ impl App {
             let from_branch = items.get(idx).and_then(|item| item.branch.clone());
             // Transition to PR input step, carrying the selected branch.
             self.state.modal = pr_step_modal(repo_slug, wt_name, ticket_id, from_branch);
+        }
+    }
+
+    /// Spawn a background thread to set the repo model via file I/O,
+    /// keeping the TUI main thread unblocked.
+    fn spawn_set_repo_model(&mut self, slug: String, model: Option<String>) {
+        if let Some(ref tx) = self.bg_tx {
+            let tx = tx.clone();
+            let model_clone = model.clone();
+            let slug_clone = slug.clone();
+            std::thread::spawn(move || {
+                use crate::action::Action;
+                use conductor_core::config::{db_path, load_config};
+                use conductor_core::db::open_database;
+                use conductor_core::repo::RepoManager;
+
+                let result = (|| {
+                    let db = db_path();
+                    let conn =
+                        open_database(&db).map_err(|e| format!("Failed to open database: {e}"))?;
+                    let config =
+                        load_config().map_err(|e| format!("Failed to load config: {e}"))?;
+                    let mgr = RepoManager::new(&conn, &config);
+                    mgr.set_model(&slug_clone, model_clone.as_deref())
+                        .map_err(|e| format!("{e}"))?;
+                    Ok(model_clone)
+                })();
+                let _ = tx.send(Action::SetRepoModelComplete { slug, result });
+            });
+            self.state.modal = Modal::Progress {
+                message: "Setting repo model…".into(),
+            };
+        } else {
+            // Fallback: no background sender (e.g. in tests), run synchronously.
+            let mgr = RepoManager::new(&self.conn, &self.config);
+            match mgr.set_model(&slug, model.as_deref()) {
+                Ok(()) => {
+                    let msg = match &model {
+                        Some(m) => format!("Model for {slug} set to: {m}"),
+                        None => format!("Model for {slug} cleared"),
+                    };
+                    self.state.status_message = Some(msg);
+                    self.refresh_data();
+                }
+                Err(e) => {
+                    self.state.modal = Modal::Error {
+                        message: format!("Failed to set model: {e}"),
+                    };
+                }
+            }
         }
     }
 }

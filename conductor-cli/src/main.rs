@@ -839,7 +839,7 @@ fn main() -> Result<()> {
                                 Ok(t) => {
                                     let prompt = build_agent_prompt(&t);
                                     println!("Starting agent...");
-                                    // Resolve model: per-worktree → per-repo → global config
+                                    // Resolve model: per-worktree → per-repo config → global config
                                     let repo_mgr = RepoManager::new(&conn, &config);
                                     let repo_model =
                                         repo_mgr.get_by_slug(&repo).ok().and_then(|r| r.model);
