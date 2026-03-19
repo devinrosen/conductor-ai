@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fmt;
 
 use super::types::{Condition, InputType, ScriptNode, WorkflowDef, WorkflowNode};
 
@@ -12,6 +13,15 @@ pub struct ValidationError {
     pub message: String,
     /// Optional hint to help the user fix the error.
     pub hint: Option<String>,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.hint {
+            Some(h) => write!(f, "{} (hint: {h})", self.message),
+            None => write!(f, "{}", self.message),
+        }
+    }
 }
 
 /// The result of running `validate_workflow_semantics`.
@@ -373,6 +383,24 @@ fn collect_script_nodes(nodes: &[WorkflowNode]) -> Vec<&ScriptNode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_display_without_hint() {
+        let err = ValidationError {
+            message: "msg".into(),
+            hint: None,
+        };
+        assert_eq!(err.to_string(), "msg");
+    }
+
+    #[test]
+    fn test_display_with_hint() {
+        let err = ValidationError {
+            message: "msg".into(),
+            hint: Some("fix it".into()),
+        };
+        assert_eq!(err.to_string(), "msg (hint: fix it)");
+    }
 
     #[cfg(unix)]
     #[test]
