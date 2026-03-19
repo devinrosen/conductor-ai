@@ -9,10 +9,10 @@ use ratatui::Frame;
 use conductor_core::workflow::InputType;
 use conductor_core::workflow::WorkflowNode;
 use conductor_core::workflow::{
-    GateType, WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
+    WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
 };
 
-use super::common::truncate;
+use super::common::{gate_type_icon, truncate};
 use super::helpers::{format_condition, shorten_paths, visual_idx_with_headers};
 use crate::state::AppState;
 use crate::state::ColumnFocus;
@@ -1723,13 +1723,7 @@ fn run_status_icon(
             .find(|s| s.status == WorkflowStepStatus::Waiting && s.gate_type.is_some())
             .and_then(|s| s.gate_type.as_ref())
     });
-    match gate_type {
-        Some(GateType::PrChecks) => ("⏳", theme.status_waiting),
-        Some(GateType::PrApproval | GateType::HumanApproval | GateType::HumanReview) => {
-            ("👤", theme.label_warning)
-        }
-        _ => ("⏸", theme.status_waiting),
-    }
+    gate_type_icon(gate_type, theme)
 }
 
 fn format_duration(start: &str, end: &str) -> String {

@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
 use crate::state::AppState;
-use crate::ui::common::{format_elapsed, truncate};
+use crate::ui::common::{format_elapsed, gate_type_icon, truncate};
 
 /// Render the Pending Gates pane in the right workflow column.
 /// Returns early (renders nothing) when there are no pending gates.
@@ -25,16 +25,8 @@ pub fn render_pending_gates(frame: &mut Frame, area: Rect, state: &AppState, foc
         .detail_gates
         .iter()
         .map(|gate| {
-            // Actionability indicator based on gate type
-            let (icon, icon_color) = match gate.step.gate_type {
-                Some(GateType::HumanApproval) | Some(GateType::HumanReview) => {
-                    ("\u{26A1}", state.theme.label_warning)
-                }
-                Some(GateType::PrChecks) | Some(GateType::PrApproval) => {
-                    ("\u{23F3}", state.theme.label_secondary)
-                }
-                None => ("\u{23F8}", state.theme.label_secondary),
-            };
+            // Actionability indicator based on gate type (shared helper)
+            let (icon, icon_color) = gate_type_icon(gate.step.gate_type.as_ref(), &state.theme);
 
             // Branch or fallback to target_label
             let location = gate
@@ -109,8 +101,8 @@ pub fn render_pending_gates(frame: &mut Frame, area: Rect, state: &AppState, foc
             .detail_gates
             .get(selected_idx)
             .map(|gate| match gate.step.gate_type {
-                Some(GateType::HumanApproval) => "Enter:approve  r:reject",
-                Some(GateType::HumanReview) => "Enter:review  r:reject",
+                Some(GateType::HumanApproval) => "Enter:approve/reject",
+                Some(GateType::HumanReview) => "Enter:approve/reject",
                 Some(GateType::PrChecks) => "CI running",
                 Some(GateType::PrApproval) => "Waiting for PR reviews",
                 None => "Enter:view",
