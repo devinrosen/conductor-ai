@@ -170,7 +170,7 @@ impl<'a> WorktreeManager<'a> {
         std::fs::create_dir_all(&repo.workspace_dir)?;
 
         // (branch_name, base_branch_for_db, warnings)
-        let (branch, base_for_db, warnings) = if let Some(pr_number) = from_pr {
+        let (branch, base_for_db, mut warnings) = if let Some(pr_number) = from_pr {
             // --from-pr path: fetch the PR branch and record the PR's base branch
             // so that create_pr can target the correct base.
             let (pr_branch, pr_base) = fetch_pr_branch(&repo.local_path, pr_number)?;
@@ -215,7 +215,7 @@ impl<'a> WorktreeManager<'a> {
             created_at: now,
             completed_at: None,
             model: None,
-            base_branch: base_for_db,
+            base_branch: base_for_db.clone(),
         };
 
         self.conn.execute(
@@ -233,6 +233,17 @@ impl<'a> WorktreeManager<'a> {
                 worktree.base_branch,
             ],
         )?;
+
+        // Auto-register feature if targeting a non-default branch
+        if let Some(ref base) = base_for_db {
+            let fm = crate::feature::FeatureManager::new(self.conn, self.config);
+            if let Ok(Some(feature)) = fm.ensure_feature_for_branch(&repo, base) {
+                warnings.push(format!(
+                    "Auto-registered feature '{}' for branch '{}'",
+                    feature.name, feature.branch
+                ));
+            }
+        }
 
         Ok((worktree, warnings))
     }
