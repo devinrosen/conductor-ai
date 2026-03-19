@@ -1950,6 +1950,45 @@ mod tests {
     }
 
     #[test]
+    fn test_list_unregistered_branches_excludes_non_active_worktrees() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+
+        // Create a merged worktree on an unregistered branch — should NOT appear
+        let wt_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES (?1, ?2, 'wt-done', 'feat/done-impl', 'feat/done', '/tmp/wt-done', 'merged', '2024-01-01T00:00:00Z')",
+            params![wt_id, repo_id],
+        ).unwrap();
+
+        // Create an abandoned worktree on an unregistered branch — should NOT appear
+        let wt_id2 = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES (?1, ?2, 'wt-del', 'feat/del-impl', 'feat/abandoned', '/tmp/wt-del', 'abandoned', '2024-01-01T00:00:00Z')",
+            params![wt_id2, repo_id],
+        ).unwrap();
+
+        // Create an active worktree on an unregistered branch — SHOULD appear
+        let wt_id3 = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES (?1, ?2, 'wt-act', 'feat/act-impl', 'feat/active-orphan', '/tmp/wt-act', 'active', '2024-01-01T00:00:00Z')",
+            params![wt_id3, repo_id],
+        ).unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let orphans = mgr.list_unregistered_branches(&repo_id, "main").unwrap();
+
+        // Only the active worktree's branch should be returned
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].0, "feat/active-orphan");
+        assert_eq!(orphans[0].1, 1);
+    }
+
+    #[test]
     fn test_resolve_active_feature_rejects_closed() {
         let conn = setup_db();
         let repo_id = insert_repo(&conn);
