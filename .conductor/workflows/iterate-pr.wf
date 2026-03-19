@@ -15,7 +15,11 @@ workflow iterate-pr {
       call workflow lint-fix
     }
 
-    call workflow review-pr
+    call workflow review-pr {
+      inputs {
+        scope = "incremental"
+      }
+    }
 
     if review-aggregator.has_blocking_findings {
       call address-reviews {
