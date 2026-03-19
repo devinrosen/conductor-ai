@@ -72,97 +72,84 @@ impl<'a> NotificationManager<'a> {
     }
 
     /// Create a new notification record and return its ID.
-    pub fn create_notification(&self, params: &CreateNotification<'_>) -> Result<String, String> {
+    pub fn create_notification(
+        &self,
+        params: &CreateNotification<'_>,
+    ) -> crate::error::Result<String> {
         let id = crate::new_id();
         let now = chrono::Utc::now().to_rfc3339();
-        self.conn
-            .execute(
-                "INSERT INTO notifications (id, kind, title, body, severity, entity_id, entity_type, read, created_at)
+        self.conn.execute(
+            "INSERT INTO notifications (id, kind, title, body, severity, entity_id, entity_type, read, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)",
-                rusqlite::params![
-                    id,
-                    params.kind,
-                    params.title,
-                    params.body,
-                    params.severity.to_string(),
-                    params.entity_id,
-                    params.entity_type,
-                    now,
-                ],
-            )
-            .map_err(|e| format!("create_notification failed: {e}"))?;
+            rusqlite::params![
+                id,
+                params.kind,
+                params.title,
+                params.body,
+                params.severity.to_string(),
+                params.entity_id,
+                params.entity_type,
+                now,
+            ],
+        )?;
         Ok(id)
     }
 
     /// List unread notifications, most recent first.
-    pub fn list_unread(&self) -> Result<Vec<Notification>, String> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, kind, title, body, severity, entity_id, entity_type, read, created_at, read_at
+    pub fn list_unread(&self) -> crate::error::Result<Vec<Notification>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, kind, title, body, severity, entity_id, entity_type, read, created_at, read_at
                  FROM notifications WHERE read = 0 ORDER BY created_at DESC",
-            )
-            .map_err(|e| format!("list_unread prepare failed: {e}"))?;
-        let rows = stmt
-            .query_map([], row_to_notification)
-            .map_err(|e| format!("list_unread query failed: {e}"))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("list_unread collect failed: {e}"))
+        )?;
+        let rows = stmt.query_map([], row_to_notification)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     /// List recent notifications (read and unread), most recent first.
-    pub fn list_recent(&self, limit: usize, offset: usize) -> Result<Vec<Notification>, String> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, kind, title, body, severity, entity_id, entity_type, read, created_at, read_at
+    pub fn list_recent(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> crate::error::Result<Vec<Notification>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, kind, title, body, severity, entity_id, entity_type, read, created_at, read_at
                  FROM notifications ORDER BY created_at DESC LIMIT ?1 OFFSET ?2",
-            )
-            .map_err(|e| format!("list_recent prepare failed: {e}"))?;
-        let rows = stmt
-            .query_map(
-                rusqlite::params![limit as i64, offset as i64],
-                row_to_notification,
-            )
-            .map_err(|e| format!("list_recent query failed: {e}"))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("list_recent collect failed: {e}"))
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![limit as i64, offset as i64],
+            row_to_notification,
+        )?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
-    /// Mark a single notification as read.
-    pub fn mark_read(&self, id: &str) -> Result<(), String> {
+    /// Mark a single notification as read. Returns `true` if a row was updated.
+    pub fn mark_read(&self, id: &str) -> crate::error::Result<bool> {
         let now = chrono::Utc::now().to_rfc3339();
-        self.conn
-            .execute(
-                "UPDATE notifications SET read = 1, read_at = ?1 WHERE id = ?2",
-                rusqlite::params![now, id],
-            )
-            .map_err(|e| format!("mark_read failed: {e}"))?;
-        Ok(())
+        let rows = self.conn.execute(
+            "UPDATE notifications SET read = 1, read_at = ?1 WHERE id = ?2",
+            rusqlite::params![now, id],
+        )?;
+        Ok(rows > 0)
     }
 
     /// Mark all unread notifications as read.
-    pub fn mark_all_read(&self) -> Result<(), String> {
+    pub fn mark_all_read(&self) -> crate::error::Result<()> {
         let now = chrono::Utc::now().to_rfc3339();
-        self.conn
-            .execute(
-                "UPDATE notifications SET read = 1, read_at = ?1 WHERE read = 0",
-                rusqlite::params![now],
-            )
-            .map_err(|e| format!("mark_all_read failed: {e}"))?;
+        self.conn.execute(
+            "UPDATE notifications SET read = 1, read_at = ?1 WHERE read = 0",
+            rusqlite::params![now],
+        )?;
         Ok(())
     }
 
     /// Count unread notifications.
-    pub fn unread_count(&self) -> Result<usize, String> {
-        self.conn
-            .query_row(
-                "SELECT COUNT(*) FROM notifications WHERE read = 0",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|c| c as usize)
-            .map_err(|e| format!("unread_count failed: {e}"))
+    pub fn unread_count(&self) -> crate::error::Result<usize> {
+        let count = self.conn.query_row(
+            "SELECT COUNT(*) FROM notifications WHERE read = 0",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(count as usize)
     }
 }
 
@@ -189,23 +176,8 @@ mod tests {
 
     fn test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE notifications (
-                id          TEXT PRIMARY KEY,
-                kind        TEXT NOT NULL,
-                title       TEXT NOT NULL,
-                body        TEXT NOT NULL,
-                severity    TEXT NOT NULL DEFAULT 'info',
-                entity_id   TEXT,
-                entity_type TEXT,
-                read        INTEGER NOT NULL DEFAULT 0,
-                created_at  TEXT NOT NULL,
-                read_at     TEXT
-            );
-            CREATE INDEX idx_notifications_read ON notifications(read);
-            CREATE INDEX idx_notifications_created_at ON notifications(created_at);",
-        )
-        .unwrap();
+        conn.execute_batch(include_str!("db/migrations/046_notifications.sql"))
+            .unwrap();
         conn
     }
 
@@ -246,10 +218,19 @@ mod tests {
             })
             .unwrap();
 
-        mgr.mark_read(&id).unwrap();
+        assert!(
+            mgr.mark_read(&id).unwrap(),
+            "mark_read should return true for existing ID"
+        );
 
         let unread = mgr.list_unread().unwrap();
         assert_eq!(unread.len(), 0);
+
+        // mark_read on non-existent ID returns false
+        assert!(
+            !mgr.mark_read("nonexistent").unwrap(),
+            "mark_read should return false for unknown ID"
+        );
 
         let recent = mgr.list_recent(10, 0).unwrap();
         assert_eq!(recent.len(), 1);

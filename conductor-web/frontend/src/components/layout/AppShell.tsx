@@ -68,10 +68,11 @@ export function AppShell() {
       lagged: refetchRepos,
       notification_created: (data: ConductorEventData) => {
         if (data.data) {
+          const d = data.data as Record<string, string>;
           addToast({
-            title: (data.data as Record<string, string>).kind?.replace(/_/g, " ") ?? "Notification",
-            body: (data.data as Record<string, string>).id ?? "",
-            severity: ((data.data as Record<string, string>).severity as "info" | "warning" | "action_required") ?? "info",
+            title: d.title || d.kind?.replace(/_/g, " ") || "Notification",
+            body: d.body || "",
+            severity: (d.severity as "info" | "warning" | "action_required") ?? "info",
           });
         }
       },

@@ -256,12 +256,20 @@ impl App {
                         use conductor_core::config::db_path;
                         use conductor_core::db::open_database;
                         use conductor_core::notification_manager::NotificationManager;
-                        if let Ok(conn) = open_database(&db_path()) {
-                            let mgr = NotificationManager::new(&conn);
-                            let notifications = mgr.list_recent(50, 0).unwrap_or_default();
-                            // Mark all as read when viewing
-                            let _ = mgr.mark_all_read();
-                            let _ = tx.send(Action::NotificationsLoaded { notifications });
+                        match open_database(&db_path()) {
+                            Ok(conn) => {
+                                let mgr = NotificationManager::new(&conn);
+                                let notifications = mgr.list_recent(50, 0).unwrap_or_default();
+                                // Mark all as read when viewing
+                                let _ = mgr.mark_all_read();
+                                let _ = tx.send(Action::NotificationsLoaded { notifications });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(Action::NotificationsLoaded {
+                                    notifications: vec![],
+                                });
+                                tracing::warn!("failed to open database for notifications: {e}");
+                            }
                         }
                     });
                     self.state.modal = Modal::Progress {

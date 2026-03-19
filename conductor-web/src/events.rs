@@ -54,6 +54,8 @@ pub enum ConductorEvent {
         id: String,
         kind: String,
         severity: String,
+        title: String,
+        body: String,
     },
 }
 
@@ -234,6 +236,8 @@ mod tests {
                     id: "".into(),
                     kind: "".into(),
                     severity: "".into(),
+                    title: "".into(),
+                    body: "".into(),
                 },
                 "notification_created",
             ),

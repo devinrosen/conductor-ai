@@ -34,7 +34,7 @@ pub async fn list_notifications(
     };
     notifications
         .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 pub async fn mark_read(
@@ -43,9 +43,14 @@ pub async fn mark_read(
 ) -> Result<StatusCode, (StatusCode, String)> {
     let db = state.db.lock().await;
     let mgr = NotificationManager::new(&db);
-    mgr.mark_read(&id)
-        .map(|_| StatusCode::NO_CONTENT)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+    match mgr.mark_read(&id) {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err((
+            StatusCode::NOT_FOUND,
+            format!("notification not found: {id}"),
+        )),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
 }
 
 pub async fn mark_all_read(
@@ -55,7 +60,7 @@ pub async fn mark_all_read(
     let mgr = NotificationManager::new(&db);
     mgr.mark_all_read()
         .map(|_| StatusCode::NO_CONTENT)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 pub async fn unread_count(
@@ -65,5 +70,5 @@ pub async fn unread_count(
     let mgr = NotificationManager::new(&db);
     mgr.unread_count()
         .map(|count| Json(UnreadCountResponse { count }))
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
