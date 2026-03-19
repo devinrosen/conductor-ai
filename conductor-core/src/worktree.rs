@@ -500,6 +500,21 @@ impl<'a> WorktreeManager<'a> {
             params![new_status.as_str(), now, worktree.id],
         )?;
 
+        // Auto-close the feature if this was the last active worktree and the
+        // git branch is gone. Skip for worktrees based on the default branch.
+        if let Some(ref base_branch) = worktree.base_branch {
+            if base_branch != &repo.default_branch {
+                let fm = crate::feature::FeatureManager::new(self.conn, self.config);
+                if let Err(e) = fm.auto_close_if_orphaned(repo, base_branch) {
+                    tracing::warn!(
+                        base_branch = base_branch,
+                        error = %e,
+                        "failed to auto-close orphaned feature"
+                    );
+                }
+            }
+        }
+
         Ok(Worktree {
             status: new_status,
             completed_at: Some(now),

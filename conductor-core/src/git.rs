@@ -42,6 +42,18 @@ fn run_command(
     Ok(output)
 }
 
+/// Check if a local branch exists in the given repo.
+///
+/// Runs `git branch --list <branch>` and returns `true` if the output is non-empty.
+/// This is a fast, local-only operation (no network).
+pub(crate) fn local_branch_exists(repo_path: &str, branch: &str) -> bool {
+    git_in(repo_path)
+        .args(["branch", "--list", "--", branch])
+        .output()
+        .map(|o| o.status.success() && !o.stdout.is_empty())
+        .unwrap_or(false)
+}
+
 /// Check if `branch` has been merged into `default_branch` using local refs
 /// (`git branch --merged`). Fast but may be stale if the remote has advanced.
 pub(crate) fn is_branch_merged_local(repo_path: &str, branch: &str, default_branch: &str) -> bool {
@@ -129,6 +141,34 @@ mod tests {
             matches!(&err, ConductorError::GhCli(msg) if msg.contains("failed to spawn")),
             "expected GhCli variant for spawn failure, got: {err:?}"
         );
+    }
+
+    #[test]
+    fn test_local_branch_exists_true() {
+        // "main" or "master" exists in the current repo
+        let repo = env!("CARGO_MANIFEST_DIR");
+        let parent = std::path::Path::new(repo).parent().unwrap();
+        // The workspace root is a git repo; it should have a "main" branch
+        assert!(
+            local_branch_exists(parent.to_str().unwrap(), "main")
+                || local_branch_exists(parent.to_str().unwrap(), "master"),
+            "expected main or master to exist"
+        );
+    }
+
+    #[test]
+    fn test_local_branch_exists_false() {
+        let repo = env!("CARGO_MANIFEST_DIR");
+        let parent = std::path::Path::new(repo).parent().unwrap();
+        assert!(!local_branch_exists(
+            parent.to_str().unwrap(),
+            "nonexistent-branch-xyz-12345"
+        ));
+    }
+
+    #[test]
+    fn test_local_branch_exists_bad_path() {
+        assert!(!local_branch_exists("/nonexistent/repo/path", "main"));
     }
 
     #[test]
