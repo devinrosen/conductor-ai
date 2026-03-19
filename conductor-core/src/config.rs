@@ -33,6 +33,12 @@ pub struct WorkflowNotificationConfig {
     pub on_success: bool,
     #[serde(default = "default_true")]
     pub on_failure: bool,
+    #[serde(default = "default_true")]
+    pub on_gate_human: bool,
+    #[serde(default)]
+    pub on_gate_ci: bool,
+    #[serde(default = "default_true")]
+    pub on_gate_pr_review: bool,
 }
 
 impl Default for WorkflowNotificationConfig {
@@ -40,6 +46,9 @@ impl Default for WorkflowNotificationConfig {
         Self {
             on_success: false,
             on_failure: true,
+            on_gate_human: true,
+            on_gate_ci: false,
+            on_gate_pr_review: true,
         }
     }
 }
@@ -620,6 +629,9 @@ app_id = 123456
         assert!(!config.notifications.enabled);
         assert!(!config.notifications.workflows.on_success);
         assert!(config.notifications.workflows.on_failure);
+        assert!(config.notifications.workflows.on_gate_human);
+        assert!(!config.notifications.workflows.on_gate_ci);
+        assert!(config.notifications.workflows.on_gate_pr_review);
     }
 
     #[test]
@@ -637,6 +649,28 @@ app_id = 123456
         assert!(config.notifications.enabled);
         assert!(config.notifications.workflows.on_success);
         assert!(!config.notifications.workflows.on_failure);
+        // Gate fields should still be at their defaults
+        assert!(config.notifications.workflows.on_gate_human);
+        assert!(!config.notifications.workflows.on_gate_ci);
+        assert!(config.notifications.workflows.on_gate_pr_review);
+    }
+
+    #[test]
+    fn test_notification_gate_overrides() {
+        let config: Config = toml::from_str(
+            r#"
+            [notifications]
+            enabled = true
+            [notifications.workflows]
+            on_gate_human = false
+            on_gate_ci = true
+            on_gate_pr_review = false
+        "#,
+        )
+        .unwrap();
+        assert!(!config.notifications.workflows.on_gate_human);
+        assert!(config.notifications.workflows.on_gate_ci);
+        assert!(!config.notifications.workflows.on_gate_pr_review);
     }
 
     #[test]

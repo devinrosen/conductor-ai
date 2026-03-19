@@ -885,17 +885,24 @@ mod tests {
         .unwrap();
     }
 
-    #[tokio::test]
-    async fn error_path_key_deduplicates() {
-        let db = empty_state().db;
-
-        let notifications = conductor_core::config::NotificationConfig {
+    fn test_notification_config() -> conductor_core::config::NotificationConfig {
+        conductor_core::config::NotificationConfig {
             enabled: true,
             workflows: conductor_core::config::WorkflowNotificationConfig {
                 on_success: true,
                 on_failure: true,
+                on_gate_human: true,
+                on_gate_ci: false,
+                on_gate_pr_review: true,
             },
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn error_path_key_deduplicates() {
+        let db = empty_state().db;
+
+        let notifications = test_notification_config();
 
         let bucket = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -958,13 +965,7 @@ mod tests {
     async fn notify_workflow_with_notifications_enabled_claims_log_row() {
         let conn = conductor_core::test_helpers::create_test_conn();
 
-        let notifications = conductor_core::config::NotificationConfig {
-            enabled: true,
-            workflows: conductor_core::config::WorkflowNotificationConfig {
-                on_success: true,
-                on_failure: true,
-            },
-        };
+        let notifications = test_notification_config();
 
         tokio::task::spawn_blocking(move || {
             notify_workflow(&conn, &notifications, "run-notify-1", "my-workflow", None, true);
