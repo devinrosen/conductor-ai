@@ -360,7 +360,7 @@ impl App {
                                 .list_active(&slug)
                                 .map_err(|e| format!("Failed to list features: {e}"))?;
 
-                            // Also fetch unregistered branches (orphan worktree bases).
+                            // Also fetch unregistered branches (orphan worktree branches).
                             let repo = RepoManager::new(&conn, &config)
                                 .get_by_slug(&slug)
                                 .map_err(|e| format!("Failed to get repo '{slug}': {e}"))?;

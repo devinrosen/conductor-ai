@@ -631,14 +631,13 @@ impl<'a> FeatureManager<'a> {
     ) -> Result<Vec<UnregisteredBranch>> {
         query_collect(
             self.conn,
-            "SELECT DISTINCT w.base_branch, COUNT(*) as worktree_count
+            "SELECT DISTINCT w.branch, COUNT(*) as worktree_count
              FROM worktrees w
              WHERE w.repo_id = ?1
                AND w.status = 'active'
-               AND w.base_branch IS NOT NULL
-               AND w.base_branch != ?2
-               AND w.base_branch NOT IN (SELECT f.branch FROM features f WHERE f.repo_id = ?1 AND f.status = 'active')
-             GROUP BY w.base_branch",
+               AND w.branch != ?2
+               AND w.branch NOT IN (SELECT f.branch FROM features f WHERE f.repo_id = ?1 AND f.status = 'active')
+             GROUP BY w.branch",
             params![repo_id, default_branch],
             |row| {
                 Ok(UnregisteredBranch {
@@ -1999,20 +1998,20 @@ mod tests {
         let conn = setup_db();
         let repo_id = insert_repo(&conn);
 
-        // Create a worktree based on an unregistered branch
+        // Create an active worktree whose branch is NOT a registered feature
         let wt_id = crate::new_id();
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
-             VALUES (?1, ?2, 'wt-orphan', 'feat/orphan-impl', 'feat/orphan', '/tmp/wt', 'active', '2024-01-01T00:00:00Z')",
+             VALUES (?1, ?2, 'wt-orphan', 'feat/orphan', 'main', '/tmp/wt', 'active', '2024-01-01T00:00:00Z')",
             params![wt_id, repo_id],
         ).unwrap();
 
-        // Create a worktree based on a registered feature branch (should NOT appear)
+        // Create a worktree whose branch IS a registered feature (should NOT appear)
         insert_feature(&conn, &repo_id, "registered", "feat/registered");
         let wt_id2 = crate::new_id();
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
-             VALUES (?1, ?2, 'wt-reg', 'feat/reg-impl', 'feat/registered', '/tmp/wt2', 'active', '2024-01-01T00:00:00Z')",
+             VALUES (?1, ?2, 'wt-reg', 'feat/registered', 'main', '/tmp/wt2', 'active', '2024-01-01T00:00:00Z')",
             params![wt_id2, repo_id],
         ).unwrap();
 
@@ -2030,27 +2029,27 @@ mod tests {
         let conn = setup_db();
         let repo_id = insert_repo(&conn);
 
-        // Create a merged worktree on an unregistered branch — should NOT appear
+        // Create a merged worktree — should NOT appear
         let wt_id = crate::new_id();
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
-             VALUES (?1, ?2, 'wt-done', 'feat/done-impl', 'feat/done', '/tmp/wt-done', 'merged', '2024-01-01T00:00:00Z')",
+             VALUES (?1, ?2, 'wt-done', 'feat/done', 'main', '/tmp/wt-done', 'merged', '2024-01-01T00:00:00Z')",
             params![wt_id, repo_id],
         ).unwrap();
 
-        // Create an abandoned worktree on an unregistered branch — should NOT appear
+        // Create an abandoned worktree — should NOT appear
         let wt_id2 = crate::new_id();
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
-             VALUES (?1, ?2, 'wt-del', 'feat/del-impl', 'feat/abandoned', '/tmp/wt-del', 'abandoned', '2024-01-01T00:00:00Z')",
+             VALUES (?1, ?2, 'wt-del', 'feat/abandoned', 'main', '/tmp/wt-del', 'abandoned', '2024-01-01T00:00:00Z')",
             params![wt_id2, repo_id],
         ).unwrap();
 
-        // Create an active worktree on an unregistered branch — SHOULD appear
+        // Create an active worktree — SHOULD appear
         let wt_id3 = crate::new_id();
         conn.execute(
             "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
-             VALUES (?1, ?2, 'wt-act', 'feat/act-impl', 'feat/active-orphan', '/tmp/wt-act', 'active', '2024-01-01T00:00:00Z')",
+             VALUES (?1, ?2, 'wt-act', 'feat/active-orphan', 'main', '/tmp/wt-act', 'active', '2024-01-01T00:00:00Z')",
             params![wt_id3, repo_id],
         ).unwrap();
 
@@ -2062,6 +2061,26 @@ mod tests {
         assert_eq!(orphans.len(), 1);
         assert_eq!(orphans[0].branch, "feat/active-orphan");
         assert_eq!(orphans[0].worktree_count, 1);
+    }
+
+    #[test]
+    fn test_list_unregistered_branches_excludes_default_branch() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+
+        // Create an active worktree on the default branch — should NOT appear
+        let wt_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES (?1, ?2, 'wt-main', 'main', 'main', '/tmp/wt-main', 'active', '2024-01-01T00:00:00Z')",
+            params![wt_id, repo_id],
+        ).unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let orphans = mgr.list_unregistered_branches(&repo_id, "main").unwrap();
+
+        assert!(orphans.is_empty());
     }
 
     #[test]
