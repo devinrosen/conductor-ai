@@ -46,7 +46,7 @@ fn run_command(
 /// (`git branch --merged`). Fast but may be stale if the remote has advanced.
 pub(crate) fn is_branch_merged_local(repo_path: &str, branch: &str, default_branch: &str) -> bool {
     let output = git_in(repo_path)
-        .args(["branch", "--merged", default_branch])
+        .args(["branch", &format!("--merged={default_branch}")])
         .output();
     match output {
         Ok(o) if o.status.success() => {
@@ -138,5 +138,101 @@ mod tests {
             matches!(&err, ConductorError::Git(msg) if msg.contains("failed to spawn")),
             "expected Git variant for spawn failure, got: {err:?}"
         );
+    }
+
+    /// Regression test for #1335: branch names that look like flags must not be
+    /// interpreted as git options.  The `--merged=<ref>` form (with `=`) used in
+    /// `is_branch_merged_local` prevents git from treating the default_branch
+    /// value as a separate flag.
+    #[test]
+    fn is_branch_merged_local_flag_like_default_branch_does_not_inject() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+
+        // Initialise a tiny repo with one commit so `git branch --merged` works.
+        Command::new("git")
+            .args(["init"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+
+        // A default_branch value that looks like a flag should NOT cause git to
+        // interpret it as an option (the old code used a positional arg which
+        // would fail here).  With the `--merged=<val>` form, git simply reports
+        // "not a valid object name" on stderr and exits non-zero, so the
+        // function returns false rather than crashing or deleting something.
+        let result = is_branch_merged_local(repo.to_str().unwrap(), "main", "--delete");
+        assert!(!result, "flag-like default_branch must not cause injection");
+    }
+
+    /// Verify the happy path: a branch merged into the default branch is detected.
+    #[test]
+    fn is_branch_merged_local_returns_true_for_merged_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+
+        // Create and merge a feature branch.
+        Command::new("git")
+            .args(["checkout", "-b", "feature"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "feat"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["merge", "feature"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+
+        assert!(is_branch_merged_local(
+            repo.to_str().unwrap(),
+            "feature",
+            "main"
+        ));
     }
 }
