@@ -75,8 +75,9 @@ pub enum DashboardRow {
         total: usize,
         merged: usize,
     },
-    /// Index into `AppState::data.worktrees`.
-    Worktree(usize),
+    /// Index into `AppState::data.worktrees`. `is_feature_child` is `true` when
+    /// this worktree belongs to a feature group (used for indentation in the UI).
+    Worktree { idx: usize, is_feature_child: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1986,7 +1987,10 @@ impl AppState {
 
                 if !self.collapsed_features.contains(&feature.id) {
                     for wt_idx in children {
-                        rows.push(DashboardRow::Worktree(wt_idx));
+                        rows.push(DashboardRow::Worktree {
+                            idx: wt_idx,
+                            is_feature_child: true,
+                        });
                     }
                 }
             }
@@ -1994,7 +1998,10 @@ impl AppState {
             // Ungrouped worktrees (not under any feature)
             for &(wt_idx, _) in repo_wts {
                 if !grouped_wt_indices.contains(&wt_idx) {
-                    rows.push(DashboardRow::Worktree(wt_idx));
+                    rows.push(DashboardRow::Worktree {
+                        idx: wt_idx,
+                        is_feature_child: false,
+                    });
                 }
             }
         }
@@ -2020,7 +2027,7 @@ impl AppState {
         match self.current_dashboard_row()? {
             DashboardRow::Repo(idx) => self.data.repos.get(idx),
             DashboardRow::Feature { repo_idx, .. } => self.data.repos.get(repo_idx),
-            DashboardRow::Worktree(idx) => {
+            DashboardRow::Worktree { idx, .. } => {
                 let wt = self.data.worktrees.get(idx)?;
                 self.data.repos.iter().find(|r| r.id == wt.repo_id)
             }
@@ -3759,8 +3766,14 @@ pub(crate) mod tests {
             rows,
             vec![
                 DashboardRow::Repo(0),
-                DashboardRow::Worktree(0),
-                DashboardRow::Worktree(1),
+                DashboardRow::Worktree {
+                    idx: 0,
+                    is_feature_child: false,
+                },
+                DashboardRow::Worktree {
+                    idx: 1,
+                    is_feature_child: false,
+                },
             ]
         );
     }
@@ -3798,8 +3811,14 @@ pub(crate) mod tests {
                     total: 1,
                     merged: 0,
                 },
-                DashboardRow::Worktree(0), // grouped under feature
-                DashboardRow::Worktree(1), // ungrouped
+                DashboardRow::Worktree {
+                    idx: 0,
+                    is_feature_child: true,
+                }, // grouped under feature
+                DashboardRow::Worktree {
+                    idx: 1,
+                    is_feature_child: false,
+                }, // ungrouped
             ]
         );
     }
@@ -3839,7 +3858,10 @@ pub(crate) mod tests {
                     merged: 0,
                 },
                 // wt1 is hidden (collapsed)
-                DashboardRow::Worktree(1), // ungrouped still shows
+                DashboardRow::Worktree {
+                    idx: 1,
+                    is_feature_child: false,
+                }, // ungrouped still shows
             ]
         );
     }
@@ -3864,7 +3886,10 @@ pub(crate) mod tests {
         state.dashboard_index = 1;
         assert_eq!(
             state.current_dashboard_row(),
-            Some(DashboardRow::Worktree(0))
+            Some(DashboardRow::Worktree {
+                idx: 0,
+                is_feature_child: false,
+            })
         );
     }
 
@@ -3903,7 +3928,10 @@ pub(crate) mod tests {
         state.dashboard_index = 2;
         assert_eq!(
             state.current_dashboard_row(),
-            Some(DashboardRow::Worktree(1))
+            Some(DashboardRow::Worktree {
+                idx: 1,
+                is_feature_child: false,
+            })
         );
     }
 
