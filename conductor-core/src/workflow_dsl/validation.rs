@@ -384,6 +384,24 @@ fn collect_script_nodes(nodes: &[WorkflowNode]) -> Vec<&ScriptNode> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_display_without_hint() {
+        let err = ValidationError {
+            message: "msg".into(),
+            hint: None,
+        };
+        assert_eq!(err.to_string(), "msg");
+    }
+
+    #[test]
+    fn test_display_with_hint() {
+        let err = ValidationError {
+            message: "msg".into(),
+            hint: Some("fix it".into()),
+        };
+        assert_eq!(err.to_string(), "msg (hint: fix it)");
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_check_script_unix_permissions_metadata_error() {
