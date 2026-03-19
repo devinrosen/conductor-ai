@@ -57,17 +57,25 @@ async fn main() -> Result<()> {
         workflow_done_notify: None,
     };
 
-    // Spawn a background task that periodically reaps orphaned runs and
-    // stale worktrees. Uses spawn_blocking to avoid blocking the tokio
+    // Spawn a background task that periodically reaps orphaned runs,
+    // stale worktrees, and detects agent run terminal transitions for
+    // notifications. Uses spawn_blocking to avoid blocking the tokio
     // runtime with synchronous DB queries and subprocess calls.
     let reaper_state = state.clone();
     let reaper_config = state.config.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        let mut seen_agent_statuses: std::collections::HashMap<
+            String,
+            conductor_core::agent::AgentRunStatus,
+        > = std::collections::HashMap::new();
+        let mut agent_initialized = false;
         loop {
             interval.tick().await;
             let db = reaper_state.db.clone();
             let cfg = reaper_config.clone();
+            let mut seen = seen_agent_statuses.clone();
+            let mut init = agent_initialized;
             let result = tokio::task::spawn_blocking(move || {
                 let conn = db.blocking_lock();
                 let mgr = AgentManager::new(&conn);
@@ -76,13 +84,43 @@ async fn main() -> Result<()> {
                 let wt_mgr = conductor_core::worktree::WorktreeManager::new(&conn, &cfg);
                 wt_mgr.reap_stale_worktrees()?;
                 let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
-                wf_mgr.reap_orphaned_workflow_runs()
+                wf_mgr.reap_orphaned_workflow_runs()?;
+
+                // Detect agent run terminal transitions and fire notifications.
+                let latest_runs = mgr.latest_runs_by_worktree()?;
+                let worktrees = wt_mgr.list(None, false)?;
+                let wt_slugs: std::collections::HashMap<&str, &str> = worktrees
+                    .iter()
+                    .map(|wt| (wt.id.as_str(), wt.slug.as_str()))
+                    .collect();
+                let runs_iter = latest_runs.iter().map(|(wt_id, run)| {
+                    let slug = wt_slugs.get(wt_id.as_str()).copied();
+                    (slug, run)
+                });
+                let transitions = conductor_core::notify::detect_agent_terminal_transitions(
+                    runs_iter, &mut seen, &mut init,
+                );
+                for t in &transitions {
+                    conductor_core::notify::fire_agent_run_notification(
+                        &conn,
+                        &cfg.notifications,
+                        &t.run_id,
+                        t.worktree_slug.as_deref(),
+                        t.succeeded,
+                        t.error_msg.as_deref(),
+                    );
+                }
+
+                Ok::<_, conductor_core::error::ConductorError>((seen, init))
             })
             .await;
             match result {
+                Ok(Ok((new_seen, new_init))) => {
+                    seen_agent_statuses = new_seen;
+                    agent_initialized = new_init;
+                }
                 Ok(Err(e)) => tracing::warn!("periodic reaper failed: {e}"),
                 Err(join_err) => tracing::warn!("periodic reaper panicked: {join_err}"),
-                Ok(Ok(_)) => {}
             }
         }
     });

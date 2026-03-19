@@ -1,3 +1,4 @@
+use crate::agent::{AgentRun, AgentRunStatus};
 use crate::config::NotificationConfig;
 use crate::notification_manager::{CreateNotification, NotificationManager, NotificationSeverity};
 use crate::workflow_dsl::GateType;
@@ -10,17 +11,29 @@ fn send_slack_message(webhook_url: &str, text: &str) {
     let url = webhook_url.to_string();
     let body = serde_json::json!({ "text": text });
     std::thread::spawn(move || {
-        if let Err(e) = ureq::post(&url).send_json(&body) {
+        let agent = ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_secs(10))
+            .build();
+        if let Err(e) = agent.post(&url).send_json(&body) {
             tracing::warn!("Slack webhook failed: {e}");
         }
     });
+}
+
+/// Escape Slack mrkdwn sequences that could trigger broadcast @-mentions
+/// or unexpected link formatting from user-supplied content.
+fn escape_slack_mrkdwn(text: &str) -> String {
+    text.replace("<!", "&lt;!")
+        .replace("<@", "&lt;@")
+        .replace("<#", "&lt;#")
 }
 
 /// If Slack is configured, dispatch `text` to the webhook.
 fn maybe_send_slack(config: &NotificationConfig, text: &str) {
     if let Some(ref url) = config.slack.webhook_url {
         if !url.is_empty() {
-            send_slack_message(url, text);
+            let escaped = escape_slack_mrkdwn(text);
+            send_slack_message(url, &escaped);
         }
     }
 }
@@ -244,15 +257,10 @@ pub fn fire_agent_run_notification(
     } else {
         NotificationSeverity::ActionRequired
     };
-    let kind = if succeeded {
-        "agent_completed"
-    } else {
-        "agent_failed"
-    };
     persist_notification(
         conn,
         &CreateNotification {
-            kind,
+            kind: event_type,
             title,
             body: &body,
             severity,
@@ -508,6 +516,64 @@ pub fn fire_grouped_gate_notification(
 
     let slack_text = format!("[conductor] {title}: {body}");
     maybe_send_slack(config, &slack_text);
+}
+
+/// An agent run that freshly transitioned to a terminal state.
+pub struct AgentTerminalTransition {
+    pub run_id: String,
+    pub worktree_slug: Option<String>,
+    pub succeeded: bool,
+    pub error_msg: Option<String>,
+}
+
+/// Detect agent runs that have freshly transitioned to a terminal status.
+///
+/// Works identically to `detect_new_terminal_transitions` for workflow runs:
+/// `seen` is updated in-place, stale entries are pruned, and `initialized`
+/// prevents spurious notifications on the first call.
+///
+/// `runs` is an iterator of `(worktree_slug, &AgentRun)` pairs.
+pub fn detect_agent_terminal_transitions<'a>(
+    runs: impl Iterator<Item = (Option<&'a str>, &'a AgentRun)>,
+    seen: &mut std::collections::HashMap<String, AgentRunStatus>,
+    initialized: &mut bool,
+) -> Vec<AgentTerminalTransition> {
+    let runs: Vec<_> = runs.collect();
+    let mut transitions = Vec::new();
+
+    for (slug, run) in &runs {
+        let now_terminal = matches!(
+            run.status,
+            AgentRunStatus::Completed | AgentRunStatus::Failed | AgentRunStatus::Cancelled
+        );
+        if *initialized {
+            let prev = seen.get(&run.id);
+            let changed = prev.map(|s| s != &run.status).unwrap_or(true);
+            if now_terminal && changed {
+                let succeeded = run.status == AgentRunStatus::Completed;
+                transitions.push(AgentTerminalTransition {
+                    run_id: run.id.clone(),
+                    worktree_slug: slug.map(|s| s.to_string()),
+                    succeeded,
+                    error_msg: if !succeeded {
+                        run.result_text.clone()
+                    } else {
+                        None
+                    },
+                });
+            }
+        }
+        seen.insert(run.id.clone(), run.status.clone());
+    }
+
+    *initialized = true;
+
+    // Prune stale entries to prevent unbounded growth
+    let current_ids: std::collections::HashSet<&str> =
+        runs.iter().map(|(_, r)| r.id.as_str()).collect();
+    seen.retain(|id, _| current_ids.contains(id.as_str()));
+
+    transitions
 }
 
 fn show_desktop_notification(title: &str, body: &str) -> Result<(), String> {

@@ -238,8 +238,6 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
 
                         // Detect agent run terminal transitions and fire notifications.
                         {
-                            use conductor_core::agent::AgentRunStatus;
-
                             // Build worktree_id → slug lookup for notification text.
                             let wt_slugs: HashMap<&str, &str> = payload
                                 .worktrees
@@ -247,41 +245,26 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                 .map(|wt| (wt.id.as_str(), wt.slug.as_str()))
                                 .collect();
 
-                            let mut current_agent_ids = HashSet::new();
-                            for (wt_id, run) in &payload.latest_agent_runs {
-                                current_agent_ids.insert(run.id.clone());
-                                let now_terminal = matches!(
-                                    run.status,
-                                    AgentRunStatus::Completed
-                                        | AgentRunStatus::Failed
-                                        | AgentRunStatus::Cancelled
+                            let runs_iter = payload.latest_agent_runs.iter().map(|(wt_id, run)| {
+                                let slug = wt_slugs.get(wt_id.as_str()).copied();
+                                (slug, run)
+                            });
+                            let transitions =
+                                conductor_core::notify::detect_agent_terminal_transitions(
+                                    runs_iter,
+                                    &mut seen_agent_statuses,
+                                    &mut agent_initialized,
                                 );
-                                if agent_initialized {
-                                    let prev = seen_agent_statuses.get(&run.id);
-                                    let changed = prev.map(|s| s != &run.status).unwrap_or(true);
-                                    if now_terminal && changed {
-                                        let succeeded = run.status == AgentRunStatus::Completed;
-                                        let slug = wt_slugs.get(wt_id.as_str()).copied();
-                                        let error_msg = if !succeeded {
-                                            run.result_text.as_deref()
-                                        } else {
-                                            None
-                                        };
-                                        crate::notify::fire_agent_run_notification(
-                                            conn,
-                                            &config.notifications,
-                                            &run.id,
-                                            slug,
-                                            succeeded,
-                                            error_msg,
-                                        );
-                                    }
-                                }
-                                seen_agent_statuses.insert(run.id.clone(), run.status.clone());
+                            for t in transitions {
+                                crate::notify::fire_agent_run_notification(
+                                    conn,
+                                    &config.notifications,
+                                    &t.run_id,
+                                    t.worktree_slug.as_deref(),
+                                    t.succeeded,
+                                    t.error_msg.as_deref(),
+                                );
                             }
-                            agent_initialized = true;
-                            // Prune stale entries
-                            seen_agent_statuses.retain(|id, _| current_agent_ids.contains(id));
                         }
 
                         // Prune resolved feedback requests to prevent unbounded growth.
