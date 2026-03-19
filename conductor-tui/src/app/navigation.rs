@@ -617,11 +617,7 @@ impl App {
             self.state.detail_pr_index = 0;
             self.state.pr_last_fetched_at = None;
             if let Some(ref tx) = self.bg_tx {
-                crate::background::spawn_pr_fetch_once(
-                    tx.clone(),
-                    remote_url,
-                    repo_id.clone(),
-                );
+                crate::background::spawn_pr_fetch_once(tx.clone(), remote_url, repo_id.clone());
             }
             self.rebuild_detail_gates();
             self.state.rebuild_filtered_tickets();
