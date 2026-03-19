@@ -40,9 +40,6 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::list_repos,
             commands::list_worktrees,
-            commands::list_milestones,
-            commands::create_milestone,
-            commands::milestone_progress,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Conductor desktop");
