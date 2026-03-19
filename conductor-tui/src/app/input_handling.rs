@@ -363,7 +363,7 @@ impl App {
                             // Also fetch unregistered branches (orphan worktree bases).
                             let repo = RepoManager::new(&conn, &config)
                                 .get_by_slug(&slug)
-                                .map_err(|e| format!("Failed to get repo: {e}"))?;
+                                .map_err(|e| format!("Failed to get repo '{slug}': {e}"))?;
                             let orphans = fm
                                 .list_unregistered_branches(&repo.id, &repo.default_branch)
                                 .map_err(|e| {
