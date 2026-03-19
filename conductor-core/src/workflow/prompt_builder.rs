@@ -12,6 +12,15 @@ pub(super) fn substitute_variables(prompt: &str, vars: &HashMap<&str, String>) -
         let pattern = format!("{{{{{key}}}}}");
         result = result.replace(&pattern, value);
     }
+    // Strip any remaining unresolved {{…}} placeholders so they don't
+    // leak as literal text into prompts, env vars, or script paths.
+    while let Some(start) = result.find("{{") {
+        if let Some(end) = result[start..].find("}}") {
+            result.replace_range(start..start + end + 2, "");
+        } else {
+            break;
+        }
+    }
     result
 }
 
@@ -195,6 +204,28 @@ mod tests {
             vars.get("prior_output_file").map(String::as_str),
             Some("/tmp/last.txt"),
         );
+    }
+
+    #[test]
+    fn test_substitute_variables_strips_unresolved_placeholders() {
+        let vars = HashMap::new();
+        let result = substitute_variables("hello {{unknown}}", &vars);
+        assert_eq!(result, "hello ");
+    }
+
+    #[test]
+    fn test_substitute_variables_resolves_known_strips_unknown() {
+        let mut vars = HashMap::new();
+        vars.insert("name", "world".to_string());
+        let result = substitute_variables("hello {{name}} and {{unknown}}", &vars);
+        assert_eq!(result, "hello world and ");
+    }
+
+    #[test]
+    fn test_substitute_variables_multiple_unresolved() {
+        let vars = HashMap::new();
+        let result = substitute_variables("{{a}} middle {{b}} end {{c}}", &vars);
+        assert_eq!(result, " middle  end ");
     }
 
     #[test]
