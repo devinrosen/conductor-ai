@@ -35,6 +35,7 @@ workflow ticket-to-pr {
   script push-and-pr {
     run = ".conductor/scripts/push-and-pr.sh"
     as  = "developer"
+    env = { FEATURE_BASE_BRANCH = "{{feature_base_branch}}" }
   }
 
   unless push-and-pr.no_changes {

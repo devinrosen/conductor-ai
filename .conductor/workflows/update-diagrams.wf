@@ -30,6 +30,7 @@ workflow update-diagrams {
     script push-and-pr {
       run = ".conductor/scripts/push-and-pr.sh"
       as  = "developer"
+      env = { FEATURE_BASE_BRANCH = "{{feature_base_branch}}" }
     }
   }
 

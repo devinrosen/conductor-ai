@@ -647,6 +647,7 @@ pub fn add_pr_label(owner: &str, repo: &str, pr_number: i64, label: &str) -> Res
 }
 
 /// Create a PR with a specific title and body via the `gh` CLI.
+/// When `base` is `Some`, the PR targets that branch instead of the repo default.
 /// Returns the PR URL.
 pub fn create_pr_with_body(
     owner: &str,
@@ -654,11 +655,17 @@ pub fn create_pr_with_body(
     branch: &str,
     title: &str,
     body: &str,
+    base: Option<&str>,
 ) -> Result<String> {
     let repo_slug = repo_slug(owner, repo);
-    let output = run_gh(&[
+    let mut args = vec![
         "pr", "create", "--repo", &repo_slug, "--head", branch, "--title", title, "--body", body,
-    ])?;
+    ];
+    if let Some(b) = base {
+        args.push("--base");
+        args.push(b);
+    }
+    let output = run_gh(&args)?;
     let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok(url)
 }
