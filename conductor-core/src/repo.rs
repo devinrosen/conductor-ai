@@ -143,7 +143,40 @@ impl<'a> RepoManager<'a> {
             RepoConfig::default()
         });
         repo_config.defaults.model = model;
-        repo_config.save(repo_path)
+        repo_config.save_full(repo_path)
+    }
+
+    /// Load the per-repo config with warning fallback on error.
+    pub fn load_repo_config(&self, repo: &Repo) -> RepoConfig {
+        RepoConfig::load(Path::new(&repo.local_path)).unwrap_or_else(|e| {
+            tracing::warn!(
+                "Failed to load .conductor/config.toml for repo '{}': {e}; using defaults",
+                repo.slug,
+            );
+            RepoConfig::default()
+        })
+    }
+
+    /// Resolve the effective model for a repo: per-repo config → global config → None.
+    pub fn resolve_model(&self, repo: &Repo) -> Option<String> {
+        let rc = self.load_repo_config(repo);
+        rc.defaults
+            .model
+            .or_else(|| self.config.general.model.clone())
+    }
+
+    /// Resolve the effective default branch: per-repo config → global config.
+    pub fn resolve_default_branch(&self, repo: &Repo) -> String {
+        let rc = self.load_repo_config(repo);
+        rc.defaults
+            .default_branch
+            .unwrap_or_else(|| self.config.defaults.default_branch.clone())
+    }
+
+    /// Resolve the effective bot name: per-repo config → None.
+    pub fn resolve_bot_name(&self, repo: &Repo) -> Option<String> {
+        let rc = self.load_repo_config(repo);
+        rc.defaults.bot_name
     }
 
     /// Set whether agents can create issues for this repo.
@@ -212,4 +245,61 @@ pub fn derive_local_path(config: &Config, slug: &str) -> String {
         .join("main")
         .to_string_lossy()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_set_model_persists_and_clears() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = crate::test_helpers::create_test_conn();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+        let repo = mgr
+            .register(
+                "set-model-test",
+                tmp.path().to_str().unwrap(),
+                "https://github.com/test/repo.git",
+                None,
+            )
+            .unwrap();
+
+        // Set a model and verify it persists to disk.
+        mgr.set_model(&repo, Some("opus".to_string())).unwrap();
+        let rc = RepoConfig::load(tmp.path()).unwrap();
+        assert_eq!(rc.defaults.model.as_deref(), Some("opus"));
+
+        // Clear the model and verify it's gone.
+        mgr.set_model(&repo, None).unwrap();
+        let rc = RepoConfig::load(tmp.path()).unwrap();
+        assert!(rc.defaults.model.is_none());
+    }
+
+    #[test]
+    fn test_resolve_bot_name_from_repo_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = crate::test_helpers::create_test_conn();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+        let repo = mgr
+            .register(
+                "bot-name-test",
+                tmp.path().to_str().unwrap(),
+                "https://github.com/test/repo2.git",
+                None,
+            )
+            .unwrap();
+
+        // No config file → None.
+        assert!(mgr.resolve_bot_name(&repo).is_none());
+
+        // Write a config with bot_name.
+        let mut rc = RepoConfig::default();
+        rc.defaults.bot_name = Some("my-bot".to_string());
+        rc.save(tmp.path()).unwrap();
+
+        assert_eq!(mgr.resolve_bot_name(&repo).as_deref(), Some("my-bot"));
+    }
 }

@@ -940,6 +940,68 @@ mod tests {
         assert_eq!(null_count, 1);
     }
 
+    /// Verifies that migration 045 preserves existing rows in `repos` when
+    /// dropping the `model` and `default_branch` columns.
+    #[test]
+    fn test_migration_045_preserves_existing_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+
+        // Build a minimal schema at version 44 with the old model/default_branch columns.
+        conn.execute_batch(
+            "CREATE TABLE _conductor_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE repos (
+                id TEXT PRIMARY KEY,
+                slug TEXT NOT NULL UNIQUE,
+                local_path TEXT NOT NULL,
+                remote_url TEXT NOT NULL,
+                workspace_dir TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                model TEXT,
+                default_branch TEXT NOT NULL DEFAULT 'main',
+                allow_agent_issue_creation INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO _conductor_meta VALUES ('schema_version', '44');
+            INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at, model, default_branch, allow_agent_issue_creation)
+                VALUES ('r1', 'my-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z', 'sonnet', 'develop', 1);
+            INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+                VALUES ('r2', 'other-repo', '/tmp/repo2', 'https://github.com/test/repo2.git', '/tmp/ws2', '2024-02-01T00:00:00Z');",
+        ).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+
+        // Apply migration 045.
+        run(&conn).unwrap();
+
+        // Both rows must survive.
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM repos", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2, "both repo rows must survive migration 045");
+
+        // Verify core fields preserved for r1.
+        let (slug, local_path, allow): (String, String, i64) = conn
+            .query_row(
+                "SELECT slug, local_path, allow_agent_issue_creation FROM repos WHERE id = 'r1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(slug, "my-repo");
+        assert_eq!(local_path, "/tmp/repo");
+        assert_eq!(allow, 1);
+
+        // model and default_branch columns must no longer exist.
+        assert!(
+            conn.prepare("SELECT model FROM repos LIMIT 0").is_err(),
+            "model column must be dropped"
+        );
+        assert!(
+            conn.prepare("SELECT default_branch FROM repos LIMIT 0")
+                .is_err(),
+            "default_branch column must be dropped"
+        );
+    }
+
     /// Verifies that `with_foreign_keys_off` restores FK enforcement even when
     /// the closure returns an error.
     #[test]

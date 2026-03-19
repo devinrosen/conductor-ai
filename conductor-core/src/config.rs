@@ -380,6 +380,39 @@ impl RepoConfig {
     /// Save per-repo config to `<repo_path>/.conductor/config.toml`.
     ///
     /// Creates the `.conductor/` directory if it doesn't exist.
+    /// Full overwrite of the `[defaults]` section, preserving unknown top-level sections.
+    /// Unlike `save()`, this removes keys that are `None` in the struct (e.g. clearing model).
+    pub fn save_full(&self, repo_path: &std::path::Path) -> Result<()> {
+        let path = repo_config_path(repo_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let mut merged: toml::Value = if path.exists() {
+            let existing = std::fs::read_to_string(&path)?;
+            toml::from_str(&existing).map_err(|e| {
+                ConductorError::Config(format!("existing repo config is malformed: {e}"))
+            })?
+        } else {
+            toml::Value::Table(toml::map::Map::new())
+        };
+
+        let new_value: toml::Value = toml::Value::try_from(self)
+            .map_err(|e| ConductorError::Config(format!("serialize repo config: {e}")))?;
+
+        // Overwrite known sections entirely (so cleared fields are removed).
+        if let (toml::Value::Table(base), toml::Value::Table(new_tbl)) = (&mut merged, new_value) {
+            for (key, val) in new_tbl {
+                base.insert(key, val);
+            }
+        }
+
+        let contents = toml::to_string_pretty(&merged)
+            .map_err(|e| ConductorError::Config(format!("serialize repo config: {e}")))?;
+        std::fs::write(&path, contents)?;
+        Ok(())
+    }
+
     /// Uses patch-write to preserve unknown sections.
     pub fn save(&self, repo_path: &std::path::Path) -> Result<()> {
         let path = repo_config_path(repo_path);

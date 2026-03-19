@@ -641,13 +641,9 @@ impl App {
                     Some(value.trim().to_string())
                 };
                 let mgr = RepoManager::new(&self.conn, &self.config);
-                let result = mgr.get_by_id(&repo_id).and_then(|repo| {
-                    let repo_path = std::path::Path::new(&repo.local_path);
-                    let mut repo_config =
-                        conductor_core::config::RepoConfig::load(repo_path).unwrap_or_default();
-                    repo_config.defaults.model = model.clone();
-                    repo_config.save(repo_path)
-                });
+                let result = mgr
+                    .get_by_id(&repo_id)
+                    .and_then(|repo| mgr.set_model(&repo, model.clone()));
                 match result {
                     Ok(()) => {
                         let msg = match &model {
@@ -725,13 +721,9 @@ impl App {
                     Some(value.trim().to_string())
                 };
                 let mgr = RepoManager::new(&self.conn, &self.config);
-                let result = mgr.get_by_id(&repo_id).and_then(|repo| {
-                    let repo_path = std::path::Path::new(&repo.local_path);
-                    let mut repo_config =
-                        conductor_core::config::RepoConfig::load(repo_path).unwrap_or_default();
-                    repo_config.defaults.model = model.clone();
-                    repo_config.save(repo_path)
-                });
+                let result = mgr
+                    .get_by_id(&repo_id)
+                    .and_then(|repo| mgr.set_model(&repo, model.clone()));
                 match result {
                     Ok(()) => {
                         let msg = match &model {

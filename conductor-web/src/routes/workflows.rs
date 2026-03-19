@@ -1058,9 +1058,9 @@ mod tests {
             let db = state.db.lock().await;
             db.execute_batch(&format!(
                 "INSERT INTO repos \
-                     (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
+                     (id, slug, local_path, remote_url, workspace_dir, created_at) \
                      VALUES ('r1', 'test-repo', '{wt_path}', \
-                             'https://github.com/test/repo.git', 'main', '/tmp/ws', \
+                             'https://github.com/test/repo.git', '/tmp/ws', \
                              '2024-01-01T00:00:00Z'); \
                  INSERT INTO worktrees \
                      (id, repo_id, slug, branch, path, status, created_at) \

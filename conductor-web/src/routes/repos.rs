@@ -80,29 +80,36 @@ pub async fn register_repo(
     State(state): State<AppState>,
     Json(body): Json<RegisterRepoRequest>,
 ) -> Result<(StatusCode, Json<RepoResponse>), ApiError> {
-    let db = state.db.lock().await;
-    let config = state.config.read().await;
-    let mgr = RepoManager::new(&db, &config);
-    let slug = body
-        .slug
-        .unwrap_or_else(|| derive_slug_from_url(&body.remote_url));
-    let local_path = body
-        .local_path
-        .unwrap_or_else(|| derive_local_path(&config, &slug));
-    let repo = mgr.register(
-        &slug,
-        &local_path,
-        &body.remote_url,
-        body.workspace_dir.as_deref(),
-    )?;
-    state.events.emit(ConductorEvent::RepoRegistered {
-        id: repo.id.clone(),
-    });
-    let default_branch = &config.defaults.default_branch;
-    Ok((
-        StatusCode::CREATED,
-        Json(repo_to_response(repo, default_branch)),
-    ))
+    let (repo, default_branch) = {
+        let db = state.db.lock().await;
+        let config = state.config.read().await;
+        let mgr = RepoManager::new(&db, &config);
+        let slug = body
+            .slug
+            .unwrap_or_else(|| derive_slug_from_url(&body.remote_url));
+        let local_path = body
+            .local_path
+            .unwrap_or_else(|| derive_local_path(&config, &slug));
+        let repo = mgr.register(
+            &slug,
+            &local_path,
+            &body.remote_url,
+            body.workspace_dir.as_deref(),
+        )?;
+        state.events.emit(ConductorEvent::RepoRegistered {
+            id: repo.id.clone(),
+        });
+        (repo, config.defaults.default_branch.clone())
+    };
+    // repo_to_response performs file I/O — run off the tokio worker thread.
+    let response = tokio::task::spawn_blocking(move || repo_to_response(repo, &default_branch))
+        .await
+        .map_err(|e| {
+            ApiError(conductor_core::error::ConductorError::Config(format!(
+                "spawn_blocking join failed: {e}"
+            )))
+        })?;
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 pub async fn unregister_repo(
@@ -127,13 +134,23 @@ pub async fn patch_repo_model(
     Path(id): Path<String>,
     Json(body): Json<SetModelRequest>,
 ) -> Result<Json<RepoResponse>, ApiError> {
-    let db = state.db.lock().await;
-    let config = state.config.read().await;
-    let mgr = RepoManager::new(&db, &config);
-    let repo = mgr.get_by_id(&id)?;
-    mgr.set_model(&repo, body.model)?;
-    let default_branch = &config.defaults.default_branch;
-    Ok(Json(repo_to_response(repo, default_branch)))
+    let (repo, default_branch) = {
+        let db = state.db.lock().await;
+        let config = state.config.read().await;
+        let mgr = RepoManager::new(&db, &config);
+        let repo = mgr.get_by_id(&id)?;
+        mgr.set_model(&repo, body.model)?;
+        (repo, config.defaults.default_branch.clone())
+    };
+    // repo_to_response performs file I/O — run off the tokio worker thread.
+    let response = tokio::task::spawn_blocking(move || repo_to_response(repo, &default_branch))
+        .await
+        .map_err(|e| {
+            ApiError(conductor_core::error::ConductorError::Config(format!(
+                "spawn_blocking join failed: {e}"
+            )))
+        })?;
+    Ok(Json(response))
 }
 
 #[derive(Deserialize)]
@@ -147,15 +164,25 @@ pub async fn update_repo_settings(
     Path(id): Path<String>,
     Json(body): Json<UpdateRepoSettingsRequest>,
 ) -> Result<Json<RepoResponse>, ApiError> {
-    let db = state.db.lock().await;
-    let config = state.config.read().await;
-    let mgr = RepoManager::new(&db, &config);
-    if let Some(allow) = body.allow_agent_issue_creation {
-        mgr.set_allow_agent_issue_creation(&id, allow)?;
-    }
-    let repo = mgr.get_by_id(&id)?;
-    let default_branch = &config.defaults.default_branch;
-    Ok(Json(repo_to_response(repo, default_branch)))
+    let (repo, default_branch) = {
+        let db = state.db.lock().await;
+        let config = state.config.read().await;
+        let mgr = RepoManager::new(&db, &config);
+        if let Some(allow) = body.allow_agent_issue_creation {
+            mgr.set_allow_agent_issue_creation(&id, allow)?;
+        }
+        let repo = mgr.get_by_id(&id)?;
+        (repo, config.defaults.default_branch.clone())
+    };
+    // repo_to_response performs file I/O — run off the tokio worker thread.
+    let response = tokio::task::spawn_blocking(move || repo_to_response(repo, &default_branch))
+        .await
+        .map_err(|e| {
+            ApiError(conductor_core::error::ConductorError::Config(format!(
+                "spawn_blocking join failed: {e}"
+            )))
+        })?;
+    Ok(Json(response))
 }
 
 /// A repo discovered via GitHub with a flag indicating if it's already registered.

@@ -214,6 +214,11 @@ pub enum Action {
         repo_id: String,
         prs: Vec<conductor_core::github::GithubPr>,
     },
+    /// Background result: per-repo config loaded from disk.
+    RepoConfigLoaded {
+        repo_id: String,
+        config: conductor_core::config::RepoConfig,
+    },
     DataRefreshed(Box<DataRefreshedPayload>),
     TicketSyncComplete {
         repo_slug: String,

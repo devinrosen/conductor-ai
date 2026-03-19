@@ -613,12 +613,23 @@ impl App {
                             let repo_id = repo.id.clone();
                             let remote_url = repo.remote_url.clone();
                             self.state.selected_repo_id = Some(repo_id.clone());
-                            self.state.cached_repo_config = Some(
-                                conductor_core::config::RepoConfig::load(std::path::Path::new(
-                                    &repo.local_path,
-                                ))
-                                .unwrap_or_default(),
-                            );
+                            self.state.cached_repo_config = None;
+                            // Load per-repo config off the main thread.
+                            if let Some(ref tx) = self.bg_tx {
+                                let tx = tx.clone();
+                                let local_path = repo.local_path.clone();
+                                let rid = repo_id.clone();
+                                std::thread::spawn(move || {
+                                    let rc = conductor_core::config::RepoConfig::load(
+                                        std::path::Path::new(&local_path),
+                                    )
+                                    .unwrap_or_default();
+                                    let _ = tx.send(crate::action::Action::RepoConfigLoaded {
+                                        repo_id: rid,
+                                        config: rc,
+                                    });
+                                });
+                            }
                             self.state.detail_worktrees = self
                                 .state
                                 .data

@@ -756,6 +756,11 @@ impl App {
                     self.state.pr_last_fetched_at = Some(std::time::Instant::now());
                 }
             }
+            Action::RepoConfigLoaded { repo_id, config } => {
+                if self.state.selected_repo_id.as_deref() == Some(&repo_id) {
+                    self.state.cached_repo_config = Some(config);
+                }
+            }
             Action::DataRefreshed(payload) => {
                 self.state.data.repos = payload.repos;
                 self.state.data.worktrees = payload.worktrees;
