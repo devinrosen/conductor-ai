@@ -1378,6 +1378,7 @@ mod tests {
         assert_eq!(count, 1, "grouped notification must claim exactly once");
     }
 
+<<<<<<< HEAD
     // --- fire_agent_run_notification ---
 
     #[test]
@@ -1922,5 +1923,32 @@ mod tests {
         assert_eq!(t.len(), 1);
         assert!(!t[0].succeeded);
         assert_eq!(t[0].error_msg.as_deref(), Some("out of memory"));
+    }
+
+    // --- should_notify_gate: QualityGate ---
+
+    #[test]
+    fn should_notify_gate_quality_gate_returns_false() {
+        let cfg = config(true, true, true);
+        assert!(
+            !should_notify_gate(&cfg, Some(&GateType::QualityGate)),
+            "quality gates are non-blocking and should never trigger notifications"
+        );
+    }
+
+    // --- gate_notification_text: QualityGate ---
+
+    #[test]
+    fn gate_notification_text_quality_gate() {
+        let (title, body) = gate_notification_text(
+            Some(&GateType::QualityGate),
+            "check-quality",
+            "review-pr",
+            Some("feat/foo"),
+            None,
+        );
+        assert!(title.contains("Quality Gate"), "title: {title}");
+        assert!(body.contains("check-quality"), "body: {body}");
+        assert!(body.contains("review-pr"), "body: {body}");
     }
 }

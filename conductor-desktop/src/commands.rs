@@ -72,10 +72,14 @@ pub fn list_worktrees(
 /// Learned from global-sdlc's Wails desktop implementation.
 pub fn fixup_macos_path() {
     if cfg!(target_os = "macos") {
-        let cargo_bin = std::env::var("HOME")
-            .map(|h| format!("{h}/.cargo/bin"))
-            .unwrap_or_default();
-        let extra_paths = ["/opt/homebrew/bin", "/usr/local/bin", cargo_bin.as_str()];
+        let cargo_bin = match std::env::var("HOME") {
+            Ok(h) => format!("{h}/.cargo/bin"),
+            Err(_) => String::new(),
+        };
+        let mut extra_paths: Vec<&str> = vec!["/opt/homebrew/bin", "/usr/local/bin"];
+        if !cargo_bin.is_empty() {
+            extra_paths.push(cargo_bin.as_str());
+        }
         if let Ok(current) = std::env::var("PATH") {
             let mut parts: Vec<&str> = extra_paths.to_vec();
             parts.push(&current);
