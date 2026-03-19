@@ -3,7 +3,20 @@ set -uo pipefail
 
 ERRORS=0
 
-cargo clippy --workspace --all-targets --exclude conductor-web -- -D warnings 2>&1 || ERRORS=1
+# Build frontend if needed (required for conductor-web to compile)
+if [ ! -d conductor-web/frontend/dist ]; then
+  if command -v bun &>/dev/null; then
+    (cd conductor-web/frontend && bun install && bun run build) 2>&1 || true
+  fi
+fi
+
+# Run clippy on full workspace (matches CI)
+if [ -d conductor-web/frontend/dist ]; then
+  cargo clippy --workspace --all-targets -- -D warnings 2>&1 || ERRORS=1
+else
+  echo "Warning: frontend not built, excluding conductor-web from clippy"
+  cargo clippy --workspace --all-targets --exclude conductor-web -- -D warnings 2>&1 || ERRORS=1
+fi
 cargo fmt --all --check 2>&1 || ERRORS=1
 
 # Validate changed or new .wf files

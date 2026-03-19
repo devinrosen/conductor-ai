@@ -10,6 +10,9 @@ For Rust projects, run:
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo fmt --all --check`
 
+Note: `conductor-web` requires the frontend to be built before clippy can check it.
+If `conductor-web/frontend/dist` does not exist, run `cd conductor-web/frontend && bun install && bun run build` first.
+
 Report each lint error or warning with:
 - File and line number
 - The lint rule or warning name
