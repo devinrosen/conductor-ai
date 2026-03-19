@@ -173,6 +173,8 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                     &step.step_name,
                                     workflow_name,
                                     target_label.as_deref(),
+                                    step.gate_type.as_ref(),
+                                    step.gate_prompt.as_deref(),
                                 );
                             }
                         }

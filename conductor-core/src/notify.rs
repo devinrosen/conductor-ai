@@ -1,4 +1,5 @@
 use crate::config::NotificationConfig;
+use crate::workflow_dsl::GateType;
 
 /// Returns `true` if a notification should fire given the config and run outcome.
 ///
@@ -108,9 +109,61 @@ pub fn fire_feedback_notification(
     }
 }
 
-/// Fire a desktop notification for a workflow human gate waiting for approval.
+/// Build the notification title and body for a gate based on its type.
+///
+/// Pure function — no side effects — extracted so the formatting logic is
+/// unit-testable without touching `notify_rust` or the dedup DB.
+pub fn gate_notification_text(
+    gate_type: Option<&GateType>,
+    step_name: &str,
+    workflow_name: &str,
+    target_label: Option<&str>,
+    gate_prompt: Option<&str>,
+) -> (&'static str, String) {
+    let wf = match target_label {
+        Some(label) => format!("{workflow_name} on {label}"),
+        None => workflow_name.to_string(),
+    };
+
+    match gate_type {
+        Some(GateType::HumanApproval) => {
+            let title = "Conductor \u{2014} Awaiting Your Approval";
+            let body = match gate_prompt {
+                Some(prompt) => format!("{wf} \u{2192} {step_name}: {prompt}"),
+                None => format!("{wf} \u{2192} {step_name}"),
+            };
+            (title, body)
+        }
+        Some(GateType::HumanReview) => {
+            let title = "Conductor \u{2014} Review Requested";
+            let body = match gate_prompt {
+                Some(prompt) => format!("{wf} \u{2192} {step_name}: {prompt}"),
+                None => format!("{wf} \u{2192} {step_name}"),
+            };
+            (title, body)
+        }
+        Some(GateType::PrApproval) => {
+            let title = "Conductor \u{2014} Awaiting PR Review";
+            let body = format!("{wf}: PR needs review");
+            (title, body)
+        }
+        Some(GateType::PrChecks) => {
+            let title = "Conductor \u{2014} Waiting on CI";
+            let body = format!("{wf}: PR checks running");
+            (title, body)
+        }
+        None => {
+            let title = "Conductor \u{2014} Approval Required";
+            let body = format!("{wf}: {step_name}");
+            (title, body)
+        }
+    }
+}
+
+/// Fire a desktop notification for a workflow gate waiting for action.
 ///
 /// Gated on `config.enabled`. Uses `(step_id, "gate_waiting")` as the dedup key.
+#[allow(clippy::too_many_arguments)]
 pub fn fire_gate_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
@@ -118,6 +171,8 @@ pub fn fire_gate_notification(
     step_name: &str,
     workflow_name: &str,
     target_label: Option<&str>,
+    gate_type: Option<&GateType>,
+    gate_prompt: Option<&str>,
 ) {
     if !config.enabled {
         return;
@@ -127,11 +182,14 @@ pub fn fire_gate_notification(
         return;
     }
 
-    let body = match target_label {
-        Some(label) => format!("{workflow_name} on {label}: {step_name}"),
-        None => format!("{workflow_name}: {step_name}"),
-    };
-    if let Err(e) = show_desktop_notification("Conductor \u{2014} Approval Required", &body) {
+    let (title, body) = gate_notification_text(
+        gate_type,
+        step_name,
+        workflow_name,
+        target_label,
+        gate_prompt,
+    );
+    if let Err(e) = show_desktop_notification(title, &body) {
         tracing::warn!(
             step_id,
             step_name,
@@ -440,13 +498,141 @@ mod tests {
         assert_eq!(count, 1, "notification_log must contain exactly one row");
     }
 
+    // --- gate_notification_text ---
+
+    #[test]
+    fn gate_text_human_approval_with_prompt() {
+        let (title, body) = gate_notification_text(
+            Some(&GateType::HumanApproval),
+            "Deploy to prod",
+            "release",
+            None,
+            Some("Ready to deploy?"),
+        );
+        assert_eq!(title, "Conductor \u{2014} Awaiting Your Approval");
+        assert_eq!(body, "release \u{2192} Deploy to prod: Ready to deploy?");
+    }
+
+    #[test]
+    fn gate_text_human_approval_without_prompt() {
+        let (title, body) = gate_notification_text(
+            Some(&GateType::HumanApproval),
+            "Deploy to prod",
+            "release",
+            None,
+            None,
+        );
+        assert_eq!(title, "Conductor \u{2014} Awaiting Your Approval");
+        assert_eq!(body, "release \u{2192} Deploy to prod");
+    }
+
+    #[test]
+    fn gate_text_human_review_with_prompt() {
+        let (title, body) = gate_notification_text(
+            Some(&GateType::HumanReview),
+            "Code review",
+            "ci-pipeline",
+            None,
+            Some("Please review the diff"),
+        );
+        assert_eq!(title, "Conductor \u{2014} Review Requested");
+        assert_eq!(
+            body,
+            "ci-pipeline \u{2192} Code review: Please review the diff"
+        );
+    }
+
+    #[test]
+    fn gate_text_human_review_without_prompt() {
+        let (title, body) = gate_notification_text(
+            Some(&GateType::HumanReview),
+            "Code review",
+            "ci-pipeline",
+            None,
+            None,
+        );
+        assert_eq!(title, "Conductor \u{2014} Review Requested");
+        assert_eq!(body, "ci-pipeline \u{2192} Code review");
+    }
+
+    #[test]
+    fn gate_text_pr_approval() {
+        let (title, body) = gate_notification_text(
+            Some(&GateType::PrApproval),
+            "wait-for-review",
+            "release",
+            None,
+            None,
+        );
+        assert_eq!(title, "Conductor \u{2014} Awaiting PR Review");
+        assert_eq!(body, "release: PR needs review");
+    }
+
+    #[test]
+    fn gate_text_pr_checks() {
+        let (title, body) = gate_notification_text(
+            Some(&GateType::PrChecks),
+            "wait-for-ci",
+            "release",
+            None,
+            None,
+        );
+        assert_eq!(title, "Conductor \u{2014} Waiting on CI");
+        assert_eq!(body, "release: PR checks running");
+    }
+
+    #[test]
+    fn gate_text_none_fallback() {
+        let (title, body) = gate_notification_text(None, "Deploy to prod", "release", None, None);
+        assert_eq!(title, "Conductor \u{2014} Approval Required");
+        assert_eq!(body, "release: Deploy to prod");
+    }
+
+    #[test]
+    fn gate_text_with_target_label() {
+        let (title, body) = gate_notification_text(
+            Some(&GateType::HumanApproval),
+            "Deploy",
+            "release",
+            Some("conductor-ai/feat-1095"),
+            Some("Ship it?"),
+        );
+        assert_eq!(title, "Conductor \u{2014} Awaiting Your Approval");
+        assert_eq!(
+            body,
+            "release on conductor-ai/feat-1095 \u{2192} Deploy: Ship it?"
+        );
+    }
+
+    #[test]
+    fn gate_text_pr_approval_with_target_label() {
+        let (title, body) = gate_notification_text(
+            Some(&GateType::PrApproval),
+            "wait-for-review",
+            "release",
+            Some("main"),
+            None,
+        );
+        assert_eq!(title, "Conductor \u{2014} Awaiting PR Review");
+        assert_eq!(body, "release on main: PR needs review");
+    }
+
     // --- fire_gate_notification smoke test ---
 
     #[test]
     fn fire_gate_notification_disabled_does_not_claim() {
         let conn = in_memory_db();
         let cfg = config(false, true, true);
-        fire_gate_notification(&conn, &cfg, "step-1", "Deploy to prod", "release", None);
+        fire_gate_notification(
+            &conn,
+            &cfg,
+            "step-1",
+            "Deploy to prod",
+            "release",
+            None,
+            None,
+            None,
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'step-1'",
@@ -461,8 +647,26 @@ mod tests {
     fn fire_gate_notification_enabled_claims_once() {
         let conn = in_memory_db();
         let cfg = config(true, true, true);
-        fire_gate_notification(&conn, &cfg, "step-2", "Deploy to prod", "release", None);
-        fire_gate_notification(&conn, &cfg, "step-2", "Deploy to prod", "release", None);
+        fire_gate_notification(
+            &conn,
+            &cfg,
+            "step-2",
+            "Deploy to prod",
+            "release",
+            None,
+            Some(&GateType::HumanApproval),
+            Some("Ready?"),
+        );
+        fire_gate_notification(
+            &conn,
+            &cfg,
+            "step-2",
+            "Deploy to prod",
+            "release",
+            None,
+            Some(&GateType::HumanApproval),
+            Some("Ready?"),
+        );
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'step-2' AND event_type = 'gate_waiting'",
@@ -484,6 +688,8 @@ mod tests {
             "Deploy to prod",
             "release",
             Some("conductor-ai/feat-1095"),
+            None,
+            None,
         );
         fire_gate_notification(
             &conn,
@@ -492,6 +698,8 @@ mod tests {
             "Deploy to prod",
             "release",
             Some("conductor-ai/feat-1095"),
+            None,
+            None,
         );
         let count: i64 = conn
             .query_row(
