@@ -2915,7 +2915,7 @@ mod tests {
             on_timeout: OnTimeout::Fail,
             bot_name: None,
             source: source.map(|s| s.to_string()),
-            threshold: threshold,
+            threshold,
             on_fail_action: Some(on_fail),
         }
     }
