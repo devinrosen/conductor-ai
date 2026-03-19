@@ -498,6 +498,12 @@ impl App {
                     prefill.insert("ticket_id".to_string(), tid.clone());
                 }
             }
+        } else if let crate::state::WorkflowPickerTarget::WorkflowRun {
+            ref workflow_run_id,
+            ..
+        } = target
+        {
+            prefill.insert("workflow_run_id".to_string(), workflow_run_id.clone());
         }
         self.show_workflow_inputs_or_run(target, def, prefill);
     }
