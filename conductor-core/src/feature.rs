@@ -6,7 +6,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Config, RepoConfig};
+use crate::config::Config;
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::git::{check_output, git_in};
@@ -153,18 +153,8 @@ impl<'a> FeatureManager<'a> {
 
         let branch = derive_branch_name(name);
 
-        let repo_config =
-            RepoConfig::load(std::path::Path::new(&repo.local_path)).unwrap_or_else(|e| {
-                tracing::warn!(
-                    "Failed to load .conductor/config.toml for repo '{}': {e}; using defaults",
-                    repo.slug,
-                );
-                RepoConfig::default()
-            });
-        let default_branch = repo_config
-            .defaults
-            .default_branch
-            .unwrap_or_else(|| self.config.defaults.default_branch.clone());
+        let default_branch =
+            crate::repo::RepoManager::new(self.conn, self.config).resolve_default_branch(&repo);
         let base = from_branch.map(|b| b.to_string()).unwrap_or(default_branch);
 
         // Create git branch and push — clean up local branch on push failure

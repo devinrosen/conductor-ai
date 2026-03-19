@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::Path;
 use std::process::Command;
 
-use crate::config::{Config, RepoConfig};
+use crate::config::Config;
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::git::{check_gh_output, check_output, git_in};
@@ -108,17 +108,8 @@ impl<'a> WorktreeManager<'a> {
 
     /// Resolve the effective default branch for a repo by loading its per-repo
     /// config and falling back to the global config value.
-    fn resolve_default_branch(&self, repo_local_path: &str) -> String {
-        let repo_config = RepoConfig::load(Path::new(repo_local_path)).unwrap_or_else(|e| {
-            tracing::warn!(
-                "Failed to load .conductor/config.toml at '{repo_local_path}': {e}; using defaults"
-            );
-            RepoConfig::default()
-        });
-        repo_config
-            .defaults
-            .default_branch
-            .unwrap_or_else(|| self.config.defaults.default_branch.clone())
+    fn resolve_default_branch(&self, repo: &crate::repo::Repo) -> String {
+        RepoManager::new(self.conn, self.config).resolve_default_branch(repo)
     }
 
     /// Create a new worktree, ensuring the base branch is up to date first.
@@ -185,7 +176,7 @@ impl<'a> WorktreeManager<'a> {
         std::fs::create_dir_all(&repo.workspace_dir)?;
 
         // Resolve the default branch from repo config → global config → "main"
-        let default_branch = self.resolve_default_branch(&repo.local_path);
+        let default_branch = self.resolve_default_branch(&repo);
 
         // (branch_name, base_branch_for_db, warnings)
         let (branch, base_for_db, warnings) = if let Some(pr_number) = from_pr {
@@ -472,7 +463,7 @@ impl<'a> WorktreeManager<'a> {
                 })
                 .unwrap_or(false)
         });
-        let default_branch = self.resolve_default_branch(&repo.local_path);
+        let default_branch = self.resolve_default_branch(repo);
         let is_merged = ticket_closed
             || crate::git::is_branch_merged_local(
                 &repo.local_path,
@@ -554,7 +545,7 @@ impl<'a> WorktreeManager<'a> {
     pub fn create_pr(&self, repo_slug: &str, name: &str, draft: bool) -> Result<String> {
         let (repo, worktree) = self.get_active_worktree(repo_slug, name)?;
 
-        let default_branch = self.resolve_default_branch(&repo.local_path);
+        let default_branch = self.resolve_default_branch(&repo);
         let base = worktree.effective_base(&default_branch);
         let mut args = vec![
             "pr",

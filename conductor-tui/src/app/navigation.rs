@@ -623,7 +623,10 @@ impl App {
                                     let rc = conductor_core::config::RepoConfig::load(
                                         std::path::Path::new(&local_path),
                                     )
-                                    .unwrap_or_default();
+                                    .unwrap_or_else(|e| {
+                                        tracing::warn!("Failed to load .conductor/config.toml at '{local_path}': {e}; using defaults");
+                                        conductor_core::config::RepoConfig::default()
+                                    });
                                     let _ = tx.send(crate::action::Action::RepoConfigLoaded {
                                         repo_id: rid,
                                         config: rc,

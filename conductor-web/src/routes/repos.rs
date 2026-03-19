@@ -11,6 +11,13 @@ use crate::error::ApiError;
 use crate::events::ConductorEvent;
 use crate::state::AppState;
 
+/// Map a `tokio::task::JoinError` from `spawn_blocking` into an `ApiError`.
+fn join_err(e: tokio::task::JoinError) -> ApiError {
+    ApiError(conductor_core::error::ConductorError::Config(format!(
+        "spawn_blocking join failed: {e}"
+    )))
+}
+
 /// API response that includes resolved per-repo config values alongside core Repo data.
 /// The frontend sees `default_branch` and `model` as before, but they're now resolved
 /// from `.conductor/config.toml` with global config fallback.
@@ -68,11 +75,7 @@ pub async fn list_repos(
             .collect::<Vec<_>>()
     })
     .await
-    .map_err(|e| {
-        ApiError(conductor_core::error::ConductorError::Config(format!(
-            "spawn_blocking join failed: {e}"
-        )))
-    })?;
+    .map_err(join_err)?;
     Ok(Json(responses))
 }
 

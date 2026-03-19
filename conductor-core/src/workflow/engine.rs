@@ -302,16 +302,9 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
 
     // Resolve default_bot_name: explicit input → repo config → None
     let effective_bot_name = input.default_bot_name.clone().or_else(|| {
-        if let Some(rid) = input.repo_id {
-            let repo = crate::repo::RepoManager::new(conn, config)
-                .get_by_id(rid)
-                .ok()?;
-            crate::config::RepoConfig::load(std::path::Path::new(&repo.local_path))
-                .ok()
-                .and_then(|rc| rc.defaults.bot_name)
-        } else {
-            None
-        }
+        let repo_mgr = crate::repo::RepoManager::new(conn, config);
+        let repo = repo_mgr.get_by_id(input.repo_id?).ok()?;
+        repo_mgr.resolve_bot_name(&repo)
     });
 
     // Persist default_bot_name so it can be restored on resume.
@@ -1456,5 +1449,43 @@ mod tests {
         // Other keys populated from Feature
         assert_eq!(inputs.get("feature_id").unwrap(), "f1");
         assert_eq!(inputs.get("feature_branch").unwrap(), "feat/my-feature");
+    }
+
+    #[test]
+    fn test_effective_bot_name_from_repo_config() {
+        use crate::config::{Config, RepoConfig};
+        use crate::repo::RepoManager;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = crate::test_helpers::create_test_conn();
+        let config = Config::default();
+        let repo_mgr = RepoManager::new(&conn, &config);
+        let repo = repo_mgr
+            .register(
+                "bot-name-wf",
+                tmp.path().to_str().unwrap(),
+                "https://github.com/test/bot-wf.git",
+                None,
+            )
+            .unwrap();
+
+        // No config → resolve_bot_name returns None.
+        assert!(repo_mgr.resolve_bot_name(&repo).is_none());
+
+        // Write a per-repo config with bot_name.
+        let mut rc = RepoConfig::default();
+        rc.defaults.bot_name = Some("workflow-bot".to_string());
+        rc.save(tmp.path()).unwrap();
+
+        // Explicit input takes precedence.
+        let explicit = Some("explicit-bot".to_string());
+        let effective = explicit
+            .clone()
+            .or_else(|| repo_mgr.resolve_bot_name(&repo));
+        assert_eq!(effective.as_deref(), Some("explicit-bot"));
+
+        // No explicit input → falls back to repo config.
+        let effective: Option<String> = None.or_else(|| repo_mgr.resolve_bot_name(&repo));
+        assert_eq!(effective.as_deref(), Some("workflow-bot"));
     }
 }

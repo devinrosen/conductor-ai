@@ -512,8 +512,12 @@ impl App {
                         conductor_core::config::RepoConfig::load(std::path::Path::new(
                             &r.local_path,
                         ))
-                        .ok()
-                        .and_then(|rc| rc.defaults.model)
+                        .unwrap_or_else(|e| {
+                            tracing::warn!("Failed to load .conductor/config.toml for repo '{}': {e}; using defaults", r.slug);
+                            conductor_core::config::RepoConfig::default()
+                        })
+                        .defaults
+                        .model
                     });
                 let repo_model = repo_model_owned.as_deref();
                 let resolved_default = conductor_core::models::resolve_model(

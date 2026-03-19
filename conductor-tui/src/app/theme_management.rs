@@ -125,8 +125,15 @@ impl App {
         // Helper: load the per-repo model from .conductor/config.toml
         let repo_model_from_config = |repo: &conductor_core::repo::Repo| -> Option<String> {
             conductor_core::config::RepoConfig::load(std::path::Path::new(&repo.local_path))
-                .ok()
-                .and_then(|rc| rc.defaults.model)
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "Failed to load .conductor/config.toml for repo '{}': {e}; using defaults",
+                        repo.slug
+                    );
+                    conductor_core::config::RepoConfig::default()
+                })
+                .defaults
+                .model
         };
 
         // Helper to compute effective default and source for a worktree context

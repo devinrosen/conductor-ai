@@ -188,9 +188,7 @@ pub async fn run_workflow(
         }
 
         // Resolve model: request → per-worktree → per-repo config → global config
-        let repo_config =
-            conductor_core::config::RepoConfig::load(std::path::Path::new(&repo.local_path))
-                .unwrap_or_default();
+        let repo_config = RepoManager::new(&db, &config).load_repo_config(&repo);
         let model = req
             .model
             .clone()

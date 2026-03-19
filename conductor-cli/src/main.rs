@@ -826,14 +826,11 @@ fn main() -> Result<()> {
                                     println!("Starting agent...");
                                     // Resolve model: per-worktree → per-repo config → global config
                                     let repo_mgr = RepoManager::new(&conn, &config);
-                                    let repo_model =
-                                        repo_mgr.get_by_slug(&repo).ok().and_then(|r| {
-                                            conductor_core::config::RepoConfig::load(
-                                                std::path::Path::new(&r.local_path),
-                                            )
-                                            .ok()
-                                            .and_then(|rc| rc.defaults.model)
-                                        });
+                                    let repo_model = repo_mgr
+                                        .get_by_slug(&repo)
+                                        .ok()
+                                        .map(|r| repo_mgr.load_repo_config(&r))
+                                        .and_then(|rc| rc.defaults.model);
                                     let resolved_model = conductor_core::models::resolve_model(
                                         wt.model.as_deref(),
                                         repo_model.as_deref(),

@@ -302,4 +302,81 @@ mod tests {
 
         assert_eq!(mgr.resolve_bot_name(&repo).as_deref(), Some("my-bot"));
     }
+
+    #[test]
+    fn test_resolve_model_repo_and_global_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = crate::test_helpers::create_test_conn();
+
+        // Global config with a model set.
+        let mut config = Config::default();
+        config.general.model = Some("global-model".to_string());
+        let mgr = RepoManager::new(&conn, &config);
+        let repo = mgr
+            .register(
+                "resolve-model-test",
+                tmp.path().to_str().unwrap(),
+                "https://github.com/test/resolve-model.git",
+                None,
+            )
+            .unwrap();
+
+        // No repo config → falls back to global.
+        assert_eq!(mgr.resolve_model(&repo).as_deref(), Some("global-model"));
+
+        // Write a per-repo config with model.
+        let mut rc = RepoConfig::default();
+        rc.defaults.model = Some("repo-model".to_string());
+        rc.save(tmp.path()).unwrap();
+
+        // Per-repo config takes precedence over global.
+        assert_eq!(mgr.resolve_model(&repo).as_deref(), Some("repo-model"));
+    }
+
+    #[test]
+    fn test_resolve_model_no_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = crate::test_helpers::create_test_conn();
+        let config = Config::default(); // no global model
+        let mgr = RepoManager::new(&conn, &config);
+        let repo = mgr
+            .register(
+                "resolve-model-none",
+                tmp.path().to_str().unwrap(),
+                "https://github.com/test/resolve-model-none.git",
+                None,
+            )
+            .unwrap();
+
+        // No repo config, no global config → None.
+        assert!(mgr.resolve_model(&repo).is_none());
+    }
+
+    #[test]
+    fn test_resolve_default_branch_repo_and_global_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = crate::test_helpers::create_test_conn();
+        let mut config = Config::default();
+        config.defaults.default_branch = "develop".to_string();
+        let mgr = RepoManager::new(&conn, &config);
+        let repo = mgr
+            .register(
+                "resolve-branch-test",
+                tmp.path().to_str().unwrap(),
+                "https://github.com/test/resolve-branch.git",
+                None,
+            )
+            .unwrap();
+
+        // No repo config → falls back to global default_branch.
+        assert_eq!(mgr.resolve_default_branch(&repo), "develop");
+
+        // Write a per-repo config with default_branch.
+        let mut rc = RepoConfig::default();
+        rc.defaults.default_branch = Some("trunk".to_string());
+        rc.save(tmp.path()).unwrap();
+
+        // Per-repo config takes precedence.
+        assert_eq!(mgr.resolve_default_branch(&repo), "trunk");
+    }
 }
