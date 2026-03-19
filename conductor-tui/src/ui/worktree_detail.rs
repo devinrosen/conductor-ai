@@ -97,6 +97,10 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                     Style::default().fg(state.theme.label_secondary),
                 ),
             },
+            Span::styled(
+                " (Enter to change)",
+                Style::default().fg(state.theme.label_secondary),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Path: ", Style::default().fg(state.theme.label_secondary)),

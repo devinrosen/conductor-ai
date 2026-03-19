@@ -6,7 +6,7 @@ expression: render_to_string(&state)
 "│Worktree: feat-123-add-login                                                ││                                        │"
 "│Repo: my-app                                                                ││                                        │"
 "│Branch: feat/123-add-login                                                  ││                                        │"
-"│Base: (repo default)                                                        ││                                        │"
+"│Base: (repo default) (Enter to change)                                      ││                                        │"
 "│Path: /home/user/my-app/.worktrees/feat-123-add-login                       ││                                        │"
 "│Status: active                                                              ││                                        │"
 "│Model: (not set) (press Enter to change)                                    ││                                        │"

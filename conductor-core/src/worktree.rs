@@ -544,6 +544,34 @@ impl<'a> WorktreeManager<'a> {
         Ok(())
     }
 
+    /// Set (or clear) the worktree's base branch.
+    /// Pass `None` to reset to the repo default branch.
+    /// When setting to a non-default branch, auto-registers a feature for that branch.
+    pub fn set_base_branch(
+        &self,
+        repo_slug: &str,
+        name: &str,
+        base_branch: Option<&str>,
+    ) -> Result<()> {
+        let repo_mgr = RepoManager::new(self.conn, self.config);
+        let repo = repo_mgr.get_by_slug(repo_slug)?;
+        let updated = self.conn.execute(
+            "UPDATE worktrees SET base_branch = ?1 WHERE repo_id = ?2 AND slug = ?3",
+            params![base_branch, repo.id, name],
+        )?;
+        if updated == 0 {
+            return Err(ConductorError::WorktreeNotFound {
+                slug: name.to_string(),
+            });
+        }
+        // Auto-register feature if targeting a non-default branch
+        if let Some(branch) = base_branch {
+            let fm = crate::feature::FeatureManager::new(self.conn, self.config);
+            let _ = fm.ensure_feature_for_branch(&repo, branch, None);
+        }
+        Ok(())
+    }
+
     /// Push the worktree branch to origin.
     pub fn push(&self, repo_slug: &str, name: &str) -> Result<String> {
         let (_repo, worktree) = self.get_active_worktree(repo_slug, name)?;

@@ -124,6 +124,19 @@ pub enum Action {
     // Model configuration
     SetModel,
 
+    // Base branch change (worktree detail)
+    SetBaseBranch,
+    BaseBranchesLoaded {
+        repo_slug: String,
+        wt_slug: String,
+        worktree_id: String,
+        items: Vec<crate::state::BranchPickerItem>,
+    },
+    BaseBranchesFailed {
+        error: String,
+    },
+    SelectBaseBranch(Option<usize>),
+
     // Theme picker
     ShowThemePicker,
     /// Background result: theme directory scan completed; open the picker modal.

@@ -350,6 +350,11 @@ impl App {
                 ref items,
                 ref mut selected,
                 ..
+            }
+            | Modal::BaseBranchPicker {
+                ref items,
+                ref mut selected,
+                ..
             } => {
                 wrap_decrement(selected, items.len());
                 return;
@@ -478,6 +483,11 @@ impl App {
                 return;
             }
             Modal::BranchPicker {
+                ref items,
+                ref mut selected,
+                ..
+            }
+            | Modal::BaseBranchPicker {
                 ref items,
                 ref mut selected,
                 ..

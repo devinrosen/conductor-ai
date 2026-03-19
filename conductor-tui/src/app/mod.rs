@@ -396,6 +396,23 @@ impl App {
             // Model configuration
             Action::SetModel => self.handle_set_model(),
 
+            // Base branch change
+            Action::SetBaseBranch => self.handle_set_base_branch(),
+            Action::BaseBranchesLoaded {
+                repo_slug,
+                wt_slug,
+                worktree_id,
+                items,
+            } => {
+                self.handle_base_branches_loaded(repo_slug, wt_slug, worktree_id, items);
+            }
+            Action::BaseBranchesFailed { error } => {
+                self.state.modal = Modal::Error {
+                    message: format!("Failed to load branches: {error}"),
+                };
+            }
+            Action::SelectBaseBranch(index) => self.handle_base_branch_pick(index),
+
             // Theme picker
             Action::ShowThemePicker => self.handle_show_theme_picker(),
             Action::ThemesLoaded {

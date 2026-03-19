@@ -619,6 +619,15 @@ pub enum Modal {
         items: Vec<BranchPickerItem>,
         selected: usize,
     },
+    /// Branch picker for changing worktree base branch (separate from creation-flow BranchPicker).
+    BaseBranchPicker {
+        repo_slug: String,
+        wt_slug: String,
+        #[allow(dead_code)]
+        worktree_id: String,
+        items: Vec<BranchPickerItem>,
+        selected: usize,
+    },
     /// In-TUI theme picker: browse named themes with live preview.
     ThemePicker {
         /// Snapshot of all available themes at picker-open time (built-ins + custom).
@@ -674,6 +683,7 @@ impl fmt::Debug for Modal {
                     "Modal::GithubDiscover(owner={owner:?}, loading={loading})"
                 )
             }
+            Modal::BaseBranchPicker { .. } => write!(f, "Modal::BaseBranchPicker"),
             Modal::BranchPicker { .. } => write!(f, "Modal::BranchPicker"),
             Modal::PostCreatePicker { .. } => write!(f, "Modal::PostCreatePicker"),
             Modal::PrWorkflowPicker {
