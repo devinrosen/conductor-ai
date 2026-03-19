@@ -1,0 +1,17 @@
+fields:
+  root_cause: string
+  failure_category:
+    type: string
+    desc: "One of: workflow_bug, agent_bug, infrastructure, schema_error, external_dependency"
+  issues:
+    type: array
+    items:
+      title: string
+      description: string
+      category: string
+      failed_step: string
+      severity: enum(critical, warning)
+  summary: string
+
+markers:
+  has_issues: "issues.length > 0"
