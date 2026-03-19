@@ -287,6 +287,11 @@ pub enum Action {
         imported: usize,
         errors: Vec<String>,
     },
+    /// Background result: repo model set/cleared via file I/O.
+    SetRepoModelComplete {
+        slug: String,
+        result: Result<Option<String>, String>,
+    },
 
     // Branch picker (during worktree creation)
     /// Background result: feature branches loaded for branch picker.

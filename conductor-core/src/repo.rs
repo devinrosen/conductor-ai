@@ -1,9 +1,10 @@
-use crate::config::{effective_default_branch, effective_repo_model, Config};
+use crate::config::{Config, RepoConfig};
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Repo {
@@ -31,9 +32,22 @@ pub struct RepoManager<'a> {
 impl Repo {
     /// Populate the computed `default_branch` and `model` fields from
     /// the per-repo `.conductor/config.toml`, falling back to global config.
+    ///
+    /// Loads `RepoConfig` once to resolve both fields, avoiding redundant disk reads.
     fn enrich(mut self, global_config: &Config) -> Self {
-        self.default_branch = effective_default_branch(&self.local_path, global_config);
-        self.model = effective_repo_model(&self.local_path);
+        let repo_config = RepoConfig::load(Path::new(&self.local_path)).unwrap_or_else(|e| {
+            tracing::warn!(
+                repo = %self.slug,
+                path = %self.local_path,
+                "failed to load .conductor/config.toml, using defaults: {e}"
+            );
+            RepoConfig::default()
+        });
+        self.default_branch = repo_config
+            .defaults
+            .default_branch
+            .unwrap_or_else(|| global_config.defaults.default_branch.clone());
+        self.model = repo_config.defaults.model;
         self
     }
 }
@@ -198,6 +212,17 @@ impl<'a> RepoManager<'a> {
                 slug: repo_id.to_string(),
             });
         }
+        Ok(())
+    }
+
+    /// Set the per-repo model override in `.conductor/config.toml`.
+    /// Pass `None` to clear the override.
+    pub fn set_model(&self, slug: &str, model: Option<&str>) -> Result<()> {
+        let repo = self.get_by_slug(slug)?;
+        let repo_path = Path::new(&repo.local_path);
+        let mut repo_config = RepoConfig::load(repo_path)?;
+        repo_config.defaults.model = model.map(|s| s.to_string());
+        repo_config.save(repo_path)?;
         Ok(())
     }
 

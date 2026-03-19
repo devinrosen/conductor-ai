@@ -698,12 +698,7 @@ fn main() -> Result<()> {
             }
             RepoCommands::SetModel { slug, model } => {
                 let mgr = RepoManager::new(&conn, &config);
-                let repo = mgr.get_by_slug(&slug)?;
-                let mut repo_config = conductor_core::config::RepoConfig::load(
-                    std::path::Path::new(&repo.local_path),
-                )?;
-                repo_config.defaults.model = model.clone();
-                repo_config.save(std::path::Path::new(&repo.local_path))?;
+                mgr.set_model(&slug, model.as_deref())?;
                 match model {
                     Some(m) => println!("Set model for {slug} to: {m}"),
                     None => println!("Cleared model override for {slug} (will use global default)"),

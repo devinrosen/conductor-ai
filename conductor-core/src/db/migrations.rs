@@ -42,6 +42,76 @@ fn bump_version(conn: &Connection, v: u32) -> Result<()> {
     Ok(())
 }
 
+/// Migration 45 helper: copy `default_branch` and `model` column values from
+/// the repos table into per-repo `.conductor/config.toml` files before the
+/// columns are dropped. Errors are logged but do not abort the migration — the
+/// worst case is that the user must re-set a repo-level override.
+fn migrate_repo_columns_to_config(conn: &Connection) {
+    use crate::config::RepoConfig;
+    use std::path::Path;
+
+    // The columns may not exist (fresh DB or already dropped by a prior attempt).
+    let has_default_branch: bool = conn
+        .prepare("SELECT default_branch FROM repos LIMIT 0")
+        .is_ok();
+    let has_model: bool = conn.prepare("SELECT model FROM repos LIMIT 0").is_ok();
+    if !has_default_branch && !has_model {
+        return;
+    }
+
+    // Build a query that reads whatever columns exist.
+    let sql = if has_default_branch && has_model {
+        "SELECT local_path, default_branch, model FROM repos"
+    } else if has_default_branch {
+        "SELECT local_path, default_branch, NULL FROM repos"
+    } else {
+        "SELECT local_path, NULL, model FROM repos"
+    };
+
+    let Ok(mut stmt) = conn.prepare(sql) else {
+        return;
+    };
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .ok();
+    let Some(rows) = rows else { return };
+
+    for row in rows.flatten() {
+        let (local_path, default_branch, model) = row;
+        let repo_path = Path::new(&local_path);
+
+        // Skip if both are empty/default — nothing to migrate.
+        let branch_is_custom = default_branch
+            .as_deref()
+            .is_some_and(|b| !b.is_empty() && b != "main");
+        let model_is_set = model.as_deref().is_some_and(|m| !m.is_empty());
+        if !branch_is_custom && !model_is_set {
+            continue;
+        }
+
+        // Load existing repo config (or defaults) and merge the DB values.
+        let mut rc = RepoConfig::load(repo_path).unwrap_or_default();
+        if branch_is_custom && rc.defaults.default_branch.is_none() {
+            rc.defaults.default_branch = default_branch;
+        }
+        if model_is_set && rc.defaults.model.is_none() {
+            rc.defaults.model = model;
+        }
+        if let Err(e) = rc.save(repo_path) {
+            tracing::warn!(
+                path = %local_path,
+                "migration 45: failed to write .conductor/config.toml: {e}"
+            );
+        }
+    }
+}
+
 /// Run all schema migrations. Uses a simple version counter in a meta table.
 pub fn run(conn: &Connection) -> Result<()> {
     conn.execute_batch(
@@ -747,6 +817,9 @@ pub fn run(conn: &Connection) -> Result<()> {
     }
 
     if version < 45 {
+        // Before dropping the columns, migrate any non-default default_branch values
+        // to per-repo .conductor/config.toml so they are not lost.
+        migrate_repo_columns_to_config(conn);
         conn.execute_batch(include_str!(
             "migrations/045_drop_repo_model_default_branch.sql"
         ))?;

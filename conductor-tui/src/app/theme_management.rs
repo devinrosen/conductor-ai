@@ -212,7 +212,6 @@ impl App {
                             suggested: None,
                             allow_default: false,
                             on_submit: InputAction::SetRepoModel {
-                                repo_id: repo.id.clone(),
                                 slug: repo.slug.clone(),
                             },
                         };
@@ -284,7 +283,6 @@ impl App {
                     suggested: None,
                     allow_default: false,
                     on_submit: InputAction::SetRepoModel {
-                        repo_id: repo.id.clone(),
                         slug: repo.slug.clone(),
                     },
                 };

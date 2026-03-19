@@ -429,6 +429,23 @@ impl RepoConfig {
             .map_err(|e| ConductorError::Config(format!("serialize repo config: {e}")))?;
         merge_toml(&mut merged, new_value);
 
+        // Explicitly remove keys that are None in the struct but survived merge
+        // (because skip_serializing_if omits them, so merge_toml preserves stale keys).
+        if let Some(defaults) = merged.get_mut("defaults").and_then(|d| d.as_table_mut()) {
+            if self.defaults.model.is_none() {
+                defaults.remove("model");
+            }
+            if self.defaults.default_branch.is_none() {
+                defaults.remove("default_branch");
+            }
+            if self.defaults.bot_name.is_none() {
+                defaults.remove("bot_name");
+            }
+            if self.defaults.feature_merge_strategy.is_none() {
+                defaults.remove("feature_merge_strategy");
+            }
+        }
+
         let contents = toml::to_string_pretty(&merged)
             .map_err(|e| ConductorError::Config(format!("serialize repo config: {e}")))?;
         std::fs::write(&path, contents)?;
@@ -438,17 +455,33 @@ impl RepoConfig {
 
 /// Resolve the effective default branch: per-repo config → global config → "main".
 pub fn effective_default_branch(repo_path: &str, global_config: &Config) -> String {
-    RepoConfig::load(Path::new(repo_path))
-        .ok()
-        .and_then(|rc| rc.defaults.default_branch)
-        .unwrap_or_else(|| global_config.defaults.default_branch.clone())
+    match RepoConfig::load(Path::new(repo_path)) {
+        Ok(rc) => rc
+            .defaults
+            .default_branch
+            .unwrap_or_else(|| global_config.defaults.default_branch.clone()),
+        Err(e) => {
+            tracing::warn!(
+                path = %repo_path,
+                "failed to load .conductor/config.toml, using global default_branch: {e}"
+            );
+            global_config.defaults.default_branch.clone()
+        }
+    }
 }
 
 /// Resolve the effective repo model: per-repo config → global config → None.
 pub fn effective_repo_model(repo_path: &str) -> Option<String> {
-    RepoConfig::load(Path::new(repo_path))
-        .ok()
-        .and_then(|rc| rc.defaults.model)
+    match RepoConfig::load(Path::new(repo_path)) {
+        Ok(rc) => rc.defaults.model,
+        Err(e) => {
+            tracing::warn!(
+                path = %repo_path,
+                "failed to load .conductor/config.toml, using no repo model: {e}"
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -943,5 +976,40 @@ bot_name = "my-bot"
         let dir = tempfile::tempdir().unwrap();
         let result = effective_repo_model(dir.path().to_str().unwrap());
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_repo_config_save_clears_option_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        // First, save a config with model set.
+        let rc = RepoConfig {
+            defaults: RepoDefaults {
+                model: Some("opus".to_string()),
+                default_branch: Some("develop".to_string()),
+                bot_name: None,
+                feature_merge_strategy: None,
+            },
+        };
+        rc.save(dir.path()).unwrap();
+        let loaded = RepoConfig::load(dir.path()).unwrap();
+        assert_eq!(loaded.defaults.model.as_deref(), Some("opus"));
+        assert_eq!(loaded.defaults.default_branch.as_deref(), Some("develop"));
+
+        // Now clear model by saving with None — it must actually be removed.
+        let rc2 = RepoConfig {
+            defaults: RepoDefaults {
+                model: None,
+                default_branch: Some("develop".to_string()),
+                bot_name: None,
+                feature_merge_strategy: None,
+            },
+        };
+        rc2.save(dir.path()).unwrap();
+        let loaded2 = RepoConfig::load(dir.path()).unwrap();
+        assert!(
+            loaded2.defaults.model.is_none(),
+            "model should be cleared after saving with None"
+        );
+        assert_eq!(loaded2.defaults.default_branch.as_deref(), Some("develop"));
     }
 }
