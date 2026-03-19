@@ -80,10 +80,11 @@ pub fn fixup_macos_path() {
         if !cargo_bin.is_empty() {
             extra_paths.push(cargo_bin.as_str());
         }
-        if let Ok(current) = std::env::var("PATH") {
-            let mut parts: Vec<&str> = extra_paths.to_vec();
+        let current = std::env::var("PATH").unwrap_or_default();
+        let mut parts: Vec<&str> = extra_paths.to_vec();
+        if !current.is_empty() {
             parts.push(&current);
-            std::env::set_var("PATH", parts.join(":"));
         }
+        std::env::set_var("PATH", parts.join(":"));
     }
 }

@@ -2464,3 +2464,24 @@ workflow review {
     let msg = result.unwrap_err().to_string();
     assert!(msg.contains("0-100"), "error should mention range: {msg}");
 }
+
+#[test]
+fn test_parse_quality_gate_invalid_on_fail() {
+    let input = r#"
+workflow review {
+    meta { targets = ["worktree"] }
+    gate quality_gate {
+        source    = "aggregator"
+        threshold = 85
+        on_fail   = garbage
+    }
+}
+"#;
+    let result = parse_workflow_str(input, "test.wf");
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("Invalid on_fail"),
+        "error should mention invalid on_fail: {msg}"
+    );
+}
