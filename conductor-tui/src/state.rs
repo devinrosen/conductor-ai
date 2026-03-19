@@ -47,6 +47,7 @@ use conductor_core::workflow::{
 
 use crate::theme::Theme;
 
+use conductor_core::feature::FeatureRow;
 use conductor_core::worktree::Worktree;
 use ratatui::widgets::ListState;
 use tui_textarea::TextArea;
@@ -60,13 +61,23 @@ pub enum View {
     WorkflowDefDetail,
 }
 
-/// A row in the unified dashboard list — either a repo header or a worktree entry.
+/// A row in the unified dashboard list — repo header, feature header, or worktree entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DashboardRow {
     /// Index into `AppState::data.repos`.
     Repo(usize),
-    /// Index into `AppState::data.worktrees`.
-    Worktree(usize),
+    /// A feature header row. `repo_idx` indexes `data.repos`, `feature_idx` indexes
+    /// `data.features_by_repo[&repo.id]`. `total` / `merged` are pre-computed child
+    /// worktree counts so render and input handlers don't rescan worktrees.
+    Feature {
+        repo_idx: usize,
+        feature_idx: usize,
+        total: usize,
+        merged: usize,
+    },
+    /// Index into `AppState::data.worktrees`. `is_feature_child` is `true` when
+    /// this worktree belongs to a feature group (used for indentation in the UI).
+    Worktree { idx: usize, is_feature_child: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -816,6 +827,9 @@ pub struct DataCache {
     /// Live turn counts for running agents, keyed by worktree_id.
     /// Populated by the background poller each tick.
     pub live_turns_by_worktree: HashMap<String, i64>,
+    /// Active features per repo (repo_id → active FeatureRows).
+    /// Populated by the background poller each tick.
+    pub features_by_repo: HashMap<String, Vec<FeatureRow>>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.
@@ -1013,6 +1027,8 @@ pub struct AppState {
     pub selected_workflow_run_id: Option<String>,
     /// Set of parent workflow run IDs that are currently collapsed in the runs pane.
     pub collapsed_workflow_run_ids: HashSet<String>,
+    /// Set of feature IDs that are currently collapsed in the dashboard view.
+    pub collapsed_features: HashSet<String>,
     /// Set of repo slugs whose group header is collapsed in global mode.
     pub collapsed_repo_headers: HashSet<String>,
     /// Set of composite `"repo_slug/target_key"` strings whose target header is collapsed in global mode.
@@ -1401,6 +1417,7 @@ impl AppState {
             step_agent_event_index: 0,
             selected_workflow_run_id: None,
             collapsed_workflow_run_ids: HashSet::new(),
+            collapsed_features: HashSet::new(),
             collapsed_repo_headers: HashSet::new(),
             collapsed_target_headers: HashSet::new(),
             collapse_initialized: HashSet::new(),
@@ -1911,27 +1928,107 @@ impl AppState {
     }
 
     /// Ordered list of rows for the unified dashboard panel.
-    /// Each repo appears first, followed immediately by its worktrees.
+    /// Each repo appears first, then feature groups with their child worktrees,
+    /// then ungrouped worktrees.
+    ///
+    /// Builds a per-repo worktree index up-front so the inner loop is O(W) total
+    /// rather than O(F×W).
     pub fn dashboard_rows(&self) -> Vec<DashboardRow> {
+        // Build an index: repo_id → [(global_wt_idx, &Worktree)]
+        let mut wts_by_repo: HashMap<&str, Vec<(usize, &conductor_core::worktree::Worktree)>> =
+            HashMap::new();
+        for (idx, wt) in self.data.worktrees.iter().enumerate() {
+            wts_by_repo
+                .entry(wt.repo_id.as_str())
+                .or_default()
+                .push((idx, wt));
+        }
+
         let mut rows = Vec::new();
         for (repo_idx, repo) in self.data.repos.iter().enumerate() {
             rows.push(DashboardRow::Repo(repo_idx));
-            for (wt_idx, wt) in self.data.worktrees.iter().enumerate() {
-                if wt.repo_id == repo.id {
-                    rows.push(DashboardRow::Worktree(wt_idx));
+
+            let empty_features = Vec::new();
+            let features = self
+                .data
+                .features_by_repo
+                .get(&repo.id)
+                .unwrap_or(&empty_features);
+
+            let repo_wts = wts_by_repo.get(repo.id.as_str());
+            let empty_wts = Vec::new();
+            let repo_wts = repo_wts.unwrap_or(&empty_wts);
+
+            // Track which worktrees are grouped under a feature
+            let mut grouped_wt_indices: HashSet<usize> = HashSet::new();
+
+            for (fi, feature) in features.iter().enumerate() {
+                let mut total = 0usize;
+                let mut merged = 0usize;
+                let mut children = Vec::new();
+
+                for &(wt_idx, wt) in repo_wts {
+                    if wt.belongs_to_feature(&repo.id, &feature.branch) {
+                        grouped_wt_indices.insert(wt_idx);
+                        total += 1;
+                        if wt.status.is_done() {
+                            merged += 1;
+                        }
+                        children.push(wt_idx);
+                    }
+                }
+
+                rows.push(DashboardRow::Feature {
+                    repo_idx,
+                    feature_idx: fi,
+                    total,
+                    merged,
+                });
+
+                if !self.collapsed_features.contains(&feature.id) {
+                    for wt_idx in children {
+                        rows.push(DashboardRow::Worktree {
+                            idx: wt_idx,
+                            is_feature_child: true,
+                        });
+                    }
+                }
+            }
+
+            // Ungrouped worktrees (not under any feature)
+            for &(wt_idx, _) in repo_wts {
+                if !grouped_wt_indices.contains(&wt_idx) {
+                    rows.push(DashboardRow::Worktree {
+                        idx: wt_idx,
+                        is_feature_child: false,
+                    });
                 }
             }
         }
         rows
     }
 
+    /// Returns the dashboard row at `dashboard_index`.
+    /// Delegates to `dashboard_rows()` to guarantee the two can never diverge.
+    pub fn current_dashboard_row(&self) -> Option<DashboardRow> {
+        self.dashboard_rows().get(self.dashboard_index).copied()
+    }
+
+    /// Look up a feature by repo index and feature index.
+    /// Resolves the three-level lookup: repo_idx → repo.id → features_by_repo → feature.
+    pub fn feature_at(&self, repo_idx: usize, feature_idx: usize) -> Option<&FeatureRow> {
+        let repo = self.data.repos.get(repo_idx)?;
+        self.data.features_by_repo.get(&repo.id)?.get(feature_idx)
+    }
+
     /// Get the currently selected repo, if any.
-    /// When the cursor is on a worktree row, returns that worktree's owning repo.
+    /// When the cursor is on a worktree or feature row, returns that item's owning repo.
     pub fn selected_repo(&self) -> Option<&Repo> {
-        match self.dashboard_rows().get(self.dashboard_index)? {
-            DashboardRow::Repo(idx) => self.data.repos.get(*idx),
-            DashboardRow::Worktree(idx) => {
-                let wt = self.data.worktrees.get(*idx)?;
+        match self.current_dashboard_row()? {
+            DashboardRow::Repo(idx) => self.data.repos.get(idx),
+            DashboardRow::Feature { repo_idx, .. } => self.data.repos.get(repo_idx),
+            DashboardRow::Worktree { idx, .. } => {
+                let wt = self.data.worktrees.get(idx)?;
                 self.data.repos.iter().find(|r| r.id == wt.repo_id)
             }
         }
@@ -3584,5 +3681,385 @@ pub(crate) mod tests {
             "child run c1 should appear, got {:?}",
             rows[2]
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // dashboard_rows() tests
+    // -----------------------------------------------------------------------
+
+    fn make_repo(id: &str, slug: &str) -> conductor_core::repo::Repo {
+        conductor_core::repo::Repo {
+            id: id.into(),
+            slug: slug.into(),
+            local_path: String::new(),
+            remote_url: String::new(),
+            default_branch: "main".into(),
+            workspace_dir: String::new(),
+            created_at: String::new(),
+            model: None,
+            allow_agent_issue_creation: false,
+        }
+    }
+
+    fn make_worktree(
+        id: &str,
+        repo_id: &str,
+        base_branch: Option<&str>,
+        status: conductor_core::worktree::WorktreeStatus,
+    ) -> conductor_core::worktree::Worktree {
+        conductor_core::worktree::Worktree {
+            id: id.into(),
+            repo_id: repo_id.into(),
+            slug: id.into(),
+            branch: format!("feat/{id}"),
+            path: String::new(),
+            ticket_id: None,
+            status,
+            created_at: String::new(),
+            completed_at: None,
+            model: None,
+            base_branch: base_branch.map(|s| s.to_string()),
+        }
+    }
+
+    fn make_feature_row(id: &str, branch: &str) -> conductor_core::feature::FeatureRow {
+        conductor_core::feature::FeatureRow {
+            id: id.into(),
+            name: id.into(),
+            branch: branch.into(),
+            base_branch: "main".into(),
+            status: conductor_core::feature::FeatureStatus::Active,
+            created_at: String::new(),
+            worktree_count: 0,
+            ticket_count: 0,
+        }
+    }
+
+    #[test]
+    fn dashboard_rows_repo_only() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        let rows = state.dashboard_rows();
+        assert_eq!(rows, vec![DashboardRow::Repo(0)]);
+    }
+
+    #[test]
+    fn dashboard_rows_ungrouped_worktrees() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        state.data.worktrees = vec![
+            make_worktree(
+                "wt1",
+                "r1",
+                None,
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+            make_worktree(
+                "wt2",
+                "r1",
+                None,
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+        ];
+        let rows = state.dashboard_rows();
+        assert_eq!(
+            rows,
+            vec![
+                DashboardRow::Repo(0),
+                DashboardRow::Worktree {
+                    idx: 0,
+                    is_feature_child: false,
+                },
+                DashboardRow::Worktree {
+                    idx: 1,
+                    is_feature_child: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn dashboard_rows_feature_groups_worktrees() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        state
+            .data
+            .features_by_repo
+            .insert("r1".into(), vec![make_feature_row("f1", "feat/big-thing")]);
+        state.data.worktrees = vec![
+            make_worktree(
+                "wt1",
+                "r1",
+                Some("feat/big-thing"),
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+            make_worktree(
+                "wt2",
+                "r1",
+                None,
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+        ];
+        let rows = state.dashboard_rows();
+        assert_eq!(
+            rows,
+            vec![
+                DashboardRow::Repo(0),
+                DashboardRow::Feature {
+                    repo_idx: 0,
+                    feature_idx: 0,
+                    total: 1,
+                    merged: 0,
+                },
+                DashboardRow::Worktree {
+                    idx: 0,
+                    is_feature_child: true,
+                }, // grouped under feature
+                DashboardRow::Worktree {
+                    idx: 1,
+                    is_feature_child: false,
+                }, // ungrouped
+            ]
+        );
+    }
+
+    #[test]
+    fn dashboard_rows_collapsed_feature_hides_children() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        state
+            .data
+            .features_by_repo
+            .insert("r1".into(), vec![make_feature_row("f1", "feat/big-thing")]);
+        state.data.worktrees = vec![
+            make_worktree(
+                "wt1",
+                "r1",
+                Some("feat/big-thing"),
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+            make_worktree(
+                "wt2",
+                "r1",
+                None,
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+        ];
+        state.collapsed_features.insert("f1".into());
+        let rows = state.dashboard_rows();
+        assert_eq!(
+            rows,
+            vec![
+                DashboardRow::Repo(0),
+                DashboardRow::Feature {
+                    repo_idx: 0,
+                    feature_idx: 0,
+                    total: 1,
+                    merged: 0,
+                },
+                // wt1 is hidden (collapsed)
+                DashboardRow::Worktree {
+                    idx: 1,
+                    is_feature_child: false,
+                }, // ungrouped still shows
+            ]
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // current_dashboard_row() tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn current_dashboard_row_returns_correct_row() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        state.data.worktrees = vec![make_worktree(
+            "wt1",
+            "r1",
+            None,
+            conductor_core::worktree::WorktreeStatus::Active,
+        )];
+        // index 0 = Repo, index 1 = Worktree
+        state.dashboard_index = 0;
+        assert_eq!(state.current_dashboard_row(), Some(DashboardRow::Repo(0)));
+        state.dashboard_index = 1;
+        assert_eq!(
+            state.current_dashboard_row(),
+            Some(DashboardRow::Worktree {
+                idx: 0,
+                is_feature_child: false,
+            })
+        );
+    }
+
+    #[test]
+    fn current_dashboard_row_out_of_bounds() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        state.dashboard_index = 99;
+        assert_eq!(state.current_dashboard_row(), None);
+    }
+
+    #[test]
+    fn current_dashboard_row_skips_collapsed_children() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        state
+            .data
+            .features_by_repo
+            .insert("r1".into(), vec![make_feature_row("f1", "feat/big-thing")]);
+        state.data.worktrees = vec![
+            make_worktree(
+                "wt1",
+                "r1",
+                Some("feat/big-thing"),
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+            make_worktree(
+                "wt2",
+                "r1",
+                None,
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+        ];
+        state.collapsed_features.insert("f1".into());
+        // Rows: Repo(0), Feature{0,0}, Worktree{1,false} (wt1 hidden)
+        state.dashboard_index = 2;
+        assert_eq!(
+            state.current_dashboard_row(),
+            Some(DashboardRow::Worktree {
+                idx: 1,
+                is_feature_child: false,
+            })
+        );
+    }
+
+    #[test]
+    fn current_dashboard_row_agrees_with_dashboard_rows() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a"), make_repo("r2", "repo-b")];
+        state
+            .data
+            .features_by_repo
+            .insert("r1".into(), vec![make_feature_row("f1", "feat/thing")]);
+        state.data.worktrees = vec![
+            make_worktree(
+                "wt1",
+                "r1",
+                Some("feat/thing"),
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+            make_worktree(
+                "wt2",
+                "r2",
+                None,
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+        ];
+        let rows = state.dashboard_rows();
+        for (i, row) in rows.iter().enumerate() {
+            state.dashboard_index = i;
+            assert_eq!(state.current_dashboard_row().as_ref(), Some(row));
+        }
+        state.dashboard_index = rows.len();
+        assert_eq!(state.current_dashboard_row(), None);
+    }
+
+    #[test]
+    fn dashboard_rows_always_reflects_current_data() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        state.data.worktrees = vec![make_worktree(
+            "wt1",
+            "r1",
+            None,
+            conductor_core::worktree::WorktreeStatus::Active,
+        )];
+
+        let rows1 = state.dashboard_rows();
+        assert_eq!(rows1.len(), 2); // Repo + Worktree
+
+        // Mutate underlying data (add a second worktree)
+        state.data.worktrees.push(make_worktree(
+            "wt2",
+            "r1",
+            None,
+            conductor_core::worktree::WorktreeStatus::Active,
+        ));
+
+        // dashboard_rows() always recomputes — no stale cache possible
+        let rows2 = state.dashboard_rows();
+        assert_eq!(rows2.len(), 3, "should immediately see Repo + 2 Worktrees");
+    }
+
+    #[test]
+    fn dashboard_rows_feature_stats_count_correctly() {
+        let mut state = AppState::new();
+        state.data.repos = vec![make_repo("r1", "repo-a")];
+        state
+            .data
+            .features_by_repo
+            .insert("r1".into(), vec![make_feature_row("f1", "feat/big-thing")]);
+        state.data.worktrees = vec![
+            make_worktree(
+                "wt1",
+                "r1",
+                Some("feat/big-thing"),
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+            make_worktree(
+                "wt2",
+                "r1",
+                Some("feat/big-thing"),
+                conductor_core::worktree::WorktreeStatus::Merged,
+            ),
+            make_worktree(
+                "wt3",
+                "r1",
+                Some("feat/big-thing"),
+                conductor_core::worktree::WorktreeStatus::Abandoned,
+            ),
+            make_worktree(
+                "wt4",
+                "r1",
+                None,
+                conductor_core::worktree::WorktreeStatus::Active,
+            ),
+        ];
+        let rows = state.dashboard_rows();
+        // The Feature row should have total=3, merged=2
+        let feature_row = rows
+            .iter()
+            .find(|r| matches!(r, DashboardRow::Feature { .. }))
+            .unwrap();
+        match feature_row {
+            DashboardRow::Feature { total, merged, .. } => {
+                assert_eq!(*total, 3);
+                assert_eq!(*merged, 2);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn selected_repo_returns_repo_for_feature_row() {
+        let mut state = AppState::new();
+        let repo = make_repo("r1", "my-repo");
+        state.data.repos = vec![repo];
+        state
+            .data
+            .features_by_repo
+            .insert("r1".into(), vec![make_feature_row("f1", "feat/thing")]);
+        // Build dashboard rows and select the feature row
+        let rows = state.dashboard_rows();
+        let feature_pos = rows
+            .iter()
+            .position(|r| matches!(r, DashboardRow::Feature { .. }))
+            .expect("should have a Feature row");
+        state.dashboard_index = feature_pos;
+        let selected = state.selected_repo().expect("should resolve owning repo");
+        assert_eq!(selected.id, "r1");
+        assert_eq!(selected.slug, "my-repo");
     }
 }

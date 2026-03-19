@@ -4,6 +4,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
+use tracing::warn;
+
 use crate::state::{AppState, ColumnFocus, DashboardRow};
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -24,7 +26,13 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         .iter()
         .map(|row| match row {
             DashboardRow::Repo(idx) => {
-                let repo = &state.data.repos[*idx];
+                let Some(repo) = state.data.repos.get(*idx) else {
+                    warn!(
+                        "dashboard: repo index {idx} out of bounds (len={})",
+                        state.data.repos.len()
+                    );
+                    return ListItem::new(Line::from(""));
+                };
                 let active = state
                     .data
                     .worktrees
@@ -44,13 +52,53 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                     ),
                 ]))
             }
-            DashboardRow::Worktree(idx) => super::common::worktree_list_item_with_prefix(
-                &state.data.worktrees[*idx],
-                state,
-                None,
-                false,
-                "  \u{2514} ",
-            ),
+            DashboardRow::Feature {
+                repo_idx,
+                feature_idx,
+                total,
+                merged,
+            } => {
+                let Some(feature) = state.feature_at(*repo_idx, *feature_idx) else {
+                    warn!("dashboard: feature_at({repo_idx}, {feature_idx}) returned None");
+                    return ListItem::new(Line::from(""));
+                };
+                let collapsed = state.collapsed_features.contains(&feature.id);
+
+                let arrow = if collapsed { "▸" } else { "▾" };
+                let progress = format!(" ({merged}/{total} merged)");
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("  {arrow} "),
+                        Style::default().fg(state.theme.label_secondary),
+                    ),
+                    Span::styled(
+                        feature.name.clone(),
+                        Style::default()
+                            .fg(state.theme.status_running)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(progress, Style::default().fg(state.theme.label_secondary)),
+                ]))
+            }
+            DashboardRow::Worktree {
+                idx,
+                is_feature_child,
+            } => {
+                let Some(wt) = state.data.worktrees.get(*idx) else {
+                    warn!(
+                        "dashboard: worktree index {idx} out of bounds (len={})",
+                        state.data.worktrees.len()
+                    );
+                    return ListItem::new(Line::from(""));
+                };
+                let prefix = if *is_feature_child {
+                    "    \u{2514} "
+                } else {
+                    "  \u{2514} "
+                };
+                super::common::worktree_list_item_with_prefix(wt, state, None, false, prefix)
+            }
         })
         .collect();
 

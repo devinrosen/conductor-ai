@@ -160,7 +160,7 @@ impl App {
             View::Dashboard => {
                 let rows = self.state.dashboard_rows();
                 match rows.get(self.state.dashboard_index) {
-                    Some(&DashboardRow::Worktree(wt_idx)) => {
+                    Some(&DashboardRow::Worktree { idx: wt_idx, .. }) => {
                         let Some(wt) = self.state.data.worktrees.get(wt_idx).cloned() else {
                             return;
                         };
@@ -216,6 +216,9 @@ impl App {
                                 slug: repo.slug.clone(),
                             },
                         };
+                    }
+                    Some(DashboardRow::Feature { .. }) => {
+                        // Features don't have a model setting — no-op.
                     }
                     None => (),
                 }

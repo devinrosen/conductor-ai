@@ -646,7 +646,26 @@ impl App {
                             self.state.view = View::RepoDetail;
                         }
                     }
-                    Some(&DashboardRow::Worktree(wt_idx)) => {
+                    Some(DashboardRow::Feature {
+                        repo_idx,
+                        feature_idx,
+                        ..
+                    }) => {
+                        // Enter on a feature header toggles collapse
+                        if let Some(feature) = self.state.feature_at(*repo_idx, *feature_idx) {
+                            let fid = feature.id.clone();
+                            if !self.state.collapsed_features.remove(&fid) {
+                                self.state.collapsed_features.insert(fid);
+                            }
+                        } else {
+                            tracing::warn!(
+                                repo_idx,
+                                feature_idx,
+                                "Enter on Feature row: feature_at() returned None — stale dashboard row"
+                            );
+                        }
+                    }
+                    Some(&DashboardRow::Worktree { idx: wt_idx, .. }) => {
                         if let Some(wt) = self.state.data.worktrees.get(wt_idx).cloned() {
                             self.state.selected_worktree_id = Some(wt.id.clone());
                             self.state.selected_repo_id = None;

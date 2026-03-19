@@ -21,6 +21,11 @@ pub enum WorktreeStatus {
 }
 
 impl WorktreeStatus {
+    /// Returns `true` for terminal states (`Merged` or `Abandoned`).
+    pub fn is_done(&self) -> bool {
+        matches!(self, Self::Merged | Self::Abandoned)
+    }
+
     /// Return the canonical lowercase string stored in the database.
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -71,6 +76,12 @@ pub struct Worktree {
 impl Worktree {
     pub fn is_active(&self) -> bool {
         self.status == WorktreeStatus::Active
+    }
+
+    /// Returns true if this worktree is a child of the given feature
+    /// (same repo and base_branch matches the feature branch).
+    pub fn belongs_to_feature(&self, repo_id: &str, feature_branch: &str) -> bool {
+        self.repo_id == repo_id && self.base_branch.as_deref() == Some(feature_branch)
     }
 
     /// Resolve the effective base branch: the worktree's own base, or the repo default.
@@ -1242,6 +1253,13 @@ mod tests {
     }
 
     #[test]
+    fn test_worktree_status_is_done() {
+        assert!(!WorktreeStatus::Active.is_done());
+        assert!(WorktreeStatus::Merged.is_done());
+        assert!(WorktreeStatus::Abandoned.is_done());
+    }
+
+    #[test]
     fn test_worktree_status_as_str() {
         assert_eq!(WorktreeStatus::Active.as_str(), "active");
         assert_eq!(WorktreeStatus::Merged.as_str(), "merged");
@@ -1902,5 +1920,49 @@ mod tests {
         // Nonexistent ID returns nothing extra
         let result = mgr.get_by_ids(&["nonexistent"]).unwrap();
         assert!(result.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Worktree::belongs_to_feature() tests
+    // -----------------------------------------------------------------------
+
+    fn make_worktree_with_base(repo_id: &str, base_branch: Option<&str>) -> Worktree {
+        Worktree {
+            id: "wt-test".into(),
+            repo_id: repo_id.into(),
+            slug: "test-wt".into(),
+            branch: "feat/child".into(),
+            path: "/tmp/test".into(),
+            ticket_id: None,
+            status: WorktreeStatus::Active,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            completed_at: None,
+            model: None,
+            base_branch: base_branch.map(String::from),
+        }
+    }
+
+    #[test]
+    fn belongs_to_feature_matching_repo_and_branch() {
+        let wt = make_worktree_with_base("repo1", Some("feat/parent"));
+        assert!(wt.belongs_to_feature("repo1", "feat/parent"));
+    }
+
+    #[test]
+    fn belongs_to_feature_mismatched_repo() {
+        let wt = make_worktree_with_base("repo1", Some("feat/parent"));
+        assert!(!wt.belongs_to_feature("repo2", "feat/parent"));
+    }
+
+    #[test]
+    fn belongs_to_feature_mismatched_branch() {
+        let wt = make_worktree_with_base("repo1", Some("feat/parent"));
+        assert!(!wt.belongs_to_feature("repo1", "feat/other"));
+    }
+
+    #[test]
+    fn belongs_to_feature_none_base_branch() {
+        let wt = make_worktree_with_base("repo1", None);
+        assert!(!wt.belongs_to_feature("repo1", "feat/parent"));
     }
 }

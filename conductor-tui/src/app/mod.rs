@@ -699,6 +699,43 @@ impl App {
                 }
             }
 
+            // Feature actions
+            Action::FeatureDetail {
+                repo_idx,
+                feature_idx,
+                total,
+                merged,
+            } => {
+                if let Some(feature) = self.state.feature_at(repo_idx, feature_idx) {
+                    let body = format!(
+                        "Name:        {}\n\
+                         Branch:      {}\n\
+                         Base:        {}\n\
+                         Status:      {:?}\n\
+                         Worktrees:   {total} ({merged} merged)\n\
+                         Tickets:     {}",
+                        feature.name,
+                        feature.branch,
+                        feature.base_branch,
+                        feature.status,
+                        feature.ticket_count
+                    );
+                    let line_count = body.lines().count();
+                    self.state.modal = Modal::EventDetail {
+                        title: format!("Feature: {}", feature.name),
+                        body,
+                        line_count,
+                        scroll_offset: 0,
+                        horizontal_offset: 0,
+                    };
+                } else {
+                    tracing::warn!(
+                        repo_idx,
+                        feature_idx,
+                        "FeatureDetail: feature_at() returned None — stale dashboard row"
+                    );
+                }
+            }
             // Background results
             Action::PrsRefreshed { repo_id, mut prs } => {
                 if self.state.selected_repo_id.as_deref() == Some(&repo_id) {
@@ -731,6 +768,7 @@ impl App {
                 self.state.data.active_non_worktree_workflow_runs =
                     payload.active_non_worktree_workflow_runs;
                 self.state.data.live_turns_by_worktree = payload.live_turns_by_worktree;
+                self.state.data.features_by_repo = payload.features_by_repo;
                 self.refresh_pending_feedback();
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();
@@ -1442,6 +1480,7 @@ mod action_handler_tests {
                 pending_feedback_requests: vec![],
                 waiting_gate_steps: vec![],
                 live_turns_by_worktree: std::collections::HashMap::new(),
+                features_by_repo: std::collections::HashMap::new(),
             },
         )));
 

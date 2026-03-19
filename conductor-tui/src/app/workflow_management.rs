@@ -255,17 +255,19 @@ impl App {
             use crate::state::DashboardRow;
             let rows = self.state.dashboard_rows();
             match rows.get(self.state.dashboard_index) {
-                Some(&DashboardRow::Repo(repo_idx)) => {
+                Some(&DashboardRow::Repo(repo_idx))
+                | Some(&DashboardRow::Feature { repo_idx, .. }) => {
                     let repo = match self.state.data.repos.get(repo_idx) {
                         Some(r) => r.clone(),
                         None => {
-                            self.state.status_message = Some("No repo selected".to_string());
+                            self.state.status_message =
+                                Some(format!("Internal error: repo index {repo_idx} not found"));
                             return;
                         }
                     };
                     self.repo_picker_target(&repo)
                 }
-                Some(&DashboardRow::Worktree(wt_idx)) => {
+                Some(&DashboardRow::Worktree { idx: wt_idx, .. }) => {
                     let wt = match self.state.data.worktrees.get(wt_idx) {
                         Some(w) => w.clone(),
                         None => {

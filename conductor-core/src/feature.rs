@@ -75,6 +75,39 @@ pub struct FeatureRow {
 }
 
 // ---------------------------------------------------------------------------
+// Shared SQL fragments & row mapper for FeatureRow queries
+// ---------------------------------------------------------------------------
+
+/// SQL fragment: column list through `FROM features f` (no leading `SELECT`,
+/// no `WHERE`/`ORDER`). When used in `list_all_active`, prefix with
+/// `f.repo_id, ` so the repo_id appears at column 0 and FeatureRow columns
+/// start at offset 1.
+const FEATURE_ROW_FRAGMENT: &str = "\
+    f.id, f.name, f.branch, f.base_branch, f.status, f.created_at, \
+    (SELECT COUNT(*) FROM worktrees w WHERE w.repo_id = f.repo_id AND w.base_branch = f.branch) AS wt_count, \
+    (SELECT COUNT(*) FROM feature_tickets ft WHERE ft.feature_id = f.id) AS ticket_count \
+    FROM features f";
+
+const FEATURE_ROW_ORDER: &str = " ORDER BY f.created_at DESC";
+
+/// Map a rusqlite row to a `FeatureRow`, starting at the given column offset.
+fn map_feature_row_cols(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> std::result::Result<FeatureRow, rusqlite::Error> {
+    Ok(FeatureRow {
+        id: row.get(offset)?,
+        name: row.get(offset + 1)?,
+        branch: row.get(offset + 2)?,
+        base_branch: row.get(offset + 3)?,
+        status: row.get(offset + 4)?,
+        created_at: row.get(offset + 5)?,
+        worktree_count: row.get(offset + 6)?,
+        ticket_count: row.get(offset + 7)?,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Manager
 // ---------------------------------------------------------------------------
 
@@ -196,6 +229,26 @@ impl<'a> FeatureManager<'a> {
         self.list_with_status_filter(repo_slug, Some(FeatureStatus::Active))
     }
 
+    /// List active features for all repos in a single query, keyed by repo_id.
+    pub fn list_all_active(&self) -> Result<std::collections::HashMap<String, Vec<FeatureRow>>> {
+        let sql = format!(
+            "SELECT f.repo_id, {FEATURE_ROW_FRAGMENT} WHERE f.status = ?1{FEATURE_ROW_ORDER}"
+        );
+
+        let pairs: Vec<(String, FeatureRow)> = query_collect(
+            self.conn,
+            &sql,
+            params![FeatureStatus::Active],
+            |row: &rusqlite::Row<'_>| Ok((row.get::<_, String>(0)?, map_feature_row_cols(row, 1)?)),
+        )?;
+
+        let mut map = std::collections::HashMap::new();
+        for (repo_id, row) in pairs {
+            map.entry(repo_id).or_insert_with(Vec::new).push(row);
+        }
+        Ok(map)
+    }
+
     /// Shared helper: list features with an optional status filter.
     ///
     /// Worktree count uses an implicit join via branch name
@@ -210,33 +263,19 @@ impl<'a> FeatureManager<'a> {
     ) -> Result<Vec<FeatureRow>> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
 
-        let row_mapper = |row: &rusqlite::Row<'_>| {
-            Ok(FeatureRow {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                branch: row.get(2)?,
-                base_branch: row.get(3)?,
-                status: row.get(4)?,
-                created_at: row.get(5)?,
-                worktree_count: row.get(6)?,
-                ticket_count: row.get(7)?,
-            })
-        };
-
-        const SELECT: &str = "\
-            SELECT f.id, f.name, f.branch, f.base_branch, f.status, f.created_at, \
-                   (SELECT COUNT(*) FROM worktrees w WHERE w.repo_id = f.repo_id AND w.base_branch = f.branch) AS wt_count, \
-                   (SELECT COUNT(*) FROM feature_tickets ft WHERE ft.feature_id = f.id) AS ticket_count \
-            FROM features f";
-        const ORDER: &str = " ORDER BY f.created_at DESC";
+        let row_mapper = |row: &rusqlite::Row<'_>| map_feature_row_cols(row, 0);
 
         match status {
             Some(s) => {
-                let sql = format!("{SELECT} WHERE f.repo_id = ?1 AND f.status = ?2{ORDER}");
+                let sql = format!(
+                    "SELECT {FEATURE_ROW_FRAGMENT} WHERE f.repo_id = ?1 AND f.status = ?2{FEATURE_ROW_ORDER}"
+                );
                 query_collect(self.conn, &sql, params![repo.id, s], row_mapper)
             }
             None => {
-                let sql = format!("{SELECT} WHERE f.repo_id = ?1{ORDER}");
+                let sql = format!(
+                    "SELECT {FEATURE_ROW_FRAGMENT} WHERE f.repo_id = ?1{FEATURE_ROW_ORDER}"
+                );
                 query_collect(self.conn, &sql, params![repo.id], row_mapper)
             }
         }
@@ -727,6 +766,64 @@ mod tests {
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].name, "active-feat");
         assert_eq!(active[0].status, FeatureStatus::Active);
+    }
+
+    #[test]
+    fn test_list_all_active_groups_by_repo() {
+        let conn = setup_db();
+        let repo_id_a = insert_repo(&conn);
+        // Insert a second repo.
+        let repo_id_b = crate::new_id();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at)
+             VALUES (?1, 'second-repo', '/tmp/repo2', 'https://github.com/test/repo2.git', 'main', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            params![repo_id_b],
+        ).unwrap();
+
+        let feat_a1_id = insert_feature(&conn, &repo_id_a, "feat-a1", "feat/a1");
+        insert_feature(&conn, &repo_id_a, "feat-a2", "feat/a2");
+        insert_feature(&conn, &repo_id_b, "feat-b1", "feat/b1");
+
+        // Mark feat-a2 as closed — should be excluded.
+        conn.execute(
+            "UPDATE features SET status = 'closed' WHERE name = 'feat-a2'",
+            params![],
+        )
+        .unwrap();
+
+        // Insert a worktree under feat-a1 (base_branch matches feature branch).
+        let wt_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES (?1, ?2, 'wt-a1', 'feat/a1-impl', ?3, '/tmp/wt', 'active', '2024-01-02T00:00:00Z')",
+            params![wt_id, repo_id_a, "feat/a1"],
+        )
+        .unwrap();
+
+        // Link a ticket to feat-a1 via feature_tickets.
+        let ticket_id = insert_ticket(&conn, &repo_id_a, "42");
+        conn.execute(
+            "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+            params![feat_a1_id, ticket_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let map = mgr.list_all_active().unwrap();
+
+        // repo_a has 1 active feature (feat-a1), repo_b has 1 (feat-b1).
+        assert_eq!(map.get(&repo_id_a).map(|v| v.len()), Some(1));
+        let feat_a1 = &map.get(&repo_id_a).unwrap()[0];
+        assert_eq!(feat_a1.name, "feat-a1");
+        assert_eq!(feat_a1.worktree_count, 1);
+        assert_eq!(feat_a1.ticket_count, 1);
+
+        assert_eq!(map.get(&repo_id_b).map(|v| v.len()), Some(1));
+        let feat_b1 = &map.get(&repo_id_b).unwrap()[0];
+        assert_eq!(feat_b1.name, "feat-b1");
+        assert_eq!(feat_b1.worktree_count, 0);
+        assert_eq!(feat_b1.ticket_count, 0);
     }
 
     #[test]
