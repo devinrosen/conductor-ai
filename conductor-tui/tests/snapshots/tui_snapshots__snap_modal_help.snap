@@ -2,7 +2,7 @@
 source: conductor-tui/tests/tui_snapshots.rs
 expression: render_to_string(&state)
 ---
-"┌ Repos & Worktrees (0 active) ──────────────────────────────────────────────┐┌ All Workflow Definitions ──────────────┐"
+"┌ Repos & Worktrees (0 active) ──────────────────────────────────────────────┐┌ All Workflow Runs (H: show history) ───┐"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
@@ -17,8 +17,8 @@ expression: render_to_string(&state)
 "│                       │  g / Home            Jump to top of list                             │                       │"
 "│                       │  Ctrl+d / Ctrl+u     Half-page down / up                             │                       │"
 "│                       │  Enter               Drill into selected item                        │                       │"
-"│                       │  Esc                 Back to previous view                           │───────────────────────┘"
-"│                       │  ?                   Toggle this help                                │s (H: show history) ───┐"
+"│                       │  Esc                 Back to previous view                           │                       │"
+"│                       │  ?                   Toggle this help                                │                       │"
 "│                       │  q                   Quit                                            │                       │"
 "│                       │  [ / ]               Focus content / workflow column                 │                       │"
 "│                       │  \                   Toggle workflow column                          │                       │"
@@ -37,8 +37,8 @@ expression: render_to_string(&state)
 "│                       │  L                   Filter tickets by label (repo detail)           │                       │"
 "│                       │                                                                      │                       │"
 "│                       │Dashboard — Feature Rows                                              │                       │"
-"│                       └──────────────────────────────────────────────────────────────────────┘                       │"
-"│                                                                            ││                                        │"
+"│                       └──────────────────────────────────────────────────────────────────────┘───────────────────────┘"
+"│                                                                            │┌ All Workflow Definitions ──────────────┐"
 "│                                                                            ││                                        │"
 "└────────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────┘"
 "[Dashboard]  Tab:panel  [/]:column  \:workflows  q:quit                                                                 "

@@ -116,6 +116,21 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
         state.theme.border_inactive
     };
 
+    // Collapsed: render a single-line header with def count.
+    if state.workflow_defs_collapsed {
+        let count = state.data.workflow_defs.len();
+        let title = format!("▶ Definitions ({count})");
+        let style = if focused {
+            Style::default()
+                .fg(state.theme.border_focused)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(state.theme.border_inactive)
+        };
+        frame.render_widget(Paragraph::new(Span::styled(title, style)), area);
+        return;
+    }
+
     let context = workflow_context_label(state);
     let global_mode = state.selected_worktree_id.is_none() && state.selected_repo_id.is_none();
 

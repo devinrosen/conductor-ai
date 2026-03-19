@@ -314,6 +314,12 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char(' ') if state.workflows_focus == crate::state::WorkflowsFocus::Runs => {
                 return Action::ToggleWorkflowRunCollapse;
             }
+            KeyCode::Char(' ')
+                if state.workflows_focus == crate::state::WorkflowsFocus::Defs
+                    && state.workflow_def_focus == crate::state::WorkflowDefFocus::List =>
+            {
+                return Action::ToggleWorkflowDefsCollapse;
+            }
             // Right / l: enter or exit the step tree pane when viewing defs.
             KeyCode::Right | KeyCode::Char('l')
                 if state.workflows_focus == crate::state::WorkflowsFocus::Defs =>

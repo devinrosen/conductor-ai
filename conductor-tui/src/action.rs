@@ -317,6 +317,8 @@ pub enum Action {
     // Workflow actions
     /// Toggle expand/collapse for the hovered parent run row.
     ToggleWorkflowRunCollapse,
+    /// Toggle collapse/expand for the workflow definitions pane (Space key on Defs focus).
+    ToggleWorkflowDefsCollapse,
     /// Open a workflow picker for the current context (worktree, PR, etc.)
     PickWorkflow,
     RunWorkflow,

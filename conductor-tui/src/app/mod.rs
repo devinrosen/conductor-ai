@@ -715,6 +715,10 @@ impl App {
                 }
             }
 
+            Action::ToggleWorkflowDefsCollapse => {
+                self.state.workflow_defs_collapsed = !self.state.workflow_defs_collapsed;
+            }
+
             // Feature actions
             Action::ToggleFeatureCollapse => {
                 if let Some(crate::state::DashboardRow::Feature {

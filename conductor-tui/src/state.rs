@@ -465,9 +465,11 @@ pub fn parse_target_label(label: &str) -> (String, String, TargetType) {
 }
 
 impl WorkflowsFocus {
-    /// Cycle forward: Defs → Gates → Runs → Defs, skipping Gates when empty.
+    /// Cycle forward: Gates → Runs → Defs → Gates, skipping Gates when empty.
     pub fn next_for_gates(self, has_gates: bool) -> Self {
         match self {
+            Self::Gates => Self::Runs,
+            Self::Runs => Self::Defs,
             Self::Defs => {
                 if has_gates {
                     Self::Gates
@@ -475,8 +477,6 @@ impl WorkflowsFocus {
                     Self::Runs
                 }
             }
-            Self::Gates => Self::Runs,
-            Self::Runs => Self::Defs,
         }
     }
 
@@ -484,7 +484,6 @@ impl WorkflowsFocus {
     pub fn prev_for_gates(self, has_gates: bool) -> Self {
         match self {
             Self::Defs => Self::Runs,
-            Self::Gates => Self::Defs,
             Self::Runs => {
                 if has_gates {
                     Self::Gates
@@ -492,6 +491,7 @@ impl WorkflowsFocus {
                     Self::Defs
                 }
             }
+            Self::Gates => Self::Defs,
         }
     }
 }
@@ -1293,6 +1293,8 @@ pub struct AppState {
 
     // Workflow state
     pub workflows_focus: WorkflowsFocus,
+    /// Whether the workflow definitions pane is collapsed (session-only, not persisted).
+    pub workflow_defs_collapsed: bool,
     pub workflow_def_index: usize,
     pub workflow_run_index: usize,
     pub workflow_step_index: usize,
@@ -1685,7 +1687,8 @@ impl AppState {
             status_message: None,
             status_message_at: None,
             github_orgs_cache: Vec::new(),
-            workflows_focus: WorkflowsFocus::Defs,
+            workflows_focus: WorkflowsFocus::Runs,
+            workflow_defs_collapsed: false,
             workflow_def_index: 0,
             workflow_run_index: 0,
             workflow_step_index: 0,
@@ -2420,10 +2423,7 @@ pub(crate) mod tests {
 
     #[test]
     fn workflows_focus_next_for_gates_with_gates() {
-        assert_eq!(
-            WorkflowsFocus::Defs.next_for_gates(true),
-            WorkflowsFocus::Gates
-        );
+        // New visual order: Gates → Runs → Defs
         assert_eq!(
             WorkflowsFocus::Gates.next_for_gates(true),
             WorkflowsFocus::Runs
@@ -2432,33 +2432,38 @@ pub(crate) mod tests {
             WorkflowsFocus::Runs.next_for_gates(true),
             WorkflowsFocus::Defs
         );
+        assert_eq!(
+            WorkflowsFocus::Defs.next_for_gates(true),
+            WorkflowsFocus::Gates
+        );
     }
 
     #[test]
     fn workflows_focus_next_for_gates_without_gates() {
         assert_eq!(
-            WorkflowsFocus::Defs.next_for_gates(false),
-            WorkflowsFocus::Runs
-        );
-        assert_eq!(
             WorkflowsFocus::Runs.next_for_gates(false),
             WorkflowsFocus::Defs
+        );
+        assert_eq!(
+            WorkflowsFocus::Defs.next_for_gates(false),
+            WorkflowsFocus::Runs
         );
     }
 
     #[test]
     fn workflows_focus_prev_for_gates_with_gates() {
+        // Reverse of Gates → Runs → Defs
         assert_eq!(
             WorkflowsFocus::Defs.prev_for_gates(true),
             WorkflowsFocus::Runs
         );
         assert_eq!(
-            WorkflowsFocus::Gates.prev_for_gates(true),
-            WorkflowsFocus::Defs
-        );
-        assert_eq!(
             WorkflowsFocus::Runs.prev_for_gates(true),
             WorkflowsFocus::Gates
+        );
+        assert_eq!(
+            WorkflowsFocus::Gates.prev_for_gates(true),
+            WorkflowsFocus::Defs
         );
     }
 

@@ -2,7 +2,7 @@
 source: conductor-tui/tests/tui_snapshots.rs
 expression: render_to_string(&state)
 ---
-"┌ Worktree Detail ───────────────────────────────────────────────────────────┐┌ Workflow Definitions (feat-123-add-logi┐"
+"┌ Worktree Detail ───────────────────────────────────────────────────────────┐┌ Workflow Runs (feat-123-add-login) (H: ┐"
 "│Worktree: feat-123-add-login                                                ││                                        │"
 "│Repo: my-app                                                                ││                                        │"
 "│Branch: feat/123-add-login                                                  ││                                        │"
@@ -17,8 +17,7 @@ expression: render_to_string(&state)
 "│Tab=switch panel  y=copy  o=act  p=prompt  O=orchestrate  x=stop  w=workflow││                                        │"
 "└────────────────────────────────────────────────────────────────────────────┘│                                        │"
 "┌ Agent Activity ────────────────────────────────────────────────────────────┐│                                        │"
-"│No agent activity                                                           │└────────────────────────────────────────┘"
-"│                                                                            │┌ Workflow Runs (feat-123-add-login) (H: ┐"
+"│No agent activity                                                           ││                                        │"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
@@ -38,7 +37,8 @@ expression: render_to_string(&state)
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
 "│                                                                            ││                                        │"
-"│                                                                            ││                                        │"
+"│                                                                            │└────────────────────────────────────────┘"
+"│                                                                            │┌ Workflow Definitions (feat-123-add-logi┐"
 "│                                                                            ││                                        │"
 "└────────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────┘"
 "[Worktree Detail]  Tab:panel  [/]:column  \:workflows  q:quit                                                           "
