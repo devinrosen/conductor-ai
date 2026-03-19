@@ -1,0 +1,29 @@
+workflow debug-failed-run {
+  meta {
+    description = "Diagnose a failed workflow run and file GitHub issues for fixes"
+    trigger     = "manual"
+    targets     = ["workflow_run"]
+  }
+
+  inputs {
+    workflow_run_id required
+  }
+
+  script fetch-run-data {
+    run = ".conductor/scripts/fetch-run-data.sh"
+    env = { RUN_ID = "{{workflow_run_id}}" }
+  }
+
+  script fetch-agent-logs {
+    run = ".conductor/scripts/fetch-agent-logs.sh"
+    env = { RUN_ID = "{{workflow_run_id}}" }
+  }
+
+  call diagnose-failure { output = "debug-diagnosis" }
+
+  script file-debug-issues {
+    run = ".conductor/scripts/file-debug-issues.sh"
+    as  = "developer"
+    env = { PRIOR_OUTPUT = "{{prior_output}}" RUN_ID = "{{workflow_run_id}}" }
+  }
+}
