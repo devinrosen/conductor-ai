@@ -143,9 +143,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_local_branch_exists_true() {
-        // Create a temp git repo with a known branch so the test is hermetic
+    /// Create a throwaway git repo with one commit so branch refs exist.
+    fn init_temp_repo() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().to_str().unwrap();
         Command::new("git")
@@ -153,28 +152,34 @@ mod tests {
             .arg(p)
             .output()
             .unwrap();
-        // Need at least one commit for the branch ref to exist
-        Command::new("git")
+        // Configure a dummy author so commit works even without global gitconfig
+        for (k, v) in [("user.name", "test"), ("user.email", "t@t")] {
+            Command::new("git")
+                .args(["-C", p, "config", k, v])
+                .output()
+                .unwrap();
+        }
+        let out = Command::new("git")
             .args(["-C", p, "commit", "--allow-empty", "-m", "init"])
             .output()
             .unwrap();
-        assert!(local_branch_exists(p, "main"));
+        assert!(out.status.success(), "git commit failed in temp repo");
+        tmp
+    }
+
+    #[test]
+    fn test_local_branch_exists_true() {
+        let tmp = init_temp_repo();
+        assert!(local_branch_exists(tmp.path().to_str().unwrap(), "main"));
     }
 
     #[test]
     fn test_local_branch_exists_false() {
-        let tmp = tempfile::tempdir().unwrap();
-        let p = tmp.path().to_str().unwrap();
-        Command::new("git")
-            .args(["init", "-b", "main"])
-            .arg(p)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["-C", p, "commit", "--allow-empty", "-m", "init"])
-            .output()
-            .unwrap();
-        assert!(!local_branch_exists(p, "nonexistent-branch-xyz-12345"));
+        let tmp = init_temp_repo();
+        assert!(!local_branch_exists(
+            tmp.path().to_str().unwrap(),
+            "nonexistent-branch-xyz-12345"
+        ));
     }
 
     #[test]
