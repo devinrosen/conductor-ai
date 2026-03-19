@@ -1668,8 +1668,15 @@ mod tests {
         app.show_workflow_inputs_or_run(target, def, prefill);
 
         match &app.state.modal {
-            Modal::Form { fields, active_field, .. } => {
-                let field = fields.iter().find(|f| f.label == "workflow_run_id").unwrap();
+            Modal::Form {
+                fields,
+                active_field,
+                ..
+            } => {
+                let field = fields
+                    .iter()
+                    .find(|f| f.label == "workflow_run_id")
+                    .unwrap();
                 assert_eq!(field.value, "run-123");
                 assert!(field.readonly, "workflow_run_id should be readonly");
                 // active_field should not point to a readonly field
