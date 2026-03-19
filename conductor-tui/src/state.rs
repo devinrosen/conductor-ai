@@ -4074,7 +4074,7 @@ pub(crate) mod tests {
         match &rows[2] {
             DashboardRow::Worktree { idx, prefix } => {
                 assert_eq!(*idx, 0, "wt1 should come second (child)");
-                assert!(!prefix.is_empty(), "child should have non-empty prefix");
+                assert_eq!(prefix, "    └ ", "child prefix: 2-space repo indent + to_prefix(depth=1, last)");
             }
             other => panic!("expected Worktree, got {other:?}"),
         }
@@ -4204,14 +4204,14 @@ pub(crate) mod tests {
         match &rows[2] {
             DashboardRow::Worktree { idx, prefix } => {
                 assert_eq!(*idx, 2, "wt_mid second");
-                assert!(!prefix.is_empty(), "child should have prefix");
+                assert_eq!(prefix, "    └ ", "child prefix: 2-space repo indent + to_prefix(depth=1, last)");
             }
             other => panic!("expected Worktree, got {other:?}"),
         }
         match &rows[3] {
             DashboardRow::Worktree { idx, prefix } => {
                 assert_eq!(*idx, 0, "wt_leaf third");
-                assert!(!prefix.is_empty(), "grandchild should have prefix");
+                assert_eq!(prefix, "      └ ", "grandchild prefix: 2-space repo indent + to_prefix(depth=2, last)");
             }
             other => panic!("expected Worktree, got {other:?}"),
         }
