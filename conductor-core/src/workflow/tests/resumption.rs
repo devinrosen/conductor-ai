@@ -934,6 +934,7 @@ fn test_resume_workflow_repo_target() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -989,6 +990,7 @@ fn test_resume_workflow_ticket_target() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -1050,6 +1052,7 @@ fn test_resume_workflow_preserves_feature_id() {
         feature_id: Some("f1"),
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     let result = execute_workflow(&input).unwrap();
 

@@ -2738,6 +2738,7 @@ pub(crate) mod tests {
             iteration: 0,
             blocked_on: None,
             feature_id: None,
+            triggered_by_hook: false,
         }
     }
 
@@ -2856,6 +2857,7 @@ pub(crate) mod tests {
             iteration: 0,
             blocked_on: None,
             feature_id: None,
+            triggered_by_hook: false,
         }
     }
 

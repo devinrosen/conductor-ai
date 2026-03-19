@@ -271,6 +271,7 @@ pub(super) fn tool_run_workflow(
         target_label: Some(target_label),
         feature_id,
         run_id_notify: Some(Arc::clone(&notify_pair)),
+        triggered_by_hook: false,
     };
 
     // Slot receives the error message if execute_workflow_standalone fails before

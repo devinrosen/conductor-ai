@@ -83,6 +83,7 @@ impl<'a> WorkflowManager<'a> {
             None,
             None,
             None,
+            false,
         )
     }
 
@@ -101,6 +102,7 @@ impl<'a> WorkflowManager<'a> {
         parent_workflow_run_id: Option<&str>,
         target_label: Option<&str>,
         feature_id: Option<&str>,
+        triggered_by_hook: bool,
     ) -> Result<WorkflowRun> {
         let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
@@ -108,8 +110,8 @@ impl<'a> WorkflowManager<'a> {
         self.conn.execute(
             "INSERT INTO workflow_runs (id, workflow_name, worktree_id, ticket_id, repo_id, \
              parent_run_id, status, dry_run, trigger, started_at, definition_snapshot, \
-             parent_workflow_run_id, target_label, feature_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+             parent_workflow_run_id, target_label, feature_id, triggered_by_hook) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 id,
                 workflow_name,
@@ -125,6 +127,7 @@ impl<'a> WorkflowManager<'a> {
                 parent_workflow_run_id,
                 target_label,
                 feature_id,
+                triggered_by_hook as i64,
             ],
         )?;
 
@@ -149,6 +152,7 @@ impl<'a> WorkflowManager<'a> {
             iteration: 0,
             blocked_on: None,
             feature_id: feature_id.map(String::from),
+            triggered_by_hook,
         })
     }
 
@@ -1542,6 +1546,7 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
         })
     });
     let feature_id: Option<String> = row.get(19)?;
+    let triggered_by_hook_int: i64 = row.get(20)?;
     Ok(WorkflowRun {
         id,
         workflow_name: row.get(1)?,
@@ -1563,6 +1568,7 @@ pub(super) fn row_to_workflow_run(row: &rusqlite::Row) -> rusqlite::Result<Workf
         iteration,
         blocked_on,
         feature_id,
+        triggered_by_hook: triggered_by_hook_int != 0,
     })
 }
 
@@ -1688,6 +1694,7 @@ mod tests {
                 None,
                 None,
                 None,
+                false,
             )
             .unwrap()
     }
@@ -1735,6 +1742,7 @@ mod tests {
                 None,
                 None,
                 None,
+                false,
             )
             .unwrap();
         let runs = WorkflowManager::new(&conn)
@@ -2470,6 +2478,7 @@ mod tests {
                 None,
                 Some("conductor-ai/feat-123"),
                 None,
+                false,
             )
             .unwrap();
 

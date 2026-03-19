@@ -255,6 +255,7 @@ pub fn run_workflow_on_pr(
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
 
     // `temp_dir` is dropped after execute_workflow returns, cleaning up the cloned repo.

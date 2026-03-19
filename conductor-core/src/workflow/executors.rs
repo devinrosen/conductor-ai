@@ -589,6 +589,7 @@ pub(super) fn execute_call_workflow(
             feature_id: state.feature_id.as_deref(),
             iteration,
             run_id_notify: None,
+            triggered_by_hook: false,
         };
 
         match super::engine::execute_workflow(&child_input) {
@@ -2179,6 +2180,7 @@ mod tests {
             resume_ctx: None,
             default_bot_name: None,
             feature_id: None,
+            triggered_by_hook: false,
         }
     }
 

@@ -70,6 +70,7 @@ fn base_execution_state<'a>(
         resume_ctx: None,
         default_bot_name: None,
         feature_id: None,
+        triggered_by_hook: false,
     }
 }
 
@@ -374,6 +375,7 @@ pub(super) fn insert_workflow_run_with_targets(
             None,
             None,
             None,
+            false,
         )
         .unwrap();
     run.id

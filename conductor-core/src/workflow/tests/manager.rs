@@ -79,6 +79,7 @@ fn test_create_workflow_run_with_repo_id_round_trip() {
             None,
             None,
             None,
+            false,
         )
         .unwrap();
 
@@ -126,6 +127,7 @@ fn test_active_run_counts_by_repo_with_runs() {
             None,
             None,
             None,
+            false,
         )
         .unwrap();
     // Advance run1 to running.
@@ -147,6 +149,7 @@ fn test_active_run_counts_by_repo_with_runs() {
             None,
             None,
             None,
+            false,
         )
         .unwrap();
     // run2 stays at pending (default).
@@ -180,6 +183,7 @@ fn test_active_run_counts_by_repo_excludes_completed() {
             None,
             None,
             None,
+            false,
         )
         .unwrap();
     conn.execute(
@@ -219,6 +223,7 @@ fn test_create_workflow_run_with_ticket_id_round_trip() {
             None,
             None,
             None,
+            false,
         )
         .unwrap();
 
@@ -642,6 +647,7 @@ fn test_list_workflow_runs_by_repo_id_excludes_merged_worktree() {
         None,
         None,
         None,
+        false,
     )
     .unwrap();
     mgr.create_workflow_run_with_targets(
@@ -656,6 +662,7 @@ fn test_list_workflow_runs_by_repo_id_excludes_merged_worktree() {
         None,
         None,
         None,
+        false,
     )
     .unwrap();
 
@@ -1487,6 +1494,7 @@ fn test_list_workflow_runs_by_repo_id_offset_pagination() {
             None,
             None,
             None,
+            false,
         )
         .unwrap();
     }

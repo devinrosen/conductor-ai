@@ -900,6 +900,7 @@ fn test_cannot_start_workflow_run_when_active() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     let err = execute_workflow(&input).unwrap_err();
     assert!(
@@ -945,6 +946,7 @@ fn test_can_start_workflow_run_after_completion() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     // Guard should pass; empty workflow completes successfully.
     let result = execute_workflow(&input);
@@ -992,6 +994,7 @@ fn test_child_workflow_not_blocked_by_parent() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     let result = execute_workflow(&input);
     assert!(
@@ -1033,6 +1036,7 @@ fn test_run_id_notify_slot_is_populated() {
         feature_id: None,
         iteration: 0,
         run_id_notify: Some(std::sync::Arc::clone(&slot)),
+        triggered_by_hook: false,
     };
 
     execute_workflow(&input).expect("workflow should complete");
@@ -1082,6 +1086,7 @@ fn test_execute_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
 
     let result = execute_workflow(&input).expect(
@@ -2039,6 +2044,7 @@ fn test_execute_workflow_injects_repo_variables() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -2090,6 +2096,7 @@ fn test_execute_workflow_injects_ticket_variables() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -2145,6 +2152,7 @@ fn test_execute_workflow_existing_input_not_overwritten_by_injection() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -2187,6 +2195,7 @@ fn test_execute_workflow_unknown_ticket_id_returns_error() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -2220,6 +2229,7 @@ fn test_execute_workflow_unknown_repo_id_returns_error() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -2258,6 +2268,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     let result1 = execute_workflow(&input1);
     assert!(
@@ -2290,6 +2301,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     let result2 = execute_workflow(&input2);
     assert!(
@@ -2628,6 +2640,7 @@ fn test_execute_workflow_iteration_persisted() {
         feature_id: None,
         iteration: 3,
         run_id_notify: Some(slot.clone()),
+        triggered_by_hook: false,
     };
 
     let result = execute_workflow(&input);
@@ -2701,6 +2714,7 @@ fn test_execute_workflow_fails_on_invalid_schema() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
 
     let err = execute_workflow(&input).unwrap_err();
@@ -2774,6 +2788,7 @@ fn test_execute_workflow_fails_on_invalid_schema_parse() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
 
     let err = execute_workflow(&input).unwrap_err();
@@ -2851,6 +2866,7 @@ fn test_execute_workflow_passes_preflight_with_valid_schema() {
         feature_id: None,
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
 
     // execute_workflow should pass pre-flight validation (schema exists and is valid).
@@ -2903,6 +2919,7 @@ fn test_execute_workflow_injects_feature_variables() {
         feature_id: Some("f1"),
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -2952,6 +2969,7 @@ fn test_execute_workflow_invalid_feature_id_returns_error() {
         feature_id: Some("nonexistent-feature-id"),
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     let err = execute_workflow(&input).unwrap_err();
     assert!(
@@ -3016,6 +3034,7 @@ fn test_call_workflow_propagates_feature_id_to_child() {
         feature_id: Some("f1"),
         iteration: 0,
         run_id_notify: None,
+        triggered_by_hook: false,
     };
     let result = execute_workflow(&input).unwrap();
 

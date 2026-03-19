@@ -832,6 +832,21 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 46)?;
     }
 
+    // Migration 047: add triggered_by_hook column and widen trigger CHECK to include 'hook'.
+    // SQLite cannot alter CHECK constraints in-place; a table swap is required.
+    if version < 47 {
+        let has_triggered_by_hook: bool = conn
+            .prepare("SELECT triggered_by_hook FROM workflow_runs LIMIT 0")
+            .is_ok();
+        if !has_triggered_by_hook {
+            with_foreign_keys_off(conn, || {
+                conn.execute_batch(include_str!("migrations/047_workflow_run_hooks.sql"))?;
+                Ok(())
+            })?;
+        }
+        bump_version(conn, 47)?;
+    }
+
     Ok(())
 }
 

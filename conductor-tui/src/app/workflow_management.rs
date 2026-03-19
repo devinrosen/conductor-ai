@@ -889,6 +889,7 @@ impl App {
                 target_label: Some(target_label),
                 feature_id,
                 run_id_notify: None,
+                triggered_by_hook: false,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -951,6 +952,7 @@ impl App {
                 target_label: Some(target_label),
                 feature_id,
                 run_id_notify: None,
+                triggered_by_hook: false,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -998,6 +1000,7 @@ impl App {
                 target_label: Some(repo_name),
                 feature_id: None,
                 run_id_notify: None,
+                triggered_by_hook: false,
             };
 
             let result = execute_workflow_standalone(&params);
@@ -1044,6 +1047,7 @@ impl App {
                 target_label: Some(target_label),
                 feature_id: None,
                 run_id_notify: None,
+                triggered_by_hook: false,
             };
 
             let result = execute_workflow_standalone(&params);

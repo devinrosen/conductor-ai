@@ -274,6 +274,7 @@ pub async fn run_workflow(
                 feature_id: feature_id.as_deref(),
                 iteration: 0,
                 run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
+                triggered_by_hook: false,
             };
 
             execute_workflow(&input)

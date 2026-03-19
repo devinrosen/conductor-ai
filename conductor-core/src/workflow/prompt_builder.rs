@@ -140,6 +140,7 @@ mod tests {
             resume_ctx: None,
             default_bot_name: None,
             feature_id: None,
+            triggered_by_hook: false,
         }
     }
 

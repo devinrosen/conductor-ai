@@ -1485,6 +1485,7 @@ fn main() -> Result<()> {
                             feature_id: feature_id.as_deref(),
                             iteration: 0,
                             run_id_notify: None,
+                            triggered_by_hook: false,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1537,6 +1538,7 @@ fn main() -> Result<()> {
                             feature_id: feature_id.as_deref(),
                             iteration: 0,
                             run_id_notify: None,
+                            triggered_by_hook: false,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1589,6 +1591,7 @@ fn main() -> Result<()> {
                             feature_id: feature_id.as_deref(),
                             iteration: 0,
                             run_id_notify: None,
+                            triggered_by_hook: false,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1644,6 +1647,7 @@ fn main() -> Result<()> {
                             feature_id: feature_id.as_deref(),
                             iteration: 0,
                             run_id_notify: None,
+                            triggered_by_hook: false,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),

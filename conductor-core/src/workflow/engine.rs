@@ -92,6 +92,8 @@ pub(super) struct ExecutionState<'a> {
     pub default_bot_name: Option<String>,
     /// Optional feature ID linking this run to a feature branch.
     pub feature_id: Option<String>,
+    /// Whether this run was triggered by a workflow hook (prevents infinite chains).
+    pub triggered_by_hook: bool,
 }
 
 /// Resolve a schema by name using the standard search order.
@@ -283,6 +285,11 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     };
 
     // Create workflow run record with snapshot and target FKs in a single INSERT
+    let trigger_str = if input.triggered_by_hook {
+        "hook".to_string()
+    } else {
+        workflow.trigger.to_string()
+    };
     let wf_run = wf_mgr.create_workflow_run_with_targets(
         &workflow.name,
         input.worktree_id,
@@ -290,11 +297,12 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         input.repo_id,
         &parent_run.id,
         input.exec_config.dry_run,
-        &workflow.trigger.to_string(),
+        &trigger_str,
         Some(&snapshot_json),
         input.parent_workflow_run_id,
         input.target_label,
         feature.as_ref().map(|f| f.id.as_str()),
+        input.triggered_by_hook,
     )?;
 
     // Notify any waiting caller of the freshly-created run ID.
@@ -389,6 +397,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         resume_ctx: None,
         default_bot_name: input.default_bot_name.clone(),
         feature_id: input.feature_id.map(String::from),
+        triggered_by_hook: input.triggered_by_hook,
     };
 
     run_workflow_engine(&mut state, workflow)
@@ -475,6 +484,17 @@ pub(super) fn run_workflow_engine(
         state.total_duration_ms as f64 / 1000.0
     );
 
+    // Evaluate workflow hooks — only for top-level runs that were not themselves
+    // triggered by a hook (prevents infinite chains).
+    let final_status = if state.all_succeeded {
+        WorkflowRunStatus::Completed
+    } else {
+        WorkflowRunStatus::Failed
+    };
+    if !state.triggered_by_hook && state.depth == 0 {
+        evaluate_hooks(state, workflow, &final_status);
+    }
+
     Ok(WorkflowResult {
         workflow_run_id: wf_run_id,
         worktree_id: state.worktree_id.clone(),
@@ -484,6 +504,105 @@ pub(super) fn run_workflow_engine(
         total_turns: state.total_turns,
         total_duration_ms: state.total_duration_ms,
     })
+}
+
+/// Evaluate and fire workflow hooks after a run reaches a terminal state.
+fn evaluate_hooks(
+    state: &ExecutionState<'_>,
+    workflow: &WorkflowDef,
+    final_status: &WorkflowRunStatus,
+) {
+    let hooks_config = match crate::hooks::load_hooks_config(&state.repo_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Failed to load hooks config: {e}");
+            return;
+        }
+    };
+
+    let hook_workflows = crate::hooks::hooks_for(&hooks_config, &workflow.name, final_status);
+    if hook_workflows.is_empty() {
+        return;
+    }
+
+    for hook_wf_name in &hook_workflows {
+        tracing::info!(
+            "Hook: triggering '{}' after '{}' reached {}",
+            hook_wf_name,
+            workflow.name,
+            final_status,
+        );
+
+        let hook_wf = match crate::workflow_dsl::load_workflow_by_name(
+            &state.working_dir,
+            &state.repo_path,
+            hook_wf_name,
+        ) {
+            Ok(wf) => wf,
+            Err(e) => {
+                tracing::warn!("Hook workflow '{}' not found, skipping: {e}", hook_wf_name,);
+                continue;
+            }
+        };
+
+        // Build hook inputs with context from the triggering run.
+        let mut hook_inputs = HashMap::new();
+        hook_inputs.insert("run_id".to_string(), state.workflow_run_id.clone());
+        hook_inputs.insert("workflow_name".to_string(), workflow.name.clone());
+        hook_inputs.insert("worktree_slug".to_string(), state.worktree_slug.clone());
+        if *final_status == WorkflowRunStatus::Failed {
+            // Include error context from the body for failed runs.
+            if let Some(summary) = state
+                .wf_mgr
+                .get_workflow_run(&state.workflow_run_id)
+                .ok()
+                .flatten()
+                .and_then(|r| r.result_summary)
+            {
+                hook_inputs.insert("error".to_string(), summary);
+            }
+        }
+
+        let exec_config = WorkflowExecConfig {
+            shutdown: state.exec_config.shutdown.clone(),
+            ..WorkflowExecConfig::default()
+        };
+
+        let hook_input = WorkflowExecInput {
+            conn: state.conn,
+            config: state.config,
+            workflow: &hook_wf,
+            worktree_id: state.worktree_id.as_deref(),
+            working_dir: &state.working_dir,
+            repo_path: &state.repo_path,
+            model: state.model.as_deref(),
+            exec_config: &exec_config,
+            inputs: hook_inputs,
+            ticket_id: state.ticket_id.as_deref(),
+            repo_id: state.repo_id.as_deref(),
+            depth: 0,
+            parent_workflow_run_id: Some(&state.workflow_run_id),
+            target_label: state.target_label.as_deref(),
+            default_bot_name: None,
+            iteration: 0,
+            feature_id: state.feature_id.as_deref(),
+            run_id_notify: None,
+            triggered_by_hook: true,
+        };
+
+        match execute_workflow(&hook_input) {
+            Ok(result) => {
+                tracing::info!(
+                    "Hook workflow '{}' completed (success={})",
+                    hook_wf_name,
+                    result.all_succeeded,
+                );
+            }
+            Err(e) => {
+                tracing::warn!("Hook workflow '{}' failed: {e}", hook_wf_name);
+            }
+        }
+    }
 }
 
 /// Execute a workflow in a self-contained manner: opens its own database
@@ -512,6 +631,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         feature_id: params.feature_id.as_deref(),
         iteration: 0,
         run_id_notify: params.run_id_notify.clone(),
+        triggered_by_hook: params.triggered_by_hook,
     };
 
     execute_workflow(&input)
@@ -781,6 +901,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         resume_ctx,
         default_bot_name: wf_run.default_bot_name.clone(),
         feature_id: wf_run.feature_id.clone(),
+        triggered_by_hook: wf_run.triggered_by_hook,
     };
 
     run_workflow_engine(&mut state, &workflow)
