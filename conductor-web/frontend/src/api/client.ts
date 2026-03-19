@@ -25,6 +25,7 @@ import type {
   WorkflowRunStep,
   RunWorkflowRequest,
   FeedbackRequest,
+  Notification,
 } from "./types";
 
 const BASE = "/api";
@@ -241,4 +242,16 @@ export const api = {
     }),
   rejectGate: (runId: string) =>
     request<void>(`/workflows/runs/${runId}/gate/reject`, { method: "POST" }),
+
+  // Notifications
+  listNotifications: (unreadOnly = false, limit = 50, offset = 0) =>
+    request<Notification[]>(
+      `/notifications?unread_only=${unreadOnly}&limit=${limit}&offset=${offset}`,
+    ),
+  unreadNotificationCount: () =>
+    request<{ count: number }>("/notifications/unread-count"),
+  markNotificationRead: (id: string) =>
+    request<void>(`/notifications/${id}/read`, { method: "POST" }),
+  markAllNotificationsRead: () =>
+    request<void>("/notifications/read-all", { method: "POST" }),
 };

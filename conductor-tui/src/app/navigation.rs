@@ -404,6 +404,15 @@ impl App {
                 wrap_decrement(cursor, repos.len());
                 return;
             }
+            Modal::Notifications {
+                ref notifications,
+                ref mut selected,
+            } => {
+                if !notifications.is_empty() {
+                    wrap_decrement(selected, notifications.len());
+                }
+                return;
+            }
             _ => {}
         }
         // When workflow column has focus, navigate workflow panes.
@@ -538,6 +547,15 @@ impl App {
                 ..
             } => {
                 wrap_increment(cursor, repos.len());
+                return;
+            }
+            Modal::Notifications {
+                ref notifications,
+                ref mut selected,
+            } => {
+                if !notifications.is_empty() {
+                    wrap_increment(selected, notifications.len());
+                }
                 return;
             }
             _ => {}

@@ -49,6 +49,12 @@ pub enum ConductorEvent {
     },
     #[serde(rename = "workflow_gate_waiting")]
     WorkflowGateWaiting { run_id: String, step_id: String },
+    #[serde(rename = "notification_created")]
+    NotificationCreated {
+        id: String,
+        kind: String,
+        severity: String,
+    },
 }
 
 impl ConductorEvent {
@@ -69,6 +75,7 @@ impl ConductorEvent {
             Self::WorkflowRunStatusChanged { .. } => "workflow_run_status_changed",
             Self::WorkflowStepStatusChanged { .. } => "workflow_step_status_changed",
             Self::WorkflowGateWaiting { .. } => "workflow_gate_waiting",
+            Self::NotificationCreated { .. } => "notification_created",
         }
     }
 }
@@ -221,6 +228,14 @@ mod tests {
                     step_id: "".into(),
                 },
                 "workflow_gate_waiting",
+            ),
+            (
+                ConductorEvent::NotificationCreated {
+                    id: "".into(),
+                    kind: "".into(),
+                    severity: "".into(),
+                },
+                "notification_created",
             ),
         ];
         for (event, expected) in cases {

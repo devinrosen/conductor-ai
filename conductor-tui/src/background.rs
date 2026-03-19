@@ -388,6 +388,12 @@ pub fn poll_data() -> Option<PollResult> {
     // Return an empty map here; the loop merges in the incremental state.
     let live_turns_by_worktree = std::collections::HashMap::new();
 
+    // Fetch unread notification count for the footer indicator.
+    let unread_notification_count = {
+        use conductor_core::notification_manager::NotificationManager;
+        NotificationManager::new(&conn).unread_count().unwrap_or(0)
+    };
+
     // Load active features for all repos in a single query.
     let feat_mgr = FeatureManager::new(&conn, &config);
     let features_by_repo = feat_mgr.list_all_active().unwrap_or_else(|e| {
@@ -409,6 +415,7 @@ pub fn poll_data() -> Option<PollResult> {
         waiting_gate_steps,
         live_turns_by_worktree,
         features_by_repo,
+        unread_notification_count,
     }));
     Some(PollResult {
         action,

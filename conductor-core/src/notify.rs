@@ -1,4 +1,5 @@
 use crate::config::NotificationConfig;
+use crate::notification_manager::{CreateNotification, NotificationManager, NotificationSeverity};
 use crate::workflow_dsl::GateType;
 
 /// Returns `true` if a notification should fire given the config and run outcome.
@@ -78,6 +79,30 @@ pub fn fire_workflow_notification(
         "Conductor \u{2014} Workflow Failed"
     };
     let body = notification_body(workflow_name, target_label);
+
+    // Persist in-app notification
+    let severity = if succeeded {
+        NotificationSeverity::Info
+    } else {
+        NotificationSeverity::ActionRequired
+    };
+    let kind = if succeeded {
+        "workflow_completed"
+    } else {
+        "workflow_failed"
+    };
+    let mgr = NotificationManager::new(conn);
+    if let Err(e) = mgr.create_notification(&CreateNotification {
+        kind,
+        title,
+        body: &body,
+        severity,
+        entity_id: Some(run_id),
+        entity_type: Some("workflow_run"),
+    }) {
+        tracing::warn!(run_id, "persist notification failed: {e}");
+    }
+
     if let Err(e) = show_desktop_notification(title, &body) {
         tracing::warn!(run_id, workflow_name, "desktop notification failed: {e}");
     }
@@ -102,9 +127,22 @@ pub fn fire_feedback_notification(
         return;
     }
 
-    if let Err(e) =
-        show_desktop_notification("Conductor \u{2014} Agent Needs Input", prompt_preview)
-    {
+    let title = "Conductor \u{2014} Agent Needs Input";
+
+    // Persist in-app notification
+    let mgr = NotificationManager::new(conn);
+    if let Err(e) = mgr.create_notification(&CreateNotification {
+        kind: "feedback_requested",
+        title,
+        body: prompt_preview,
+        severity: NotificationSeverity::Warning,
+        entity_id: Some(request_id),
+        entity_type: Some("agent_run"),
+    }) {
+        tracing::warn!(request_id, "persist notification failed: {e}");
+    }
+
+    if let Err(e) = show_desktop_notification(title, prompt_preview) {
         tracing::warn!(request_id, "desktop notification failed: {e}");
     }
 }
@@ -205,6 +243,26 @@ pub fn fire_gate_notification(
         params.target_label,
         params.gate_prompt,
     );
+
+    // Persist in-app notification
+    let severity = match params.gate_type {
+        Some(GateType::HumanApproval | GateType::HumanReview) => {
+            NotificationSeverity::ActionRequired
+        }
+        _ => NotificationSeverity::Warning,
+    };
+    let mgr = NotificationManager::new(conn);
+    if let Err(e) = mgr.create_notification(&CreateNotification {
+        kind: "gate_waiting",
+        title,
+        body: &body,
+        severity,
+        entity_id: Some(params.step_id),
+        entity_type: Some("workflow_step"),
+    }) {
+        tracing::warn!(step_id = params.step_id, "persist notification failed: {e}");
+    }
+
     if let Err(e) = show_desktop_notification(title, &body) {
         tracing::warn!(
             step_id = params.step_id,
@@ -297,6 +355,20 @@ pub fn fire_grouped_gate_notification(
         params.target_label,
         params.count,
     );
+
+    // Persist in-app notification
+    let mgr = NotificationManager::new(conn);
+    if let Err(e) = mgr.create_notification(&CreateNotification {
+        kind: "gate_waiting",
+        title,
+        body: &body,
+        severity: NotificationSeverity::ActionRequired,
+        entity_id: Some(params.run_id),
+        entity_type: Some("workflow_run"),
+    }) {
+        tracing::warn!(run_id = params.run_id, "persist notification failed: {e}");
+    }
+
     if let Err(e) = show_desktop_notification(title, &body) {
         tracing::warn!(
             run_id = params.run_id,
@@ -348,6 +420,18 @@ mod tests {
                 event_type TEXT NOT NULL,
                 fired_at   TEXT NOT NULL,
                 PRIMARY KEY (entity_id, event_type)
+            );
+            CREATE TABLE notifications (
+                id          TEXT PRIMARY KEY,
+                kind        TEXT NOT NULL,
+                title       TEXT NOT NULL,
+                body        TEXT NOT NULL,
+                severity    TEXT NOT NULL DEFAULT 'info',
+                entity_id   TEXT,
+                entity_type TEXT,
+                read        INTEGER NOT NULL DEFAULT 0,
+                created_at  TEXT NOT NULL,
+                read_at     TEXT
             );",
         )
         .unwrap();

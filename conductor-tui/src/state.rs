@@ -822,6 +822,11 @@ pub enum Modal {
         /// re-opened after an Esc cancel.
         original_name: String,
     },
+    /// In-app notification list modal.
+    Notifications {
+        notifications: Vec<conductor_core::notification_manager::Notification>,
+        selected: usize,
+    },
 }
 
 impl fmt::Debug for Modal {
@@ -883,6 +888,9 @@ impl fmt::Debug for Modal {
                     f,
                     "Modal::ThemePicker(selected={selected}, original={original_name:?})"
                 )
+            }
+            Modal::Notifications { selected, .. } => {
+                write!(f, "Modal::Notifications(selected={selected})")
             }
         }
     }
@@ -1342,6 +1350,9 @@ pub struct AppState {
     /// When true, show the persistent workflow column on the right side.
     pub workflow_column_visible: bool,
 
+    /// Number of unread in-app notifications (updated from background poller).
+    pub unread_notification_count: usize,
+
     /// Cached home directory path for `~` substitution in path display. Never changes.
     pub home_dir: Option<String>,
 
@@ -1713,6 +1724,7 @@ impl AppState {
             ticket_sync_in_progress: false,
             column_focus: ColumnFocus::Content,
             workflow_column_visible: true,
+            unread_notification_count: 0,
             home_dir: dirs::home_dir().map(|p| p.to_string_lossy().into_owned()),
             theme: Theme::default(),
             selected_workflow_def: None,
