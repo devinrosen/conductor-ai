@@ -34,6 +34,7 @@ pub const ENGINE_INJECTED_KEYS: &[&str] = &[
     "feature_name",
     "feature_branch",
     "feature_base_branch",
+    "workflow_run_id",
 ];
 
 /// Pre-loaded context for resuming a workflow run.
