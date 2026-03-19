@@ -165,15 +165,32 @@ pub struct GateNotificationParams<'a> {
     pub gate_prompt: Option<&'a str>,
 }
 
+/// Returns `true` if a gate notification should fire given the config and gate type.
+///
+/// Pure function — no side effects — checks master `enabled` flag then maps
+/// each gate type to its per-type config flag.
+pub fn should_notify_gate(config: &NotificationConfig, gate_type: Option<&GateType>) -> bool {
+    if !config.enabled {
+        return false;
+    }
+    match gate_type {
+        None => true,
+        Some(GateType::HumanApproval | GateType::HumanReview) => config.workflows.on_gate_human,
+        Some(GateType::PrChecks) => config.workflows.on_gate_ci,
+        Some(GateType::PrApproval) => config.workflows.on_gate_pr_review,
+    }
+}
+
 /// Fire a desktop notification for a workflow gate waiting for action.
 ///
-/// Gated on `config.enabled`. Uses `(step_id, "gate_waiting")` as the dedup key.
+/// Gated on `config.enabled` and per-gate-type flags. Uses `(step_id, "gate_waiting")`
+/// as the dedup key.
 pub fn fire_gate_notification(
     conn: &rusqlite::Connection,
     config: &NotificationConfig,
     params: &GateNotificationParams<'_>,
 ) {
-    if !config.enabled {
+    if !should_notify_gate(config, params.gate_type) {
         return;
     }
 
@@ -225,6 +242,9 @@ mod tests {
             workflows: WorkflowNotificationConfig {
                 on_success,
                 on_failure,
+                on_gate_human: true,
+                on_gate_ci: false,
+                on_gate_pr_review: true,
             },
         }
     }
@@ -692,6 +712,121 @@ mod tests {
         assert_eq!(
             count, 1,
             "notification_log must contain exactly one row even with target_label"
+        );
+    }
+
+    // --- should_notify_gate ---
+
+    #[test]
+    fn should_notify_gate_disabled_suppresses_all() {
+        let cfg = config(false, true, true);
+        assert!(!should_notify_gate(&cfg, None));
+        assert!(!should_notify_gate(&cfg, Some(&GateType::HumanApproval)));
+        assert!(!should_notify_gate(&cfg, Some(&GateType::PrChecks)));
+    }
+
+    #[test]
+    fn should_notify_gate_none_always_notifies() {
+        let cfg = config(true, true, true);
+        assert!(should_notify_gate(&cfg, None));
+    }
+
+    #[test]
+    fn should_notify_gate_human_approval() {
+        let mut cfg = config(true, true, true);
+        assert!(should_notify_gate(&cfg, Some(&GateType::HumanApproval)));
+        cfg.workflows.on_gate_human = false;
+        assert!(!should_notify_gate(&cfg, Some(&GateType::HumanApproval)));
+    }
+
+    #[test]
+    fn should_notify_gate_human_review() {
+        let mut cfg = config(true, true, true);
+        assert!(should_notify_gate(&cfg, Some(&GateType::HumanReview)));
+        cfg.workflows.on_gate_human = false;
+        assert!(!should_notify_gate(&cfg, Some(&GateType::HumanReview)));
+    }
+
+    #[test]
+    fn should_notify_gate_pr_checks_default_false() {
+        let cfg = config(true, true, true);
+        // on_gate_ci defaults to false in config() helper
+        assert!(!should_notify_gate(&cfg, Some(&GateType::PrChecks)));
+    }
+
+    #[test]
+    fn should_notify_gate_pr_checks_enabled() {
+        let mut cfg = config(true, true, true);
+        cfg.workflows.on_gate_ci = true;
+        assert!(should_notify_gate(&cfg, Some(&GateType::PrChecks)));
+    }
+
+    #[test]
+    fn should_notify_gate_pr_approval() {
+        let mut cfg = config(true, true, true);
+        assert!(should_notify_gate(&cfg, Some(&GateType::PrApproval)));
+        cfg.workflows.on_gate_pr_review = false;
+        assert!(!should_notify_gate(&cfg, Some(&GateType::PrApproval)));
+    }
+
+    // --- fire_gate_notification: per-gate-type filtering ---
+
+    #[test]
+    fn fire_gate_notification_suppressed_by_gate_type() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        // on_gate_ci is false by default — PrChecks gate should not claim
+        fire_gate_notification(
+            &conn,
+            &cfg,
+            &GateNotificationParams {
+                step_id: "step-ci-1",
+                step_name: "wait-for-ci",
+                workflow_name: "release",
+                target_label: None,
+                gate_type: Some(&GateType::PrChecks),
+                gate_prompt: None,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'step-ci-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "PrChecks gate must not claim when on_gate_ci is false"
+        );
+    }
+
+    #[test]
+    fn fire_gate_notification_human_gate_allowed_by_default() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        fire_gate_notification(
+            &conn,
+            &cfg,
+            &GateNotificationParams {
+                step_id: "step-human-1",
+                step_name: "approve",
+                workflow_name: "release",
+                target_label: None,
+                gate_type: Some(&GateType::HumanApproval),
+                gate_prompt: None,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'step-human-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "HumanApproval gate must claim when on_gate_human is true"
         );
     }
 }
