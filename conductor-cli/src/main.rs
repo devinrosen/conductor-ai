@@ -77,6 +77,21 @@ enum Commands {
         #[command(subcommand)]
         command: McpCommands,
     },
+    /// Development utilities
+    Dev {
+        #[command(subcommand)]
+        command: DevCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum DevCommands {
+    /// Populate the current database with realistic test fixtures
+    Seed {
+        /// Wipe and re-create the database before seeding
+        #[arg(long)]
+        reset: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2013,6 +2028,19 @@ fn main() -> Result<()> {
                 let rt = tokio::runtime::Runtime::new()
                     .context("failed to create tokio runtime for MCP server")?;
                 rt.block_on(mcp::serve())?;
+            }
+        },
+        Commands::Dev { command } => match command {
+            DevCommands::Seed { reset } => {
+                let db_path = conductor_core::config::db_path();
+                if reset && db_path.exists() {
+                    std::fs::remove_file(&db_path)
+                        .context("failed to remove existing database")?;
+                    println!("Removed {}", db_path.display());
+                }
+                let conn = open_database(&db_path)?;
+                conductor_core::db::seed::seed_database(&conn)?;
+                println!("Seeded database at {}", db_path.display());
             }
         },
     }

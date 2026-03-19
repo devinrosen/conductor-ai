@@ -201,6 +201,11 @@ impl<'a> WorktreeManager<'a> {
         // Detect and install deps
         install_deps(&wt_path);
 
+        // Create isolated DB for the worktree (runs migrations + seeds)
+        let wt_db_path = wt_path.join(".conductor.db");
+        let wt_conn = crate::db::open_database(&wt_db_path)?;
+        crate::db::seed::seed_database(&wt_conn)?;
+
         let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
 
