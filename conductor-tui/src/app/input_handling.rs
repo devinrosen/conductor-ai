@@ -366,7 +366,9 @@ impl App {
                                 .map_err(|e| format!("Failed to get repo: {e}"))?;
                             let orphans = fm
                                 .list_unregistered_branches(&repo.id, &repo.default_branch)
-                                .unwrap_or_default();
+                                .map_err(|e| {
+                                    format!("Failed to list unregistered branches: {e}")
+                                })?;
 
                             // Convert core types to TUI types off the main thread.
                             if features.is_empty() && orphans.is_empty() {
