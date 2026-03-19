@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { api } from "../../api/client";
 import type { Notification } from "../../api/types";
 import {
@@ -32,16 +32,13 @@ export function NotificationBell() {
   }, [fetchNotifications]);
 
   // Refresh on SSE notification_created events
-  const handlers = useCallback(() => {
-    const handleMap: Partial<
-      Record<ConductorEventType, (data: ConductorEventData) => void>
-    > = {
-      notification_created: () => fetchNotifications(),
-    };
-    return handleMap;
-  }, [fetchNotifications]);
+  const handlers = useMemo((): Partial<
+    Record<ConductorEventType, (data: ConductorEventData) => void>
+  > => ({
+    notification_created: () => fetchNotifications(),
+  }), [fetchNotifications]);
 
-  useConductorEvents(handlers());
+  useConductorEvents(handlers);
 
   // Close panel on outside click
   useEffect(() => {
