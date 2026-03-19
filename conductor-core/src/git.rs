@@ -42,6 +42,33 @@ fn run_command(
     Ok(output)
 }
 
+/// Check if a local branch exists in the given repo.
+///
+/// Runs `git branch --list <branch>` and returns `true` if the output is non-empty.
+/// This is a fast, local-only operation (no network).
+///
+/// Returns `Err` if the git subprocess fails to run (e.g. git not installed,
+/// invalid repo path) so callers can distinguish "branch absent" from
+/// "unable to check".
+pub(crate) fn local_branch_exists(repo_path: &str, branch: &str) -> Result<bool> {
+    let output = git_in(repo_path)
+        .args(["branch", "--list", "--", branch])
+        .output()
+        .map_err(|e| {
+            ConductorError::Git(format!(
+                "failed to spawn `git branch --list -- {branch}`: {e}"
+            ))
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ConductorError::Git(format!(
+            "`git branch --list -- {branch}` exited with {}: {stderr}",
+            output.status
+        )));
+    }
+    Ok(!output.stdout.is_empty())
+}
+
 /// Check if `branch` has been merged into `default_branch` using local refs
 /// (`git branch --merged`). Fast but may be stale if the remote has advanced.
 pub(crate) fn is_branch_merged_local(repo_path: &str, branch: &str, default_branch: &str) -> bool {
@@ -129,6 +156,51 @@ mod tests {
             matches!(&err, ConductorError::GhCli(msg) if msg.contains("failed to spawn")),
             "expected GhCli variant for spawn failure, got: {err:?}"
         );
+    }
+
+    /// Create a throwaway git repo with one commit so branch refs exist.
+    fn init_temp_repo() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().to_str().unwrap();
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .arg(p)
+            .output()
+            .unwrap();
+        // Configure a dummy author so commit works even without global gitconfig
+        for (k, v) in [("user.name", "test"), ("user.email", "t@t")] {
+            Command::new("git")
+                .args(["-C", p, "config", k, v])
+                .output()
+                .unwrap();
+        }
+        let out = Command::new("git")
+            .args(["-C", p, "commit", "--allow-empty", "-m", "init"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git commit failed in temp repo");
+        tmp
+    }
+
+    #[test]
+    fn test_local_branch_exists_true() {
+        let tmp = init_temp_repo();
+        assert!(local_branch_exists(tmp.path().to_str().unwrap(), "main").unwrap());
+    }
+
+    #[test]
+    fn test_local_branch_exists_false() {
+        let tmp = init_temp_repo();
+        assert!(
+            !local_branch_exists(tmp.path().to_str().unwrap(), "nonexistent-branch-xyz-12345")
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_local_branch_exists_bad_path() {
+        // Bad path should return an error, not silently return false
+        assert!(local_branch_exists("/nonexistent/repo/path", "main").is_err());
     }
 
     #[test]

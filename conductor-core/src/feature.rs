@@ -92,11 +92,19 @@ pub struct UnregisteredBranch {
 /// start at offset 1.
 const FEATURE_ROW_FRAGMENT: &str = "\
     f.id, f.name, f.branch, f.base_branch, f.status, f.created_at, \
-    (SELECT COUNT(*) FROM worktrees w WHERE w.repo_id = f.repo_id AND w.base_branch = f.branch) AS wt_count, \
+    (SELECT COUNT(*) FROM worktrees w WHERE w.repo_id = f.repo_id AND w.base_branch = f.branch AND w.status = 'active') AS wt_count, \
     (SELECT COUNT(*) FROM feature_tickets ft WHERE ft.feature_id = f.id) AS ticket_count \
     FROM features f";
 
 const FEATURE_ROW_ORDER: &str = " ORDER BY f.created_at DESC";
+
+/// Column list for a plain `SELECT … FROM features` (no join, no subquery).
+/// Used by `map_feature_row` — keep in sync with that function's column indices.
+const FEATURE_COLS: &str = "id, repo_id, name, branch, base_branch, status, created_at, merged_at";
+
+/// Same columns but table-aliased (`f.`) for use in joins.
+const FEATURE_COLS_ALIASED: &str =
+    "f.id, f.repo_id, f.name, f.branch, f.base_branch, f.status, f.created_at, f.merged_at";
 
 /// Map a rusqlite row to a `FeatureRow`, starting at the given column offset.
 fn map_feature_row_cols(
@@ -312,8 +320,7 @@ impl<'a> FeatureManager<'a> {
     pub fn get_by_id(&self, id: &str) -> Result<Feature> {
         self.conn
             .query_row(
-                "SELECT id, repo_id, name, branch, base_branch, status, created_at, merged_at
-                 FROM features WHERE id = ?1",
+                &format!("SELECT {FEATURE_COLS} FROM features WHERE id = ?1"),
                 params![id],
                 map_feature_row,
             )
@@ -347,10 +354,11 @@ impl<'a> FeatureManager<'a> {
     pub fn find_feature_for_ticket(&self, ticket_id: &str) -> Result<Option<Feature>> {
         let features: Vec<Feature> = query_collect(
             self.conn,
-            "SELECT f.id, f.repo_id, f.name, f.branch, f.base_branch, f.status, f.created_at, f.merged_at
-             FROM features f
-             INNER JOIN feature_tickets ft ON ft.feature_id = f.id
-             WHERE ft.ticket_id = ?1 AND f.status = 'active'",
+            &format!(
+                "SELECT {FEATURE_COLS_ALIASED} FROM features f \
+                 INNER JOIN feature_tickets ft ON ft.feature_id = f.id \
+                 WHERE ft.ticket_id = ?1 AND f.status = 'active'"
+            ),
             params![ticket_id],
             map_feature_row,
         )?;
@@ -486,18 +494,20 @@ impl<'a> FeatureManager<'a> {
     pub fn close(&self, repo_slug: &str, feature_name: &str) -> Result<()> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
         let feature = self.get_feature_by_repo_id(&repo.id, feature_name)?;
+        self.close_with_merge_detection(&repo.local_path, &feature)
+    }
 
-        // Check if the branch was merged on the remote. Fall back to local
-        // merge check — the remote branch may have been auto-deleted after merge.
-        let merged = crate::git::is_branch_merged_remote(
-            &repo.local_path,
-            &feature.branch,
-            &feature.base_branch,
-        ) || crate::git::is_branch_merged_local(
-            &repo.local_path,
-            &feature.branch,
-            &feature.base_branch,
-        );
+    /// Detect whether the feature branch was merged and update its status
+    /// accordingly (merged vs closed). Shared by `close()` and
+    /// `auto_close_if_orphaned()`.
+    fn close_with_merge_detection(&self, repo_path: &str, feature: &Feature) -> Result<()> {
+        let merged =
+            crate::git::is_branch_merged_remote(repo_path, &feature.branch, &feature.base_branch)
+                || crate::git::is_branch_merged_local(
+                    repo_path,
+                    &feature.branch,
+                    &feature.base_branch,
+                );
 
         let now = Utc::now().to_rfc3339();
         if merged {
@@ -510,6 +520,73 @@ impl<'a> FeatureManager<'a> {
                 "UPDATE features SET status = ?1 WHERE id = ?2",
                 params![FeatureStatus::Closed, feature.id],
             )?;
+        }
+        Ok(())
+    }
+
+    /// Auto-close a feature if it has no remaining active worktrees and its
+    /// git branch no longer exists locally.
+    ///
+    /// Called after a worktree is deleted. If the feature still has active
+    /// worktrees, or if the branch still exists locally (user may create new
+    /// worktrees later), this is a no-op.
+    pub(crate) fn auto_close_if_orphaned(
+        &self,
+        repo: &crate::repo::Repo,
+        feature_branch: &str,
+    ) -> Result<()> {
+        // Find the active feature for this branch
+        let feature: Option<Feature> = self
+            .conn
+            .query_row(
+                &format!("SELECT {FEATURE_COLS} FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'active'"),
+                params![repo.id, feature_branch],
+                map_feature_row,
+            )
+            .optional()?;
+
+        let feature = match feature {
+            Some(f) => f,
+            None => return Ok(()), // No active feature for this branch
+        };
+
+        // Count remaining active worktrees targeting this feature's branch
+        let active_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM worktrees WHERE repo_id = ?1 AND base_branch = ?2 AND status = 'active'",
+            params![repo.id, feature_branch],
+            |row| row.get(0),
+        )?;
+
+        if active_count > 0 {
+            return Ok(()); // Other active worktrees still reference this feature
+        }
+
+        // Check if the branch still exists locally
+        if crate::git::local_branch_exists(&repo.local_path, feature_branch)? {
+            return Ok(()); // Branch still exists — user may reuse it
+        }
+
+        self.close_with_merge_detection(&repo.local_path, &feature)
+    }
+
+    /// Convenience wrapper called after a worktree is deleted.
+    ///
+    /// Looks up the repo from `repo_id`, checks the worktree's `base_branch`
+    /// and, if it differs from the repo's default branch, delegates to
+    /// [`auto_close_if_orphaned`]. Accepts plain IDs instead of domain structs
+    /// to avoid bidirectional module coupling.
+    pub(crate) fn auto_close_after_worktree_delete(
+        &self,
+        repo_id: &str,
+        base_branch: Option<&str>,
+    ) -> Result<()> {
+        let base_branch = match base_branch {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        let repo = crate::repo::RepoManager::new(self.conn, self.config).get_by_id(repo_id)?;
+        if base_branch != repo.default_branch {
+            return self.auto_close_if_orphaned(&repo, base_branch);
         }
         Ok(())
     }
@@ -657,8 +734,7 @@ impl<'a> FeatureManager<'a> {
     fn get_feature_by_repo_id(&self, repo_id: &str, name: &str) -> Result<Feature> {
         self.conn
             .query_row(
-                "SELECT id, repo_id, name, branch, base_branch, status, created_at, merged_at
-                 FROM features WHERE repo_id = ?1 AND name = ?2",
+                &format!("SELECT {FEATURE_COLS} FROM features WHERE repo_id = ?1 AND name = ?2"),
                 params![repo_id, name],
                 map_feature_row,
             )
@@ -1809,10 +1885,14 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn make_repo(id: &str) -> crate::repo::Repo {
+        make_repo_at(id, "/tmp/repo")
+    }
+
+    fn make_repo_at(id: &str, local_path: &str) -> crate::repo::Repo {
         crate::repo::Repo {
             id: id.to_string(),
             slug: "test-repo".to_string(),
-            local_path: "/tmp/repo".to_string(),
+            local_path: local_path.to_string(),
             remote_url: "https://github.com/test/repo.git".to_string(),
             default_branch: "main".to_string(),
             workspace_dir: "/tmp/ws".to_string(),
@@ -2085,6 +2165,224 @@ mod tests {
         let orphans = mgr.list_unregistered_branches(&repo_id, "main").unwrap();
 
         assert!(orphans.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // auto_close_if_orphaned tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_auto_close_no_feature_is_noop() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let repo = make_repo(&repo_id);
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        // No feature exists for this branch — should succeed silently
+        mgr.auto_close_if_orphaned(&repo, "feat/nonexistent")
+            .unwrap();
+    }
+
+    #[test]
+    fn test_auto_close_skips_when_active_worktrees_remain() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let repo = make_repo(&repo_id);
+        insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+        // Insert an active worktree targeting this feature's branch
+        let wt_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES (?1, ?2, 'wt-a', 'wt-branch', 'feat/my-feat', '/tmp/wt', 'active', '2024-01-01T00:00:00Z')",
+            params![wt_id, repo_id],
+        ).unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        mgr.auto_close_if_orphaned(&repo, "feat/my-feat").unwrap();
+
+        // Feature should still be active
+        let f = mgr.get_by_name("test-repo", "my-feat").unwrap();
+        assert_eq!(f.status, FeatureStatus::Active);
+    }
+
+    #[test]
+    fn test_auto_close_skips_already_closed_feature() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let repo = make_repo(&repo_id);
+        let fid = insert_feature(&conn, &repo_id, "done-feat", "feat/done-feat");
+        conn.execute(
+            "UPDATE features SET status = 'closed' WHERE id = ?1",
+            params![fid],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        // Should be a no-op since the feature is already closed
+        mgr.auto_close_if_orphaned(&repo, "feat/done-feat").unwrap();
+    }
+
+    #[test]
+    fn test_auto_close_closes_orphaned_feature() {
+        // Use a real git repo so we can control branch existence
+        let (work, _bare) = setup_git_repo();
+        let conn = setup_db();
+        let repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+
+        // Create a feature branch, then delete it so local_branch_exists returns false
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "feat/orphaned", "main"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["checkout", "main"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["branch", "-D", "feat/orphaned"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+
+        insert_feature(&conn, &repo_id, "orphaned", "feat/orphaned");
+
+        let repo = make_repo_at(&repo_id, work.path().to_str().unwrap());
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        mgr.auto_close_if_orphaned(&repo, "feat/orphaned").unwrap();
+
+        // Feature should now be closed (not merged, since the branch was never merged)
+        let f = mgr.get_by_name("test-repo", "orphaned").unwrap();
+        assert_eq!(f.status, FeatureStatus::Closed);
+    }
+
+    #[test]
+    fn test_auto_close_skips_when_branch_still_exists() {
+        let (work, _bare) = setup_git_repo();
+        let conn = setup_db();
+        let repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+
+        // Create a feature branch but do NOT delete it
+        std::process::Command::new("git")
+            .args(["branch", "feat/still-here", "main"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+
+        insert_feature(&conn, &repo_id, "still-here", "feat/still-here");
+
+        let repo = make_repo_at(&repo_id, work.path().to_str().unwrap());
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        mgr.auto_close_if_orphaned(&repo, "feat/still-here")
+            .unwrap();
+
+        // Feature should remain active because the branch still exists
+        let f = mgr.get_by_name("test-repo", "still-here").unwrap();
+        assert_eq!(f.status, FeatureStatus::Active);
+    }
+
+    #[test]
+    fn test_auto_close_only_counts_active_worktrees() {
+        let (work, _bare) = setup_git_repo();
+        let conn = setup_db();
+        let repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+
+        // Delete the branch so it doesn't exist locally
+        std::process::Command::new("git")
+            .args(["branch", "feat/has-merged-wt", "main"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["branch", "-D", "feat/has-merged-wt"])
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+
+        insert_feature(&conn, &repo_id, "has-merged-wt", "feat/has-merged-wt");
+
+        // Insert a merged (non-active) worktree — should not prevent auto-close
+        let wt_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES (?1, ?2, 'wt-done', 'wt-branch', 'feat/has-merged-wt', '/tmp/wt', 'merged', '2024-01-01T00:00:00Z')",
+            params![wt_id, repo_id],
+        ).unwrap();
+
+        let repo = make_repo_at(&repo_id, work.path().to_str().unwrap());
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        mgr.auto_close_if_orphaned(&repo, "feat/has-merged-wt")
+            .unwrap();
+
+        // Feature should be closed — only merged worktrees remain (not active)
+        let f = mgr.get_by_name("test-repo", "has-merged-wt").unwrap();
+        assert_eq!(f.status, FeatureStatus::Closed);
+    }
+
+    #[test]
+    fn test_auto_close_after_worktree_delete_skips_default_branch() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        // Create a feature whose branch matches the repo's default branch ("main")
+        insert_feature(&conn, &repo_id, "main-feat", "main");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        // base_branch == "main" == default_branch → should be a no-op
+        mgr.auto_close_after_worktree_delete(&repo_id, Some("main"))
+            .unwrap();
+
+        // Feature should remain active
+        let f = mgr.get_by_name("test-repo", "main-feat").unwrap();
+        assert_eq!(f.status, FeatureStatus::Active);
+    }
+
+    /// Regression: FEATURE_ROW_FRAGMENT wt_count subquery must only count
+    /// active worktrees. Non-active (merged/abandoned) worktrees should not
+    /// inflate the count.
+    #[test]
+    fn test_feature_row_wt_count_ignores_non_active_worktrees() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        insert_feature(&conn, &repo_id, "counted", "feat/counted");
+
+        // Insert one active worktree
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES ('wt-a', ?1, 'wt-active', 'wt-branch-a', 'feat/counted', '/tmp/wt-a', 'active', '2024-01-01T00:00:00Z')",
+            params![repo_id],
+        ).unwrap();
+        // Insert one merged worktree (should NOT be counted)
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES ('wt-m', ?1, 'wt-merged', 'wt-branch-m', 'feat/counted', '/tmp/wt-m', 'merged', '2024-01-01T00:00:00Z')",
+            params![repo_id],
+        ).unwrap();
+        // Insert one abandoned worktree (should NOT be counted)
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES ('wt-x', ?1, 'wt-abandoned', 'wt-branch-x', 'feat/counted', '/tmp/wt-x', 'abandoned', '2024-01-01T00:00:00Z')",
+            params![repo_id],
+        ).unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let rows = mgr.list("test-repo").unwrap();
+        let row = rows.iter().find(|r| r.branch == "feat/counted").unwrap();
+        assert_eq!(
+            row.worktree_count, 1,
+            "wt_count should only count active worktrees, got {}",
+            row.worktree_count
+        );
     }
 
     #[test]
