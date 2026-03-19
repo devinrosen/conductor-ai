@@ -2179,4 +2179,58 @@ mod tests {
             other => panic!("expected WorktreeNotFound, got: {other}"),
         }
     }
+
+    /// Integration: deleting the last active worktree for a feature whose
+    /// branch is gone should auto-close the feature via delete_internal →
+    /// auto_close_if_orphaned.
+    #[test]
+    fn test_delete_auto_closes_orphaned_feature() {
+        let (_tmp, _remote, local) = setup_repo_with_remote();
+        let local_str = local.to_str().unwrap();
+
+        let conn = crate::test_helpers::create_test_conn();
+        let repo_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at)
+             VALUES (?1, 'test-repo', ?2, 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+            rusqlite::params![repo_id, local_str],
+        ).unwrap();
+
+        // Create a feature branch, then delete it so the branch is gone
+        git(&["branch", "feat/ephemeral", "main"], &local);
+        git(&["branch", "-D", "feat/ephemeral"], &local);
+
+        let feature_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
+             VALUES (?1, ?2, 'ephemeral', 'feat/ephemeral', 'main', 'active', '2024-01-01T00:00:00Z')",
+            rusqlite::params![feature_id, repo_id],
+        ).unwrap();
+
+        // Create a worktree record pointing at that feature branch (use a
+        // fake path — delete_internal's remove_git_artifacts will just no-op)
+        let wt_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES (?1, ?2, 'wt-eph', 'wt-eph-branch', 'feat/ephemeral', '/tmp/nonexistent-wt', 'active', '2024-01-01T00:00:00Z')",
+            rusqlite::params![wt_id, repo_id],
+        ).unwrap();
+
+        let config = Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+        mgr.delete("test-repo", "wt-eph").unwrap();
+
+        // The feature should now be closed
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM features WHERE id = ?1",
+                rusqlite::params![feature_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            status, "closed",
+            "feature should be auto-closed after last worktree deleted and branch gone"
+        );
+    }
 }
