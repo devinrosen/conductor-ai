@@ -1534,9 +1534,7 @@ impl App {
     /// Resolve the currently selected workflow run from the runs pane.
     ///
     /// Returns `None` (with a status message set) if no run is selected or found.
-    fn resolve_selected_workflow_run(
-        &mut self,
-    ) -> Option<conductor_core::workflow::WorkflowRun> {
+    fn resolve_selected_workflow_run(&mut self) -> Option<conductor_core::workflow::WorkflowRun> {
         let rows = self.state.visible_workflow_run_rows();
         let run_id = match rows
             .get(self.state.workflow_run_index)
