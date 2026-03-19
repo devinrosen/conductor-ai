@@ -60,7 +60,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                     );
                     return ListItem::new(Line::from(""));
                 };
-                let display_prefix = format!("  {prefix}\u{2514} ");
+                let display_prefix = prefix.clone();
                 super::common::worktree_list_item_with_prefix(
                     wt,
                     state,

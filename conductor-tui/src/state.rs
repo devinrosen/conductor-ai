@@ -82,24 +82,30 @@ impl TreePosition {
     }
 }
 
-/// Reorder worktrees into tree order based on `base_branch` parent-child relationships.
+/// Tree-order worktrees by `base_branch` parent-child relationships, returning
+/// indices into the input and parallel `TreePosition`s — no cloning.
 ///
-/// A worktree is a child of another worktree when its `base_branch` matches the other's `branch`.
-/// Returns `(tree_ordered_worktrees, parallel_tree_positions)`.
-pub fn build_worktree_tree(
-    worktrees: &[Worktree],
+/// Accepts anything deref-able to `Worktree` so callers with `&[Worktree]` or
+/// `&[&Worktree]` can both use it.
+pub fn build_worktree_tree_indices<W: std::borrow::Borrow<Worktree>>(
+    worktrees: &[W],
     default_branch: &str,
-) -> (Vec<Worktree>, Vec<TreePosition>) {
+) -> (Vec<usize>, Vec<TreePosition>) {
     if worktrees.is_empty() {
         return (Vec::new(), Vec::new());
     }
 
+    let borrow = |i: usize| -> &Worktree { worktrees[i].borrow() };
+
     // Map branch name → indices of worktrees whose base_branch matches that branch (children).
     let mut children_of: HashMap<&str, Vec<usize>> = HashMap::new();
-    let branch_set: HashSet<&str> = worktrees.iter().map(|wt| wt.branch.as_str()).collect();
+    let branch_set: HashSet<&str> = worktrees
+        .iter()
+        .map(|wt| wt.borrow().branch.as_str())
+        .collect();
 
     for (i, wt) in worktrees.iter().enumerate() {
-        let parent_branch = wt.base_branch.as_deref().unwrap_or(default_branch);
+        let parent_branch = wt.borrow().base_branch.as_deref().unwrap_or(default_branch);
         children_of.entry(parent_branch).or_default().push(i);
     }
 
@@ -107,19 +113,19 @@ pub fn build_worktree_tree(
     // or doesn't match any other worktree's branch in the list.
     let mut roots: Vec<usize> = Vec::new();
     for (i, wt) in worktrees.iter().enumerate() {
-        let parent = wt.base_branch.as_deref().unwrap_or(default_branch);
+        let parent = wt.borrow().base_branch.as_deref().unwrap_or(default_branch);
         if parent == default_branch || !branch_set.contains(parent) {
             roots.push(i);
         }
     }
-    roots.sort_by(|a, b| worktrees[*a].branch.cmp(&worktrees[*b].branch));
+    roots.sort_by(|a, b| borrow(*a).branch.cmp(&borrow(*b).branch));
 
     // Sort each child group by branch name.
     for children in children_of.values_mut() {
-        children.sort_by(|a, b| worktrees[*a].branch.cmp(&worktrees[*b].branch));
+        children.sort_by(|a, b| borrow(*a).branch.cmp(&borrow(*b).branch));
     }
 
-    let mut result: Vec<Worktree> = Vec::with_capacity(worktrees.len());
+    let mut indices: Vec<usize> = Vec::with_capacity(worktrees.len());
     let mut positions: Vec<TreePosition> = Vec::with_capacity(worktrees.len());
     let mut visited: HashSet<usize> = HashSet::new();
 
@@ -141,9 +147,9 @@ pub fn build_worktree_tree(
             is_last_sibling: is_last,
             ancestors_are_last: ancestors_are_last.clone(),
         });
-        result.push(worktrees[idx].clone());
+        indices.push(idx);
 
-        let branch = worktrees[idx].branch.as_str();
+        let branch = borrow(idx).branch.as_str();
         if let Some(children) = children_of.get(branch) {
             let len = children.len();
             let mut child_ancestors = ancestors_are_last;
@@ -156,19 +162,32 @@ pub fn build_worktree_tree(
     }
 
     // Append any unvisited worktrees (cycle members) as roots.
-    for (i, wt) in worktrees.iter().enumerate() {
+    for i in 0..worktrees.len() {
         if !visited.contains(&i) {
             positions.push(TreePosition {
                 depth: 0,
                 is_last_sibling: true,
                 ancestors_are_last: Vec::new(),
             });
-            result.push(wt.clone());
+            indices.push(i);
             visited.insert(i);
         }
     }
 
-    (result, positions)
+    (indices, positions)
+}
+
+/// Reorder worktrees into tree order based on `base_branch` parent-child relationships.
+///
+/// A worktree is a child of another worktree when its `base_branch` matches the other's `branch`.
+/// Returns `(tree_ordered_worktrees, parallel_tree_positions)`.
+pub fn build_worktree_tree(
+    worktrees: &[Worktree],
+    default_branch: &str,
+) -> (Vec<Worktree>, Vec<TreePosition>) {
+    let (indices, positions) = build_worktree_tree_indices(worktrees, default_branch);
+    let ordered = indices.into_iter().map(|i| worktrees[i].clone()).collect();
+    (ordered, positions)
 }
 
 /// Reorder branch picker items into tree order based on `base_branch` parent-child relationships.
@@ -2243,25 +2262,32 @@ impl AppState {
                 continue;
             }
 
-            // Map worktree ID → global index for lookup after tree ordering
-            let id_to_global: HashMap<&str, usize> = repo_wts
-                .iter()
-                .map(|&(idx, wt)| (wt.id.as_str(), idx))
-                .collect();
+            // Map local index → global index
+            let local_to_global: Vec<usize> = repo_wts.iter().map(|&(idx, _)| idx).collect();
 
-            // Extract just the worktrees for the tree builder
-            let wt_slice: Vec<conductor_core::worktree::Worktree> =
-                repo_wts.iter().map(|&(_, wt)| wt.clone()).collect();
+            // Collect worktree refs for tree ordering (no cloning needed)
+            let wt_refs: Vec<&Worktree> = repo_wts.iter().map(|&(_, wt)| wt).collect();
+            let (ordered_local_indices, positions) =
+                build_worktree_tree_indices(&wt_refs, &repo.default_branch);
 
-            let (ordered, positions) = build_worktree_tree(&wt_slice, &repo.default_branch);
-
-            for (wt, pos) in ordered.iter().zip(positions.iter()) {
-                if let Some(&global_idx) = id_to_global.get(wt.id.as_str()) {
-                    rows.push(DashboardRow::Worktree {
-                        idx: global_idx,
-                        prefix: pos.to_prefix(),
-                    });
-                }
+            for (local_idx, pos) in ordered_local_indices.iter().zip(positions.iter()) {
+                let global_idx = local_to_global[*local_idx];
+                // Build the full display prefix: "  " indent under repo header,
+                // plus tree connectors. to_prefix() returns empty for depth-0
+                // roots, so we add their connectors here.
+                let prefix = if pos.depth == 0 {
+                    if pos.is_last_sibling {
+                        "  └ ".to_string()
+                    } else {
+                        "  ├ ".to_string()
+                    }
+                } else {
+                    format!("  {}", pos.to_prefix())
+                };
+                rows.push(DashboardRow::Worktree {
+                    idx: global_idx,
+                    prefix,
+                });
             }
         }
         rows
@@ -4004,13 +4030,13 @@ pub(crate) mod tests {
         let rows = state.dashboard_rows();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0], DashboardRow::Repo(0));
-        // Both are root-level (no parent) so prefix is empty
+        // Both are root-level (no parent); dashboard prefixes include indent + connector
         match &rows[1] {
-            DashboardRow::Worktree { prefix, .. } => assert_eq!(prefix, ""),
+            DashboardRow::Worktree { prefix, .. } => assert_eq!(prefix, "  ├ "),
             other => panic!("expected Worktree, got {other:?}"),
         }
         match &rows[2] {
-            DashboardRow::Worktree { prefix, .. } => assert_eq!(prefix, ""),
+            DashboardRow::Worktree { prefix, .. } => assert_eq!(prefix, "  └ "),
             other => panic!("expected Worktree, got {other:?}"),
         }
     }
@@ -4041,7 +4067,7 @@ pub(crate) mod tests {
         match &rows[1] {
             DashboardRow::Worktree { idx, prefix } => {
                 assert_eq!(*idx, 1, "wt2 should come first (parent)");
-                assert_eq!(prefix, "");
+                assert_eq!(prefix, "  └ ", "sole root gets └ connector");
             }
             other => panic!("expected Worktree, got {other:?}"),
         }
@@ -4171,7 +4197,7 @@ pub(crate) mod tests {
         match &rows[1] {
             DashboardRow::Worktree { idx, prefix } => {
                 assert_eq!(*idx, 1, "wt_root first");
-                assert_eq!(prefix, "");
+                assert_eq!(prefix, "  └ ", "sole root gets └ connector");
             }
             other => panic!("expected Worktree, got {other:?}"),
         }
