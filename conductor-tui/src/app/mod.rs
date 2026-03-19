@@ -401,10 +401,9 @@ impl App {
             Action::BaseBranchesLoaded {
                 repo_slug,
                 wt_slug,
-                worktree_id,
                 items,
             } => {
-                self.handle_base_branches_loaded(repo_slug, wt_slug, worktree_id, items);
+                self.handle_base_branches_loaded(repo_slug, wt_slug, items);
             }
             Action::BaseBranchesFailed { error } => {
                 self.state.modal = Modal::Error {

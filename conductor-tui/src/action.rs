@@ -129,7 +129,6 @@ pub enum Action {
     BaseBranchesLoaded {
         repo_slug: String,
         wt_slug: String,
-        worktree_id: String,
         items: Vec<crate::state::BranchPickerItem>,
     },
     BaseBranchesFailed {

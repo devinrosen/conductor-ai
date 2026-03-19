@@ -374,27 +374,9 @@ impl App {
                             if features.is_empty() && orphans.is_empty() {
                                 return Ok(Vec::new());
                             }
-                            let mut items = vec![BranchPickerItem {
-                                branch: None,
-                                worktree_count: 0,
-                                ticket_count: 0,
-                            }];
-                            for f in &features {
-                                items.push(BranchPickerItem {
-                                    branch: Some(f.branch.clone()),
-                                    worktree_count: f.worktree_count,
-                                    ticket_count: f.ticket_count,
-                                });
-                            }
-                            // Append orphan branches after registered features.
-                            for orphan in &orphans {
-                                items.push(BranchPickerItem {
-                                    branch: Some(orphan.branch.clone()),
-                                    worktree_count: orphan.worktree_count,
-                                    ticket_count: 0,
-                                });
-                            }
-                            Ok::<Vec<BranchPickerItem>, String>(items)
+                            Ok::<Vec<BranchPickerItem>, String>(
+                                BranchPickerItem::from_features_and_orphans(&features, &orphans),
+                            )
                         })();
                         match result {
                             Ok(items) => {
@@ -828,9 +810,9 @@ impl App {
             let tx = tx.clone();
             let slug = repo_slug.clone();
             let wt_slug = wt.slug.clone();
-            let wt_id = wt.id.clone();
             std::thread::spawn(move || {
                 use crate::action::Action;
+                use crate::state::BranchPickerItem;
                 use conductor_core::config::{db_path, load_config};
                 use conductor_core::db::open_database;
                 use conductor_core::feature::FeatureManager;
@@ -854,33 +836,15 @@ impl App {
                         .list_unregistered_branches(&repo.id, &repo.default_branch)
                         .map_err(|e| format!("Failed to list unregistered branches: {e}"))?;
 
-                    let mut items = vec![BranchPickerItem {
-                        branch: None,
-                        worktree_count: 0,
-                        ticket_count: 0,
-                    }];
-                    for f in &features {
-                        items.push(BranchPickerItem {
-                            branch: Some(f.branch.clone()),
-                            worktree_count: f.worktree_count,
-                            ticket_count: f.ticket_count,
-                        });
-                    }
-                    for orphan in &orphans {
-                        items.push(BranchPickerItem {
-                            branch: Some(orphan.branch.clone()),
-                            worktree_count: orphan.worktree_count,
-                            ticket_count: 0,
-                        });
-                    }
-                    Ok::<Vec<BranchPickerItem>, String>(items)
+                    Ok::<Vec<BranchPickerItem>, String>(
+                        BranchPickerItem::from_features_and_orphans(&features, &orphans),
+                    )
                 })();
                 match result {
                     Ok(items) => {
                         let _ = tx.send(Action::BaseBranchesLoaded {
                             repo_slug: slug,
                             wt_slug,
-                            worktree_id: wt_id,
                             items,
                         });
                     }
@@ -900,13 +864,11 @@ impl App {
         &mut self,
         repo_slug: String,
         wt_slug: String,
-        worktree_id: String,
         items: Vec<BranchPickerItem>,
     ) {
         self.state.modal = Modal::BaseBranchPicker {
             repo_slug,
             wt_slug,
-            worktree_id,
             items,
             selected: 0,
         };

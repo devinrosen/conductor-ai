@@ -567,7 +567,14 @@ impl<'a> WorktreeManager<'a> {
         // Auto-register feature if targeting a non-default branch
         if let Some(branch) = base_branch {
             let fm = crate::feature::FeatureManager::new(self.conn, self.config);
-            let _ = fm.ensure_feature_for_branch(&repo, branch, None);
+            if let Err(e) = fm.ensure_feature_for_branch(&repo, branch, None) {
+                tracing::warn!(
+                    repo_slug = repo_slug,
+                    branch = branch,
+                    error = %e,
+                    "failed to auto-register feature for base branch"
+                );
+            }
         }
         Ok(())
     }
@@ -2100,5 +2107,62 @@ mod tests {
             features.is_empty(),
             "should not have any features for default branch, got: {features:?}"
         );
+    }
+
+    #[test]
+    fn test_set_base_branch() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+
+        // Initially base_branch should be NULL
+        let wt: Option<String> = conn
+            .query_row(
+                "SELECT base_branch FROM worktrees WHERE slug = 'feat-test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(wt.is_none(), "expected NULL base_branch initially");
+
+        // Set base branch to a feature branch
+        mgr.set_base_branch("test-repo", "feat-test", Some("develop"))
+            .unwrap();
+        let wt: Option<String> = conn
+            .query_row(
+                "SELECT base_branch FROM worktrees WHERE slug = 'feat-test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(wt.as_deref(), Some("develop"));
+
+        // Clear base branch (reset to repo default)
+        mgr.set_base_branch("test-repo", "feat-test", None)
+            .unwrap();
+        let wt: Option<String> = conn
+            .query_row(
+                "SELECT base_branch FROM worktrees WHERE slug = 'feat-test'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(wt.is_none(), "expected NULL after clearing base_branch");
+    }
+
+    #[test]
+    fn test_set_base_branch_not_found() {
+        let conn = crate::test_helpers::setup_db();
+        let config = Config::default();
+        let mgr = WorktreeManager::new(&conn, &config);
+
+        let result = mgr.set_base_branch("test-repo", "nonexistent", Some("develop"));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ConductorError::WorktreeNotFound { slug } => {
+                assert_eq!(slug, "nonexistent");
+            }
+            other => panic!("expected WorktreeNotFound, got: {other}"),
+        }
     }
 }
