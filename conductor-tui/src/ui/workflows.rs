@@ -107,6 +107,23 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 }
 
+/// Returns the number of visible rows in the defs list (items + separator headers in global mode).
+/// Used by both `render_defs` and `workflow_column::render_workflow_column` for height calculation.
+pub(super) fn render_defs_row_count(state: &AppState) -> usize {
+    let global_mode = state.selected_worktree_id.is_none() && state.selected_repo_id.is_none();
+    if global_mode {
+        let sep_count = state
+            .data
+            .workflow_def_slugs
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        state.data.workflow_defs.len() + sep_count
+    } else {
+        state.data.workflow_defs.len()
+    }
+}
+
 pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
     let focused = state.column_focus == ColumnFocus::Workflow
         && state.workflows_focus == WorkflowsFocus::Defs;

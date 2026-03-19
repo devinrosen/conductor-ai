@@ -25,20 +25,7 @@ pub fn render_workflow_column(frame: &mut Frame, area: Rect, state: &AppState) {
         1
     } else {
         // Expanded: items + 2 for top/bottom border.
-        // In global mode, account for separator header rows.
-        let global_mode = state.selected_worktree_id.is_none() && state.selected_repo_id.is_none();
-        let item_count = if global_mode {
-            // Count unique repo slugs (each adds a separator row) + def count.
-            let sep_count = state
-                .data
-                .workflow_def_slugs
-                .iter()
-                .collect::<std::collections::HashSet<_>>()
-                .len();
-            state.data.workflow_defs.len() + sep_count
-        } else {
-            state.data.workflow_defs.len()
-        };
+        let item_count = super::workflows::render_defs_row_count(state);
         let raw = (item_count as u16).saturating_add(2).max(3);
         // Cap at 1/3 of the area to avoid overwhelming runs.
         raw.min(area.height / 3)
