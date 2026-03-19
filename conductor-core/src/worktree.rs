@@ -2207,10 +2207,8 @@ mod tests {
         let wt = wt_mgr.delete("test-repo", "wt-eph").unwrap();
 
         // Caller-side auto-close (mirrors CLI/TUI/web pattern)
-        let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
-        let repo = repo_mgr.get_by_slug("test-repo").unwrap();
         let fm = crate::feature::FeatureManager::new(&conn, &config);
-        fm.auto_close_after_worktree_delete(&repo, &wt).unwrap();
+        fm.auto_close_after_worktree_delete(&wt).unwrap();
 
         // The feature should now be closed
         let status: String = conn

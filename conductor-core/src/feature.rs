@@ -564,19 +564,24 @@ impl<'a> FeatureManager<'a> {
 
     /// Convenience wrapper called after a worktree is deleted.
     ///
-    /// Checks the deleted worktree's `base_branch` and, if it differs from the
-    /// repo's default branch, delegates to [`auto_close_if_orphaned`]. This
-    /// keeps the auto-close logic in `FeatureManager` rather than in
-    /// `WorktreeManager`, preserving the dependency direction.
+    /// Looks up the repo from the worktree's `repo_id`, checks the deleted
+    /// worktree's `base_branch` and, if it differs from the repo's default
+    /// branch, delegates to [`auto_close_if_orphaned`]. This keeps the
+    /// auto-close logic in `FeatureManager` rather than in `WorktreeManager`,
+    /// preserving the dependency direction and avoiding boilerplate at call
+    /// sites.
     pub fn auto_close_after_worktree_delete(
         &self,
-        repo: &crate::repo::Repo,
         worktree: &crate::worktree::Worktree,
     ) -> Result<()> {
-        if let Some(ref base_branch) = worktree.base_branch {
-            if base_branch != &repo.default_branch {
-                return self.auto_close_if_orphaned(repo, base_branch);
-            }
+        let base_branch = match worktree.base_branch {
+            Some(ref b) => b,
+            None => return Ok(()),
+        };
+        let repo = crate::repo::RepoManager::new(self.conn, self.config)
+            .get_by_id(&worktree.repo_id)?;
+        if base_branch != &repo.default_branch {
+            return self.auto_close_if_orphaned(&repo, base_branch);
         }
         Ok(())
     }
