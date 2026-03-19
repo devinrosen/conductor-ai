@@ -6,7 +6,12 @@ use crate::workflow_dsl::GateType;
 fn persist_notification(conn: &rusqlite::Connection, params: &CreateNotification<'_>) {
     let mgr = NotificationManager::new(conn);
     if let Err(e) = mgr.create_notification(params) {
-        tracing::warn!("persist notification failed: {e}");
+        tracing::warn!(
+            kind = params.kind,
+            entity_id = params.entity_id,
+            entity_type = params.entity_type,
+            "persist notification failed: {e}"
+        );
     }
 }
 
