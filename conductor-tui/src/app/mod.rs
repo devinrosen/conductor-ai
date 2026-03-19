@@ -1250,7 +1250,6 @@ mod tests {
             iteration: 0,
             blocked_on: None,
             feature_id: None,
-            triggered_by_hook: false,
         }
     }
 
@@ -1573,7 +1572,6 @@ workflow my-wf {
             iteration: 0,
             blocked_on: None,
             feature_id: None,
-            triggered_by_hook: false,
         };
         run.inputs
             .insert("pr_url".to_string(), "https://example.com".to_string());

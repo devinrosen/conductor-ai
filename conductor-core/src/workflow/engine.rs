@@ -302,7 +302,6 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         input.parent_workflow_run_id,
         input.target_label,
         feature.as_ref().map(|f| f.id.as_str()),
-        input.triggered_by_hook,
     )?;
 
     // Notify any waiting caller of the freshly-created run ID.
@@ -901,7 +900,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         resume_ctx,
         default_bot_name: wf_run.default_bot_name.clone(),
         feature_id: wf_run.feature_id.clone(),
-        triggered_by_hook: wf_run.triggered_by_hook,
+        triggered_by_hook: wf_run.is_triggered_by_hook(),
     };
 
     run_workflow_engine(&mut state, &workflow)

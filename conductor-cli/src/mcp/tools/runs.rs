@@ -516,7 +516,6 @@ mod tests {
                     None,
                     None,
                     None,
-                    false,
                 )
                 .unwrap();
             wf_mgr
@@ -532,7 +531,6 @@ mod tests {
                     None,
                     None,
                     None,
-                    false,
                 )
                 .unwrap();
         }
@@ -624,7 +622,6 @@ mod tests {
                 None,
                 None,
                 None,
-                false,
             )
             .expect("create run A");
         let _run_b = mgr
@@ -640,7 +637,6 @@ mod tests {
                 None,
                 None,
                 None,
-                false,
             )
             .expect("create run B");
 
@@ -907,7 +903,6 @@ mod tests {
                 None,
                 None,
                 None,
-                false,
             )
             .expect("create workflow run");
 

@@ -832,17 +832,41 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 46)?;
     }
 
-    // Migration 047: add triggered_by_hook column and widen trigger CHECK to include 'hook'.
+    // Migration 047: widen trigger CHECK to include 'hook'.
     // SQLite cannot alter CHECK constraints in-place; a table swap is required.
+    // Also recreates indexes dropped by the table swap (ticket, repo, parent_wf).
     if version < 47 {
-        let has_triggered_by_hook: bool = conn
-            .prepare("SELECT triggered_by_hook FROM workflow_runs LIMIT 0")
-            .is_ok();
-        if !has_triggered_by_hook {
+        // Guard: check if the trigger CHECK already includes 'hook' by inspecting
+        // the table schema DDL.
+        let schema_sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='workflow_runs'",
+            [],
+            |row| row.get(0),
+        )?;
+        let needs_swap = !schema_sql.contains("'hook'");
+        if needs_swap {
             with_foreign_keys_off(conn, || {
                 conn.execute_batch(include_str!("migrations/047_workflow_run_hooks.sql"))?;
                 Ok(())
             })?;
+        } else {
+            // Table already has the updated CHECK. If the old `triggered_by_hook`
+            // column exists (from a prior version of this migration), drop it via
+            // table swap. Otherwise just ensure indexes exist.
+            let has_old_column = schema_sql.contains("triggered_by_hook");
+            if has_old_column {
+                with_foreign_keys_off(conn, || {
+                    conn.execute_batch(include_str!("migrations/047_workflow_run_hooks.sql"))?;
+                    Ok(())
+                })?;
+            } else {
+                // Just ensure indexes exist (idempotent).
+                conn.execute_batch(
+                    "CREATE INDEX IF NOT EXISTS idx_workflow_runs_ticket ON workflow_runs(ticket_id);
+                     CREATE INDEX IF NOT EXISTS idx_workflow_runs_repo ON workflow_runs(repo_id);
+                     CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_wf ON workflow_runs(parent_workflow_run_id);",
+                )?;
+            }
         }
         bump_version(conn, 47)?;
     }

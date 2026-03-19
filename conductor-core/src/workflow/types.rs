@@ -70,8 +70,14 @@ pub struct WorkflowRun {
     pub blocked_on: Option<BlockedOn>,
     /// Optional feature ID linking this run to a feature branch.
     pub feature_id: Option<String>,
+}
+
+impl WorkflowRun {
     /// Whether this run was triggered by a workflow hook (prevents infinite chains).
-    pub triggered_by_hook: bool,
+    /// Derived from `trigger == "hook"` rather than stored separately.
+    pub fn is_triggered_by_hook(&self) -> bool {
+        self.trigger == "hook"
+    }
 }
 
 /// A workflow step execution record from the database.

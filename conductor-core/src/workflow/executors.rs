@@ -589,7 +589,7 @@ pub(super) fn execute_call_workflow(
             feature_id: state.feature_id.as_deref(),
             iteration,
             run_id_notify: None,
-            triggered_by_hook: false,
+            triggered_by_hook: state.triggered_by_hook,
         };
 
         match super::engine::execute_workflow(&child_input) {
