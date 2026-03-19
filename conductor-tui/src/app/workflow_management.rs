@@ -1505,7 +1505,11 @@ impl App {
         let wt_model = wt.and_then(|w| w.model.clone());
         let repo_model = wt
             .and_then(|w| self.state.data.repos.iter().find(|r| r.id == w.repo_id))
-            .and_then(|r| r.model.clone());
+            .and_then(|r| {
+                conductor_core::config::RepoConfig::load(std::path::Path::new(&r.local_path))
+                    .ok()
+                    .and_then(|rc| rc.defaults.model)
+            });
         let is_wt = wt_model.is_some();
         let is_repo = !is_wt && repo_model.is_some();
         let model = conductor_core::models::resolve_model(
@@ -1556,25 +1560,40 @@ mod tests {
         }
     }
 
-    fn make_repo(id: &str, model: Option<&str>) -> Repo {
-        Repo {
+    /// Create a Repo with optional per-repo model written to a real temp directory.
+    /// Returns `(Repo, Option<TempDir>)` — keep TempDir alive for the test duration.
+    fn make_repo_with_config(id: &str, model: Option<&str>) -> (Repo, Option<tempfile::TempDir>) {
+        let (local_path, tmpdir) = if model.is_some() {
+            let tmp = tempfile::tempdir().unwrap();
+            let rc = conductor_core::config::RepoConfig {
+                defaults: conductor_core::config::RepoDefaultsConfig {
+                    model: model.map(String::from),
+                    ..Default::default()
+                },
+            };
+            rc.save(tmp.path()).unwrap();
+            (tmp.path().to_string_lossy().to_string(), Some(tmp))
+        } else {
+            ("/tmp/repo".to_string(), None)
+        };
+        let repo = Repo {
             id: id.to_string(),
             slug: "test-repo".to_string(),
-            local_path: "/tmp/repo".to_string(),
+            local_path,
             remote_url: "https://github.com/test/repo.git".to_string(),
-            default_branch: "main".to_string(),
             workspace_dir: "/tmp/ws".to_string(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
-            model: model.map(String::from),
             allow_agent_issue_creation: false,
-        }
+        };
+        (repo, tmpdir)
     }
 
     #[test]
     fn resolve_model_worktree_level_wins_over_repo_and_global() {
         let mut app = make_app();
         app.config.general.model = Some("haiku".to_string());
-        app.state.data.repos = vec![make_repo("r1", Some("sonnet"))];
+        let (repo, _tmp) = make_repo_with_config("r1", Some("sonnet"));
+        app.state.data.repos = vec![repo];
         app.state.data.worktrees = vec![make_worktree("w1", "r1", Some("opus"))];
         let (model, source) = app.resolve_model_for_worktree("w1");
         assert_eq!(model.as_deref(), Some("opus"));
@@ -1585,7 +1604,8 @@ mod tests {
     fn resolve_model_repo_level_when_no_worktree_model() {
         let mut app = make_app();
         app.config.general.model = Some("haiku".to_string());
-        app.state.data.repos = vec![make_repo("r1", Some("sonnet"))];
+        let (repo, _tmp) = make_repo_with_config("r1", Some("sonnet"));
+        app.state.data.repos = vec![repo];
         app.state.data.worktrees = vec![make_worktree("w1", "r1", None)];
         let (model, source) = app.resolve_model_for_worktree("w1");
         assert_eq!(model.as_deref(), Some("sonnet"));
@@ -1596,7 +1616,8 @@ mod tests {
     fn resolve_model_global_config_fallback_when_no_wt_or_repo_model() {
         let mut app = make_app();
         app.config.general.model = Some("haiku".to_string());
-        app.state.data.repos = vec![make_repo("r1", None)];
+        let (repo, _tmp) = make_repo_with_config("r1", None);
+        app.state.data.repos = vec![repo];
         app.state.data.worktrees = vec![make_worktree("w1", "r1", None)];
         let (model, source) = app.resolve_model_for_worktree("w1");
         assert_eq!(model.as_deref(), Some("haiku"));
@@ -1606,7 +1627,8 @@ mod tests {
     #[test]
     fn resolve_model_not_set_when_nothing_configured() {
         let mut app = make_app();
-        app.state.data.repos = vec![make_repo("r1", None)];
+        let (repo, _tmp) = make_repo_with_config("r1", None);
+        app.state.data.repos = vec![repo];
         app.state.data.worktrees = vec![make_worktree("w1", "r1", None)];
         let (model, source) = app.resolve_model_for_worktree("w1");
         assert!(model.is_none());
@@ -1616,7 +1638,8 @@ mod tests {
     #[test]
     fn resolve_model_unknown_worktree_id_returns_not_set() {
         let mut app = make_app();
-        app.state.data.repos = vec![make_repo("r1", Some("opus"))];
+        let (repo, _tmp) = make_repo_with_config("r1", Some("opus"));
+        app.state.data.repos = vec![repo];
         app.state.data.worktrees = vec![make_worktree("w1", "r1", Some("sonnet"))];
         let (model, source) = app.resolve_model_for_worktree("nonexistent");
         assert!(model.is_none());

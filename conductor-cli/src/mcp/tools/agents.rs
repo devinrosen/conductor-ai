@@ -238,8 +238,8 @@ mod tests {
         {
             let conn = open_database(&db).expect("open db");
             conn.execute(
-                "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
-                 VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+                 VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
                 [],
             ).unwrap();
             conn.execute(
@@ -291,8 +291,8 @@ mod tests {
         {
             let conn = open_database(&db).expect("open db");
             conn.execute(
-                "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
-                 VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+                 VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
                 [],
             ).unwrap();
             conn.execute(

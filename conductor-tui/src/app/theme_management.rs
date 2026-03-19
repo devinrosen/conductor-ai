@@ -122,6 +122,13 @@ impl App {
     }
 
     pub(super) fn handle_set_model(&mut self) {
+        // Helper: load the per-repo model from .conductor/config.toml
+        let repo_model_from_config = |repo: &conductor_core::repo::Repo| -> Option<String> {
+            conductor_core::config::RepoConfig::load(std::path::Path::new(&repo.local_path))
+                .ok()
+                .and_then(|rc| rc.defaults.model)
+        };
+
         // Helper to compute effective default and source for a worktree context
         let resolve_wt_effective =
             |wt: &conductor_core::worktree::Worktree,
@@ -130,7 +137,7 @@ impl App {
                 let repo_model = repos
                     .iter()
                     .find(|r| r.id == wt.repo_id)
-                    .and_then(|r| r.model.clone());
+                    .and_then(repo_model_from_config);
                 if let Some(ref m) = wt.model {
                     (Some(m.clone()), "worktree".to_string())
                 } else if let Some(ref m) = repo_model {
@@ -194,14 +201,15 @@ impl App {
                         let Some(repo) = self.state.data.repos.get(repo_idx).cloned() else {
                             return;
                         };
-                        let (effective, source) = if let Some(ref m) = repo.model {
+                        let repo_model = repo_model_from_config(&repo);
+                        let (effective, source) = if let Some(ref m) = repo_model {
                             (Some(m.clone()), "repo".to_string())
                         } else if let Some(ref m) = self.config.general.model {
                             (Some(m.clone()), "global config".to_string())
                         } else {
                             (None, "not set".to_string())
                         };
-                        let selected = initial_selected(&repo.model);
+                        let selected = initial_selected(&repo_model);
                         self.state.modal = Modal::ModelPicker {
                             context_label: format!("repo: {}", repo.slug),
                             effective_default: effective,
@@ -269,14 +277,15 @@ impl App {
                 else {
                     return;
                 };
-                let (effective, source) = if let Some(ref m) = repo.model {
+                let repo_model = repo_model_from_config(&repo);
+                let (effective, source) = if let Some(ref m) = repo_model {
                     (Some(m.clone()), "repo".to_string())
                 } else if let Some(ref m) = self.config.general.model {
                     (Some(m.clone()), "global config".to_string())
                 } else {
                     (None, "not set".to_string())
                 };
-                let selected = initial_selected(&repo.model);
+                let selected = initial_selected(&repo_model);
                 self.state.modal = Modal::ModelPicker {
                     context_label: format!("repo: {}", repo.slug),
                     effective_default: effective,

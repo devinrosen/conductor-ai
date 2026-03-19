@@ -32,8 +32,8 @@ pub(super) fn tool_list_repos(db_path: &Path) -> CallToolResult {
     let mut out = String::new();
     for r in repos {
         out.push_str(&format!(
-            "slug: {}\nlocal_path: {}\nremote_url: {}\ndefault_branch: {}\n",
-            r.slug, r.local_path, r.remote_url, r.default_branch
+            "slug: {}\nlocal_path: {}\nremote_url: {}\n",
+            r.slug, r.local_path, r.remote_url
         ));
         let running = agent_counts.get(&r.id).map_or(0, |c| c.running)
             + workflow_counts.get(&r.id).map_or(0, |c| c.running);
@@ -76,11 +76,10 @@ pub(super) fn tool_register_repo(
     };
     match RepoManager::new(&conn, &config).register(&slug, &local, remote_url, None) {
         Ok(repo) => tool_ok(format!(
-            "Registered repo: {slug}\nlocal_path: {local_path}\nremote_url: {remote_url}\ndefault_branch: {default_branch}\n",
+            "Registered repo: {slug}\nlocal_path: {local_path}\nremote_url: {remote_url}\n",
             slug = repo.slug,
             local_path = repo.local_path,
             remote_url = repo.remote_url,
-            default_branch = repo.default_branch,
         )),
         Err(e) => tool_err(e),
     }

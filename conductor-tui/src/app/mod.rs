@@ -1447,10 +1447,8 @@ mod action_handler_tests {
                 slug: "repo-a".to_string(),
                 local_path: "/tmp/repo-a".to_string(),
                 remote_url: "https://github.com/x/a".to_string(),
-                default_branch: "main".to_string(),
                 workspace_dir: "/tmp".to_string(),
                 created_at: "2024-01-01T00:00:00Z".to_string(),
-                model: None,
                 allow_agent_issue_creation: false,
             },
             conductor_core::repo::Repo {
@@ -1458,10 +1456,8 @@ mod action_handler_tests {
                 slug: "repo-b".to_string(),
                 local_path: "/tmp/repo-b".to_string(),
                 remote_url: "https://github.com/x/b".to_string(),
-                default_branch: "main".to_string(),
                 workspace_dir: "/tmp".to_string(),
                 created_at: "2024-01-01T00:00:00Z".to_string(),
-                model: None,
                 allow_agent_issue_creation: false,
             },
         ];

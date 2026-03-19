@@ -3,12 +3,38 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+use conductor_core::config::RepoConfig;
 use conductor_core::github::{discover_github_repos, list_github_orgs, DiscoveredRepo};
 use conductor_core::repo::{derive_local_path, derive_slug_from_url, Repo, RepoManager};
 
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
 use crate::state::AppState;
+
+/// API response that includes resolved per-repo config values alongside core Repo data.
+/// The frontend sees `default_branch` and `model` as before, but they're now resolved
+/// from `.conductor/config.toml` with global config fallback.
+#[derive(Serialize)]
+pub struct RepoResponse {
+    #[serde(flatten)]
+    pub repo: Repo,
+    pub default_branch: String,
+    pub model: Option<String>,
+}
+
+fn repo_to_response(repo: Repo, global_default_branch: &str) -> RepoResponse {
+    let repo_config = RepoConfig::load(std::path::Path::new(&repo.local_path)).unwrap_or_default();
+    let default_branch = repo_config
+        .defaults
+        .default_branch
+        .unwrap_or_else(|| global_default_branch.to_string());
+    let model = repo_config.defaults.model;
+    RepoResponse {
+        repo,
+        default_branch,
+        model,
+    }
+}
 
 #[derive(Deserialize)]
 pub struct RegisterRepoRequest {
@@ -18,18 +44,25 @@ pub struct RegisterRepoRequest {
     pub workspace_dir: Option<String>,
 }
 
-pub async fn list_repos(State(state): State<AppState>) -> Result<Json<Vec<Repo>>, ApiError> {
+pub async fn list_repos(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<RepoResponse>>, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
     let mgr = RepoManager::new(&db, &config);
     let repos = mgr.list()?;
-    Ok(Json(repos))
+    let default_branch = &config.defaults.default_branch;
+    let responses: Vec<RepoResponse> = repos
+        .into_iter()
+        .map(|r| repo_to_response(r, default_branch))
+        .collect();
+    Ok(Json(responses))
 }
 
 pub async fn register_repo(
     State(state): State<AppState>,
     Json(body): Json<RegisterRepoRequest>,
-) -> Result<(StatusCode, Json<Repo>), ApiError> {
+) -> Result<(StatusCode, Json<RepoResponse>), ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
     let mgr = RepoManager::new(&db, &config);
@@ -48,7 +81,11 @@ pub async fn register_repo(
     state.events.emit(ConductorEvent::RepoRegistered {
         id: repo.id.clone(),
     });
-    Ok((StatusCode::CREATED, Json(repo)))
+    let default_branch = &config.defaults.default_branch;
+    Ok((
+        StatusCode::CREATED,
+        Json(repo_to_response(repo, default_branch)),
+    ))
 }
 
 pub async fn unregister_repo(
@@ -72,14 +109,18 @@ pub async fn patch_repo_model(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<SetModelRequest>,
-) -> Result<Json<Repo>, ApiError> {
+) -> Result<Json<RepoResponse>, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
     let mgr = RepoManager::new(&db, &config);
     let repo = mgr.get_by_id(&id)?;
-    mgr.set_model(&repo.slug, body.model.as_deref())?;
-    let updated = mgr.get_by_id(&id)?;
-    Ok(Json(updated))
+    // Write model to .conductor/config.toml
+    let repo_path = std::path::Path::new(&repo.local_path);
+    let mut repo_config = RepoConfig::load(repo_path).unwrap_or_default();
+    repo_config.defaults.model = body.model;
+    repo_config.save(repo_path)?;
+    let default_branch = &config.defaults.default_branch;
+    Ok(Json(repo_to_response(repo, default_branch)))
 }
 
 #[derive(Deserialize)]
@@ -92,7 +133,7 @@ pub async fn update_repo_settings(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<UpdateRepoSettingsRequest>,
-) -> Result<Json<Repo>, ApiError> {
+) -> Result<Json<RepoResponse>, ApiError> {
     let db = state.db.lock().await;
     let config = state.config.read().await;
     let mgr = RepoManager::new(&db, &config);
@@ -100,7 +141,8 @@ pub async fn update_repo_settings(
         mgr.set_allow_agent_issue_creation(&id, allow)?;
     }
     let repo = mgr.get_by_id(&id)?;
-    Ok(Json(repo))
+    let default_branch = &config.defaults.default_branch;
+    Ok(Json(repo_to_response(repo, default_branch)))
 }
 
 /// A repo discovered via GitHub with a flag indicating if it's already registered.

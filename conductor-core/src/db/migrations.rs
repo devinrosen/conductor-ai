@@ -746,6 +746,51 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 44)?;
     }
 
+    // Migration 045: drop model and default_branch columns from repos.
+    // These values now live in per-repo .conductor/config.toml files.
+    if version < 45 {
+        // Check if the columns still exist (idempotency guard).
+        let has_model: bool = conn.prepare("SELECT model FROM repos LIMIT 0").is_ok();
+        let has_default_branch: bool = conn
+            .prepare("SELECT default_branch FROM repos LIMIT 0")
+            .is_ok();
+        if has_model || has_default_branch {
+            // Check if allow_agent_issue_creation exists (added in migration 014).
+            // Minimal test schemas may not have it yet.
+            let has_allow_issues: bool = conn
+                .prepare("SELECT allow_agent_issue_creation FROM repos LIMIT 0")
+                .is_ok();
+            with_foreign_keys_off(conn, || {
+                if has_allow_issues {
+                    conn.execute_batch(include_str!(
+                        "migrations/045_drop_repo_model_default_branch.sql"
+                    ))?;
+                } else {
+                    // Simplified version without allow_agent_issue_creation
+                    conn.execute_batch(
+                        "BEGIN;
+                        CREATE TABLE repos_new (
+                            id          TEXT PRIMARY KEY,
+                            slug        TEXT NOT NULL UNIQUE,
+                            local_path  TEXT NOT NULL,
+                            remote_url  TEXT NOT NULL,
+                            workspace_dir TEXT NOT NULL,
+                            created_at  TEXT NOT NULL
+                        );
+                        INSERT INTO repos_new (id, slug, local_path, remote_url, workspace_dir, created_at)
+                            SELECT id, slug, local_path, remote_url, workspace_dir, created_at
+                            FROM repos;
+                        DROP TABLE repos;
+                        ALTER TABLE repos_new RENAME TO repos;
+                        COMMIT;",
+                    )?;
+                }
+                Ok(())
+            })?;
+        }
+        bump_version(conn, 45)?;
+    }
+
     Ok(())
 }
 

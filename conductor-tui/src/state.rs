@@ -2680,10 +2680,8 @@ pub(crate) mod tests {
             slug: "my-repo".into(),
             remote_url: String::new(),
             local_path: String::new(),
-            default_branch: String::new(),
             workspace_dir: String::new(),
             created_at: String::new(),
-            model: None,
             allow_agent_issue_creation: false,
         }];
         state.data.workflow_runs = vec![make_wf_run_with_label(
@@ -3693,10 +3691,8 @@ pub(crate) mod tests {
             slug: slug.into(),
             local_path: String::new(),
             remote_url: String::new(),
-            default_branch: "main".into(),
             workspace_dir: String::new(),
             created_at: String::new(),
-            model: None,
             allow_agent_issue_creation: false,
         }
     }

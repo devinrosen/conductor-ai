@@ -1642,10 +1642,8 @@ mod tests {
             slug: "test-repo".to_string(),
             local_path: "/tmp/repo".to_string(),
             remote_url: "https://github.com/test/repo.git".to_string(),
-            default_branch: "main".to_string(),
             workspace_dir: "/tmp/ws".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
-            model: None,
             allow_agent_issue_creation: false,
         }
     }

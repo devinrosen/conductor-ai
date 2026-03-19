@@ -4,6 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
+use conductor_core::config::RepoConfig;
 use conductor_core::github::GithubPr;
 
 use super::helpers::{shorten_paths, visual_idx_with_headers};
@@ -40,6 +41,8 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         frame.render_widget(msg, area);
         return;
     };
+
+    let repo_config = RepoConfig::load(std::path::Path::new(&repo.local_path)).unwrap_or_default();
 
     // Worktrees pane: sized to content, capped at 1/3 of available height.
     let wt_height = (state.detail_worktrees.len() as u16 + 2)
@@ -104,7 +107,13 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                 "Branch:        ",
                 Style::default().fg(state.theme.label_secondary),
             ),
-            Span::raw(&repo.default_branch),
+            Span::raw(
+                repo_config
+                    .defaults
+                    .default_branch
+                    .as_deref()
+                    .unwrap_or("main"),
+            ),
         ]),
         Line::from(vec![
             Span::styled(
@@ -125,7 +134,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                 "Model:         ",
                 Style::default().fg(state.theme.label_secondary),
             ),
-            match repo.model.as_deref() {
+            match repo_config.defaults.model.as_deref() {
                 Some(m) => Span::raw(m.to_string()),
                 None => Span::styled(
                     "(not set)",

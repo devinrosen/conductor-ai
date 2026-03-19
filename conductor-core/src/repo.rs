@@ -1,8 +1,9 @@
 use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
-use crate::config::Config;
+use crate::config::{Config, RepoConfig};
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 
@@ -12,12 +13,8 @@ pub struct Repo {
     pub slug: String,
     pub local_path: String,
     pub remote_url: String,
-    pub default_branch: String,
     pub workspace_dir: String,
     pub created_at: String,
-    /// Per-repo default model for Claude agent runs.
-    #[serde(default)]
-    pub model: Option<String>,
     /// Whether agents are allowed to create issues in the issue tracker for this repo.
     pub allow_agent_issue_creation: bool,
 }
@@ -67,22 +64,19 @@ impl<'a> RepoManager<'a> {
             slug: slug.to_string(),
             local_path: local_path.to_string(),
             remote_url: remote_url.to_string(),
-            default_branch: self.config.defaults.default_branch.clone(),
             workspace_dir: ws_dir,
             created_at: now,
-            model: None,
             allow_agent_issue_creation: false,
         };
 
         self.conn.execute(
-            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 repo.id,
                 repo.slug,
                 repo.local_path,
                 repo.remote_url,
-                repo.default_branch,
                 repo.workspace_dir,
                 repo.created_at,
             ],
@@ -94,49 +88,22 @@ impl<'a> RepoManager<'a> {
     pub fn list(&self) -> Result<Vec<Repo>> {
         query_collect(
             self.conn,
-            "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, created_at, \
-             COALESCE(model, NULL) as model, \
+            "SELECT id, slug, local_path, remote_url, workspace_dir, created_at, \
              COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation \
              FROM repos ORDER BY slug",
             [],
-            |row| {
-                Ok(Repo {
-                    id: row.get(0)?,
-                    slug: row.get(1)?,
-                    local_path: row.get(2)?,
-                    remote_url: row.get(3)?,
-                    default_branch: row.get(4)?,
-                    workspace_dir: row.get(5)?,
-                    created_at: row.get(6)?,
-                    model: row.get(7)?,
-                    allow_agent_issue_creation: row.get::<_, i64>(8).map(|v| v != 0)?,
-                })
-            },
+            map_repo_row,
         )
     }
 
     pub fn get_by_id(&self, id: &str) -> Result<Repo> {
         self.conn
             .query_row(
-                "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, \
-                 created_at, \
-                 COALESCE(model, NULL) as model, \
+                "SELECT id, slug, local_path, remote_url, workspace_dir, created_at, \
                  COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation \
                  FROM repos WHERE id = ?1",
                 params![id],
-                |row| {
-                    Ok(Repo {
-                        id: row.get(0)?,
-                        slug: row.get(1)?,
-                        local_path: row.get(2)?,
-                        remote_url: row.get(3)?,
-                        default_branch: row.get(4)?,
-                        workspace_dir: row.get(5)?,
-                        created_at: row.get(6)?,
-                        model: row.get(7)?,
-                        allow_agent_issue_creation: row.get::<_, i64>(8).map(|v| v != 0)?,
-                    })
-                },
+                map_repo_row,
             )
             .map_err(|e| match e {
                 rusqlite::Error::QueryReturnedNoRows => ConductorError::RepoNotFound {
@@ -149,25 +116,11 @@ impl<'a> RepoManager<'a> {
     pub fn get_by_slug(&self, slug: &str) -> Result<Repo> {
         self.conn
             .query_row(
-                "SELECT id, slug, local_path, remote_url, default_branch, workspace_dir, \
-                 created_at, \
-                 COALESCE(model, NULL) as model, \
+                "SELECT id, slug, local_path, remote_url, workspace_dir, created_at, \
                  COALESCE(allow_agent_issue_creation, 0) as allow_agent_issue_creation \
                  FROM repos WHERE slug = ?1",
                 params![slug],
-                |row| {
-                    Ok(Repo {
-                        id: row.get(0)?,
-                        slug: row.get(1)?,
-                        local_path: row.get(2)?,
-                        remote_url: row.get(3)?,
-                        default_branch: row.get(4)?,
-                        workspace_dir: row.get(5)?,
-                        created_at: row.get(6)?,
-                        model: row.get(7)?,
-                        allow_agent_issue_creation: row.get::<_, i64>(8).map(|v| v != 0)?,
-                    })
-                },
+                map_repo_row,
             )
             .map_err(|e| match e {
                 rusqlite::Error::QueryReturnedNoRows => ConductorError::RepoNotFound {
@@ -177,19 +130,9 @@ impl<'a> RepoManager<'a> {
             })
     }
 
-    /// Set (or clear) the per-repo default model.
-    /// Pass `None` to clear the override and fall back to global config.
-    pub fn set_model(&self, slug: &str, model: Option<&str>) -> Result<()> {
-        let affected = self.conn.execute(
-            "UPDATE repos SET model = ?1 WHERE slug = ?2",
-            params![model, slug],
-        )?;
-        if affected == 0 {
-            return Err(ConductorError::RepoNotFound {
-                slug: slug.to_string(),
-            });
-        }
-        Ok(())
+    /// Load the per-repo config from `.conductor/config.toml` in the repo's local path.
+    pub fn load_repo_config(&self, repo: &Repo) -> RepoConfig {
+        RepoConfig::load(Path::new(&repo.local_path)).unwrap_or_default()
     }
 
     /// Set whether agents can create issues for this repo.
@@ -229,6 +172,18 @@ impl<'a> RepoManager<'a> {
         }
         Ok(())
     }
+}
+
+fn map_repo_row(row: &rusqlite::Row) -> rusqlite::Result<Repo> {
+    Ok(Repo {
+        id: row.get(0)?,
+        slug: row.get(1)?,
+        local_path: row.get(2)?,
+        remote_url: row.get(3)?,
+        workspace_dir: row.get(4)?,
+        created_at: row.get(5)?,
+        allow_agent_issue_creation: row.get::<_, i64>(6).map(|v| v != 0)?,
+    })
 }
 
 /// Derive a repo slug from a remote URL (e.g. "https://github.com/org/repo.git" → "repo").

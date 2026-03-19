@@ -506,9 +506,16 @@ impl App {
                     .iter()
                     .find(|w| w.id == worktree_id);
                 let wt_model = wt.and_then(|w| w.model.as_deref());
-                let repo_model = wt
+                let repo_model_owned = wt
                     .and_then(|w| self.state.data.repos.iter().find(|r| r.id == w.repo_id))
-                    .and_then(|r| r.model.as_deref());
+                    .and_then(|r| {
+                        conductor_core::config::RepoConfig::load(std::path::Path::new(
+                            &r.local_path,
+                        ))
+                        .ok()
+                        .and_then(|rc| rc.defaults.model)
+                    });
+                let repo_model = repo_model_owned.as_deref();
                 let resolved_default = conductor_core::models::resolve_model(
                     wt_model,
                     repo_model,
@@ -634,7 +641,14 @@ impl App {
                     Some(value.trim().to_string())
                 };
                 let mgr = RepoManager::new(&self.conn, &self.config);
-                match mgr.set_model(&slug, model.as_deref()) {
+                let result = mgr.get_by_id(&repo_id).and_then(|repo| {
+                    let repo_path = std::path::Path::new(&repo.local_path);
+                    let mut repo_config =
+                        conductor_core::config::RepoConfig::load(repo_path).unwrap_or_default();
+                    repo_config.defaults.model = model.clone();
+                    repo_config.save(repo_path)
+                });
+                match result {
                     Ok(()) => {
                         let msg = match &model {
                             Some(m) => format!("Model for {slug} set to: {m}"),
@@ -649,7 +663,6 @@ impl App {
                         };
                     }
                 }
-                let _ = repo_id;
             }
             InputAction::FeedbackResponse { feedback_id } => {
                 if value.is_empty() {
@@ -712,7 +725,14 @@ impl App {
                     Some(value.trim().to_string())
                 };
                 let mgr = RepoManager::new(&self.conn, &self.config);
-                match mgr.set_model(&slug, model.as_deref()) {
+                let result = mgr.get_by_id(&repo_id).and_then(|repo| {
+                    let repo_path = std::path::Path::new(&repo.local_path);
+                    let mut repo_config =
+                        conductor_core::config::RepoConfig::load(repo_path).unwrap_or_default();
+                    repo_config.defaults.model = model.clone();
+                    repo_config.save(repo_path)
+                });
+                match result {
                     Ok(()) => {
                         let msg = match &model {
                             Some(m) => format!("Model for {slug} set to: {m}"),
@@ -727,7 +747,6 @@ impl App {
                         };
                     }
                 }
-                let _ = repo_id;
             }
             InputAction::AgentModelOverride {
                 prompt,

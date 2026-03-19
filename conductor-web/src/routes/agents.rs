@@ -106,10 +106,13 @@ pub async fn start_agent(
 
     // Resolve model: per-worktree → per-repo → global config
     let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
+    let repo_config =
+        conductor_core::config::RepoConfig::load(std::path::Path::new(&repo.local_path))
+            .unwrap_or_default();
     let model = wt
         .model
         .as_deref()
-        .or(repo.model.as_deref())
+        .or(repo_config.defaults.model.as_deref())
         .or(config.general.model.as_deref())
         .map(str::to_string);
 
@@ -498,10 +501,13 @@ pub async fn orchestrate_agent(
 
     // Resolve model
     let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
+    let repo_config =
+        conductor_core::config::RepoConfig::load(std::path::Path::new(&repo.local_path))
+            .unwrap_or_default();
     let model = wt
         .model
         .as_deref()
-        .or(repo.model.as_deref())
+        .or(repo_config.defaults.model.as_deref())
         .or(config.general.model.as_deref())
         .map(str::to_string);
 

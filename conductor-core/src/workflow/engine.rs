@@ -300,8 +300,22 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         cvar.notify_one();
     }
 
+    // Resolve default_bot_name: explicit input → repo config → None
+    let effective_bot_name = input.default_bot_name.clone().or_else(|| {
+        if let Some(rid) = input.repo_id {
+            let repo = crate::repo::RepoManager::new(conn, config)
+                .get_by_id(rid)
+                .ok()?;
+            crate::config::RepoConfig::load(std::path::Path::new(&repo.local_path))
+                .ok()
+                .and_then(|rc| rc.defaults.bot_name)
+        } else {
+            None
+        }
+    });
+
     // Persist default_bot_name so it can be restored on resume.
-    if let Some(ref bot_name) = input.default_bot_name {
+    if let Some(ref bot_name) = effective_bot_name {
         wf_mgr.set_workflow_run_default_bot_name(&wf_run.id, bot_name)?;
     }
 
@@ -383,7 +397,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         block_output: None,
         block_with: Vec::new(),
         resume_ctx: None,
-        default_bot_name: input.default_bot_name.clone(),
+        default_bot_name: effective_bot_name,
         feature_id: input.feature_id.map(String::from),
     };
 

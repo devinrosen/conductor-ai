@@ -20,10 +20,8 @@ fn make_repos() -> Vec<Repo> {
             slug: "my-app".into(),
             local_path: "/home/user/my-app".into(),
             remote_url: "https://github.com/user/my-app".into(),
-            default_branch: "main".into(),
             workspace_dir: "/home/user/.conductor/workspaces/my-app".into(),
             created_at: "2024-01-01T00:00:00Z".into(),
-            model: None,
             allow_agent_issue_creation: false,
         },
         Repo {
@@ -31,10 +29,8 @@ fn make_repos() -> Vec<Repo> {
             slug: "backend-api".into(),
             local_path: "/home/user/backend-api".into(),
             remote_url: "https://github.com/user/backend-api".into(),
-            default_branch: "main".into(),
             workspace_dir: "/home/user/.conductor/workspaces/backend-api".into(),
             created_at: "2024-01-02T00:00:00Z".into(),
-            model: None,
             allow_agent_issue_creation: false,
         },
     ]

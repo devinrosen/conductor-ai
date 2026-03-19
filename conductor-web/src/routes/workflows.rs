@@ -187,12 +187,15 @@ pub async fn run_workflow(
             }));
         }
 
-        // Resolve model: request → per-worktree → per-repo → global config
+        // Resolve model: request → per-worktree → per-repo config → global config
+        let repo_config =
+            conductor_core::config::RepoConfig::load(std::path::Path::new(&repo.local_path))
+                .unwrap_or_default();
         let model = req
             .model
             .clone()
             .or_else(|| wt.model.clone())
-            .or_else(|| repo.model.clone())
+            .or(repo_config.defaults.model)
             .or_else(|| config.general.model.clone());
 
         // Resolve feature_id synchronously so user-facing errors (e.g. ambiguous
@@ -774,8 +777,8 @@ mod tests {
             // Seed the minimum fixtures required by the FK chain:
             // workflow_runs.parent_run_id → agent_runs.id → worktrees.id → repos.id
             db.execute_batch(
-                "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
-                 VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z');
+                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+                 VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z');
                  INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
                  VALUES ('w1', 'r1', 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z');
                  INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at) \

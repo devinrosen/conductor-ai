@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::Path;
 use std::process::Command;
 
-use crate::config::Config;
+use crate::config::{Config, RepoConfig};
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result};
 use crate::git::{check_gh_output, check_output, git_in};
@@ -169,6 +169,14 @@ impl<'a> WorktreeManager<'a> {
         // Ensure the per-repo workspace directory exists
         std::fs::create_dir_all(&repo.workspace_dir)?;
 
+        // Resolve the default branch from repo config → global config → "main"
+        let repo_config = RepoConfig::load(Path::new(&repo.local_path)).unwrap_or_default();
+        let default_branch = repo_config
+            .defaults
+            .default_branch
+            .as_deref()
+            .unwrap_or(&self.config.defaults.default_branch);
+
         // (branch_name, base_branch_for_db, warnings)
         let (branch, base_for_db, warnings) = if let Some(pr_number) = from_pr {
             // --from-pr path: fetch the PR branch and record the PR's base branch
@@ -179,7 +187,7 @@ impl<'a> WorktreeManager<'a> {
             // Normal path: resolve base, ensure it's up to date, create a new branch.
             let base = from_branch
                 .map(|b| b.to_string())
-                .unwrap_or_else(|| resolve_base_branch(&repo.local_path, &repo.default_branch));
+                .unwrap_or_else(|| resolve_base_branch(&repo.local_path, default_branch));
             let warnings = ensure_base_up_to_date(&repo.local_path, &base)?;
             check_output(git_in(&repo.local_path).args([
                 "branch",
@@ -454,11 +462,17 @@ impl<'a> WorktreeManager<'a> {
                 })
                 .unwrap_or(false)
         });
+        let repo_config = RepoConfig::load(Path::new(&repo.local_path)).unwrap_or_default();
+        let default_branch = repo_config
+            .defaults
+            .default_branch
+            .as_deref()
+            .unwrap_or(&self.config.defaults.default_branch);
         let is_merged = ticket_closed
             || crate::git::is_branch_merged_local(
                 &repo.local_path,
                 &worktree.branch,
-                &repo.default_branch,
+                default_branch,
             );
         let new_status = if is_merged {
             WorktreeStatus::Merged
@@ -535,7 +549,13 @@ impl<'a> WorktreeManager<'a> {
     pub fn create_pr(&self, repo_slug: &str, name: &str, draft: bool) -> Result<String> {
         let (repo, worktree) = self.get_active_worktree(repo_slug, name)?;
 
-        let base = worktree.effective_base(&repo.default_branch);
+        let repo_config = RepoConfig::load(Path::new(&repo.local_path)).unwrap_or_default();
+        let default_branch = repo_config
+            .defaults
+            .default_branch
+            .as_deref()
+            .unwrap_or(&self.config.defaults.default_branch);
+        let base = worktree.effective_base(default_branch);
         let mut args = vec![
             "pr",
             "create",

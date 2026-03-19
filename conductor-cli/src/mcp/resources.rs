@@ -128,8 +128,8 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
         let mut out = String::new();
         for r in repos {
             out.push_str(&format!(
-                "slug: {}\nlocal_path: {}\nremote_url: {}\ndefault_branch: {}\n\n",
-                r.slug, r.local_path, r.remote_url, r.default_branch
+                "slug: {}\nlocal_path: {}\nremote_url: {}\n\n",
+                r.slug, r.local_path, r.remote_url
             ));
         }
         return Ok(out);
@@ -139,8 +139,8 @@ pub(super) fn read_resource_by_uri(db_path: &Path, uri: &str) -> anyhow::Result<
         let mgr = RepoManager::new(&conn, &config);
         let r = mgr.get_by_slug(slug)?;
         return Ok(format!(
-            "slug: {}\nlocal_path: {}\nremote_url: {}\ndefault_branch: {}\nworkspace_dir: {}\ncreated_at: {}\n",
-            r.slug, r.local_path, r.remote_url, r.default_branch, r.workspace_dir, r.created_at
+            "slug: {}\nlocal_path: {}\nremote_url: {}\nworkspace_dir: {}\ncreated_at: {}\n",
+            r.slug, r.local_path, r.remote_url, r.workspace_dir, r.created_at
         ));
     }
 

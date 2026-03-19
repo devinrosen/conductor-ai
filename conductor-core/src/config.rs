@@ -337,6 +337,77 @@ fn save_config_to(config: &Config, path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Per-repo config: .conductor/config.toml
+// ---------------------------------------------------------------------------
+
+/// Per-repo configuration loaded from `<repo>/.conductor/config.toml`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RepoConfig {
+    #[serde(default)]
+    pub defaults: RepoDefaultsConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RepoDefaultsConfig {
+    pub model: Option<String>,
+    pub default_branch: Option<String>,
+    pub bot_name: Option<String>,
+    pub feature_merge_strategy: Option<String>,
+}
+
+/// Returns the path to a repo's conductor config file.
+pub fn repo_config_path(repo_path: &std::path::Path) -> std::path::PathBuf {
+    repo_path.join(".conductor").join("config.toml")
+}
+
+impl RepoConfig {
+    /// Load per-repo config from `<repo_path>/.conductor/config.toml`.
+    ///
+    /// Returns `Default::default()` if the file doesn't exist (not an error).
+    /// Returns an error only if the file exists but is malformed.
+    pub fn load(repo_path: &std::path::Path) -> Result<RepoConfig> {
+        let path = repo_config_path(repo_path);
+        if !path.exists() {
+            return Ok(RepoConfig::default());
+        }
+        let contents = std::fs::read_to_string(&path)?;
+        let config: RepoConfig =
+            toml::from_str(&contents).map_err(|e| ConductorError::Config(e.to_string()))?;
+        Ok(config)
+    }
+
+    /// Save per-repo config to `<repo_path>/.conductor/config.toml`.
+    ///
+    /// Creates the `.conductor/` directory if it doesn't exist.
+    /// Uses patch-write to preserve unknown sections.
+    pub fn save(&self, repo_path: &std::path::Path) -> Result<()> {
+        let path = repo_config_path(repo_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let mut merged: toml::Value = if path.exists() {
+            let existing = std::fs::read_to_string(&path)?;
+            toml::from_str(&existing).map_err(|e| {
+                ConductorError::Config(format!("existing repo config is malformed: {e}"))
+            })?
+        } else {
+            toml::Value::Table(toml::map::Map::new())
+        };
+
+        let new_value: toml::Value = toml::Value::try_from(self)
+            .map_err(|e| ConductorError::Config(format!("serialize repo config: {e}")))?;
+
+        merge_toml(&mut merged, new_value);
+
+        let contents = toml::to_string_pretty(&merged)
+            .map_err(|e| ConductorError::Config(format!("serialize repo config: {e}")))?;
+        std::fs::write(&path, contents)?;
+        Ok(())
+    }
+}
+
 /// Ensure the conductor data directory exists.
 pub fn ensure_dirs(config: &Config) -> Result<()> {
     std::fs::create_dir_all(conductor_dir())?;
@@ -704,5 +775,100 @@ some_key = "some_value"
                 .and_then(|v| v.as_str()),
             Some("some_value")
         );
+    }
+
+    // ── RepoConfig tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_repo_config_load_missing_file_returns_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = RepoConfig::load(dir.path()).unwrap();
+        assert!(config.defaults.model.is_none());
+        assert!(config.defaults.default_branch.is_none());
+        assert!(config.defaults.bot_name.is_none());
+        assert!(config.defaults.feature_merge_strategy.is_none());
+    }
+
+    #[test]
+    fn test_repo_config_load_valid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let conductor_dir = dir.path().join(".conductor");
+        std::fs::create_dir_all(&conductor_dir).unwrap();
+        std::fs::write(
+            conductor_dir.join("config.toml"),
+            r#"
+[defaults]
+model = "opus"
+default_branch = "develop"
+bot_name = "developer"
+feature_merge_strategy = "squash"
+"#,
+        )
+        .unwrap();
+
+        let config = RepoConfig::load(dir.path()).unwrap();
+        assert_eq!(config.defaults.model.as_deref(), Some("opus"));
+        assert_eq!(config.defaults.default_branch.as_deref(), Some("develop"));
+        assert_eq!(config.defaults.bot_name.as_deref(), Some("developer"));
+        assert_eq!(
+            config.defaults.feature_merge_strategy.as_deref(),
+            Some("squash")
+        );
+    }
+
+    #[test]
+    fn test_repo_config_load_malformed_file_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let conductor_dir = dir.path().join(".conductor");
+        std::fs::create_dir_all(&conductor_dir).unwrap();
+        std::fs::write(conductor_dir.join("config.toml"), "not valid toml = [").unwrap();
+
+        let result = RepoConfig::load(dir.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_repo_config_save_and_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = RepoConfig {
+            defaults: RepoDefaultsConfig {
+                model: Some("sonnet".to_string()),
+                default_branch: Some("main".to_string()),
+                bot_name: None,
+                feature_merge_strategy: None,
+            },
+        };
+        config.save(dir.path()).unwrap();
+
+        let reloaded = RepoConfig::load(dir.path()).unwrap();
+        assert_eq!(reloaded.defaults.model.as_deref(), Some("sonnet"));
+        assert_eq!(reloaded.defaults.default_branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn test_repo_config_save_preserves_unknown_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let conductor_dir = dir.path().join(".conductor");
+        std::fs::create_dir_all(&conductor_dir).unwrap();
+        std::fs::write(
+            conductor_dir.join("config.toml"),
+            r#"
+[hooks]
+pre_commit = "cargo fmt"
+"#,
+        )
+        .unwrap();
+
+        let config = RepoConfig {
+            defaults: RepoDefaultsConfig {
+                model: Some("opus".to_string()),
+                ..Default::default()
+            },
+        };
+        config.save(dir.path()).unwrap();
+
+        let raw_contents = std::fs::read_to_string(conductor_dir.join("config.toml")).unwrap();
+        let raw: toml::Value = toml::from_str(&raw_contents).unwrap();
+        assert!(raw.get("hooks").is_some(), "[hooks] should survive save");
     }
 }
