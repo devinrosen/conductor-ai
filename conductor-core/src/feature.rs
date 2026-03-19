@@ -3,7 +3,7 @@ use std::process::Command;
 use std::str::FromStr;
 
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -72,6 +72,13 @@ pub struct FeatureRow {
     pub created_at: String,
     pub worktree_count: i64,
     pub ticket_count: i64,
+}
+
+/// A branch that has active worktrees but no matching feature record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnregisteredBranch {
+    pub branch: String,
+    pub worktree_count: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -506,6 +513,142 @@ impl<'a> FeatureManager<'a> {
         Ok(())
     }
 
+    /// Auto-register a feature for a branch if none exists yet.
+    ///
+    /// This is a **DB-only** operation — the branch already exists (the caller
+    /// is targeting it for a worktree). Returns `Ok(Some(feature))` when a new
+    /// feature was created, `Ok(None)` when no action was needed (branch is the
+    /// default, or a feature already exists).
+    pub fn ensure_feature_for_branch(
+        &self,
+        repo: &crate::repo::Repo,
+        branch: &str,
+        base_branch: Option<&str>,
+    ) -> Result<Option<Feature>> {
+        // No feature for the default branch.
+        if branch == repo.default_branch {
+            return Ok(None);
+        }
+
+        // Already registered?
+        let exists: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'active')",
+            params![repo.id, branch],
+            |row| row.get(0),
+        )?;
+        if exists {
+            return Ok(None);
+        }
+
+        let base_name = branch_to_feature_name(branch);
+
+        // Use the caller-supplied base_branch, or fall back to the repo default.
+        let resolved_base: String = base_branch
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| repo.default_branch.clone());
+
+        // Check if a non-active feature with the base name exists — if so,
+        // reactivate it rather than creating a suffixed duplicate.
+        let maybe_inactive: Option<(String, String, String)> = self
+            .conn
+            .query_row(
+                "SELECT id, status, created_at FROM features WHERE repo_id = ?1 AND name = ?2 AND status != 'active'",
+                params![repo.id, base_name],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        if let Some((inactive_id, _status, created_at)) = maybe_inactive {
+            self.conn.execute(
+                "UPDATE features SET branch = ?1, base_branch = ?2, status = 'active', merged_at = NULL WHERE id = ?3",
+                params![branch, resolved_base, inactive_id],
+            )?;
+            return Ok(Some(Feature {
+                id: inactive_id,
+                repo_id: repo.id.clone(),
+                name: base_name.to_string(),
+                branch: branch.to_string(),
+                base_branch: resolved_base,
+                status: FeatureStatus::Active,
+                created_at,
+                merged_at: None,
+            }));
+        }
+
+        // Disambiguate if an active feature with this name already exists (on a
+        // different branch).
+        let mut name = base_name.to_string();
+        let mut suffix = 2u32;
+        loop {
+            let taken: bool = self.conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM features WHERE repo_id = ?1 AND name = ?2)",
+                params![repo.id, name],
+                |row| row.get(0),
+            )?;
+            if !taken {
+                break;
+            }
+            name = format!("{base_name}-{suffix}");
+            suffix += 1;
+        }
+
+        let id = crate::new_id();
+        let now = Utc::now().to_rfc3339();
+
+        let feature = Feature {
+            id: id.clone(),
+            repo_id: repo.id.clone(),
+            name,
+            branch: branch.to_string(),
+            base_branch: resolved_base,
+            status: FeatureStatus::Active,
+            created_at: now,
+            merged_at: None,
+        };
+
+        self.conn.execute(
+            "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                feature.id,
+                feature.repo_id,
+                feature.name,
+                feature.branch,
+                feature.base_branch,
+                feature.status,
+                feature.created_at,
+            ],
+        )?;
+
+        Ok(Some(feature))
+    }
+
+    /// List non-default branches that have active worktrees but no active
+    /// feature record. Used by the TUI branch picker to show "orphan" branches.
+    pub fn list_unregistered_branches(
+        &self,
+        repo_id: &str,
+        default_branch: &str,
+    ) -> Result<Vec<UnregisteredBranch>> {
+        query_collect(
+            self.conn,
+            "SELECT DISTINCT w.base_branch, COUNT(*) as worktree_count
+             FROM worktrees w
+             WHERE w.repo_id = ?1
+               AND w.status = 'active'
+               AND w.base_branch IS NOT NULL
+               AND w.base_branch != ?2
+               AND w.base_branch NOT IN (SELECT f.branch FROM features f WHERE f.repo_id = ?1 AND f.status = 'active')
+             GROUP BY w.base_branch",
+            params![repo_id, default_branch],
+            |row| {
+                Ok(UnregisteredBranch {
+                    branch: row.get(0)?,
+                    worktree_count: row.get(1)?,
+                })
+            },
+        )
+    }
+
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
@@ -628,6 +771,16 @@ fn derive_branch_name(name: &str) -> String {
     } else {
         format!("feat/{name}")
     }
+}
+
+/// Derive a feature name from a branch name (inverse of `derive_branch_name`).
+///
+/// Strips `feat/` and `fix/` prefixes; leaves everything else as-is.
+pub fn branch_to_feature_name(branch: &str) -> &str {
+    branch
+        .strip_prefix("feat/")
+        .or_else(|| branch.strip_prefix("fix/"))
+        .unwrap_or(branch)
 }
 
 // ---------------------------------------------------------------------------
@@ -1618,6 +1771,297 @@ mod tests {
             .resolve_feature_id_for_run(None, Some("test-repo"), None, Some("wt-no-ticket"))
             .unwrap();
         assert_eq!(result, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // branch_to_feature_name tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_branch_to_feature_name_strips_feat_prefix() {
+        assert_eq!(
+            branch_to_feature_name("feat/notification-improvements"),
+            "notification-improvements"
+        );
+    }
+
+    #[test]
+    fn test_branch_to_feature_name_strips_fix_prefix() {
+        assert_eq!(
+            branch_to_feature_name("fix/crash-on-startup"),
+            "crash-on-startup"
+        );
+    }
+
+    #[test]
+    fn test_branch_to_feature_name_leaves_other_prefixes() {
+        assert_eq!(branch_to_feature_name("release/2.0"), "release/2.0");
+    }
+
+    #[test]
+    fn test_branch_to_feature_name_passthrough_no_prefix() {
+        assert_eq!(branch_to_feature_name("my-branch"), "my-branch");
+    }
+
+    // -----------------------------------------------------------------------
+    // ensure_feature_for_branch tests
+    // -----------------------------------------------------------------------
+
+    fn make_repo(id: &str) -> crate::repo::Repo {
+        crate::repo::Repo {
+            id: id.to_string(),
+            slug: "test-repo".to_string(),
+            local_path: "/tmp/repo".to_string(),
+            remote_url: "https://github.com/test/repo.git".to_string(),
+            default_branch: "main".to_string(),
+            workspace_dir: "/tmp/ws".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            model: None,
+            allow_agent_issue_creation: false,
+        }
+    }
+
+    #[test]
+    fn test_ensure_feature_for_branch_creates_feature() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let repo = make_repo(&repo_id);
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .ensure_feature_for_branch(&repo, "feat/notifications", None)
+            .unwrap();
+        assert!(result.is_some(), "should create a new feature");
+        let feature = result.unwrap();
+        assert_eq!(feature.name, "notifications");
+        assert_eq!(feature.branch, "feat/notifications");
+        assert_eq!(feature.base_branch, "main"); // fallback to default
+        assert_eq!(feature.status, FeatureStatus::Active);
+    }
+
+    #[test]
+    fn test_ensure_feature_for_branch_noop_when_exists() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let repo = make_repo(&repo_id);
+        insert_feature(&conn, &repo_id, "notifications", "feat/notifications");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .ensure_feature_for_branch(&repo, "feat/notifications", None)
+            .unwrap();
+        assert!(
+            result.is_none(),
+            "should be no-op when feature already exists"
+        );
+    }
+
+    #[test]
+    fn test_ensure_feature_for_branch_noop_for_default_branch() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let repo = make_repo(&repo_id);
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr.ensure_feature_for_branch(&repo, "main", None).unwrap();
+        assert!(result.is_none(), "should be no-op for default branch");
+    }
+
+    #[test]
+    fn test_ensure_feature_for_branch_disambiguates_name() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let repo = make_repo(&repo_id);
+        // Insert a feature with the name "notifications" but on a DIFFERENT branch
+        // (e.g. it was closed/merged and a new branch was created with the same prefix).
+        insert_feature(&conn, &repo_id, "notifications", "feat/notifications-old");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .ensure_feature_for_branch(&repo, "feat/notifications", None)
+            .unwrap();
+        assert!(result.is_some());
+        let feature = result.unwrap();
+        assert_eq!(
+            feature.name, "notifications-2",
+            "should disambiguate with suffix"
+        );
+        assert_eq!(feature.branch, "feat/notifications");
+    }
+
+    #[test]
+    fn test_ensure_feature_for_branch_disambiguates_chained_suffix() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let repo = make_repo(&repo_id);
+        // Pre-insert both "notifications" and "notifications-2" on different branches
+        insert_feature(&conn, &repo_id, "notifications", "feat/notifications-old");
+        insert_feature(&conn, &repo_id, "notifications-2", "feat/notifications-v2");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .ensure_feature_for_branch(&repo, "feat/notifications", None)
+            .unwrap();
+        assert!(result.is_some());
+        let feature = result.unwrap();
+        assert_eq!(
+            feature.name, "notifications-3",
+            "should skip taken suffixes and use the next available one"
+        );
+        assert_eq!(feature.branch, "feat/notifications");
+    }
+
+    #[test]
+    fn test_ensure_feature_for_branch_reactivates_closed_feature() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let repo = make_repo(&repo_id);
+
+        // Insert a feature with name "notifications" but mark it as merged (non-active).
+        let feat_id = insert_feature(&conn, &repo_id, "notifications", "feat/notifications-old");
+        conn.execute(
+            "UPDATE features SET status = 'merged' WHERE id = ?1",
+            params![feat_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .ensure_feature_for_branch(&repo, "feat/notifications", None)
+            .unwrap();
+        assert!(result.is_some());
+        let feature = result.unwrap();
+        assert_eq!(
+            feature.name, "notifications",
+            "should reuse the name by reactivating the closed feature"
+        );
+        assert_eq!(feature.branch, "feat/notifications");
+        assert_eq!(feature.status, FeatureStatus::Active);
+        assert_eq!(feature.id, feat_id, "should reactivate the same record");
+    }
+
+    #[test]
+    fn test_ensure_feature_for_branch_uses_supplied_base_branch() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let repo = make_repo(&repo_id);
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .ensure_feature_for_branch(&repo, "feat/notifications", Some("develop"))
+            .unwrap();
+        assert!(result.is_some());
+        let feature = result.unwrap();
+        assert_eq!(
+            feature.base_branch, "develop",
+            "should use caller-supplied base_branch"
+        );
+    }
+
+    #[test]
+    fn test_ensure_feature_for_branch_defaults_to_repo_default_branch() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let repo = make_repo(&repo_id);
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+
+        let result = mgr
+            .ensure_feature_for_branch(&repo, "feat/notifications", None)
+            .unwrap();
+        assert!(result.is_some());
+        let feature = result.unwrap();
+        assert_eq!(
+            feature.base_branch, "main",
+            "should fall back to repo default_branch when base_branch is None"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // list_unregistered_branches tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_list_unregistered_branches() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+
+        // Create a worktree based on an unregistered branch
+        let wt_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES (?1, ?2, 'wt-orphan', 'feat/orphan-impl', 'feat/orphan', '/tmp/wt', 'active', '2024-01-01T00:00:00Z')",
+            params![wt_id, repo_id],
+        ).unwrap();
+
+        // Create a worktree based on a registered feature branch (should NOT appear)
+        insert_feature(&conn, &repo_id, "registered", "feat/registered");
+        let wt_id2 = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES (?1, ?2, 'wt-reg', 'feat/reg-impl', 'feat/registered', '/tmp/wt2', 'active', '2024-01-01T00:00:00Z')",
+            params![wt_id2, repo_id],
+        ).unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let orphans = mgr.list_unregistered_branches(&repo_id, "main").unwrap();
+
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].branch, "feat/orphan");
+        assert_eq!(orphans[0].worktree_count, 1);
+    }
+
+    #[test]
+    fn test_list_unregistered_branches_excludes_non_active_worktrees() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+
+        // Create a merged worktree on an unregistered branch — should NOT appear
+        let wt_id = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES (?1, ?2, 'wt-done', 'feat/done-impl', 'feat/done', '/tmp/wt-done', 'merged', '2024-01-01T00:00:00Z')",
+            params![wt_id, repo_id],
+        ).unwrap();
+
+        // Create an abandoned worktree on an unregistered branch — should NOT appear
+        let wt_id2 = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES (?1, ?2, 'wt-del', 'feat/del-impl', 'feat/abandoned', '/tmp/wt-del', 'abandoned', '2024-01-01T00:00:00Z')",
+            params![wt_id2, repo_id],
+        ).unwrap();
+
+        // Create an active worktree on an unregistered branch — SHOULD appear
+        let wt_id3 = crate::new_id();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES (?1, ?2, 'wt-act', 'feat/act-impl', 'feat/active-orphan', '/tmp/wt-act', 'active', '2024-01-01T00:00:00Z')",
+            params![wt_id3, repo_id],
+        ).unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let orphans = mgr.list_unregistered_branches(&repo_id, "main").unwrap();
+
+        // Only the active worktree's branch should be returned
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].branch, "feat/active-orphan");
+        assert_eq!(orphans[0].worktree_count, 1);
     }
 
     #[test]

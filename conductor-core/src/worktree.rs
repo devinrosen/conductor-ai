@@ -170,7 +170,7 @@ impl<'a> WorktreeManager<'a> {
         std::fs::create_dir_all(&repo.workspace_dir)?;
 
         // (branch_name, base_branch_for_db, warnings)
-        let (branch, base_for_db, warnings) = if let Some(pr_number) = from_pr {
+        let (branch, base_for_db, mut warnings) = if let Some(pr_number) = from_pr {
             // --from-pr path: fetch the PR branch and record the PR's base branch
             // so that create_pr can target the correct base.
             let (pr_branch, pr_base) = fetch_pr_branch(&repo.local_path, pr_number)?;
@@ -215,7 +215,7 @@ impl<'a> WorktreeManager<'a> {
             created_at: now,
             completed_at: None,
             model: None,
-            base_branch: base_for_db,
+            base_branch: base_for_db.clone(),
         };
 
         self.conn.execute(
@@ -233,6 +233,26 @@ impl<'a> WorktreeManager<'a> {
                 worktree.base_branch,
             ],
         )?;
+
+        // Auto-register feature if targeting a non-default branch
+        if let Some(ref base_branch) = worktree.base_branch {
+            let fm = crate::feature::FeatureManager::new(self.conn, self.config);
+            match fm.ensure_feature_for_branch(&repo, base_branch, None) {
+                Ok(Some(feature)) => {
+                    warnings.push(format!(
+                        "Auto-registered feature '{}' for branch '{}'",
+                        feature.name, feature.branch
+                    ));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    warnings.push(format!(
+                        "Warning: failed to auto-register feature for branch '{}': {}",
+                        base_branch, e
+                    ));
+                }
+            }
+        }
 
         Ok((worktree, warnings))
     }
@@ -1964,5 +1984,88 @@ mod tests {
     fn belongs_to_feature_none_base_branch() {
         let wt = make_worktree_with_base("repo1", None);
         assert!(!wt.belongs_to_feature("repo1", "feat/parent"));
+    }
+
+    #[test]
+    fn test_create_auto_registers_feature_for_non_default_base() {
+        let (tmp, remote, local) = setup_repo_with_remote();
+
+        // Create a feature branch in the repo to use as a non-default base
+        git(&["checkout", "-b", "feat/parent"], &local);
+        let file = local.join("feature.txt");
+        fs::write(&file, "feature work").unwrap();
+        git(&["add", "feature.txt"], &local);
+        git(&["commit", "-m", "feature commit"], &local);
+        git(&["push", "-u", "origin", "feat/parent"], &local);
+        git(&["checkout", "main"], &local);
+
+        let conn = crate::test_helpers::setup_db();
+        let mut config = Config::default();
+        config.general.workspace_root = tmp.path().to_path_buf();
+
+        let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+        repo_mgr
+            .register(
+                "myrepo",
+                local.to_str().unwrap(),
+                remote.to_str().unwrap(),
+                Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+            )
+            .unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let (wt, _warnings) = mgr
+            .create("myrepo", "feat-child", Some("feat/parent"), None, None)
+            .expect("create should succeed");
+
+        // Worktree should have feat/parent as its base branch
+        assert_eq!(wt.base_branch.as_deref(), Some("feat/parent"));
+
+        // Auto-registration should have happened inside create()
+        let fm = crate::feature::FeatureManager::new(&conn, &config);
+        let features = fm.list_active("myrepo").unwrap();
+        assert!(
+            features.iter().any(|f| f.branch == "feat/parent"),
+            "expected a feature for 'feat/parent' to be auto-registered, got: {features:?}"
+        );
+    }
+
+    #[test]
+    fn test_create_skips_auto_registration_for_default_branch() {
+        // Creating a worktree from the default branch should not trigger
+        // auto-registration of a feature.
+        let (tmp, remote, local) = setup_repo_with_remote();
+
+        let conn = crate::test_helpers::setup_db();
+        let mut config = Config::default();
+        config.general.workspace_root = tmp.path().to_path_buf();
+
+        let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+        repo_mgr
+            .register(
+                "myrepo",
+                local.to_str().unwrap(),
+                remote.to_str().unwrap(),
+                Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+            )
+            .unwrap();
+
+        // Create a worktree from main (default branch)
+        let mgr = WorktreeManager::new(&conn, &config);
+        let (wt, _warnings) = mgr
+            .create("myrepo", "feat-on-main", None, None, None)
+            .expect("create should succeed");
+
+        // base_branch should be "main" (default) — auto-registration should skip it
+        assert!(
+            wt.base_branch.is_none() || wt.base_branch.as_deref() == Some("main"),
+            "expected no non-default base_branch"
+        );
+        let fm = crate::feature::FeatureManager::new(&conn, &config);
+        let features = fm.list_active("myrepo").unwrap();
+        assert!(
+            features.is_empty(),
+            "should not have any features for default branch, got: {features:?}"
+        );
     }
 }

@@ -810,6 +810,7 @@ fn main() -> Result<()> {
                         ticket.as_deref(),
                         from_pr,
                     )?;
+
                     for warning in &warnings {
                         eprintln!("warning: {warning}");
                     }

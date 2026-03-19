@@ -371,6 +371,7 @@ impl App {
                     ticket_id.as_deref(),
                     from_pr,
                 )?;
+
                 Ok((wt, warnings))
             })();
             match result {

@@ -347,6 +347,7 @@ impl App {
                         use conductor_core::config::{db_path, load_config};
                         use conductor_core::db::open_database;
                         use conductor_core::feature::FeatureManager;
+                        use conductor_core::repo::RepoManager;
 
                         let db = db_path();
                         let result = (|| {
@@ -358,8 +359,19 @@ impl App {
                             let features = fm
                                 .list_active(&slug)
                                 .map_err(|e| format!("Failed to list features: {e}"))?;
+
+                            // Also fetch unregistered branches (orphan worktree bases).
+                            let repo = RepoManager::new(&conn, &config)
+                                .get_by_slug(&slug)
+                                .map_err(|e| format!("Failed to get repo '{slug}': {e}"))?;
+                            let orphans = fm
+                                .list_unregistered_branches(&repo.id, &repo.default_branch)
+                                .map_err(|e| {
+                                    format!("Failed to list unregistered branches: {e}")
+                                })?;
+
                             // Convert core types to TUI types off the main thread.
-                            if features.is_empty() {
+                            if features.is_empty() && orphans.is_empty() {
                                 return Ok(Vec::new());
                             }
                             let mut items = vec![BranchPickerItem {
@@ -372,6 +384,14 @@ impl App {
                                     branch: Some(f.branch.clone()),
                                     worktree_count: f.worktree_count,
                                     ticket_count: f.ticket_count,
+                                });
+                            }
+                            // Append orphan branches after registered features.
+                            for orphan in &orphans {
+                                items.push(BranchPickerItem {
+                                    branch: Some(orphan.branch.clone()),
+                                    worktree_count: orphan.worktree_count,
+                                    ticket_count: 0,
                                 });
                             }
                             Ok::<Vec<BranchPickerItem>, String>(items)
