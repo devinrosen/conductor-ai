@@ -502,8 +502,8 @@ impl<'a> FeatureManager<'a> {
     /// `auto_close_if_orphaned()`.
     fn close_with_merge_detection(&self, repo_path: &str, feature: &Feature) -> Result<()> {
         let merged =
-            crate::git::is_branch_merged_remote(repo_path, &feature.branch, &feature.base_branch)
-                || crate::git::is_branch_merged_local(
+            crate::git::is_branch_merged_local(repo_path, &feature.branch, &feature.base_branch)
+                || crate::git::is_branch_merged_remote(
                     repo_path,
                     &feature.branch,
                     &feature.base_branch,
