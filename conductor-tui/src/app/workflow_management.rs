@@ -236,29 +236,9 @@ impl App {
             && self.state.workflows_focus == crate::state::WorkflowsFocus::Runs
         {
             // Workflow runs pane: resolve the selected row to a WorkflowRun
-            let rows = self.state.visible_workflow_run_rows();
-            let run_id = match rows
-                .get(self.state.workflow_run_index)
-                .and_then(|r| r.run_id())
-            {
-                Some(id) => id.to_string(),
-                None => {
-                    self.state.status_message = Some("No workflow run selected".to_string());
-                    return;
-                }
-            };
-            let run = match self
-                .state
-                .data
-                .workflow_runs
-                .iter()
-                .find(|r| r.id == run_id)
-            {
-                Some(r) => r.clone(),
-                None => {
-                    self.state.status_message = Some("Workflow run not found".to_string());
-                    return;
-                }
+            let run = match self.resolve_selected_workflow_run() {
+                Some(r) => r,
+                None => return,
             };
             match self.workflow_run_picker_target(&run) {
                 Some(t) => t,
@@ -509,39 +489,23 @@ impl App {
         if self.state.column_focus == crate::state::ColumnFocus::Workflow
             && self.state.workflows_focus == crate::state::WorkflowsFocus::Runs
         {
+            let run = match self.resolve_selected_workflow_run() {
+                Some(r) => r,
+                None => return,
+            };
             let def = match self
                 .state
                 .data
                 .workflow_defs
-                .get(self.state.workflow_def_index)
+                .iter()
+                .find(|d| d.name == run.workflow_name)
             {
                 Some(d) => d.clone(),
                 None => {
-                    self.state.status_message = Some("No workflow definition selected".to_string());
-                    return;
-                }
-            };
-            let rows = self.state.visible_workflow_run_rows();
-            let run_id = match rows
-                .get(self.state.workflow_run_index)
-                .and_then(|r| r.run_id())
-            {
-                Some(id) => id.to_string(),
-                None => {
-                    self.state.status_message = Some("No workflow run selected".to_string());
-                    return;
-                }
-            };
-            let run = match self
-                .state
-                .data
-                .workflow_runs
-                .iter()
-                .find(|r| r.id == run_id)
-            {
-                Some(r) => r.clone(),
-                None => {
-                    self.state.status_message = Some("Workflow run not found".to_string());
+                    self.state.status_message = Some(format!(
+                        "Workflow definition '{}' not found",
+                        run.workflow_name
+                    ));
                     return;
                 }
             };
@@ -1565,6 +1529,38 @@ impl App {
             worktree_path,
             repo_path,
         })
+    }
+
+    /// Resolve the currently selected workflow run from the runs pane.
+    ///
+    /// Returns `None` (with a status message set) if no run is selected or found.
+    fn resolve_selected_workflow_run(
+        &mut self,
+    ) -> Option<conductor_core::workflow::WorkflowRun> {
+        let rows = self.state.visible_workflow_run_rows();
+        let run_id = match rows
+            .get(self.state.workflow_run_index)
+            .and_then(|r| r.run_id())
+        {
+            Some(id) => id.to_string(),
+            None => {
+                self.state.status_message = Some("No workflow run selected".to_string());
+                return None;
+            }
+        };
+        match self
+            .state
+            .data
+            .workflow_runs
+            .iter()
+            .find(|r| r.id == run_id)
+        {
+            Some(r) => Some(r.clone()),
+            None => {
+                self.state.status_message = Some("Workflow run not found".to_string());
+                None
+            }
+        }
     }
 
     /// Check whether a workflow is already active for `worktree_id`.
