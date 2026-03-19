@@ -5,6 +5,10 @@ workflow review-pr {
     targets     = ["pr", "worktree"]
   }
 
+  inputs {
+    scope default = "full"
+  }
+
   script detect-db-migrations {
     run = ".conductor/scripts/detect-db-migrations.sh"
   }

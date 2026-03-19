@@ -1,9 +1,11 @@
 ## Diff scope rules
 
-Get the diff for this PR by running:
-```
-git diff origin/main...HEAD
-```
+Get the diff for this PR using the appropriate command for the review scope:
+
+- If the scope is **full** (default): run `git diff origin/main...HEAD` to see the entire PR diff.
+- If the scope is **incremental**: run `git diff HEAD~1` to see only the latest commit.
+
+**Review scope: {{scope}}**
 
 If the diff exceeds ~50KB, focus on files most relevant to your review area.
 
