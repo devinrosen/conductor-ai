@@ -49,20 +49,27 @@ let subscribers: Set<Subscriber> = new Set();
 let boundListeners: [string, EventListener][] = [];
 
 function dispatch(eventType: ConductorEventType, e: MessageEvent) {
+  let parsed: ConductorEventData = { event: eventType };
+  try {
+    const json = JSON.parse(e.data);
+    parsed = { event: eventType, data: json.data ?? json };
+  } catch (err) {
+    console.warn(`[useConductorEvents] failed to parse SSE data for "${eventType}":`, err);
+  }
   for (const sub of subscribers) {
     const handler = sub.handlersRef.current?.[eventType];
-    if (!handler) continue;
-    try {
-      const parsed = JSON.parse(e.data);
-      handler({ event: eventType, data: parsed.data ?? parsed });
-    } catch {
-      handler({ event: eventType });
-    }
+    if (handler) handler(parsed);
   }
 }
 
 function openSharedSource() {
-  if (sharedSource) return;
+  if (sharedSource && sharedSource.readyState !== EventSource.CLOSED) return;
+
+  // Clean up any dead connection before creating a new one
+  if (sharedSource) {
+    closeSharedSource();
+  }
+
   const source = new EventSource("/api/events");
   sharedSource = source;
 
@@ -71,6 +78,16 @@ function openSharedSource() {
     source.addEventListener(type, listener);
     boundListeners.push([type, listener]);
   }
+
+  source.onerror = () => {
+    if (source.readyState === EventSource.CLOSED) {
+      // Connection permanently closed — tear down and reconnect if there are still subscribers
+      closeSharedSource();
+      if (subscribers.size > 0) {
+        setTimeout(() => openSharedSource(), 3000);
+      }
+    }
+  };
 }
 
 function closeSharedSource() {
