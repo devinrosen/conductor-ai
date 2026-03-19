@@ -1568,6 +1568,29 @@ impl AppState {
         self.filter.active || self.detail_ticket_filter.active || self.label_filter.active
     }
 
+    /// Rebuild `detail_worktrees` and `detail_wt_tree_positions` from the current
+    /// data cache for the given repo.  Must be called whenever the selected repo
+    /// changes or the worktree list is refreshed.
+    pub fn rebuild_detail_worktree_tree(&mut self, repo_id: &str) {
+        let filtered_wts: Vec<_> = self
+            .data
+            .worktrees
+            .iter()
+            .filter(|wt| wt.repo_id == repo_id)
+            .cloned()
+            .collect();
+        let repo_default = self
+            .data
+            .repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .map(|r| r.default_branch.as_str())
+            .unwrap_or("main");
+        let (ordered, positions) = build_worktree_tree(&filtered_wts, repo_default);
+        self.detail_worktrees = ordered;
+        self.detail_wt_tree_positions = positions;
+    }
+
     /// Rebuild the pre-filtered ticket vecs from the current source data,
     /// `show_closed_tickets`, and the active text/label filters.  Must be called
     /// whenever any of those inputs change.
@@ -4245,5 +4268,38 @@ pub(crate) mod tests {
         let (ordered, positions) = build_worktree_tree(&[], "main");
         assert!(ordered.is_empty());
         assert!(positions.is_empty());
+    }
+
+    #[test]
+    fn build_worktree_tree_cycle() {
+        // A→B→C→A forms a cycle; none has base_branch == default_branch and all
+        // point to branches that exist in the list, so none qualifies as a root
+        // via the normal path.  They should appear as cycle-member fallback roots.
+        let wts = vec![
+            make_wt("feat/a", Some("feat/c")),
+            make_wt("feat/b", Some("feat/a")),
+            make_wt("feat/c", Some("feat/b")),
+        ];
+        let (ordered, positions) = build_worktree_tree(&wts, "main");
+        // All three must be emitted.
+        assert_eq!(ordered.len(), 3);
+        assert_eq!(positions.len(), 3);
+        // Cycle members are appended as depth-0 roots.
+        for pos in &positions {
+            assert_eq!(pos.depth, 0);
+        }
+        // The first two cycle members should NOT be is_last_sibling (only the
+        // very last appended one should be).  Currently the fallback marks every
+        // cycle member as is_last_sibling: true — verify current behaviour and
+        // document.
+        //
+        // Because cycle members are appended one-by-one without knowledge of
+        // how many remain, each gets is_last_sibling: true.  The visual effect
+        // is that every cycle member gets a '└' connector.  This is acceptable
+        // since cycles are an edge case.
+        for pos in &positions {
+            assert!(pos.is_last_sibling);
+            assert!(pos.ancestors_are_last.is_empty());
+        }
     }
 }

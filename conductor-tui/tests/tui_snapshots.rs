@@ -214,17 +214,14 @@ fn snap_repo_detail() {
     let repos = make_repos();
     let worktrees = make_worktrees(&repos);
     let tickets = make_tickets(&repos);
-    state.selected_repo_id = Some(repos[0].id.clone());
-    state.detail_worktrees = worktrees
-        .iter()
-        .filter(|w| w.repo_id == repos[0].id)
-        .cloned()
-        .collect();
+    let repo_id = repos[0].id.clone();
+    state.selected_repo_id = Some(repo_id.clone());
     state.detail_tickets = tickets.clone();
     state.data.repos = repos;
     state.data.worktrees = worktrees;
     state.data.tickets = tickets;
     state.data.rebuild_maps();
+    state.rebuild_detail_worktree_tree(&repo_id);
     state.view = View::RepoDetail;
     insta::assert_snapshot!(render_to_string(&state));
 }
@@ -235,17 +232,14 @@ fn snap_repo_detail_tickets_focus() {
     let repos = make_repos();
     let worktrees = make_worktrees(&repos);
     let tickets = make_tickets(&repos);
-    state.selected_repo_id = Some(repos[0].id.clone());
-    state.detail_worktrees = worktrees
-        .iter()
-        .filter(|w| w.repo_id == repos[0].id)
-        .cloned()
-        .collect();
+    let repo_id = repos[0].id.clone();
+    state.selected_repo_id = Some(repo_id.clone());
     state.detail_tickets = tickets.clone();
     state.data.repos = repos;
     state.data.worktrees = worktrees;
     state.data.tickets = tickets;
     state.data.rebuild_maps();
+    state.rebuild_detail_worktree_tree(&repo_id);
     state.rebuild_filtered_tickets();
     state.repo_detail_focus = RepoDetailFocus::Tickets;
     state.view = View::RepoDetail;

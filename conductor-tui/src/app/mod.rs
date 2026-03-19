@@ -935,26 +935,7 @@ impl App {
 
         // If in repo detail, refresh scoped data before rebuilding filtered vecs
         if let Some(ref repo_id) = self.state.selected_repo_id.clone() {
-            let filtered_wts: Vec<_> = self
-                .state
-                .data
-                .worktrees
-                .iter()
-                .filter(|wt| &wt.repo_id == repo_id)
-                .cloned()
-                .collect();
-            let repo_default = self
-                .state
-                .data
-                .repos
-                .iter()
-                .find(|r| &r.id == repo_id)
-                .map(|r| r.default_branch.as_str())
-                .unwrap_or("main");
-            let (ordered, positions) =
-                crate::state::build_worktree_tree(&filtered_wts, repo_default);
-            self.state.detail_worktrees = ordered;
-            self.state.detail_wt_tree_positions = positions;
+            self.state.rebuild_detail_worktree_tree(repo_id);
             self.state.detail_tickets = self
                 .state
                 .data
