@@ -1,0 +1,30 @@
+# Quality configuration for conductor-ai
+# Used by quality gates and roundtable reviews to evaluate code quality.
+
+[rust]
+# Clippy must produce zero warnings
+clippy_zero_warnings = true
+# rustfmt must pass
+fmt_required = true
+# Minimum test coverage percentage
+min_coverage = 80
+# Flag any use of `unsafe` for manual review
+flag_unsafe = true
+
+[thresholds]
+# Minimum confidence score for quality gates (0-100)
+quality_gate_default = 85
+# Minimum confidence for security roundtable
+security_gate = 90
+# Minimum confidence for strategic roundtable
+strategic_gate = 80
+# Minimum confidence for UI roundtable
+ui_gate = 75
+# Minimum confidence for testing roundtable
+testing_gate = 85
+
+[ci]
+# Run cargo-audit in CI
+audit_enabled = true
+# Fail on any advisory (not just vulnerabilities)
+audit_strict = false

@@ -8,7 +8,7 @@ use crate::agent_config::AgentSpec;
 use crate::error::{ConductorError, Result};
 use crate::workflow_dsl::{
     ApprovalMode, CallNode, CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode, GateType,
-    IfNode, OnTimeout, ParallelNode, ScriptNode, UnlessNode, WhileNode,
+    IfNode, OnFailAction, OnTimeout, ParallelNode, ScriptNode, UnlessNode, WhileNode,
 };
 
 use super::engine::{
@@ -1346,6 +1346,11 @@ pub(super) fn execute_gate(
         return Ok(());
     }
 
+    // Quality gates evaluate immediately — no blocking/waiting.
+    if node.gate_type == GateType::QualityGate {
+        return execute_quality_gate(state, node, pos, iteration);
+    }
+
     // Dry-run: auto-approve all gates
     if state.exec_config.dry_run {
         tracing::info!("gate '{}': dry-run auto-approved", node.name);
@@ -1412,6 +1417,7 @@ pub(super) fn execute_gate(
             approvals_needed: node.min_approvals,
         },
         GateType::PrChecks => super::types::BlockedOn::PrChecks { gate_name },
+        GateType::QualityGate => unreachable!("quality gates are handled above"),
     };
     state
         .wf_mgr
@@ -1692,7 +1698,139 @@ pub(super) fn execute_gate(
                 thread::sleep(state.exec_config.poll_interval);
             }
         }
+        GateType::QualityGate => {
+            // Quality gates are handled earlier in execute_gate via execute_quality_gate.
+            unreachable!("quality gates should not reach the blocking gate poll loop");
+        }
     }
+}
+
+/// Evaluate a quality gate by checking a prior step's structured output against a threshold.
+///
+/// Quality gates are non-blocking: they evaluate immediately by reading the
+/// `structured_output` from `step_results` for the configured `source` step,
+/// parsing the JSON, and comparing the `confidence` field against `threshold`.
+fn execute_quality_gate(
+    state: &mut ExecutionState<'_>,
+    node: &GateNode,
+    pos: i64,
+    iteration: u32,
+) -> Result<()> {
+    let source = node.source.as_deref().unwrap_or("unknown");
+    let threshold = node.threshold.unwrap_or(0);
+    let on_fail_action = node
+        .on_fail_action
+        .as_ref()
+        .cloned()
+        .unwrap_or(OnFailAction::Fail);
+
+    let step_id = state.wf_mgr.insert_step(
+        &state.workflow_run_id,
+        &node.name,
+        "gate",
+        false,
+        pos,
+        iteration as i64,
+    )?;
+
+    // Look up the source step's structured output
+    let confidence: u32 = match state.step_results.get(source) {
+        Some(result) => {
+            if let Some(ref json_str) = result.structured_output {
+                // Parse JSON and extract confidence field
+                match serde_json::from_str::<serde_json::Value>(json_str) {
+                    Ok(val) => val.get("confidence").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                    Err(e) => {
+                        tracing::warn!(
+                            "quality_gate '{}': failed to parse structured output from '{}': {}",
+                            node.name,
+                            source,
+                            e
+                        );
+                        0
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    "quality_gate '{}': source step '{}' has no structured output",
+                    node.name,
+                    source
+                );
+                0
+            }
+        }
+        None => {
+            tracing::warn!(
+                "quality_gate '{}': source step '{}' not found in step results",
+                node.name,
+                source
+            );
+            0
+        }
+    };
+
+    let passed = confidence >= threshold;
+    let context = format!(
+        "quality_gate: confidence={}, threshold={}, result={}",
+        confidence,
+        threshold,
+        if passed { "pass" } else { "fail" }
+    );
+
+    if passed {
+        tracing::info!(
+            "quality_gate '{}': passed (confidence {} >= threshold {})",
+            node.name,
+            confidence,
+            threshold
+        );
+        state.wf_mgr.update_step_status(
+            &step_id,
+            WorkflowStepStatus::Completed,
+            None,
+            Some(&context),
+            None,
+            None,
+            None,
+        )?;
+    } else {
+        tracing::warn!(
+            "quality_gate '{}': failed (confidence {} < threshold {})",
+            node.name,
+            confidence,
+            threshold
+        );
+        match on_fail_action {
+            OnFailAction::Fail => {
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Failed,
+                    None,
+                    Some(&context),
+                    None,
+                    None,
+                    None,
+                )?;
+                return Err(ConductorError::Workflow(format!(
+                    "Quality gate '{}' failed: confidence {} is below threshold {}",
+                    node.name, confidence, threshold
+                )));
+            }
+            OnFailAction::Continue => {
+                state.wf_mgr.update_step_status(
+                    &step_id,
+                    WorkflowStepStatus::Completed,
+                    None,
+                    Some(&format!("{} (on_fail=continue, proceeding)", context)),
+                    None,
+                    None,
+                    None,
+                )?;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub(super) fn handle_gate_timeout(

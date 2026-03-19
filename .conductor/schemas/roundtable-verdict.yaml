@@ -1,0 +1,22 @@
+fields:
+  verdict: enum(pass, fail)
+  confidence: number
+  consensus_mode: enum(consensus, discussion)
+  reviewers_total: number
+  reviewers_blocking: number
+  findings:
+    type: array
+    items:
+      reviewer: string
+      file: string
+      line: number
+      severity: enum(critical, warning)
+      message: string
+      evidence_grade: enum(verified, inferred, assumed)
+  summary: string
+
+markers:
+  approved: "verdict == pass"
+  has_review_issues: "verdict == fail"
+  low_confidence: "confidence < 70"
+  needs_discussion: "consensus_mode == discussion"

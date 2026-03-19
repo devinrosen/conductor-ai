@@ -7,8 +7,8 @@ use crate::error::{ConductorError, Result};
 use super::lexer::{Lexer, Token};
 use super::types::{
     AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode,
-    GateType, IfNode, InputDecl, InputType, OnMaxIter, OnTimeout, ParallelNode, ScriptNode,
-    UnlessNode, WhileNode, WorkflowDef, WorkflowNode, WorkflowTrigger,
+    GateType, IfNode, InputDecl, InputType, OnFailAction, OnMaxIter, OnTimeout, ParallelNode,
+    ScriptNode, UnlessNode, WhileNode, WorkflowDef, WorkflowNode, WorkflowTrigger,
 };
 
 // ---------------------------------------------------------------------------
@@ -734,8 +734,9 @@ impl Parser {
             "human_review" => GateType::HumanReview,
             "pr_approval" => GateType::PrApproval,
             "pr_checks" => GateType::PrChecks,
+            "quality_gate" => GateType::QualityGate,
             _ => return Err(format!(
-                "Unknown gate type: '{}'. Expected one of: human_approval, human_review, pr_approval, pr_checks",
+                "Unknown gate type: '{}'. Expected one of: human_approval, human_review, pr_approval, pr_checks, quality_gate",
                 name
             )),
         };
@@ -743,6 +744,46 @@ impl Parser {
         self.expect(&Token::LBrace)?;
         let kvs = self.parse_kvs()?;
         self.expect(&Token::RBrace)?;
+
+        // Quality gate has its own fields
+        if gate_type == GateType::QualityGate {
+            let source = kvs
+                .get("source")
+                .ok_or("quality_gate requires a `source` field referencing a prior step")?
+                .as_str()
+                .to_string();
+            let threshold = kvs
+                .get("threshold")
+                .ok_or("quality_gate requires a `threshold` field (0-100)")?
+                .as_str()
+                .parse::<u32>()
+                .map_err(|e| format!("Invalid threshold: {e}"))?;
+            if threshold > 100 {
+                return Err(format!(
+                    "quality_gate threshold must be 0-100, got {threshold}"
+                ));
+            }
+            let on_fail_action = match kvs.get("on_fail").map(|v| v.as_str()) {
+                Some("fail") | None => OnFailAction::Fail,
+                Some("continue") => OnFailAction::Continue,
+                Some(other) => return Err(format!("Invalid on_fail for quality_gate: {other}")),
+            };
+            let bot_name = kvs.get("as").map(|v| v.as_str().to_string());
+
+            return Ok(GateNode {
+                name,
+                gate_type,
+                prompt: None,
+                min_approvals: 1,
+                approval_mode: Default::default(),
+                timeout_secs: 0,
+                on_timeout: OnTimeout::Fail,
+                bot_name,
+                source: Some(source),
+                threshold: Some(threshold),
+                on_fail_action: Some(on_fail_action),
+            });
+        }
 
         let prompt = kvs.get("prompt").map(|v| v.as_str().to_string());
         let min_approvals = kvs
@@ -788,6 +829,9 @@ impl Parser {
             timeout_secs,
             on_timeout,
             bot_name,
+            source: None,
+            threshold: None,
+            on_fail_action: None,
         })
     }
 

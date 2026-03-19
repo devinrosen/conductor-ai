@@ -335,6 +335,13 @@ pub enum ApprovalMode {
     ReviewDecision,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnFailAction {
+    Fail,
+    Continue,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateNode {
     pub name: String,
@@ -348,6 +355,12 @@ pub struct GateNode {
     pub on_timeout: OnTimeout,
     /// Named GitHub App bot identity used for `gh` calls inside this gate.
     pub bot_name: Option<String>,
+    /// Quality gate: step key whose structured output is evaluated.
+    pub source: Option<String>,
+    /// Quality gate: minimum confidence score (0-100) required to pass.
+    pub threshold: Option<u32>,
+    /// Quality gate: action when the gate fails (score below threshold).
+    pub on_fail_action: Option<OnFailAction>,
 }
 
 fn default_one() -> u32 {
@@ -361,6 +374,7 @@ pub enum GateType {
     HumanReview,
     PrApproval,
     PrChecks,
+    QualityGate,
 }
 
 impl std::fmt::Display for GateType {
@@ -370,6 +384,7 @@ impl std::fmt::Display for GateType {
             Self::HumanReview => write!(f, "human_review"),
             Self::PrApproval => write!(f, "pr_approval"),
             Self::PrChecks => write!(f, "pr_checks"),
+            Self::QualityGate => write!(f, "quality_gate"),
         }
     }
 }
@@ -382,6 +397,7 @@ impl std::str::FromStr for GateType {
             "human_review" => Ok(Self::HumanReview),
             "pr_approval" => Ok(Self::PrApproval),
             "pr_checks" => Ok(Self::PrChecks),
+            "quality_gate" => Ok(Self::QualityGate),
             _ => Err(format!("unknown gate type: {s}")),
         }
     }

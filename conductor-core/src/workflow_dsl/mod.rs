@@ -38,8 +38,8 @@ mod validation;
 pub use types::{
     collect_agent_names, collect_workflow_refs, AgentRef, AlwaysNode, ApprovalMode, CallNode,
     CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode, GateType, IfNode, InputDecl,
-    InputType, OnMaxIter, OnTimeout, ParallelNode, ScriptNode, UnlessNode, WhileNode, WorkflowDef,
-    WorkflowNode, WorkflowTrigger, WorkflowWarning,
+    InputType, OnFailAction, OnMaxIter, OnTimeout, ParallelNode, ScriptNode, UnlessNode, WhileNode,
+    WorkflowDef, WorkflowNode, WorkflowTrigger, WorkflowWarning,
 };
 // Tree-walking helpers used in tests and available for external callers
 pub use api::{

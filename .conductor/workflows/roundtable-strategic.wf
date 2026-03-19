@@ -1,0 +1,18 @@
+workflow roundtable-strategic {
+  meta {
+    description = "Engineering and architecture roundtable review"
+    trigger     = "manual"
+    targets     = ["pr", "worktree"]
+  }
+
+  parallel {
+    output    = "review-findings"
+    with      = ["roundtable-context"]
+    fail_fast = false
+    call rt-strategic-architect       { retries = 1 }
+    call rt-strategic-scalability     { retries = 1 }
+    call rt-strategic-maintainability { retries = 1 }
+  }
+
+  call rt-aggregator { output = "roundtable-verdict" retries = 1 }
+}

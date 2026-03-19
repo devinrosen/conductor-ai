@@ -1,0 +1,18 @@
+workflow roundtable-ui {
+  meta {
+    description = "UX roundtable review"
+    trigger     = "manual"
+    targets     = ["pr", "worktree"]
+  }
+
+  parallel {
+    output    = "review-findings"
+    with      = ["roundtable-context"]
+    fail_fast = false
+    call rt-ui-usability     { retries = 1 }
+    call rt-ui-accessibility { retries = 1 }
+    call rt-ui-consistency   { retries = 1 }
+  }
+
+  call rt-aggregator { output = "roundtable-verdict" retries = 1 }
+}

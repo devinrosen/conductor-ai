@@ -193,7 +193,23 @@ fn validate_nodes<F>(
             WorkflowNode::Do(n) => {
                 validate_nodes(&n.body, produced, errors, loader, bool_inputs);
             }
-            WorkflowNode::Gate(_) => {}
+            WorkflowNode::Gate(n) => {
+                // Quality gates reference a prior step's structured output.
+                if let Some(ref source) = n.source {
+                    if !produced.contains(source) {
+                        errors.push(ValidationError {
+                            message: format!(
+                                "Quality gate '{}' references source step '{}' which has not been produced at this point in the workflow",
+                                n.name, source
+                            ),
+                            hint: Some(format!(
+                                "Ensure a call or script step named '{}' appears before this gate",
+                                source
+                            )),
+                        });
+                    }
+                }
+            }
             WorkflowNode::Script(n) => {
                 produced.insert(n.name.clone());
             }

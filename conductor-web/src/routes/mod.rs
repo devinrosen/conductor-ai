@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod events;
 pub mod issue_sources;
+pub mod milestones;
 pub mod model_config;
 pub mod notifications;
 pub mod repos;
@@ -154,6 +155,24 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/workflows/runs/{id}/gate/reject",
             post(workflows::reject_gate),
+        )
+        // Milestones
+        .route(
+            "/api/repos/{id}/milestones",
+            get(milestones::list_milestones).post(milestones::create_milestone),
+        )
+        .route("/api/milestones/{id}", delete(milestones::delete_milestone))
+        .route(
+            "/api/milestones/{id}/status",
+            patch(milestones::update_milestone_status),
+        )
+        .route(
+            "/api/milestones/{id}/progress",
+            get(milestones::get_milestone_progress),
+        )
+        .route(
+            "/api/milestones/{id}/deliverables",
+            get(milestones::list_deliverables).post(milestones::create_deliverable),
         )
         // Issue Sources
         .route(

@@ -72,6 +72,11 @@ enum Commands {
         #[command(subcommand)]
         command: FeatureCommands,
     },
+    /// Manage milestones and deliverables
+    Milestone {
+        #[command(subcommand)]
+        command: MilestoneCommands,
+    },
     /// Model Context Protocol server (stdio transport for Claude Code integration)
     Mcp {
         #[command(subcommand)]
@@ -589,6 +594,73 @@ enum FeatureCommands {
         repo: String,
         /// Feature name
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum MilestoneCommands {
+    /// Create a new milestone
+    #[command(
+        after_help = "Examples:\n  conductor milestone create conductor-ai \"Desktop App v1\"\n  conductor milestone create conductor-ai \"Desktop App v1\" --target-date 2026-06-01"
+    )]
+    Create {
+        /// Repo slug
+        repo: String,
+        /// Milestone name
+        name: String,
+        /// Description
+        #[arg(long, default_value = "")]
+        description: String,
+        /// Target date (YYYY-MM-DD)
+        #[arg(long)]
+        target_date: Option<String>,
+    },
+    /// List milestones for a repo
+    List {
+        /// Repo slug
+        repo: String,
+    },
+    /// Show milestone progress
+    Progress {
+        /// Repo slug
+        repo: String,
+        /// Milestone name
+        name: String,
+    },
+    /// Update milestone status
+    Status {
+        /// Repo slug
+        repo: String,
+        /// Milestone name
+        name: String,
+        /// New status: planned, in_progress, completed, blocked
+        status: String,
+    },
+    /// Delete a milestone
+    Delete {
+        /// Repo slug
+        repo: String,
+        /// Milestone name
+        name: String,
+    },
+    /// Add a deliverable to a milestone
+    AddDeliverable {
+        /// Repo slug
+        repo: String,
+        /// Milestone name
+        milestone: String,
+        /// Deliverable name
+        name: String,
+        /// Description
+        #[arg(long, default_value = "")]
+        description: String,
+    },
+    /// List deliverables in a milestone
+    ListDeliverables {
+        /// Repo slug
+        repo: String,
+        /// Milestone name
+        milestone: String,
     },
 }
 
@@ -1362,6 +1434,107 @@ fn main() -> Result<()> {
                 println!("Feature '{name}' closed.");
             }
         },
+        Commands::Milestone { command } => {
+            use conductor_core::milestone::{MilestoneManager, MilestoneStatus};
+            let repo_mgr = RepoManager::new(&conn, &config);
+            match command {
+                MilestoneCommands::Create {
+                    repo,
+                    name,
+                    description,
+                    target_date,
+                } => {
+                    let r = repo_mgr.get_by_slug(&repo)?;
+                    let mgr = MilestoneManager::new(&conn, &config);
+                    let ms =
+                        mgr.create_milestone(&r.id, &name, &description, target_date.as_deref())?;
+                    println!("Created milestone: {} ({})", ms.name, ms.id);
+                }
+                MilestoneCommands::List { repo } => {
+                    let r = repo_mgr.get_by_slug(&repo)?;
+                    let mgr = MilestoneManager::new(&conn, &config);
+                    let milestones = mgr.list_milestones(&r.id)?;
+                    if milestones.is_empty() {
+                        println!("No milestones found.");
+                    } else {
+                        println!("  {:<12}  {:<30}  {:<12}  TARGET", "STATUS", "NAME", "ID");
+                        for ms in &milestones {
+                            println!(
+                                "  {:<12}  {:<30}  {:<12}  {}",
+                                ms.status,
+                                ms.name,
+                                &ms.id[..12],
+                                ms.target_date.as_deref().unwrap_or("-")
+                            );
+                        }
+                    }
+                }
+                MilestoneCommands::Progress { repo, name } => {
+                    let r = repo_mgr.get_by_slug(&repo)?;
+                    let mgr = MilestoneManager::new(&conn, &config);
+                    let ms = mgr.get_milestone_by_name(&r.id, &name)?;
+                    let progress = mgr.milestone_progress(&ms.id)?;
+                    println!("Milestone: {}", progress.milestone.name);
+                    println!("Status:    {}", progress.milestone.status);
+                    println!(
+                        "Progress:  {}/{} deliverables completed",
+                        progress.completed_deliverables, progress.total_deliverables
+                    );
+                    println!(
+                        "Reviewed:  {}/{} deliverables approved",
+                        progress.approved_deliverables, progress.total_deliverables
+                    );
+                }
+                MilestoneCommands::Status { repo, name, status } => {
+                    let r = repo_mgr.get_by_slug(&repo)?;
+                    let mgr = MilestoneManager::new(&conn, &config);
+                    let ms = mgr.get_milestone_by_name(&r.id, &name)?;
+                    let new_status: MilestoneStatus =
+                        status.parse().map_err(|e: String| anyhow::anyhow!("{e}"))?;
+                    mgr.update_milestone_status(&ms.id, new_status)?;
+                    println!("Milestone '{name}' status updated to {status}.");
+                }
+                MilestoneCommands::Delete { repo, name } => {
+                    let r = repo_mgr.get_by_slug(&repo)?;
+                    let mgr = MilestoneManager::new(&conn, &config);
+                    let ms = mgr.get_milestone_by_name(&r.id, &name)?;
+                    mgr.delete_milestone(&ms.id)?;
+                    println!("Milestone '{name}' deleted.");
+                }
+                MilestoneCommands::AddDeliverable {
+                    repo,
+                    milestone,
+                    name,
+                    description,
+                } => {
+                    let r = repo_mgr.get_by_slug(&repo)?;
+                    let mgr = MilestoneManager::new(&conn, &config);
+                    let ms = mgr.get_milestone_by_name(&r.id, &milestone)?;
+                    let d = mgr.create_deliverable(&ms.id, &name, &description, None)?;
+                    println!("Created deliverable: {} ({})", d.name, d.id);
+                }
+                MilestoneCommands::ListDeliverables { repo, milestone } => {
+                    let r = repo_mgr.get_by_slug(&repo)?;
+                    let mgr = MilestoneManager::new(&conn, &config);
+                    let ms = mgr.get_milestone_by_name(&r.id, &milestone)?;
+                    let deliverables = mgr.list_deliverables(&ms.id)?;
+                    if deliverables.is_empty() {
+                        println!("No deliverables found.");
+                    } else {
+                        println!("  {:<12}  {:<10}  {:<30}  ID", "STATUS", "REVIEW", "NAME");
+                        for d in &deliverables {
+                            println!(
+                                "  {:<12}  {:<10}  {:<30}  {}",
+                                d.status,
+                                d.review_status,
+                                d.name,
+                                &d.id[..12]
+                            );
+                        }
+                    }
+                }
+            }
+        }
         Commands::Workflow { command } => match command {
             WorkflowCommands::Runs { repo, worktree } => {
                 let repo_mgr = RepoManager::new(&conn, &config);

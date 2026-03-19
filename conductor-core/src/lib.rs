@@ -39,6 +39,7 @@ pub mod github_app;
 pub mod hooks;
 pub mod issue_source;
 pub mod jira_acli;
+pub mod milestone;
 pub mod models;
 pub mod notification_manager;
 pub mod notify;

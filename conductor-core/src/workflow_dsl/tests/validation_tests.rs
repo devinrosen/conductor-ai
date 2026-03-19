@@ -1020,3 +1020,48 @@ workflow parent {
 
 // resolve_script_path and script_search_paths tests live in
 // conductor-core/src/workflow_dsl/script_utils.rs
+
+#[test]
+fn test_quality_gate_source_validation_passes() {
+    let input = r#"
+workflow review {
+    meta { targets = ["worktree"] }
+    call aggregator
+    gate quality_gate {
+        source    = "aggregator"
+        threshold = 85
+    }
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    let report = validate_workflow_semantics(&def, &no_loader);
+    assert!(
+        report.is_ok(),
+        "quality gate referencing produced step should pass: {:?}",
+        report.errors
+    );
+}
+
+#[test]
+fn test_quality_gate_source_validation_fails_missing_step() {
+    let input = r#"
+workflow review {
+    meta { targets = ["worktree"] }
+    gate quality_gate {
+        source    = "nonexistent"
+        threshold = 85
+    }
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    let report = validate_workflow_semantics(&def, &no_loader);
+    assert!(
+        !report.is_ok(),
+        "quality gate referencing missing step should fail"
+    );
+    let msg = &report.errors[0].message;
+    assert!(
+        msg.contains("nonexistent"),
+        "error should mention the missing source: {msg}"
+    );
+}

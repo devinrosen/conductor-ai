@@ -369,6 +369,7 @@ pub fn gate_type_icon(gate_type: Option<&GateType>, theme: &Theme) -> (&'static 
         Some(GateType::PrApproval | GateType::HumanApproval | GateType::HumanReview) => {
             ("👤", theme.label_warning)
         }
+        Some(GateType::QualityGate) => ("🔍", theme.status_waiting),
         None => ("⏸", theme.status_waiting),
     }
 }

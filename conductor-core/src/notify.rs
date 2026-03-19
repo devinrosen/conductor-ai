@@ -325,6 +325,11 @@ pub fn gate_notification_text(
             let body = format!("{wf}: PR checks running");
             (title, body)
         }
+        Some(GateType::QualityGate) => {
+            let title = "Conductor \u{2014} Quality Gate";
+            let body = format!("{wf}: {step_name} evaluating");
+            (title, body)
+        }
         None => {
             let title = "Conductor \u{2014} Approval Required";
             let body = format!("{wf}: {step_name}");
@@ -356,6 +361,7 @@ pub fn should_notify_gate(config: &NotificationConfig, gate_type: Option<&GateTy
         Some(GateType::HumanApproval | GateType::HumanReview) => config.workflows.on_gate_human,
         Some(GateType::PrChecks) => config.workflows.on_gate_ci,
         Some(GateType::PrApproval) => config.workflows.on_gate_pr_review,
+        Some(GateType::QualityGate) => false, // quality gates are non-blocking, no notification
     }
 }
 
@@ -428,6 +434,7 @@ fn most_urgent_gate_type<'a>(gate_types: &[Option<&'a GateType>]) -> Option<&'a 
             Some(GateType::HumanApproval) | Some(GateType::HumanReview) => 4,
             Some(GateType::PrApproval) => 3,
             Some(GateType::PrChecks) => 2,
+            Some(GateType::QualityGate) => 0, // quality gates are non-blocking
             None => 1,
         };
         if p > best_priority {
@@ -455,6 +462,7 @@ pub fn grouped_gate_notification_text(
         }
         Some(GateType::PrApproval) => "Conductor \u{2014} Awaiting PR Review",
         Some(GateType::PrChecks) => "Conductor \u{2014} Waiting on CI",
+        Some(GateType::QualityGate) => "Conductor \u{2014} Quality Gate",
         None => "Conductor \u{2014} Approval Required",
     };
 

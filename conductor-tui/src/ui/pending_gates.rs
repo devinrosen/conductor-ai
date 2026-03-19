@@ -105,6 +105,7 @@ pub fn render_pending_gates(frame: &mut Frame, area: Rect, state: &AppState, foc
                 Some(GateType::HumanReview) => "Enter:approve/reject",
                 Some(GateType::PrChecks) => "CI running",
                 Some(GateType::PrApproval) => "Waiting for PR reviews",
+                Some(GateType::QualityGate) => "Auto-evaluated",
                 None => "Enter:view",
             })
             .unwrap_or("Enter:view");

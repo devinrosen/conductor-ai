@@ -2355,3 +2355,112 @@ fn test_collect_all_agent_refs_deduplicates_across_body_and_always() {
         ]
     );
 }
+
+#[test]
+fn test_parse_quality_gate() {
+    let input = r#"
+workflow review {
+    meta { targets = ["worktree"] }
+    call rt-aggregator { output = "roundtable-verdict" }
+    gate quality_gate {
+        source    = "rt-aggregator"
+        threshold = 85
+        on_fail   = fail
+    }
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    assert_eq!(def.body.len(), 2);
+    match &def.body[1] {
+        WorkflowNode::Gate(g) => {
+            assert_eq!(g.gate_type, GateType::QualityGate);
+            assert_eq!(g.name, "quality_gate");
+            assert_eq!(g.source.as_deref(), Some("rt-aggregator"));
+            assert_eq!(g.threshold, Some(85));
+            assert_eq!(
+                g.on_fail_action,
+                Some(crate::workflow_dsl::OnFailAction::Fail)
+            );
+        }
+        _ => panic!("Expected Gate node"),
+    }
+}
+
+#[test]
+fn test_parse_quality_gate_continue() {
+    let input = r#"
+workflow review {
+    meta { targets = ["worktree"] }
+    call aggregator
+    gate quality_gate {
+        source    = "aggregator"
+        threshold = 70
+        on_fail   = continue
+    }
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    match &def.body[1] {
+        WorkflowNode::Gate(g) => {
+            assert_eq!(g.gate_type, GateType::QualityGate);
+            assert_eq!(g.threshold, Some(70));
+            assert_eq!(
+                g.on_fail_action,
+                Some(crate::workflow_dsl::OnFailAction::Continue)
+            );
+        }
+        _ => panic!("Expected Gate node"),
+    }
+}
+
+#[test]
+fn test_parse_quality_gate_missing_source() {
+    let input = r#"
+workflow review {
+    meta { targets = ["worktree"] }
+    gate quality_gate {
+        threshold = 85
+    }
+}
+"#;
+    let result = parse_workflow_str(input, "test.wf");
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("source"), "error should mention source: {msg}");
+}
+
+#[test]
+fn test_parse_quality_gate_missing_threshold() {
+    let input = r#"
+workflow review {
+    meta { targets = ["worktree"] }
+    gate quality_gate {
+        source = "aggregator"
+    }
+}
+"#;
+    let result = parse_workflow_str(input, "test.wf");
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("threshold"),
+        "error should mention threshold: {msg}"
+    );
+}
+
+#[test]
+fn test_parse_quality_gate_threshold_out_of_range() {
+    let input = r#"
+workflow review {
+    meta { targets = ["worktree"] }
+    gate quality_gate {
+        source    = "aggregator"
+        threshold = 150
+    }
+}
+"#;
+    let result = parse_workflow_str(input, "test.wf");
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("0-100"), "error should mention range: {msg}");
+}

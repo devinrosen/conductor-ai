@@ -1,0 +1,18 @@
+workflow roundtable-testing {
+  meta {
+    description = "Testing roundtable review"
+    trigger     = "manual"
+    targets     = ["pr", "worktree"]
+  }
+
+  parallel {
+    output    = "review-findings"
+    with      = ["roundtable-context"]
+    fail_fast = false
+    call rt-testing-coverage    { retries = 1 }
+    call rt-testing-integration { retries = 1 }
+    call rt-testing-regression  { retries = 1 }
+  }
+
+  call rt-aggregator { output = "roundtable-verdict" retries = 1 }
+}
