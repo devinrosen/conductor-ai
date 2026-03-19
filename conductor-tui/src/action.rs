@@ -64,6 +64,8 @@ pub struct DataRefreshedPayload {
     pub live_turns_by_worktree: HashMap<String, i64>,
     /// Active features per repo (repo_id → active FeatureRows).
     pub features_by_repo: HashMap<String, Vec<FeatureRow>>,
+    /// Per-repo configs loaded in the background (repo_id → RepoConfig).
+    pub repo_configs: HashMap<String, conductor_core::config::RepoConfig>,
 }
 
 /// Every user intent or background result flows through this enum.

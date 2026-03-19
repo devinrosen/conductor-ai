@@ -29,7 +29,11 @@ pub struct RepoResponse {
     pub model: Option<String>,
 }
 
-fn repo_to_response(repo: Repo, global_default_branch: &str) -> RepoResponse {
+fn repo_to_response(
+    repo: Repo,
+    global_default_branch: &str,
+    global_model: Option<&str>,
+) -> RepoResponse {
     let repo_config =
         RepoConfig::load(std::path::Path::new(&repo.local_path)).unwrap_or_else(|e| {
             tracing::warn!(
@@ -42,7 +46,11 @@ fn repo_to_response(repo: Repo, global_default_branch: &str) -> RepoResponse {
         .defaults
         .default_branch
         .unwrap_or_else(|| global_default_branch.to_string());
-    let model = repo_config.defaults.model;
+    // Apply global model fallback when per-repo config doesn't specify one.
+    let model = repo_config
+        .defaults
+        .model
+        .or_else(|| global_model.map(String::from));
     RepoResponse {
         repo,
         default_branch,
@@ -61,17 +69,21 @@ pub struct RegisterRepoRequest {
 pub async fn list_repos(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<RepoResponse>>, ApiError> {
-    let (repos, default_branch) = {
+    let (repos, default_branch, global_model) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
         let mgr = RepoManager::new(&db, &config);
-        (mgr.list()?, config.defaults.default_branch.clone())
+        (
+            mgr.list()?,
+            config.defaults.default_branch.clone(),
+            config.general.model.clone(),
+        )
     };
     // RepoConfig::load performs file I/O — run off the tokio worker thread.
     let responses = tokio::task::spawn_blocking(move || {
         repos
             .into_iter()
-            .map(|r| repo_to_response(r, &default_branch))
+            .map(|r| repo_to_response(r, &default_branch, global_model.as_deref()))
             .collect::<Vec<_>>()
     })
     .await
@@ -83,7 +95,7 @@ pub async fn register_repo(
     State(state): State<AppState>,
     Json(body): Json<RegisterRepoRequest>,
 ) -> Result<(StatusCode, Json<RepoResponse>), ApiError> {
-    let (repo, default_branch) = {
+    let (repo, default_branch, global_model) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
         let mgr = RepoManager::new(&db, &config);
@@ -102,16 +114,18 @@ pub async fn register_repo(
         state.events.emit(ConductorEvent::RepoRegistered {
             id: repo.id.clone(),
         });
-        (repo, config.defaults.default_branch.clone())
+        (
+            repo,
+            config.defaults.default_branch.clone(),
+            config.general.model.clone(),
+        )
     };
     // repo_to_response performs file I/O — run off the tokio worker thread.
-    let response = tokio::task::spawn_blocking(move || repo_to_response(repo, &default_branch))
-        .await
-        .map_err(|e| {
-            ApiError(conductor_core::error::ConductorError::Config(format!(
-                "spawn_blocking join failed: {e}"
-            )))
-        })?;
+    let response = tokio::task::spawn_blocking(move || {
+        repo_to_response(repo, &default_branch, global_model.as_deref())
+    })
+    .await
+    .map_err(join_err)?;
     Ok((StatusCode::CREATED, Json(response)))
 }
 
@@ -137,22 +151,24 @@ pub async fn patch_repo_model(
     Path(id): Path<String>,
     Json(body): Json<SetModelRequest>,
 ) -> Result<Json<RepoResponse>, ApiError> {
-    let (repo, default_branch) = {
+    let (repo, default_branch, global_model) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
         let mgr = RepoManager::new(&db, &config);
         let repo = mgr.get_by_id(&id)?;
         mgr.set_model(&repo, body.model)?;
-        (repo, config.defaults.default_branch.clone())
+        (
+            repo,
+            config.defaults.default_branch.clone(),
+            config.general.model.clone(),
+        )
     };
     // repo_to_response performs file I/O — run off the tokio worker thread.
-    let response = tokio::task::spawn_blocking(move || repo_to_response(repo, &default_branch))
-        .await
-        .map_err(|e| {
-            ApiError(conductor_core::error::ConductorError::Config(format!(
-                "spawn_blocking join failed: {e}"
-            )))
-        })?;
+    let response = tokio::task::spawn_blocking(move || {
+        repo_to_response(repo, &default_branch, global_model.as_deref())
+    })
+    .await
+    .map_err(join_err)?;
     Ok(Json(response))
 }
 
@@ -167,7 +183,7 @@ pub async fn update_repo_settings(
     Path(id): Path<String>,
     Json(body): Json<UpdateRepoSettingsRequest>,
 ) -> Result<Json<RepoResponse>, ApiError> {
-    let (repo, default_branch) = {
+    let (repo, default_branch, global_model) = {
         let db = state.db.lock().await;
         let config = state.config.read().await;
         let mgr = RepoManager::new(&db, &config);
@@ -175,16 +191,18 @@ pub async fn update_repo_settings(
             mgr.set_allow_agent_issue_creation(&id, allow)?;
         }
         let repo = mgr.get_by_id(&id)?;
-        (repo, config.defaults.default_branch.clone())
+        (
+            repo,
+            config.defaults.default_branch.clone(),
+            config.general.model.clone(),
+        )
     };
     // repo_to_response performs file I/O — run off the tokio worker thread.
-    let response = tokio::task::spawn_blocking(move || repo_to_response(repo, &default_branch))
-        .await
-        .map_err(|e| {
-            ApiError(conductor_core::error::ConductorError::Config(format!(
-                "spawn_blocking join failed: {e}"
-            )))
-        })?;
+    let response = tokio::task::spawn_blocking(move || {
+        repo_to_response(repo, &default_branch, global_model.as_deref())
+    })
+    .await
+    .map_err(join_err)?;
     Ok(Json(response))
 }
 

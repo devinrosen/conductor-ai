@@ -775,6 +775,7 @@ impl App {
                     payload.active_non_worktree_workflow_runs;
                 self.state.data.live_turns_by_worktree = payload.live_turns_by_worktree;
                 self.state.data.features_by_repo = payload.features_by_repo;
+                self.state.data.repo_configs = payload.repo_configs;
                 self.refresh_pending_feedback();
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();
@@ -1483,6 +1484,7 @@ mod action_handler_tests {
                 waiting_gate_steps: vec![],
                 live_turns_by_worktree: std::collections::HashMap::new(),
                 features_by_repo: std::collections::HashMap::new(),
+                repo_configs: std::collections::HashMap::new(),
             },
         )));
 

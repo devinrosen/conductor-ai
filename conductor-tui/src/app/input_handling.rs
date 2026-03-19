@@ -506,19 +506,13 @@ impl App {
                     .iter()
                     .find(|w| w.id == worktree_id);
                 let wt_model = wt.and_then(|w| w.model.as_deref());
-                let repo_model_owned = wt
-                    .and_then(|w| self.state.data.repos.iter().find(|r| r.id == w.repo_id))
-                    .and_then(|r| {
-                        conductor_core::config::RepoConfig::load(std::path::Path::new(
-                            &r.local_path,
-                        ))
-                        .unwrap_or_else(|e| {
-                            tracing::warn!("Failed to load .conductor/config.toml for repo '{}': {e}; using defaults", r.slug);
-                            conductor_core::config::RepoConfig::default()
-                        })
-                        .defaults
-                        .model
-                    });
+                let repo_model_owned = wt.and_then(|w| {
+                    self.state
+                        .data
+                        .repo_configs
+                        .get(&w.repo_id)
+                        .and_then(|rc| rc.defaults.model.clone())
+                });
                 let repo_model = repo_model_owned.as_deref();
                 let resolved_default = conductor_core::models::resolve_model(
                     wt_model,

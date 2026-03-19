@@ -830,6 +830,9 @@ pub struct DataCache {
     /// Active features per repo (repo_id → active FeatureRows).
     /// Populated by the background poller each tick.
     pub features_by_repo: HashMap<String, Vec<FeatureRow>>,
+    /// Per-repo configs loaded in the background (repo_id → RepoConfig).
+    /// Avoids file I/O on the TUI main thread.
+    pub repo_configs: HashMap<String, conductor_core::config::RepoConfig>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.

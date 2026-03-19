@@ -395,6 +395,15 @@ pub fn poll_data() -> Option<PollResult> {
         std::collections::HashMap::new()
     });
 
+    // Load per-repo configs for all repos (file I/O happens here, off the main thread).
+    let repo_configs: std::collections::HashMap<String, conductor_core::config::RepoConfig> = repos
+        .iter()
+        .map(|r| {
+            let rc = repo_mgr.load_repo_config(r);
+            (r.id.clone(), rc)
+        })
+        .collect();
+
     let action = Action::DataRefreshed(Box::new(DataRefreshedPayload {
         repos,
         worktrees,
@@ -409,6 +418,7 @@ pub fn poll_data() -> Option<PollResult> {
         waiting_gate_steps,
         live_turns_by_worktree,
         features_by_repo,
+        repo_configs,
     }));
     Some(PollResult {
         action,

@@ -122,39 +122,44 @@ impl App {
     }
 
     pub(super) fn handle_set_model(&mut self) {
-        // Helper: load the per-repo model from .conductor/config.toml
-        let repo_model_from_config = |repo: &conductor_core::repo::Repo| -> Option<String> {
-            conductor_core::config::RepoConfig::load(std::path::Path::new(&repo.local_path))
-                .unwrap_or_else(|e| {
-                    tracing::warn!(
-                        "Failed to load .conductor/config.toml for repo '{}': {e}; using defaults",
-                        repo.slug
-                    );
-                    conductor_core::config::RepoConfig::default()
-                })
+        // Helper: read the per-repo model from the background-cached RepoConfig
+        // (no file I/O on the TUI main thread).
+        let repo_model_from_config = |repo: &conductor_core::repo::Repo,
+                                      repo_configs: &std::collections::HashMap<
+            String,
+            conductor_core::config::RepoConfig,
+        >|
+         -> Option<String> {
+            repo_configs
+                .get(&repo.id)
+                .unwrap_or(&conductor_core::config::RepoConfig::default())
                 .defaults
                 .model
+                .clone()
         };
 
         // Helper to compute effective default and source for a worktree context
-        let resolve_wt_effective =
-            |wt: &conductor_core::worktree::Worktree,
-             config: &conductor_core::config::Config,
-             repos: &[conductor_core::repo::Repo]| {
-                let repo_model = repos
-                    .iter()
-                    .find(|r| r.id == wt.repo_id)
-                    .and_then(repo_model_from_config);
-                if let Some(ref m) = wt.model {
-                    (Some(m.clone()), "worktree".to_string())
-                } else if let Some(ref m) = repo_model {
-                    (Some(m.clone()), "repo".to_string())
-                } else if let Some(ref m) = config.general.model {
-                    (Some(m.clone()), "global config".to_string())
-                } else {
-                    (None, "not set".to_string())
-                }
-            };
+        let resolve_wt_effective = |wt: &conductor_core::worktree::Worktree,
+                                    config: &conductor_core::config::Config,
+                                    repos: &[conductor_core::repo::Repo],
+                                    repo_configs: &std::collections::HashMap<
+            String,
+            conductor_core::config::RepoConfig,
+        >| {
+            let repo_model = repos
+                .iter()
+                .find(|r| r.id == wt.repo_id)
+                .and_then(|r| repo_model_from_config(r, repo_configs));
+            if let Some(ref m) = wt.model {
+                (Some(m.clone()), "worktree".to_string())
+            } else if let Some(ref m) = repo_model {
+                (Some(m.clone()), "repo".to_string())
+            } else if let Some(ref m) = config.general.model {
+                (Some(m.clone()), "global config".to_string())
+            } else {
+                (None, "not set".to_string())
+            }
+        };
 
         // Helper to find the initial selected index matching current model
         let initial_selected = |current: &Option<String>| -> usize {
@@ -185,8 +190,12 @@ impl App {
                             .get(&wt.repo_id)
                             .cloned()
                             .unwrap_or_default();
-                        let (effective, source) =
-                            resolve_wt_effective(&wt, &self.config, &self.state.data.repos);
+                        let (effective, source) = resolve_wt_effective(
+                            &wt,
+                            &self.config,
+                            &self.state.data.repos,
+                            &self.state.data.repo_configs,
+                        );
                         let selected = initial_selected(&wt.model);
                         self.state.modal = Modal::ModelPicker {
                             context_label: format!("worktree: {}", wt.slug),
@@ -208,7 +217,8 @@ impl App {
                         let Some(repo) = self.state.data.repos.get(repo_idx).cloned() else {
                             return;
                         };
-                        let repo_model = repo_model_from_config(&repo);
+                        let repo_model =
+                            repo_model_from_config(&repo, &self.state.data.repo_configs);
                         let (effective, source) = if let Some(ref m) = repo_model {
                             (Some(m.clone()), "repo".to_string())
                         } else if let Some(ref m) = self.config.general.model {
@@ -255,8 +265,12 @@ impl App {
                     .get(&wt.repo_id)
                     .cloned()
                     .unwrap_or_default();
-                let (effective, source) =
-                    resolve_wt_effective(&wt, &self.config, &self.state.data.repos);
+                let (effective, source) = resolve_wt_effective(
+                    &wt,
+                    &self.config,
+                    &self.state.data.repos,
+                    &self.state.data.repo_configs,
+                );
                 let selected = initial_selected(&wt.model);
                 self.state.modal = Modal::ModelPicker {
                     context_label: format!("worktree: {}", wt.slug),
@@ -284,7 +298,7 @@ impl App {
                 else {
                     return;
                 };
-                let repo_model = repo_model_from_config(&repo);
+                let repo_model = repo_model_from_config(&repo, &self.state.data.repo_configs);
                 let (effective, source) = if let Some(ref m) = repo_model {
                     (Some(m.clone()), "repo".to_string())
                 } else if let Some(ref m) = self.config.general.model {
