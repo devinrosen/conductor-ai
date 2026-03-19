@@ -746,6 +746,13 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 44)?;
     }
 
+    if version < 45 {
+        conn.execute_batch(include_str!(
+            "migrations/045_drop_repo_model_default_branch.sql"
+        ))?;
+        bump_version(conn, 45)?;
+    }
+
     Ok(())
 }
 
@@ -773,7 +780,7 @@ mod tests {
                 id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE,
                 local_path TEXT NOT NULL, remote_url TEXT NOT NULL,
                 default_branch TEXT NOT NULL, workspace_dir TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL, model TEXT
             );
             CREATE TABLE worktrees (
                 id TEXT PRIMARY KEY, repo_id TEXT NOT NULL,
@@ -831,7 +838,7 @@ mod tests {
             );
             INSERT INTO _conductor_meta VALUES ('schema_version', '26');
             INSERT INTO repos VALUES ('r1', 'test-repo', '/tmp/repo',
-                'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z');
+                'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z', NULL);
             INSERT INTO worktrees VALUES ('w1', 'r1', 'feat-test', 'feat/test',
                 '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z', 'main');
             INSERT INTO agent_runs (id, worktree_id, prompt, started_at)

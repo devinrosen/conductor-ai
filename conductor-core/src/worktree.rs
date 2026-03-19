@@ -2188,8 +2188,8 @@ mod tests {
         let conn = crate::test_helpers::create_test_conn();
         let repo_id = crate::new_id();
         conn.execute(
-            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at)
-             VALUES (?1, 'test-repo', ?2, 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+             VALUES (?1, 'test-repo', ?2, 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
             rusqlite::params![repo_id, local_str],
         ).unwrap();
 

@@ -77,7 +77,11 @@ pub async fn patch_repo_model(
     let config = state.config.read().await;
     let mgr = RepoManager::new(&db, &config);
     let repo = mgr.get_by_id(&id)?;
-    mgr.set_model(&repo.slug, body.model.as_deref())?;
+    let mut repo_config =
+        conductor_core::config::RepoConfig::load(std::path::Path::new(&repo.local_path))?;
+    repo_config.defaults.model = body.model.clone();
+    repo_config.save(std::path::Path::new(&repo.local_path))?;
+    // Re-read to get updated computed fields
     let updated = mgr.get_by_id(&id)?;
     Ok(Json(updated))
 }

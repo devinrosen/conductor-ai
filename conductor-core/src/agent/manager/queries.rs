@@ -606,8 +606,8 @@ mod tests {
         // setup_db inserts w1 (repo_id='r1') and w2 (repo_id='r1').
         // Insert a second repo with its own worktree.
         conn.execute(
-            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
-             VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', 'main', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
             [],
         ).unwrap();
         conn.execute(
@@ -631,8 +631,8 @@ mod tests {
         // setup_db inserts w1 (repo_id='r1') and w2 (repo_id='r1').
         // Insert a second repo with its own worktree.
         conn.execute(
-            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
-             VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', 'main', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
             [],
         ).unwrap();
         conn.execute(
@@ -743,8 +743,8 @@ mod tests {
         let conn = setup_db();
         // setup_db seeds r1 with w1 and w2; insert a second repo with its own worktree.
         conn.execute(
-            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
-             VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', 'main', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
             [],
         ).unwrap();
         conn.execute(

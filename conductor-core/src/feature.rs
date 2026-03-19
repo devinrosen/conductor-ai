@@ -881,8 +881,8 @@ mod tests {
     fn insert_repo(conn: &Connection) -> String {
         let id = crate::new_id();
         conn.execute(
-            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at)
-             VALUES (?1, 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+             VALUES (?1, 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
             params![id],
         ).unwrap();
         id
@@ -1005,8 +1005,8 @@ mod tests {
         // Insert a second repo.
         let repo_id_b = crate::new_id();
         conn.execute(
-            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at)
-             VALUES (?1, 'second-repo', '/tmp/repo2', 'https://github.com/test/repo2.git', 'main', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+             VALUES (?1, 'second-repo', '/tmp/repo2', 'https://github.com/test/repo2.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
             params![repo_id_b],
         ).unwrap();
 
@@ -1171,8 +1171,8 @@ mod tests {
     fn insert_repo_at(conn: &Connection, local_path: &str) -> String {
         let id = crate::new_id();
         conn.execute(
-            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at)
-             VALUES (?1, 'test-repo', ?2, 'https://github.com/test/repo.git', 'main', '/tmp/ws', '2024-01-01T00:00:00Z')",
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at)
+             VALUES (?1, 'test-repo', ?2, 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
             params![id, local_path],
         ).unwrap();
         id

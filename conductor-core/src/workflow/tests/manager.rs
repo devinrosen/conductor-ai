@@ -831,8 +831,8 @@ fn test_purge_repo_scoped() {
     let conn = setup_db();
     // Add a second repo + worktree
     conn.execute(
-        "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at) \
-         VALUES ('r2', 'other-repo', '/tmp/r2', '', 'main', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+         VALUES ('r2', 'other-repo', '/tmp/r2', '', '/tmp/ws2', '2024-01-01T00:00:00Z')",
         [],
     )
     .unwrap();

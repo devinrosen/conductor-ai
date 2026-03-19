@@ -636,7 +636,16 @@ impl App {
                     Some(value.trim().to_string())
                 };
                 let mgr = RepoManager::new(&self.conn, &self.config);
-                match mgr.set_model(&slug, model.as_deref()) {
+                let result = (|| -> conductor_core::error::Result<()> {
+                    let repo = mgr.get_by_slug(&slug)?;
+                    let mut repo_config = conductor_core::config::RepoConfig::load(
+                        std::path::Path::new(&repo.local_path),
+                    )?;
+                    repo_config.defaults.model = model.clone();
+                    repo_config.save(std::path::Path::new(&repo.local_path))?;
+                    Ok(())
+                })();
+                match result {
                     Ok(()) => {
                         let msg = match &model {
                             Some(m) => format!("Model for {slug} set to: {m}"),
@@ -714,7 +723,16 @@ impl App {
                     Some(value.trim().to_string())
                 };
                 let mgr = RepoManager::new(&self.conn, &self.config);
-                match mgr.set_model(&slug, model.as_deref()) {
+                let result = (|| -> conductor_core::error::Result<()> {
+                    let repo = mgr.get_by_slug(&slug)?;
+                    let mut repo_config = conductor_core::config::RepoConfig::load(
+                        std::path::Path::new(&repo.local_path),
+                    )?;
+                    repo_config.defaults.model = model.clone();
+                    repo_config.save(std::path::Path::new(&repo.local_path))?;
+                    Ok(())
+                })();
+                match result {
                     Ok(()) => {
                         let msg = match &model {
                             Some(m) => format!("Model for {slug} set to: {m}"),

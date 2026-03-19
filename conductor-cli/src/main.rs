@@ -698,7 +698,12 @@ fn main() -> Result<()> {
             }
             RepoCommands::SetModel { slug, model } => {
                 let mgr = RepoManager::new(&conn, &config);
-                mgr.set_model(&slug, model.as_deref())?;
+                let repo = mgr.get_by_slug(&slug)?;
+                let mut repo_config = conductor_core::config::RepoConfig::load(
+                    std::path::Path::new(&repo.local_path),
+                )?;
+                repo_config.defaults.model = model.clone();
+                repo_config.save(std::path::Path::new(&repo.local_path))?;
                 match model {
                     Some(m) => println!("Set model for {slug} to: {m}"),
                     None => println!("Cleared model override for {slug} (will use global default)"),
@@ -839,7 +844,7 @@ fn main() -> Result<()> {
                                 Ok(t) => {
                                     let prompt = build_agent_prompt(&t);
                                     println!("Starting agent...");
-                                    // Resolve model: per-worktree → per-repo → global config
+                                    // Resolve model: per-worktree → per-repo config → global config
                                     let repo_mgr = RepoManager::new(&conn, &config);
                                     let repo_model =
                                         repo_mgr.get_by_slug(&repo).ok().and_then(|r| r.model);

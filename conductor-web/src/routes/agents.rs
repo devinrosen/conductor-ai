@@ -104,7 +104,7 @@ pub async fn start_agent(
         }
     }
 
-    // Resolve model: per-worktree → per-repo → global config
+    // Resolve model: per-worktree → per-repo config → global config
     let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
     let model = wt
         .model
@@ -496,7 +496,7 @@ pub async fn orchestrate_agent(
         }
     }
 
-    // Resolve model
+    // Resolve model: per-worktree → per-repo config → global config
     let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
     let model = wt
         .model
