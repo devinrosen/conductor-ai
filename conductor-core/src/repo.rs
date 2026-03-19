@@ -267,3 +267,52 @@ pub fn derive_local_path(config: &Config, slug: &str) -> String {
         .to_string_lossy()
         .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn setup_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::migrations::run(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn test_set_model_writes_repo_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        // Register a repo pointing at the temp dir
+        mgr.register(
+            "test-repo",
+            dir.path().to_str().unwrap(),
+            "https://example.com/repo.git",
+            None,
+        )
+        .unwrap();
+
+        // Set model
+        mgr.set_model("test-repo", Some("opus")).unwrap();
+        let rc = RepoConfig::load(dir.path()).unwrap();
+        assert_eq!(rc.defaults.model.as_deref(), Some("opus"));
+
+        // Clear model
+        mgr.set_model("test-repo", None).unwrap();
+        let rc = RepoConfig::load(dir.path()).unwrap();
+        assert!(rc.defaults.model.is_none(), "model should be cleared");
+    }
+
+    #[test]
+    fn test_set_model_not_found() {
+        let conn = setup_db();
+        let config = Config::default();
+        let mgr = RepoManager::new(&conn, &config);
+
+        let result = mgr.set_model("nonexistent", Some("opus"));
+        assert!(result.is_err());
+    }
+}

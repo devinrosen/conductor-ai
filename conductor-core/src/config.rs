@@ -453,37 +453,6 @@ impl RepoConfig {
     }
 }
 
-/// Resolve the effective default branch: per-repo config → global config → "main".
-pub fn effective_default_branch(repo_path: &str, global_config: &Config) -> String {
-    match RepoConfig::load(Path::new(repo_path)) {
-        Ok(rc) => rc
-            .defaults
-            .default_branch
-            .unwrap_or_else(|| global_config.defaults.default_branch.clone()),
-        Err(e) => {
-            tracing::warn!(
-                path = %repo_path,
-                "failed to load .conductor/config.toml, using global default_branch: {e}"
-            );
-            global_config.defaults.default_branch.clone()
-        }
-    }
-}
-
-/// Resolve the effective repo model: per-repo config → global config → None.
-pub fn effective_repo_model(repo_path: &str) -> Option<String> {
-    match RepoConfig::load(Path::new(repo_path)) {
-        Ok(rc) => rc.defaults.model,
-        Err(e) => {
-            tracing::warn!(
-                path = %repo_path,
-                "failed to load .conductor/config.toml, using no repo model: {e}"
-            );
-            None
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -929,53 +898,6 @@ bot_name = "my-bot"
         let rc = RepoConfig::default();
         rc.save(dir.path()).unwrap();
         assert!(dir.path().join(".conductor").join("config.toml").exists());
-    }
-
-    #[test]
-    fn test_effective_default_branch_from_repo_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let conductor_dir = dir.path().join(".conductor");
-        std::fs::create_dir_all(&conductor_dir).unwrap();
-        std::fs::write(
-            conductor_dir.join("config.toml"),
-            "[defaults]\ndefault_branch = \"develop\"\n",
-        )
-        .unwrap();
-
-        let global = Config::default();
-        let result = effective_default_branch(dir.path().to_str().unwrap(), &global);
-        assert_eq!(result, "develop");
-    }
-
-    #[test]
-    fn test_effective_default_branch_falls_through_to_global() {
-        let dir = tempfile::tempdir().unwrap();
-        // No .conductor/config.toml — should fall through to global default
-        let global = Config::default();
-        let result = effective_default_branch(dir.path().to_str().unwrap(), &global);
-        assert_eq!(result, "main");
-    }
-
-    #[test]
-    fn test_effective_repo_model_from_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let conductor_dir = dir.path().join(".conductor");
-        std::fs::create_dir_all(&conductor_dir).unwrap();
-        std::fs::write(
-            conductor_dir.join("config.toml"),
-            "[defaults]\nmodel = \"opus\"\n",
-        )
-        .unwrap();
-
-        let result = effective_repo_model(dir.path().to_str().unwrap());
-        assert_eq!(result.as_deref(), Some("opus"));
-    }
-
-    #[test]
-    fn test_effective_repo_model_none_when_no_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = effective_repo_model(dir.path().to_str().unwrap());
-        assert!(result.is_none());
     }
 
     #[test]

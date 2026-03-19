@@ -1001,4 +1001,77 @@ mod tests {
             "foreign_keys pragma must be restored to ON after closure error"
         );
     }
+
+    #[test]
+    fn test_migrate_repo_columns_to_config_writes_files() {
+        use crate::config::RepoConfig;
+
+        let dir1 = tempfile::tempdir().unwrap();
+        let dir2 = tempfile::tempdir().unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        // Create a minimal repos table with the old columns still present.
+        conn.execute_batch(
+            "CREATE TABLE repos (
+                id TEXT PRIMARY KEY,
+                slug TEXT NOT NULL UNIQUE,
+                local_path TEXT NOT NULL,
+                remote_url TEXT NOT NULL,
+                default_branch TEXT NOT NULL DEFAULT 'main',
+                workspace_dir TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                model TEXT
+            );",
+        )
+        .unwrap();
+
+        // Repo 1: custom default_branch and model — both should be migrated.
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at, model)
+             VALUES ('r1', 'repo1', ?1, 'https://x/r1.git', 'develop', '/ws/repo1', '2025-01-01T00:00:00Z', 'opus')",
+            rusqlite::params![dir1.path().to_str().unwrap()],
+        )
+        .unwrap();
+
+        // Repo 2: default values — should be skipped (no config file created).
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, default_branch, workspace_dir, created_at, model)
+             VALUES ('r2', 'repo2', ?1, 'https://x/r2.git', 'main', '/ws/repo2', '2025-01-01T00:00:00Z', NULL)",
+            rusqlite::params![dir2.path().to_str().unwrap()],
+        )
+        .unwrap();
+
+        migrate_repo_columns_to_config(&conn);
+
+        // Repo 1 should have a .conductor/config.toml with the migrated values.
+        let rc1 = RepoConfig::load(dir1.path()).unwrap();
+        assert_eq!(rc1.defaults.default_branch.as_deref(), Some("develop"));
+        assert_eq!(rc1.defaults.model.as_deref(), Some("opus"));
+
+        // Repo 2 should NOT have a config file (all defaults — nothing to migrate).
+        assert!(
+            !dir2.path().join(".conductor").join("config.toml").exists(),
+            "repo with default values should not get a config file"
+        );
+    }
+
+    #[test]
+    fn test_migrate_repo_columns_to_config_no_columns() {
+        // If columns are already gone, migration should be a no-op.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE repos (
+                id TEXT PRIMARY KEY,
+                slug TEXT NOT NULL UNIQUE,
+                local_path TEXT NOT NULL,
+                remote_url TEXT NOT NULL,
+                workspace_dir TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+
+        // Should not panic.
+        migrate_repo_columns_to_config(&conn);
+    }
 }
