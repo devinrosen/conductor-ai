@@ -215,6 +215,97 @@ pub fn fire_gate_notification(
     }
 }
 
+/// Determine the most "actionable" gate type from a slice of optional gate types.
+///
+/// Priority: `HumanApproval` / `HumanReview` > `PrApproval` > `PrChecks` > `None`.
+/// Returns the highest-priority type found, or `None` if the slice is empty.
+fn most_urgent_gate_type<'a>(gate_types: &[Option<&'a GateType>]) -> Option<&'a GateType> {
+    let mut best: Option<&GateType> = None;
+    let mut best_priority = 0u8;
+    for gt in gate_types {
+        let p = match gt {
+            Some(GateType::HumanApproval) | Some(GateType::HumanReview) => 4,
+            Some(GateType::PrApproval) => 3,
+            Some(GateType::PrChecks) => 2,
+            None => 1,
+        };
+        if p > best_priority {
+            best_priority = p;
+            best = *gt;
+        }
+    }
+    best
+}
+
+/// Build the notification title and body for a grouped gate notification.
+///
+/// Pure function — no side effects. The title reflects the most urgent gate type
+/// in the group; the body shows the workflow name, optional target, and count.
+pub fn grouped_gate_notification_text(
+    gate_types: &[Option<&GateType>],
+    workflow_name: &str,
+    target_label: Option<&str>,
+    count: usize,
+) -> (&'static str, String) {
+    let urgent = most_urgent_gate_type(gate_types);
+    let title = match urgent {
+        Some(GateType::HumanApproval) | Some(GateType::HumanReview) => {
+            "Conductor \u{2014} Awaiting Your Approval"
+        }
+        Some(GateType::PrApproval) => "Conductor \u{2014} Awaiting PR Review",
+        Some(GateType::PrChecks) => "Conductor \u{2014} Waiting on CI",
+        None => "Conductor \u{2014} Approval Required",
+    };
+
+    let wf = match target_label {
+        Some(label) => format!("{workflow_name} on {label}"),
+        None => workflow_name.to_string(),
+    };
+    let body = format!("{wf}: {count} gates pending");
+
+    (title, body)
+}
+
+/// Parameters for [`fire_grouped_gate_notification`].
+pub struct GroupedGateNotificationParams<'a> {
+    pub run_id: &'a str,
+    pub workflow_name: &'a str,
+    pub target_label: Option<&'a str>,
+    pub gate_types: Vec<Option<&'a GateType>>,
+    pub count: usize,
+}
+
+/// Fire a single grouped desktop notification for multiple gates in the same run.
+///
+/// Uses `(run_id, "gates_grouped")` as the dedup key.
+pub fn fire_grouped_gate_notification(
+    conn: &rusqlite::Connection,
+    config: &NotificationConfig,
+    params: &GroupedGateNotificationParams<'_>,
+) {
+    if !config.enabled {
+        return;
+    }
+
+    if !try_claim_notification(conn, params.run_id, "gates_grouped") {
+        return;
+    }
+
+    let (title, body) = grouped_gate_notification_text(
+        &params.gate_types,
+        params.workflow_name,
+        params.target_label,
+        params.count,
+    );
+    if let Err(e) = show_desktop_notification(title, &body) {
+        tracing::warn!(
+            run_id = params.run_id,
+            workflow_name = params.workflow_name,
+            "grouped desktop notification failed: {e}"
+        );
+    }
+}
+
 fn show_desktop_notification(title: &str, body: &str) -> Result<(), String> {
     #[cfg(not(any(test, feature = "test-notifications")))]
     {
@@ -828,5 +919,106 @@ mod tests {
             count, 1,
             "HumanApproval gate must claim when on_gate_human is true"
         );
+    }
+
+    // --- grouped_gate_notification_text ---
+
+    #[test]
+    fn grouped_text_mixed_types_picks_most_urgent() {
+        let gate_types = vec![
+            Some(&GateType::PrChecks),
+            Some(&GateType::HumanApproval),
+            Some(&GateType::PrApproval),
+        ];
+        let (title, body) = grouped_gate_notification_text(&gate_types, "deploy", None, 3);
+        assert_eq!(title, "Conductor \u{2014} Awaiting Your Approval");
+        assert_eq!(body, "deploy: 3 gates pending");
+    }
+
+    #[test]
+    fn grouped_text_all_pr_checks() {
+        let gate_types = vec![Some(&GateType::PrChecks), Some(&GateType::PrChecks)];
+        let (title, body) = grouped_gate_notification_text(&gate_types, "ci", Some("main"), 2);
+        assert_eq!(title, "Conductor \u{2014} Waiting on CI");
+        assert_eq!(body, "ci on main: 2 gates pending");
+    }
+
+    #[test]
+    fn grouped_text_none_gate_types() {
+        let gate_types: Vec<Option<&GateType>> = vec![None, None];
+        let (title, body) = grouped_gate_notification_text(&gate_types, "release", None, 2);
+        assert_eq!(title, "Conductor \u{2014} Approval Required");
+        assert_eq!(body, "release: 2 gates pending");
+    }
+
+    #[test]
+    fn grouped_text_human_review_is_urgent() {
+        let gate_types = vec![Some(&GateType::PrApproval), Some(&GateType::HumanReview)];
+        let (title, body) = grouped_gate_notification_text(&gate_types, "review", None, 2);
+        assert_eq!(title, "Conductor \u{2014} Awaiting Your Approval");
+        assert_eq!(body, "review: 2 gates pending");
+    }
+
+    #[test]
+    fn grouped_text_with_target_label() {
+        let gate_types = vec![Some(&GateType::PrApproval)];
+        let (title, body) = grouped_gate_notification_text(
+            &gate_types,
+            "release",
+            Some("conductor-ai/feat-1095"),
+            1,
+        );
+        assert_eq!(title, "Conductor \u{2014} Awaiting PR Review");
+        assert_eq!(body, "release on conductor-ai/feat-1095: 1 gates pending");
+    }
+
+    // --- fire_grouped_gate_notification ---
+
+    #[test]
+    fn fire_grouped_gate_notification_disabled_does_not_claim() {
+        let conn = in_memory_db();
+        let cfg = config(false, true, true);
+        fire_grouped_gate_notification(
+            &conn,
+            &cfg,
+            &GroupedGateNotificationParams {
+                run_id: "run-g1",
+                workflow_name: "deploy",
+                target_label: None,
+                gate_types: vec![Some(&GateType::HumanApproval)],
+                count: 2,
+            },
+        );
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-g1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn fire_grouped_gate_notification_claims_once() {
+        let conn = in_memory_db();
+        let cfg = config(true, true, true);
+        let params = GroupedGateNotificationParams {
+            run_id: "run-g2",
+            workflow_name: "deploy",
+            target_label: None,
+            gate_types: vec![Some(&GateType::PrChecks), Some(&GateType::PrApproval)],
+            count: 2,
+        };
+        fire_grouped_gate_notification(&conn, &cfg, &params);
+        fire_grouped_gate_notification(&conn, &cfg, &params);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE entity_id = 'run-g2' AND event_type = 'gates_grouped'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "grouped notification must claim exactly once");
     }
 }

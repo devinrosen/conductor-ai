@@ -88,6 +88,7 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
         // INSERT OR IGNORE attempts on every subsequent tick.
         let mut notified_feedback_ids: HashSet<String> = HashSet::new();
         let mut notified_gate_ids: HashSet<String> = HashSet::new();
+        let mut notified_grouped_run_ids: HashSet<String> = HashSet::new();
         // Incremental turn-counting state: run_id → (byte_offset, turn_count).
         // Keyed by run ID (not worktree ID) so that a new run on the same
         // worktree starts with a fresh offset instead of inheriting a stale one.
@@ -164,21 +165,70 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                             }
                         }
 
-                        // Fire gate-waiting notifications, skipping already-notified step IDs.
-                        for (step, workflow_name, target_label) in &payload.waiting_gate_steps {
-                            if notified_gate_ids.insert(step.id.clone()) {
-                                crate::notify::fire_gate_notification(
-                                    conn,
-                                    &config.notifications,
-                                    &crate::notify::GateNotificationParams {
-                                        step_id: &step.id,
-                                        step_name: &step.step_name,
-                                        workflow_name,
-                                        target_label: target_label.as_deref(),
-                                        gate_type: step.gate_type.as_ref(),
-                                        gate_prompt: step.gate_prompt.as_deref(),
-                                    },
-                                );
+                        // Fire gate-waiting notifications, grouping by workflow_run_id.
+                        // For runs with >1 waiting gate, fire a single grouped notification
+                        // instead of one per gate.
+                        {
+                            // Group un-notified steps by workflow_run_id
+                            type GateEntry = (
+                                conductor_core::workflow::WorkflowRunStep,
+                                String,
+                                Option<String>,
+                            );
+                            let mut by_run: HashMap<String, Vec<&GateEntry>> = HashMap::new();
+                            for entry in &payload.waiting_gate_steps {
+                                let (step, _, _) = entry;
+                                if !notified_gate_ids.contains(&step.id) {
+                                    by_run
+                                        .entry(step.workflow_run_id.clone())
+                                        .or_default()
+                                        .push(entry);
+                                }
+                            }
+
+                            for (run_id, steps) in &by_run {
+                                if steps.len() == 1 {
+                                    // Single gate: fire individual notification (no behavior change)
+                                    let (step, workflow_name, target_label) = steps[0];
+                                    notified_gate_ids.insert(step.id.clone());
+                                    crate::notify::fire_gate_notification(
+                                        conn,
+                                        &config.notifications,
+                                        &crate::notify::GateNotificationParams {
+                                            step_id: &step.id,
+                                            step_name: &step.step_name,
+                                            workflow_name,
+                                            target_label: target_label.as_deref(),
+                                            gate_type: step.gate_type.as_ref(),
+                                            gate_prompt: step.gate_prompt.as_deref(),
+                                        },
+                                    );
+                                } else if !notified_grouped_run_ids.contains(run_id) {
+                                    // Multiple gates: fire a single grouped notification
+                                    let (_, workflow_name, target_label) = steps[0];
+                                    let gate_types: Vec<
+                                        Option<&conductor_core::workflow::GateType>,
+                                    > = steps
+                                        .iter()
+                                        .map(|(s, _, _)| s.gate_type.as_ref())
+                                        .collect();
+                                    crate::notify::fire_grouped_gate_notification(
+                                        conn,
+                                        &config.notifications,
+                                        &crate::notify::GroupedGateNotificationParams {
+                                            run_id,
+                                            workflow_name,
+                                            target_label: target_label.as_deref(),
+                                            gate_types,
+                                            count: steps.len(),
+                                        },
+                                    );
+                                    notified_grouped_run_ids.insert(run_id.clone());
+                                    // Mark all individual step IDs to prevent re-processing
+                                    for (step, _, _) in steps {
+                                        notified_gate_ids.insert(step.id.clone());
+                                    }
+                                }
                             }
                         }
 
@@ -196,6 +246,14 @@ pub fn spawn_db_poller(tx: BackgroundSender, interval: Duration) {
                                 .waiting_gate_steps
                                 .iter()
                                 .any(|(step, _, _)| &step.id == id)
+                        });
+
+                        // Prune grouped run IDs when all gates for that run are resolved.
+                        notified_grouped_run_ids.retain(|run_id| {
+                            payload
+                                .waiting_gate_steps
+                                .iter()
+                                .any(|(step, _, _)| &step.workflow_run_id == run_id)
                         });
                     }
                 }
