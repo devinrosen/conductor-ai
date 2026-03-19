@@ -33,6 +33,7 @@ pub const ENGINE_INJECTED_KEYS: &[&str] = &[
     "feature_id",
     "feature_name",
     "feature_branch",
+    "feature_base_branch",
 ];
 
 /// Pre-loaded context for resuming a workflow run.
@@ -160,6 +161,9 @@ fn inject_feature_variables(feature: &Feature, merged_inputs: &mut HashMap<Strin
     merged_inputs
         .entry("feature_branch".to_string())
         .or_insert_with(|| feature.branch.clone());
+    merged_inputs
+        .entry("feature_base_branch".to_string())
+        .or_insert_with(|| feature.base_branch.clone());
 }
 
 /// Execute a workflow definition against a worktree.
@@ -1428,6 +1432,7 @@ mod tests {
         assert_eq!(inputs.get("feature_id").unwrap(), "f1");
         assert_eq!(inputs.get("feature_name").unwrap(), "my-feature");
         assert_eq!(inputs.get("feature_branch").unwrap(), "feat/my-feature");
+        assert_eq!(inputs.get("feature_base_branch").unwrap(), "main");
     }
 
     #[test]
@@ -1442,5 +1447,6 @@ mod tests {
         // Other keys populated from Feature
         assert_eq!(inputs.get("feature_id").unwrap(), "f1");
         assert_eq!(inputs.get("feature_branch").unwrap(), "feat/my-feature");
+        assert_eq!(inputs.get("feature_base_branch").unwrap(), "main");
     }
 }
