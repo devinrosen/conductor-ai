@@ -145,25 +145,36 @@ mod tests {
 
     #[test]
     fn test_local_branch_exists_true() {
-        // "main" or "master" exists in the current repo
-        let repo = env!("CARGO_MANIFEST_DIR");
-        let parent = std::path::Path::new(repo).parent().unwrap();
-        // The workspace root is a git repo; it should have a "main" branch
-        assert!(
-            local_branch_exists(parent.to_str().unwrap(), "main")
-                || local_branch_exists(parent.to_str().unwrap(), "master"),
-            "expected main or master to exist"
-        );
+        // Create a temp git repo with a known branch so the test is hermetic
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().to_str().unwrap();
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .arg(p)
+            .output()
+            .unwrap();
+        // Need at least one commit for the branch ref to exist
+        Command::new("git")
+            .args(["-C", p, "commit", "--allow-empty", "-m", "init"])
+            .output()
+            .unwrap();
+        assert!(local_branch_exists(p, "main"));
     }
 
     #[test]
     fn test_local_branch_exists_false() {
-        let repo = env!("CARGO_MANIFEST_DIR");
-        let parent = std::path::Path::new(repo).parent().unwrap();
-        assert!(!local_branch_exists(
-            parent.to_str().unwrap(),
-            "nonexistent-branch-xyz-12345"
-        ));
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().to_str().unwrap();
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .arg(p)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["-C", p, "commit", "--allow-empty", "-m", "init"])
+            .output()
+            .unwrap();
+        assert!(!local_branch_exists(p, "nonexistent-branch-xyz-12345"));
     }
 
     #[test]
