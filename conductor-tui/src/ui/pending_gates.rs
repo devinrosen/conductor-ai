@@ -1,3 +1,4 @@
+use conductor_core::workflow::GateType;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -5,7 +6,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::Frame;
 
 use crate::state::AppState;
-use crate::ui::common::truncate;
+use crate::ui::common::{format_elapsed, truncate};
 
 /// Render the Pending Gates pane in the right workflow column.
 /// Returns early (renders nothing) when there are no pending gates.
@@ -24,6 +25,17 @@ pub fn render_pending_gates(frame: &mut Frame, area: Rect, state: &AppState, foc
         .detail_gates
         .iter()
         .map(|gate| {
+            // Actionability indicator based on gate type
+            let (icon, icon_color) = match gate.step.gate_type {
+                Some(GateType::HumanApproval) | Some(GateType::HumanReview) => {
+                    ("\u{26A1}", state.theme.label_warning)
+                }
+                Some(GateType::PrChecks) | Some(GateType::PrApproval) => {
+                    ("\u{23F3}", state.theme.label_secondary)
+                }
+                None => ("\u{23F8}", state.theme.label_secondary),
+            };
+
             // Branch or fallback to target_label
             let location = gate
                 .branch
@@ -46,8 +58,16 @@ pub fn render_pending_gates(frame: &mut Frame, area: Rect, state: &AppState, foc
                 .or_else(|| gate.ticket_ref.as_ref().map(|t| format!("#{t}")))
                 .unwrap_or_default();
 
+            // Elapsed wait time
+            let elapsed = gate
+                .step
+                .started_at
+                .as_deref()
+                .map(format_elapsed)
+                .unwrap_or_default();
+
             let mut spans = vec![
-                Span::raw("\u{23F8} "),
+                Span::styled(format!("{icon} "), Style::default().fg(icon_color)),
                 Span::styled(
                     gate.workflow_name.as_str(),
                     Style::default().fg(state.theme.group_header),
@@ -69,14 +89,36 @@ pub fn render_pending_gates(frame: &mut Frame, area: Rect, state: &AppState, foc
                     Style::default().fg(state.theme.label_accent),
                 ));
             }
+            if !elapsed.is_empty() {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(
+                    elapsed,
+                    Style::default().fg(state.theme.label_accent),
+                ));
+            }
             ListItem::new(Line::from(spans))
         })
         .collect();
 
-    let title = if focused {
-        " Pending Gates  Enter:view "
+    // Context-sensitive action hint based on selected gate type
+    let title: String = if focused {
+        let selected_idx = state
+            .detail_gate_index
+            .min(state.detail_gates.len().saturating_sub(1));
+        let hint = state
+            .detail_gates
+            .get(selected_idx)
+            .map(|gate| match gate.step.gate_type {
+                Some(GateType::HumanApproval) => "Enter:approve  r:reject",
+                Some(GateType::HumanReview) => "Enter:review  r:reject",
+                Some(GateType::PrChecks) => "CI running",
+                Some(GateType::PrApproval) => "Waiting for PR reviews",
+                None => "Enter:view",
+            })
+            .unwrap_or("Enter:view");
+        format!(" Pending Gates  {hint} ")
     } else {
-        " Pending Gates "
+        " Pending Gates ".to_string()
     };
 
     let list = List::new(items)

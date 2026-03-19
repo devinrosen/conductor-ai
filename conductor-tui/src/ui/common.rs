@@ -347,6 +347,86 @@ pub fn ticket_agent_total_spans(
     )]
 }
 
+/// Format an ISO 8601 timestamp as a compact elapsed duration string.
+///
+/// Returns strings like `"3m"`, `"1h 20m"`, `"2d 5h"`.
+/// Returns an empty string if parsing fails or the timestamp is in the future.
+pub fn format_elapsed(started_at: &str) -> String {
+    use std::time::SystemTime;
+
+    // Try common ISO 8601 formats: "2026-03-18T10:30:00Z" and "2026-03-18 10:30:00"
+    let normalized = started_at
+        .replace('T', " ")
+        .trim_end_matches('Z')
+        .to_string();
+
+    // Parse "YYYY-MM-DD HH:MM:SS" manually to avoid pulling in chrono
+    let parts: Vec<&str> = normalized.split(' ').collect();
+    if parts.len() < 2 {
+        return String::new();
+    }
+    let date_parts: Vec<u64> = parts[0].split('-').filter_map(|s| s.parse().ok()).collect();
+    let time_parts: Vec<u64> = parts[1].split(':').filter_map(|s| s.parse().ok()).collect();
+    if date_parts.len() != 3 || time_parts.len() < 2 {
+        return String::new();
+    }
+
+    let (year, month, day) = (date_parts[0], date_parts[1], date_parts[2]);
+    let (hour, min) = (time_parts[0], time_parts[1]);
+    let sec = if time_parts.len() >= 3 {
+        time_parts[2]
+    } else {
+        0
+    };
+
+    // Days from epoch using a simplified calculation
+    let days_from_epoch = {
+        let y = if month <= 2 { year - 1 } else { year };
+        let m = if month <= 2 { month + 9 } else { month - 3 };
+        let era = y / 400;
+        let yoe = y - era * 400;
+        let doy = (153 * m + 2) / 5 + day - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        era * 146097 + doe - 719468
+    };
+
+    let started_epoch_secs = days_from_epoch * 86400 + hour * 3600 + min * 60 + sec;
+
+    let now_epoch_secs = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    if now_epoch_secs <= started_epoch_secs {
+        return String::new();
+    }
+
+    let elapsed_secs = now_epoch_secs - started_epoch_secs;
+    let elapsed_mins = elapsed_secs / 60;
+    let elapsed_hours = elapsed_mins / 60;
+    let elapsed_days = elapsed_hours / 24;
+
+    if elapsed_days > 0 {
+        let remaining_hours = elapsed_hours % 24;
+        if remaining_hours > 0 {
+            format!("{}d {}h", elapsed_days, remaining_hours)
+        } else {
+            format!("{}d", elapsed_days)
+        }
+    } else if elapsed_hours > 0 {
+        let remaining_mins = elapsed_mins % 60;
+        if remaining_mins > 0 {
+            format!("{}h {}m", elapsed_hours, remaining_mins)
+        } else {
+            format!("{}h", elapsed_hours)
+        }
+    } else if elapsed_mins > 0 {
+        format!("{}m", elapsed_mins)
+    } else {
+        "<1m".to_string()
+    }
+}
+
 /// Truncate a string to at most `max` characters, appending "…" if truncated.
 pub fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
