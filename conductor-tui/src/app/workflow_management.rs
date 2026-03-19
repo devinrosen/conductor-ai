@@ -1631,4 +1631,51 @@ mod tests {
         assert!(model.is_none());
         assert_eq!(source, "not set");
     }
+
+    #[test]
+    fn workflow_run_target_prefills_workflow_run_id_readonly() {
+        use conductor_core::workflow::{InputDecl, InputType, WorkflowDef, WorkflowTrigger};
+
+        let mut app = make_app();
+
+        let target = crate::state::WorkflowPickerTarget::WorkflowRun {
+            workflow_run_id: "run-123".into(),
+            workflow_name: "test-wf".into(),
+            worktree_id: None,
+            worktree_path: None,
+            repo_path: "/tmp/repo".into(),
+        };
+
+        let def = WorkflowDef {
+            name: "test-wf".into(),
+            description: "test".into(),
+            trigger: WorkflowTrigger::Manual,
+            targets: vec![],
+            inputs: vec![InputDecl {
+                name: "workflow_run_id".into(),
+                required: false,
+                default: None,
+                description: None,
+                input_type: InputType::String,
+            }],
+            body: vec![],
+            always: vec![],
+            source_path: "test.wf".into(),
+        };
+
+        let mut prefill = std::collections::HashMap::new();
+        prefill.insert("workflow_run_id".to_string(), "run-123".to_string());
+        app.show_workflow_inputs_or_run(target, def, prefill);
+
+        match &app.state.modal {
+            Modal::Form { fields, active_field, .. } => {
+                let field = fields.iter().find(|f| f.label == "workflow_run_id").unwrap();
+                assert_eq!(field.value, "run-123");
+                assert!(field.readonly, "workflow_run_id should be readonly");
+                // active_field should not point to a readonly field
+                assert!(!fields[*active_field].readonly || fields.iter().all(|f| f.readonly));
+            }
+            other => panic!("Expected Modal::Form, got {:?}", other),
+        }
+    }
 }
