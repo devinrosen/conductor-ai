@@ -255,8 +255,7 @@ impl App {
             use crate::state::DashboardRow;
             let rows = self.state.dashboard_rows();
             match rows.get(self.state.dashboard_index) {
-                Some(&DashboardRow::Repo(repo_idx))
-                | Some(&DashboardRow::Feature { repo_idx, .. }) => {
+                Some(&DashboardRow::Repo(repo_idx)) => {
                     let repo = match self.state.data.repos.get(repo_idx) {
                         Some(r) => r.clone(),
                         None => {

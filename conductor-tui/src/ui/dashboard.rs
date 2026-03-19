@@ -52,39 +52,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                     ),
                 ]))
             }
-            DashboardRow::Feature {
-                repo_idx,
-                feature_idx,
-                total,
-                merged,
-            } => {
-                let Some(feature) = state.feature_at(*repo_idx, *feature_idx) else {
-                    warn!("dashboard: feature_at({repo_idx}, {feature_idx}) returned None");
-                    return ListItem::new(Line::from(""));
-                };
-                let collapsed = state.collapsed_features.contains(&feature.id);
-
-                let arrow = if collapsed { "▸" } else { "▾" };
-                let progress = format!(" ({merged}/{total} merged)");
-
-                ListItem::new(Line::from(vec![
-                    Span::styled(
-                        format!("  {arrow} "),
-                        Style::default().fg(state.theme.label_secondary),
-                    ),
-                    Span::styled(
-                        feature.name.clone(),
-                        Style::default()
-                            .fg(state.theme.status_running)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(progress, Style::default().fg(state.theme.label_secondary)),
-                ]))
-            }
-            DashboardRow::Worktree {
-                idx,
-                is_feature_child,
-            } => {
+            DashboardRow::Worktree { idx, prefix } => {
                 let Some(wt) = state.data.worktrees.get(*idx) else {
                     warn!(
                         "dashboard: worktree index {idx} out of bounds (len={})",
@@ -92,12 +60,14 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
                     );
                     return ListItem::new(Line::from(""));
                 };
-                let prefix = if *is_feature_child {
-                    "    \u{2514} "
-                } else {
-                    "  \u{2514} "
-                };
-                super::common::worktree_list_item_with_prefix(wt, state, None, false, prefix)
+                let display_prefix = format!("  {prefix}\u{2514} ");
+                super::common::worktree_list_item_with_prefix(
+                    wt,
+                    state,
+                    None,
+                    false,
+                    &display_prefix,
+                )
             }
         })
         .collect();

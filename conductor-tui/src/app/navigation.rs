@@ -646,8 +646,7 @@ impl App {
             View::Dashboard => {
                 let rows = self.state.dashboard_rows();
                 match rows.get(self.state.dashboard_index) {
-                    Some(&DashboardRow::Repo(repo_idx))
-                    | Some(&DashboardRow::Feature { repo_idx, .. }) => {
+                    Some(&DashboardRow::Repo(repo_idx)) => {
                         self.navigate_to_repo_detail(repo_idx);
                     }
                     Some(&DashboardRow::Worktree { idx: wt_idx, .. }) => {

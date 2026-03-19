@@ -339,16 +339,6 @@ pub enum Action {
     GateInputBackspace,
     WorkflowDataRefreshed(Box<WorkflowDataPayload>),
 
-    // Feature actions (dashboard feature header rows)
-    /// Toggle collapse/expand for a feature header row (Space key).
-    ToggleFeatureCollapse,
-    FeatureDetail {
-        repo_idx: usize,
-        feature_idx: usize,
-        total: usize,
-        merged: usize,
-    },
-
     // Timer tick — also triggers workflow data refresh on workflow views
     Tick,
 
