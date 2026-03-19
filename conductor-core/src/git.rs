@@ -46,12 +46,20 @@ fn run_command(
 ///
 /// Runs `git branch --list <branch>` and returns `true` if the output is non-empty.
 /// This is a fast, local-only operation (no network).
-pub(crate) fn local_branch_exists(repo_path: &str, branch: &str) -> bool {
-    git_in(repo_path)
+///
+/// Returns `Err` if the git subprocess fails to run (e.g. git not installed,
+/// invalid repo path) so callers can distinguish "branch absent" from
+/// "unable to check".
+pub(crate) fn local_branch_exists(repo_path: &str, branch: &str) -> Result<bool> {
+    let output = git_in(repo_path)
         .args(["branch", "--list", "--", branch])
         .output()
-        .map(|o| o.status.success() && !o.stdout.is_empty())
-        .unwrap_or(false)
+        .map_err(|e| {
+            ConductorError::Git(format!(
+                "failed to spawn `git branch --list -- {branch}`: {e}"
+            ))
+        })?;
+    Ok(output.status.success() && !output.stdout.is_empty())
 }
 
 /// Check if `branch` has been merged into `default_branch` using local refs
@@ -170,21 +178,22 @@ mod tests {
     #[test]
     fn test_local_branch_exists_true() {
         let tmp = init_temp_repo();
-        assert!(local_branch_exists(tmp.path().to_str().unwrap(), "main"));
+        assert!(local_branch_exists(tmp.path().to_str().unwrap(), "main").unwrap());
     }
 
     #[test]
     fn test_local_branch_exists_false() {
         let tmp = init_temp_repo();
-        assert!(!local_branch_exists(
-            tmp.path().to_str().unwrap(),
-            "nonexistent-branch-xyz-12345"
-        ));
+        assert!(
+            !local_branch_exists(tmp.path().to_str().unwrap(), "nonexistent-branch-xyz-12345")
+                .unwrap()
+        );
     }
 
     #[test]
     fn test_local_branch_exists_bad_path() {
-        assert!(!local_branch_exists("/nonexistent/repo/path", "main"));
+        // Bad path should return an error, not silently return false
+        assert!(local_branch_exists("/nonexistent/repo/path", "main").is_err());
     }
 
     #[test]

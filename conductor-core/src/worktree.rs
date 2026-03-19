@@ -500,21 +500,6 @@ impl<'a> WorktreeManager<'a> {
             params![new_status.as_str(), now, worktree.id],
         )?;
 
-        // Auto-close the feature if this was the last active worktree and the
-        // git branch is gone. Skip for worktrees based on the default branch.
-        if let Some(ref base_branch) = worktree.base_branch {
-            if base_branch != &repo.default_branch {
-                let fm = crate::feature::FeatureManager::new(self.conn, self.config);
-                if let Err(e) = fm.auto_close_if_orphaned(repo, base_branch) {
-                    tracing::warn!(
-                        base_branch = base_branch,
-                        error = %e,
-                        "failed to auto-close orphaned feature"
-                    );
-                }
-            }
-        }
-
         Ok(Worktree {
             status: new_status,
             completed_at: Some(now),
@@ -2181,10 +2166,11 @@ mod tests {
     }
 
     /// Integration: deleting the last active worktree for a feature whose
-    /// branch is gone should auto-close the feature via delete_internal →
-    /// auto_close_if_orphaned.
+    /// branch is gone should auto-close the feature when the caller invokes
+    /// `FeatureManager::auto_close_after_worktree_delete` (mirrors what
+    /// CLI/TUI/web do after `WorktreeManager::delete`).
     #[test]
-    fn test_delete_auto_closes_orphaned_feature() {
+    fn test_delete_then_auto_close_orphaned_feature() {
         let (_tmp, _remote, local) = setup_repo_with_remote();
         let local_str = local.to_str().unwrap();
 
@@ -2217,8 +2203,14 @@ mod tests {
         ).unwrap();
 
         let config = Config::default();
-        let mgr = WorktreeManager::new(&conn, &config);
-        mgr.delete("test-repo", "wt-eph").unwrap();
+        let wt_mgr = WorktreeManager::new(&conn, &config);
+        let wt = wt_mgr.delete("test-repo", "wt-eph").unwrap();
+
+        // Caller-side auto-close (mirrors CLI/TUI/web pattern)
+        let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+        let repo = repo_mgr.get_by_slug("test-repo").unwrap();
+        let fm = crate::feature::FeatureManager::new(&conn, &config);
+        fm.auto_close_after_worktree_delete(&repo, &wt).unwrap();
 
         // The feature should now be closed
         let status: String = conn

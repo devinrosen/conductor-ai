@@ -40,6 +40,12 @@ impl App {
                         let conn = conductor_core::db::open_database(&db)?;
                         let wt_mgr = WorktreeManager::new(&conn, &config);
                         let wt = wt_mgr.delete(&repo_slug, &wt_slug)?;
+                        if let Ok(repo) = RepoManager::new(&conn, &config).get_by_slug(&repo_slug) {
+                            let fm = conductor_core::feature::FeatureManager::new(&conn, &config);
+                            if let Err(e) = fm.auto_close_after_worktree_delete(&repo, &wt) {
+                                tracing::warn!(error = %e, "failed to auto-close orphaned feature");
+                            }
+                        }
                         Ok(wt.status.to_string())
                     })();
                     let _ = bg_tx.send(Action::WorktreeDeleteComplete {

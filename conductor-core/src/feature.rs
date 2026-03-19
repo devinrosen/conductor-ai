@@ -555,11 +555,30 @@ impl<'a> FeatureManager<'a> {
         }
 
         // Check if the branch still exists locally
-        if crate::git::local_branch_exists(&repo.local_path, feature_branch) {
+        if crate::git::local_branch_exists(&repo.local_path, feature_branch)? {
             return Ok(()); // Branch still exists — user may reuse it
         }
 
         self.close_with_merge_detection(&repo.local_path, &feature)
+    }
+
+    /// Convenience wrapper called after a worktree is deleted.
+    ///
+    /// Checks the deleted worktree's `base_branch` and, if it differs from the
+    /// repo's default branch, delegates to [`auto_close_if_orphaned`]. This
+    /// keeps the auto-close logic in `FeatureManager` rather than in
+    /// `WorktreeManager`, preserving the dependency direction.
+    pub fn auto_close_after_worktree_delete(
+        &self,
+        repo: &crate::repo::Repo,
+        worktree: &crate::worktree::Worktree,
+    ) -> Result<()> {
+        if let Some(ref base_branch) = worktree.base_branch {
+            if base_branch != &repo.default_branch {
+                return self.auto_close_if_orphaned(repo, base_branch);
+            }
+        }
+        Ok(())
     }
 
     /// Auto-register a feature for a branch if none exists yet.

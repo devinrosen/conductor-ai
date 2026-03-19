@@ -82,6 +82,12 @@ pub async fn delete_worktree(
     let config = state.config.read().await;
     let mgr = WorktreeManager::new(&db, &config);
     let wt = mgr.delete_by_id(&id)?;
+    if let Ok(repo) = conductor_core::repo::RepoManager::new(&db, &config).get_by_id(&wt.repo_id) {
+        let fm = conductor_core::feature::FeatureManager::new(&db, &config);
+        if let Err(e) = fm.auto_close_after_worktree_delete(&repo, &wt) {
+            tracing::warn!(error = %e, "failed to auto-close orphaned feature");
+        }
+    }
     state.events.emit(ConductorEvent::WorktreeDeleted {
         id: wt.id.clone(),
         repo_id: wt.repo_id.clone(),
