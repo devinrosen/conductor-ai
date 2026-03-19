@@ -98,6 +98,14 @@ const FEATURE_ROW_FRAGMENT: &str = "\
 
 const FEATURE_ROW_ORDER: &str = " ORDER BY f.created_at DESC";
 
+/// Column list for a plain `SELECT … FROM features` (no join, no subquery).
+/// Used by `map_feature_row` — keep in sync with that function's column indices.
+const FEATURE_COLS: &str = "id, repo_id, name, branch, base_branch, status, created_at, merged_at";
+
+/// Same columns but table-aliased (`f.`) for use in joins.
+const FEATURE_COLS_ALIASED: &str =
+    "f.id, f.repo_id, f.name, f.branch, f.base_branch, f.status, f.created_at, f.merged_at";
+
 /// Map a rusqlite row to a `FeatureRow`, starting at the given column offset.
 fn map_feature_row_cols(
     row: &rusqlite::Row<'_>,
@@ -312,8 +320,7 @@ impl<'a> FeatureManager<'a> {
     pub fn get_by_id(&self, id: &str) -> Result<Feature> {
         self.conn
             .query_row(
-                "SELECT id, repo_id, name, branch, base_branch, status, created_at, merged_at
-                 FROM features WHERE id = ?1",
+                &format!("SELECT {FEATURE_COLS} FROM features WHERE id = ?1"),
                 params![id],
                 map_feature_row,
             )
@@ -347,10 +354,11 @@ impl<'a> FeatureManager<'a> {
     pub fn find_feature_for_ticket(&self, ticket_id: &str) -> Result<Option<Feature>> {
         let features: Vec<Feature> = query_collect(
             self.conn,
-            "SELECT f.id, f.repo_id, f.name, f.branch, f.base_branch, f.status, f.created_at, f.merged_at
-             FROM features f
-             INNER JOIN feature_tickets ft ON ft.feature_id = f.id
-             WHERE ft.ticket_id = ?1 AND f.status = 'active'",
+            &format!(
+                "SELECT {FEATURE_COLS_ALIASED} FROM features f \
+                 INNER JOIN feature_tickets ft ON ft.feature_id = f.id \
+                 WHERE ft.ticket_id = ?1 AND f.status = 'active'"
+            ),
             params![ticket_id],
             map_feature_row,
         )?;
@@ -522,7 +530,7 @@ impl<'a> FeatureManager<'a> {
     /// Called after a worktree is deleted. If the feature still has active
     /// worktrees, or if the branch still exists locally (user may create new
     /// worktrees later), this is a no-op.
-    pub fn auto_close_if_orphaned(
+    pub(crate) fn auto_close_if_orphaned(
         &self,
         repo: &crate::repo::Repo,
         feature_branch: &str,
@@ -531,8 +539,7 @@ impl<'a> FeatureManager<'a> {
         let feature: Option<Feature> = self
             .conn
             .query_row(
-                "SELECT id, repo_id, name, branch, base_branch, status, created_at, merged_at
-                 FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'active'",
+                &format!("SELECT {FEATURE_COLS} FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'active'"),
                 params![repo.id, feature_branch],
                 map_feature_row,
             )
@@ -564,23 +571,21 @@ impl<'a> FeatureManager<'a> {
 
     /// Convenience wrapper called after a worktree is deleted.
     ///
-    /// Looks up the repo from the worktree's `repo_id`, checks the deleted
-    /// worktree's `base_branch` and, if it differs from the repo's default
-    /// branch, delegates to [`auto_close_if_orphaned`]. This keeps the
-    /// auto-close logic in `FeatureManager` rather than in `WorktreeManager`,
-    /// preserving the dependency direction and avoiding boilerplate at call
-    /// sites.
-    pub fn auto_close_after_worktree_delete(
+    /// Looks up the repo from `repo_id`, checks the worktree's `base_branch`
+    /// and, if it differs from the repo's default branch, delegates to
+    /// [`auto_close_if_orphaned`]. Accepts plain IDs instead of domain structs
+    /// to avoid bidirectional module coupling.
+    pub(crate) fn auto_close_after_worktree_delete(
         &self,
-        worktree: &crate::worktree::Worktree,
+        repo_id: &str,
+        base_branch: Option<&str>,
     ) -> Result<()> {
-        let base_branch = match worktree.base_branch {
-            Some(ref b) => b,
+        let base_branch = match base_branch {
+            Some(b) => b,
             None => return Ok(()),
         };
-        let repo =
-            crate::repo::RepoManager::new(self.conn, self.config).get_by_id(&worktree.repo_id)?;
-        if base_branch != &repo.default_branch {
+        let repo = crate::repo::RepoManager::new(self.conn, self.config).get_by_id(repo_id)?;
+        if base_branch != repo.default_branch {
             return self.auto_close_if_orphaned(&repo, base_branch);
         }
         Ok(())
@@ -729,8 +734,7 @@ impl<'a> FeatureManager<'a> {
     fn get_feature_by_repo_id(&self, repo_id: &str, name: &str) -> Result<Feature> {
         self.conn
             .query_row(
-                "SELECT id, repo_id, name, branch, base_branch, status, created_at, merged_at
-                 FROM features WHERE repo_id = ?1 AND name = ?2",
+                &format!("SELECT {FEATURE_COLS} FROM features WHERE repo_id = ?1 AND name = ?2"),
                 params![repo_id, name],
                 map_feature_row,
             )
@@ -2322,6 +2326,24 @@ mod tests {
         // Feature should be closed — only merged worktrees remain (not active)
         let f = mgr.get_by_name("test-repo", "has-merged-wt").unwrap();
         assert_eq!(f.status, FeatureStatus::Closed);
+    }
+
+    #[test]
+    fn test_auto_close_after_worktree_delete_skips_default_branch() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        // Create a feature whose branch matches the repo's default branch ("main")
+        insert_feature(&conn, &repo_id, "main-feat", "main");
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        // base_branch == "main" == default_branch → should be a no-op
+        mgr.auto_close_after_worktree_delete(&repo_id, Some("main"))
+            .unwrap();
+
+        // Feature should remain active
+        let f = mgr.get_by_name("test-repo", "main-feat").unwrap();
+        assert_eq!(f.status, FeatureStatus::Active);
     }
 
     /// Regression: FEATURE_ROW_FRAGMENT wt_count subquery must only count

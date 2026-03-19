@@ -509,7 +509,10 @@ impl<'a> WorktreeManager<'a> {
         // Auto-close orphaned feature if the branch is gone.
         // Best-effort: log but don't propagate errors so the delete itself succeeds.
         let fm = crate::feature::FeatureManager::new(self.conn, self.config);
-        if let Err(e) = fm.auto_close_after_worktree_delete(&deleted_wt) {
+        if let Err(e) = fm.auto_close_after_worktree_delete(
+            &deleted_wt.repo_id,
+            deleted_wt.base_branch.as_deref(),
+        ) {
             tracing::warn!(error = %e, "failed to auto-close orphaned feature");
         }
 
