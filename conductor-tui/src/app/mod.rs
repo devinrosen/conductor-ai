@@ -700,6 +700,21 @@ impl App {
             }
 
             // Feature actions
+            Action::ToggleFeatureCollapse => {
+                if let Some(crate::state::DashboardRow::Feature {
+                    repo_idx,
+                    feature_idx,
+                    ..
+                }) = self.state.current_dashboard_row()
+                {
+                    if let Some(feature) = self.state.feature_at(repo_idx, feature_idx) {
+                        let fid = feature.id.clone();
+                        if !self.state.collapsed_features.remove(&fid) {
+                            self.state.collapsed_features.insert(fid);
+                        }
+                    }
+                }
+            }
             Action::FeatureDetail {
                 repo_idx,
                 feature_idx,

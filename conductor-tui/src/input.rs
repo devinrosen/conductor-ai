@@ -323,21 +323,31 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
     // View-specific keybindings (Dashboard)
     if state.view == View::Dashboard {
         // Feature-row-specific keybindings (only compute dashboard row when needed)
-        if let KeyCode::Char('d') = key.code {
-            if let Some(crate::state::DashboardRow::Feature {
-                repo_idx,
-                feature_idx,
-                total,
-                merged,
-            }) = state.current_dashboard_row()
-            {
-                return Action::FeatureDetail {
+        match key.code {
+            KeyCode::Char('d') => {
+                if let Some(crate::state::DashboardRow::Feature {
                     repo_idx,
                     feature_idx,
                     total,
                     merged,
-                };
+                }) = state.current_dashboard_row()
+                {
+                    return Action::FeatureDetail {
+                        repo_idx,
+                        feature_idx,
+                        total,
+                        merged,
+                    };
+                }
             }
+            KeyCode::Char(' ') => {
+                if let Some(crate::state::DashboardRow::Feature { .. }) =
+                    state.current_dashboard_row()
+                {
+                    return Action::ToggleFeatureCollapse;
+                }
+            }
+            _ => {}
         }
         match key.code {
             KeyCode::Char('o') => return Action::OpenRepoUrl,
