@@ -423,6 +423,7 @@ pub(super) fn execute_call_workflow(
             model: state.model.as_deref(),
             from_step: None,
             restart: false,
+            conductor_bin_dir: state.conductor_bin_dir.clone(),
         };
 
         match super::engine::resume_workflow(&resume_input) {
@@ -590,6 +591,7 @@ pub(super) fn execute_call_workflow(
             iteration,
             run_id_notify: None,
             triggered_by_hook: state.triggered_by_hook,
+            conductor_bin_dir: state.conductor_bin_dir.clone(),
         };
 
         match super::engine::execute_workflow(&child_input) {
@@ -1941,12 +1943,10 @@ pub(super) fn execute_script(
             .stdout(output_file)
             .stderr(stderr_file)
             .current_dir(&state.working_dir);
-        // Inject conductor's own directory into PATH so scripts can call `conductor`
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                let path = std::env::var("PATH").unwrap_or_default();
-                cmd.env("PATH", format!("{}:{}", dir.display(), path));
-            }
+        // Inject conductor's binary directory into PATH so scripts can call `conductor`
+        if let Some(ref bin_dir) = state.conductor_bin_dir {
+            let path = std::env::var("PATH").unwrap_or_default();
+            cmd.env("PATH", format!("{}:{}", bin_dir.display(), path));
         }
         match crate::github_app::resolve_named_app_token(state.config, effective_bot, "script") {
             crate::github_app::TokenResolution::AppToken(token) => {
@@ -2188,6 +2188,7 @@ mod tests {
             default_bot_name: None,
             feature_id: None,
             triggered_by_hook: false,
+            conductor_bin_dir: None,
         }
     }
 
@@ -2740,6 +2741,12 @@ mod tests {
             crate::workflow::types::WorkflowExecConfig::default(),
         );
 
+        // Simulate what binary crates do: resolve conductor binary dir from current_exe.
+        let bin_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+        state.conductor_bin_dir = bin_dir;
+
         let node = crate::workflow_dsl::ScriptNode {
             name: "check_path".into(),
             run: script_path,
@@ -2757,9 +2764,9 @@ mod tests {
         let ctx = state.contexts.last().unwrap();
         let log_path = ctx.output_file.as_ref().unwrap();
         let output = std::fs::read_to_string(log_path).unwrap();
-        let exe_dir = std::env::current_exe()
-            .unwrap()
-            .parent()
+        let exe_dir = state
+            .conductor_bin_dir
+            .as_ref()
             .unwrap()
             .to_string_lossy()
             .to_string();

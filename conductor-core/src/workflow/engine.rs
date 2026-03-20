@@ -95,6 +95,9 @@ pub(super) struct ExecutionState<'a> {
     pub feature_id: Option<String>,
     /// Whether this run was triggered by a workflow hook (prevents infinite chains).
     pub triggered_by_hook: bool,
+    /// Directory containing the conductor binary, injected into script step PATH.
+    /// Resolved by the caller (binary crate) so the library doesn't call `current_exe()`.
+    pub conductor_bin_dir: Option<std::path::PathBuf>,
 }
 
 /// Resolve a schema by name using the standard search order.
@@ -398,6 +401,7 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
         default_bot_name: input.default_bot_name.clone(),
         feature_id: input.feature_id.map(String::from),
         triggered_by_hook: input.triggered_by_hook,
+        conductor_bin_dir: input.conductor_bin_dir.clone(),
     };
 
     run_workflow_engine(&mut state, workflow)
@@ -588,6 +592,7 @@ fn evaluate_hooks(
             feature_id: state.feature_id.as_deref(),
             run_id_notify: None,
             triggered_by_hook: true,
+            conductor_bin_dir: state.conductor_bin_dir.clone(),
         };
 
         match execute_workflow(&hook_input) {
@@ -632,6 +637,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         iteration: 0,
         run_id_notify: params.run_id_notify.clone(),
         triggered_by_hook: params.triggered_by_hook,
+        conductor_bin_dir: params.conductor_bin_dir.clone(),
     };
 
     execute_workflow(&input)
@@ -688,6 +694,7 @@ pub fn resume_workflow_standalone(params: &WorkflowResumeStandalone) -> Result<W
         model: params.model.as_deref(),
         from_step: params.from_step.as_deref(),
         restart: params.restart,
+        conductor_bin_dir: params.conductor_bin_dir.clone(),
     };
 
     resume_workflow(&input)
@@ -902,6 +909,7 @@ pub fn resume_workflow(input: &WorkflowResumeInput<'_>) -> Result<WorkflowResult
         default_bot_name: wf_run.default_bot_name.clone(),
         feature_id: wf_run.feature_id.clone(),
         triggered_by_hook: wf_run.is_triggered_by_hook(),
+        conductor_bin_dir: input.conductor_bin_dir.clone(),
     };
 
     run_workflow_engine(&mut state, &workflow)

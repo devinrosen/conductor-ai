@@ -42,10 +42,10 @@ pub use manager::WorkflowManager;
 pub use output::{parse_conductor_output, ConductorOutput};
 pub use status::{WorkflowRunStatus, WorkflowStepStatus};
 pub use types::{
-    ActiveWorkflowCounts, BlockedOn, ContextEntry, MetadataEntry, PendingGateRow, RunIdSlot,
-    StepResult, WorkflowExecConfig, WorkflowExecInput, WorkflowExecStandalone, WorkflowResult,
-    WorkflowResumeInput, WorkflowResumeStandalone, WorkflowRun, WorkflowRunContext,
-    WorkflowRunStep, WorkflowStepSummary,
+    resolve_conductor_bin_dir, ActiveWorkflowCounts, BlockedOn, ContextEntry, MetadataEntry,
+    PendingGateRow, RunIdSlot, StepResult, WorkflowExecConfig, WorkflowExecInput,
+    WorkflowExecStandalone, WorkflowResult, WorkflowResumeInput, WorkflowResumeStandalone,
+    WorkflowRun, WorkflowRunContext, WorkflowRunStep, WorkflowStepSummary,
 };
 
 use crate::agent_config::AgentSpec;

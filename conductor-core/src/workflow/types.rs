@@ -354,6 +354,9 @@ pub struct WorkflowExecInput<'a> {
     pub run_id_notify: Option<RunIdSlot>,
     /// Whether this run was triggered by a workflow hook (prevents infinite chains).
     pub triggered_by_hook: bool,
+    /// Directory containing the conductor binary, injected into script step PATH.
+    /// Resolved by the caller (binary crate) so the library doesn't call `current_exe()`.
+    pub conductor_bin_dir: Option<std::path::PathBuf>,
 }
 
 /// Owned inputs for [`execute_workflow_standalone`], avoiding lifetime issues
@@ -379,6 +382,8 @@ pub struct WorkflowExecStandalone {
     pub run_id_notify: Option<RunIdSlot>,
     /// Whether this run was triggered by a workflow hook (prevents infinite chains).
     pub triggered_by_hook: bool,
+    /// Directory containing the conductor binary, injected into script step PATH.
+    pub conductor_bin_dir: Option<std::path::PathBuf>,
 }
 
 /// Owned inputs for [`resume_workflow_standalone`], avoiding lifetime issues
@@ -392,6 +397,8 @@ pub struct WorkflowResumeStandalone {
     /// Override the database path. Uses the default conductor db when `None`.
     /// Useful for tests that operate on a temporary database.
     pub db_path: Option<std::path::PathBuf>,
+    /// Directory containing the conductor binary, injected into script step PATH.
+    pub conductor_bin_dir: Option<std::path::PathBuf>,
 }
 
 /// Input parameters for resuming a workflow run.
@@ -405,4 +412,16 @@ pub struct WorkflowResumeInput<'a> {
     pub from_step: Option<&'a str>,
     /// Restart from the beginning (clear all step results).
     pub restart: bool,
+    /// Directory containing the conductor binary, injected into script step PATH.
+    pub conductor_bin_dir: Option<std::path::PathBuf>,
+}
+
+/// Resolve the directory containing the current executable.
+///
+/// Binary crates call this once at startup and pass the result into workflow
+/// input structs, keeping `current_exe()` out of the library's runtime path.
+pub fn resolve_conductor_bin_dir() -> Option<std::path::PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
 }

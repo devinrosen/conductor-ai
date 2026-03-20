@@ -227,6 +227,7 @@ pub(super) fn tool_resume_run(
         from_step,
         restart: false,
         db_path: Some(db_path.to_path_buf()),
+        conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
     };
 
     // Error slot: captures any error that occurs before steps begin executing.

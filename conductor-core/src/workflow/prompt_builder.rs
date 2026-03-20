@@ -150,6 +150,7 @@ mod tests {
             default_bot_name: None,
             feature_id: None,
             triggered_by_hook: false,
+            conductor_bin_dir: None,
         }
     }
 

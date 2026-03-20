@@ -272,6 +272,7 @@ pub(super) fn tool_run_workflow(
         feature_id,
         run_id_notify: Some(Arc::clone(&notify_pair)),
         triggered_by_hook: false,
+        conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
     };
 
     // Slot receives the error message if execute_workflow_standalone fails before

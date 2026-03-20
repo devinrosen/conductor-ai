@@ -275,6 +275,7 @@ pub async fn run_workflow(
                 iteration: 0,
                 run_id_notify: Some(std::sync::Arc::clone(&run_id_slot)),
                 triggered_by_hook: false,
+                conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
             };
 
             execute_workflow(&input)
@@ -520,6 +521,7 @@ pub async fn resume_workflow_endpoint(
             from_step,
             restart,
             db_path: None,
+            conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
         };
 
         let result = conductor_core::workflow::resume_workflow_standalone(&params);

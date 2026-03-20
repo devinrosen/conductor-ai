@@ -105,6 +105,7 @@ impl App {
                         from_step: None,
                         restart: false,
                         db_path: None,
+                        conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
                     };
 
                     let result = resume_workflow_standalone(&params);

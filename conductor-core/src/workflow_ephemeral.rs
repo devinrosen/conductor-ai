@@ -256,6 +256,7 @@ pub fn run_workflow_on_pr(
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
+        conductor_bin_dir: crate::workflow::resolve_conductor_bin_dir(),
     };
 
     // `temp_dir` is dropped after execute_workflow returns, cleaning up the cloned repo.
@@ -375,6 +376,7 @@ mod tests {
             restart: false,
             from_step: None,
             model: None,
+            conductor_bin_dir: None,
         };
 
         let err = resume_workflow(&input).unwrap_err();
