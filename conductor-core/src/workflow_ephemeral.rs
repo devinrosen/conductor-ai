@@ -195,6 +195,7 @@ pub fn run_workflow_on_pr(
     exec_config: WorkflowExecConfig,
     mut inputs: HashMap<String, String>,
     dry_run: bool,
+    conductor_bin_dir: Option<std::path::PathBuf>,
 ) -> Result<WorkflowResult> {
     // Create a temp directory; it will be cleaned up when `_temp_dir` is dropped.
     let temp_dir = TempDir::new()
@@ -256,7 +257,7 @@ pub fn run_workflow_on_pr(
         iteration: 0,
         run_id_notify: None,
         triggered_by_hook: false,
-        conductor_bin_dir: crate::workflow::resolve_conductor_bin_dir(),
+        conductor_bin_dir,
     };
 
     // `temp_dir` is dropped after execute_workflow returns, cleaning up the cloned repo.

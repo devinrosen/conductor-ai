@@ -1506,6 +1506,7 @@ fn main() -> Result<()> {
                         exec_config,
                         input_map,
                         dry_run,
+                        conductor_core::workflow::resolve_conductor_bin_dir(),
                     ) {
                         Ok(result) => report_workflow_result(result),
                         Err(e) => {

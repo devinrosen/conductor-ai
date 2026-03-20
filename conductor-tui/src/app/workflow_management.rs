@@ -1214,6 +1214,7 @@ impl App {
                 exec_config,
                 inputs,
                 false,
+                conductor_core::workflow::resolve_conductor_bin_dir(),
             );
 
             send_workflow_result(&bg_tx, &workflow_name, Some(&pr_label), result);
