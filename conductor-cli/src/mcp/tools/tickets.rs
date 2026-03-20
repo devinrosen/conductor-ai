@@ -228,16 +228,8 @@ pub(super) fn tool_upsert_ticket(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
-    let labels_json = serde_json::to_string(&labels).unwrap_or_else(|_| "[]".into());
     let assignee = get_arg(args, "assignee").map(|s| s.to_string());
     let priority = get_arg(args, "priority").map(|s| s.to_string());
-
-    let valid_states = ["open", "in_progress", "closed"];
-    if !valid_states.contains(&state) {
-        return tool_err(format!(
-            "Invalid state '{state}'. Must be one of: open, in_progress, closed."
-        ));
-    }
 
     let (conn, config) = match open_db_and_config(db_path) {
         Ok(v) => v,
@@ -254,7 +246,7 @@ pub(super) fn tool_upsert_ticket(
         title: title.to_string(),
         body,
         state: state.to_string(),
-        labels: labels_json,
+        labels,
         label_details: vec![],
         assignee,
         priority,
@@ -419,7 +411,7 @@ mod tests {
             title: "Test ticket".to_string(),
             body: "body".to_string(),
             state: "open".to_string(),
-            labels: "".to_string(),
+            labels: vec![],
             assignee: None,
             priority: None,
             url: "https://github.com/x/y/issues/42".to_string(),
@@ -521,6 +513,7 @@ mod tests {
     #[test]
     fn test_upsert_ticket_invalid_state() {
         let (_f, db) = make_test_db();
+        seed_test_repo(&db);
         let mut args = full_ticket_args("test-repo");
         args.insert("state".to_string(), Value::String("pending".to_string()));
         let result = tool_upsert_ticket(&db, &args);
@@ -530,7 +523,7 @@ mod tests {
             .map(|t| t.text.as_str())
             .unwrap_or("");
         assert!(
-            text.contains("Invalid state"),
+            text.contains("Invalid ticket state"),
             "expected invalid state error, got: {text}"
         );
         assert!(

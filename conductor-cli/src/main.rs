@@ -498,6 +498,38 @@ enum TicketCommands {
         /// Filter by repo slug
         repo: Option<String>,
     },
+    /// Create or update a ticket from an external source
+    Upsert {
+        /// Repo slug
+        repo: String,
+        /// Source type (e.g. "github", "jira", "linear")
+        #[arg(long)]
+        source_type: String,
+        /// Source ID (e.g. issue number or key)
+        #[arg(long)]
+        source_id: String,
+        /// Ticket title
+        #[arg(long)]
+        title: String,
+        /// Ticket state: open, in_progress, or closed
+        #[arg(long)]
+        state: String,
+        /// Ticket body/description
+        #[arg(long, default_value = "")]
+        body: String,
+        /// URL to the ticket
+        #[arg(long, default_value = "")]
+        url: String,
+        /// Comma-separated labels
+        #[arg(long)]
+        labels: Option<String>,
+        /// Assignee
+        #[arg(long)]
+        assignee: Option<String>,
+        /// Priority
+        #[arg(long)]
+        priority: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1182,6 +1214,48 @@ fn main() -> Result<()> {
                 let syncer = TicketSyncer::new(&conn);
                 syncer.link_to_worktree(&ticket_id, &worktree_id)?;
                 println!("Linked ticket #{ticket} to worktree '{worktree}'");
+            }
+            TicketCommands::Upsert {
+                repo,
+                source_type,
+                source_id,
+                title,
+                state,
+                body,
+                url,
+                labels,
+                assignee,
+                priority,
+            } => {
+                let repo_obj = RepoManager::new(&conn, &config).get_by_slug(&repo)?;
+
+                let labels_vec: Vec<String> = labels
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
+                let ticket_input = TicketInput {
+                    source_type: source_type.clone(),
+                    source_id: source_id.clone(),
+                    title,
+                    body,
+                    state,
+                    labels: labels_vec,
+                    label_details: vec![],
+                    assignee,
+                    priority,
+                    url,
+                    raw_json: "{}".to_string(),
+                };
+
+                let syncer = TicketSyncer::new(&conn);
+                syncer.upsert_tickets(&repo_obj.id, &[ticket_input])?;
+                println!(
+                    "Upserted ticket {}#{} into {}.",
+                    source_type, source_id, repo
+                );
             }
             TicketCommands::Stats { repo } => {
                 let repo_mgr = RepoManager::new(&conn, &config);
