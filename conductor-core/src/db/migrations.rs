@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 47;
+pub const LATEST_SCHEMA_VERSION: u32 = 48;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -878,6 +878,13 @@ pub fn run(conn: &Connection) -> Result<()> {
             )?;
         }
         bump_version(conn, 47)?;
+    }
+
+    if version < 48 {
+        conn.execute_batch(include_str!(
+            "migrations/048_backfill_workflow_run_repo_id.sql"
+        ))?;
+        bump_version(conn, 48)?;
     }
 
     Ok(())

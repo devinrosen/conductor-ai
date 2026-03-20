@@ -1835,3 +1835,87 @@ fn test_update_workflow_status_rejects_waiting() {
         "Expected InvalidInput error, got: {err}"
     );
 }
+
+#[test]
+fn test_backfill_migration_sets_repo_id_on_historical_runs() {
+    // setup_db() provides repo r1 and worktree w1 (repo_id=r1).
+    let conn = setup_db();
+
+    // Create a workflow run with worktree_id but NULL repo_id (historical data).
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at) \
+         VALUES ('run-hist', 'test-wf', 'w1', ?1, 'completed', 0, 'manual', '2025-01-01T00:00:00Z')",
+        params![parent.id],
+    )
+    .unwrap();
+
+    // Verify repo_id is NULL before backfill.
+    let repo_id_before: Option<String> = conn
+        .query_row(
+            "SELECT repo_id FROM workflow_runs WHERE id = 'run-hist'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        repo_id_before.is_none(),
+        "repo_id should be NULL before backfill"
+    );
+
+    // Run the backfill SQL.
+    conn.execute_batch(include_str!(
+        "../../db/migrations/048_backfill_workflow_run_repo_id.sql"
+    ))
+    .unwrap();
+
+    // Verify repo_id is now set.
+    let repo_id_after: Option<String> = conn
+        .query_row(
+            "SELECT repo_id FROM workflow_runs WHERE id = 'run-hist'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(repo_id_after.as_deref(), Some("r1"));
+}
+
+#[test]
+fn test_backfill_migration_skips_runs_with_existing_repo_id() {
+    // setup_db() provides repo r1 and worktree w1 (repo_id=r1).
+    let conn = setup_db();
+
+    // Add a second repo.
+    conn.execute(
+        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+         VALUES ('r2', 'other-repo', '/tmp/repo2', 'https://github.com/test/repo2', '/tmp/ws2', '2025-01-01T00:00:00Z')",
+        [],
+    )
+    .unwrap();
+
+    // Create a run that already has repo_id set (to r2, different from worktree w1's r1).
+    let run_id = insert_workflow_run_with_targets(&conn, Some("w1"), Some("r2"));
+
+    // Run the backfill — should not overwrite the existing repo_id.
+    conn.execute_batch(include_str!(
+        "../../db/migrations/048_backfill_workflow_run_repo_id.sql"
+    ))
+    .unwrap();
+
+    let repo_id: Option<String> = conn
+        .query_row(
+            "SELECT repo_id FROM workflow_runs WHERE id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        repo_id.as_deref(),
+        Some("r2"),
+        "existing repo_id should not be overwritten"
+    );
+}
