@@ -935,5 +935,88 @@ workflow parent {
     );
 }
 
+#[test]
+fn test_semantics_sub_workflow_parallel_inner_steps_produced() {
+    // Sub-workflow whose body contains a `parallel` block — each inner call
+    // should be produced in the parent so conditions can reference them.
+    let input = r#"
+workflow parent {
+    meta { targets = ["worktree"] }
+    call workflow child
+    if step-a.done {
+        call followup
+    }
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    let report = validate_workflow_semantics(&def, &|name| {
+        if name == "child" {
+            parse_workflow_str(
+                r#"workflow child {
+                    meta { description = "c" trigger = "manual" targets = ["worktree"] }
+                    parallel {
+                        call step-a
+                        call step-b
+                    }
+                }"#,
+                "child.wf",
+            )
+            .map_err(|e| e.to_string())
+        } else {
+            Err(format!("unknown: {name}"))
+        }
+    });
+    assert!(
+        report.is_ok(),
+        "Parallel inner steps of sub-workflow should be reachable, got: {:?}",
+        report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_semantics_sub_workflow_guarded_inner_steps_not_produced() {
+    // Steps nested inside `if`/`while` in a sub-workflow body should NOT be
+    // bubbled up to the parent — they are conditional and may not run.
+    let input = r#"
+workflow parent {
+    meta { targets = ["worktree"] }
+    call workflow child
+    if guarded-step.done {
+        call followup
+    }
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    let report = validate_workflow_semantics(&def, &|name| {
+        if name == "child" {
+            parse_workflow_str(
+                r#"workflow child {
+                    meta { description = "c" trigger = "manual" targets = ["worktree"] }
+                    call outer-step
+                    if outer-step.done {
+                        call guarded-step
+                    }
+                }"#,
+                "child.wf",
+            )
+            .map_err(|e| e.to_string())
+        } else {
+            Err(format!("unknown: {name}"))
+        }
+    });
+    assert!(
+        !report.is_ok(),
+        "Guarded inner steps of sub-workflow should NOT be produced in parent"
+    );
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|e| e.message.contains("guarded-step")),
+        "Error should mention 'guarded-step', got: {:?}",
+        report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 // resolve_script_path and script_search_paths tests live in
 // conductor-core/src/workflow_dsl/script_utils.rs
