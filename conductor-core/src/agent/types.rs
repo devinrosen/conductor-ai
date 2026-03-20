@@ -163,6 +163,22 @@ impl AgentRunEvent {
         let end = chrono::DateTime::parse_from_rfc3339(self.ended_at.as_ref()?).ok()?;
         Some((end - start).num_milliseconds().max(0))
     }
+
+    /// Extract the `error_text` field from metadata JSON for `tool_error` events.
+    ///
+    /// Returns `None` if this is not a `tool_error` event or if the metadata
+    /// does not contain an `error_text` field.
+    pub fn error_detail_text(&self) -> Option<String> {
+        if self.kind != "tool_error" {
+            return None;
+        }
+        let meta = self.metadata.as_ref()?;
+        let parsed: serde_json::Value = serde_json::from_str(meta).ok()?;
+        parsed
+            .get("error_text")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
 }
 
 /// A GitHub issue (or other tracker issue) created by an agent run.

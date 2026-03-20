@@ -252,8 +252,9 @@ pub fn parse_events_from_line(line: &str) -> Vec<AgentEvent> {
                             .get("tool_use_id")
                             .and_then(|v| v.as_str())
                             .unwrap_or("unknown");
-                        let summary = tool_error_summary(tool_name, &content_text);
-                        let error_text = truncate_error_text(&content_text, 2048);
+                        let sanitized = redact_secrets(&content_text);
+                        let summary = tool_error_summary(tool_name, &sanitized);
+                        let error_text = truncate_error_text(&sanitized, 2048);
                         let metadata = serde_json::json!({
                             "tool_use_id": tool_name,
                             "is_error_flag": is_error,
@@ -413,13 +414,89 @@ fn detect_error_patterns(text: &str) -> bool {
 }
 
 /// Generate a one-line summary for a tool_error event.
-fn tool_error_summary(_tool_use_id: &str, error_text: &str) -> String {
+fn tool_error_summary(tool_use_id: &str, error_text: &str) -> String {
     let first_line = error_text
         .lines()
         .find(|l| !l.trim().is_empty())
         .unwrap_or("(empty)");
     let truncated: String = first_line.chars().take(120).collect();
-    format!("[tool_error] {truncated}")
+    format!("[tool_error:{tool_use_id}] {truncated}")
+}
+
+/// Secret-like key names (lowercase). If a line contains `KEY=...` or `KEY: ...`
+/// where KEY matches one of these, the value portion is redacted.
+const SECRET_KEY_PATTERNS: &[&str] = &[
+    "api_key",
+    "api-key",
+    "apikey",
+    "secret_key",
+    "secret-key",
+    "secretkey",
+    "access_token",
+    "access-token",
+    "accesstoken",
+    "auth_token",
+    "auth-token",
+    "authtoken",
+    "password",
+    "passwd",
+    "bearer",
+    "credential",
+    "credentials",
+    "private_key",
+    "private-key",
+    "privatekey",
+    "client_secret",
+    "client-secret",
+    "clientsecret",
+    "signing_key",
+    "signing-key",
+    "signingkey",
+    "encryption_key",
+    "encryption-key",
+    "encryptionkey",
+];
+
+/// Redact values that look like secrets or credentials from error text.
+///
+/// Tool output can contain secrets echoed by shell commands (env dumps, config
+/// reads, credential printouts). We redact common patterns before persisting
+/// to SQLite / displaying in the UI.
+fn redact_secrets(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    for line in text.lines() {
+        if !result.is_empty() {
+            result.push('\n');
+        }
+        let lower = line.to_lowercase();
+        let mut redacted = false;
+        for pattern in SECRET_KEY_PATTERNS {
+            if let Some(key_pos) = lower.find(pattern) {
+                let after_key = key_pos + pattern.len();
+                // Look for = or : separator after the key name
+                let rest = &lower[after_key..];
+                let rest_trimmed = rest.trim_start();
+                if rest_trimmed.starts_with('=') || rest_trimmed.starts_with(':') {
+                    // Find the separator position in the original string
+                    let sep_offset = after_key + (rest.len() - rest_trimmed.len());
+                    // Keep everything up to and including the separator + space
+                    let sep_end = sep_offset + 1; // past the = or :
+                    let value_start = line[sep_end..]
+                        .find(|c: char| !c.is_whitespace())
+                        .map(|i| sep_end + i)
+                        .unwrap_or(line.len());
+                    result.push_str(&line[..value_start]);
+                    result.push_str("[REDACTED]");
+                    redacted = true;
+                    break;
+                }
+            }
+        }
+        if !redacted {
+            result.push_str(line);
+        }
+    }
+    result
 }
 
 /// Truncate error text to a maximum byte length for storage in metadata.
@@ -883,5 +960,52 @@ mod tests {
         assert!(result.is_none());
         let still_running = mgr.get_run(&run.id).unwrap().unwrap();
         assert_eq!(still_running.status, AgentRunStatus::Running);
+    }
+
+    #[test]
+    fn test_tool_error_summary_includes_tool_use_id() {
+        let summary = tool_error_summary("toolu_abc123", "Permission denied");
+        assert_eq!(summary, "[tool_error:toolu_abc123] Permission denied");
+    }
+
+    #[test]
+    fn test_tool_error_summary_truncates_long_lines() {
+        let long_line = "x".repeat(200);
+        let summary = tool_error_summary("id1", &long_line);
+        // 120 chars of content + prefix
+        assert!(summary.len() < 160);
+        assert!(summary.starts_with("[tool_error:id1] "));
+    }
+
+    #[test]
+    fn test_redact_secrets_api_key() {
+        let input = "API_KEY=sk-abc123secret\nother line";
+        let result = redact_secrets(input);
+        assert!(result.contains("[REDACTED]"));
+        assert!(!result.contains("sk-abc123secret"));
+        assert!(result.contains("other line"));
+    }
+
+    #[test]
+    fn test_redact_secrets_password_colon() {
+        let input = "password: hunter2";
+        let result = redact_secrets(input);
+        assert!(result.contains("[REDACTED]"));
+        assert!(!result.contains("hunter2"));
+    }
+
+    #[test]
+    fn test_redact_secrets_preserves_normal_text() {
+        let input = "error: file not found\ncommand exited with code 1";
+        let result = redact_secrets(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_redact_secrets_case_insensitive() {
+        let input = "ACCESS_TOKEN=mytoken123";
+        let result = redact_secrets(input);
+        assert!(result.contains("[REDACTED]"));
+        assert!(!result.contains("mytoken123"));
     }
 }
