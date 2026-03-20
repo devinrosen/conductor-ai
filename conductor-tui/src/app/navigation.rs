@@ -651,29 +651,16 @@ impl App {
                     repo_id.clone(),
                 );
             }
-            // Auto-sync tickets if stale (>5 min since last sync) or never synced.
+            // Auto-sync tickets (staleness check happens in the background thread).
             if !self.state.ticket_sync_in_progress {
                 if let Some(ref tx) = self.bg_tx {
-                    let syncer = conductor_core::tickets::TicketSyncer::new(&self.conn);
-                    let is_stale = match syncer.latest_synced_at(&repo_id) {
-                        Ok(Some(ts)) => chrono::DateTime::parse_from_rfc3339(&ts)
-                            .map(|dt| {
-                                chrono::Utc::now().signed_duration_since(dt).num_seconds()
-                                    > crate::background::TICKET_SYNC_STALE_SECS
-                            })
-                            .unwrap_or(true),
-                        Ok(None) => true, // no tickets — treat as stale
-                        Err(_) => false,  // query error — don't sync
-                    };
-                    if is_stale {
-                        self.state.ticket_sync_in_progress = true;
-                        crate::background::spawn_ticket_sync_for_repo(
-                            tx.clone(),
-                            repo_id.clone(),
-                            repo.slug.clone(),
-                            remote_url,
-                        );
-                    }
+                    self.state.ticket_sync_in_progress = true;
+                    crate::background::spawn_ticket_sync_for_repo(
+                        tx.clone(),
+                        repo_id.clone(),
+                        repo.slug.clone(),
+                        remote_url,
+                    );
                 }
             }
             self.rebuild_detail_gates();

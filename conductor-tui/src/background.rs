@@ -565,8 +565,9 @@ fn sync_sources_for_repo(
     true
 }
 
-/// Spawn a one-shot ticket sync for a single repo. Sends per-source
-/// `TicketSyncComplete`/`TicketSyncFailed` actions followed by `TicketSyncDone`.
+/// Spawn a one-shot ticket sync for a single repo. Checks staleness inside the
+/// background thread, then sends per-source `TicketSyncComplete`/`TicketSyncFailed`
+/// actions followed by `TicketSyncDone`.
 pub fn spawn_ticket_sync_for_repo(
     tx: BackgroundSender,
     repo_id: String,
@@ -575,16 +576,47 @@ pub fn spawn_ticket_sync_for_repo(
 ) {
     thread::spawn(move || {
         let db = db_path();
-        let Ok(conn) = open_database(&db) else {
-            let _ = tx.send(Action::TicketSyncDone);
-            return;
+        let conn = match open_database(&db) {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx.send(Action::TicketSyncFailed {
+                    repo_slug: repo_slug.clone(),
+                    error: format!("failed to open database: {e}"),
+                });
+                let _ = tx.send(Action::TicketSyncDone);
+                return;
+            }
         };
-        let Ok(config) = load_config() else {
-            let _ = tx.send(Action::TicketSyncDone);
-            return;
+        let config = match load_config() {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx.send(Action::TicketSyncFailed {
+                    repo_slug: repo_slug.clone(),
+                    error: format!("failed to load config: {e}"),
+                });
+                let _ = tx.send(Action::TicketSyncDone);
+                return;
+            }
         };
 
+        // Check staleness: skip sync if tickets were synced recently.
         let syncer = TicketSyncer::new(&conn);
+        let is_stale = match syncer.latest_synced_at(&repo_id) {
+            Ok(Some(ts)) => chrono::DateTime::parse_from_rfc3339(&ts)
+                .map(|dt| {
+                    chrono::Utc::now().signed_duration_since(dt).num_seconds()
+                        > TICKET_SYNC_STALE_SECS
+                })
+                .unwrap_or(true),
+            Ok(None) => true,
+            Err(_) => false,
+        };
+
+        if !is_stale {
+            let _ = tx.send(Action::TicketSyncDone);
+            return;
+        }
+
         let source_mgr = IssueSourceManager::new(&conn);
         let token_res = github_app::resolve_app_token(&config, "github-issues-sync");
         let token = token_res.token();

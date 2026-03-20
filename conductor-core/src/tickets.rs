@@ -622,12 +622,29 @@ mod tests {
         let conn = setup_db();
         let syncer = TicketSyncer::new(&conn);
 
+        // Insert first ticket, then manually backdate its synced_at.
         syncer
             .upsert_tickets("r1", &[make_ticket("1", "Issue 1")])
             .unwrap();
+        let old_ts = "2020-01-01T00:00:00Z";
+        conn.execute(
+            "UPDATE tickets SET synced_at = ?1 WHERE source_id = '1'",
+            rusqlite::params![old_ts],
+        )
+        .unwrap();
 
-        let ts = syncer.latest_synced_at("r1").unwrap();
-        assert!(ts.is_some(), "should have a synced_at timestamp");
+        // Insert a second ticket — it gets the current timestamp.
+        syncer
+            .upsert_tickets("r1", &[make_ticket("2", "Issue 2")])
+            .unwrap();
+
+        let latest = syncer.latest_synced_at("r1").unwrap().unwrap();
+        // The MAX must be the newer ticket's timestamp, not the backdated one.
+        assert_ne!(latest, old_ts, "MAX should return the most recent timestamp");
+        assert!(
+            latest.as_str() > old_ts,
+            "latest synced_at should be after the backdated timestamp"
+        );
     }
 
     #[test]
