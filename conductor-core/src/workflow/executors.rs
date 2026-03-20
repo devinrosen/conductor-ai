@@ -2268,7 +2268,7 @@ pub(super) fn execute_script(
 mod tests {
     use super::*;
     use crate::workflow::types::StepResult;
-    use crate::workflow_dsl::types::QualityGateConfig;
+    use crate::workflow_dsl::QualityGateConfig;
 
     // -----------------------------------------------------------------------
     // Shared test helper: build an ExecutionState backed by a real in-memory DB.
@@ -3095,6 +3095,27 @@ mod tests {
         assert!(
             result.is_ok(),
             "large confidence should be clamped to 100 and pass: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_quality_gate_clamps_large_float_confidence_to_100() {
+        let conn = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+
+        // Use a float value to exercise the as_f64() fallback branch
+        state.step_results.insert(
+            "review".to_string(),
+            make_step_result(Some(r#"{"confidence": 9999.9}"#)),
+        );
+
+        // Large float should be clamped to 100, passing threshold of 90
+        let node = make_quality_gate_node("qg", Some("review"), Some(90), OnFailAction::Fail);
+        let result = execute_quality_gate(&mut state, &node, 0, 0);
+        assert!(
+            result.is_ok(),
+            "large float confidence should be clamped to 100 and pass: {result:?}"
         );
     }
 

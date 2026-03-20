@@ -31,7 +31,7 @@ mod api;
 mod lexer;
 mod parser;
 mod script_utils;
-pub(crate) mod types;
+mod types;
 mod validation;
 
 // Re-export everything that is currently public
@@ -41,6 +41,9 @@ pub use types::{
     InputType, OnFailAction, OnMaxIter, OnTimeout, ParallelNode, ScriptNode, UnlessNode, WhileNode,
     WorkflowDef, WorkflowNode, WorkflowTrigger, WorkflowWarning,
 };
+// Re-export for test helpers within this crate — not part of the public API
+#[cfg(test)]
+pub(crate) use types::QualityGateConfig;
 // Tree-walking helpers used in tests and available for external callers
 pub use api::{
     detect_workflow_cycles, load_workflow_by_name, load_workflow_defs, validate_workflow_name,
