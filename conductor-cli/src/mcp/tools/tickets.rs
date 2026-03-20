@@ -794,4 +794,83 @@ mod tests {
             "second delete should fail (not found)"
         );
     }
+
+    #[test]
+    fn test_delete_ticket_nullifies_workflow_run_ticket_id() {
+        use conductor_core::db::open_database;
+
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+
+        // Upsert a ticket
+        let upsert_args = full_ticket_args("test-repo");
+        let upsert_result = tool_upsert_ticket(&db, &upsert_args);
+        assert_ne!(upsert_result.is_error, Some(true), "upsert should succeed");
+
+        let conn = open_database(&db).expect("open db");
+
+        // Get the ticket id
+        let ticket_id: String = conn
+            .query_row(
+                "SELECT id FROM tickets WHERE repo_id = 'r1' AND source_type = 'github' AND source_id = '42'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("ticket should exist");
+
+        // Insert a worktree so we can create an agent_run
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, created_at) \
+             VALUES ('wt1', 'r1', 'test-wt', 'feat/test', '/tmp/wt', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        // Insert an agent_run (required by workflow_runs.parent_run_id FK)
+        conn.execute(
+            "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at) \
+             VALUES ('ar1', 'wt1', 'test', 'completed', '2024-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        // Insert a workflow_run linked to the ticket
+        conn.execute(
+            "INSERT INTO workflow_runs (id, workflow_name, parent_run_id, status, started_at, ticket_id, repo_id) \
+             VALUES ('wr1', 'test-wf', 'ar1', 'completed', '2024-01-01T00:00:00Z', ?1, 'r1')",
+            rusqlite::params![ticket_id],
+        )
+        .unwrap();
+
+        // Verify ticket_id is set
+        let before: Option<String> = conn
+            .query_row(
+                "SELECT ticket_id FROM workflow_runs WHERE id = 'wr1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(before.as_deref(), Some(ticket_id.as_str()));
+
+        drop(conn);
+
+        // Delete the ticket
+        let del_args = delete_args("test-repo", "github", "42");
+        let result = tool_delete_ticket(&db, &del_args);
+        assert_ne!(result.is_error, Some(true), "delete should succeed");
+
+        // Verify the workflow_run's ticket_id is now NULL
+        let conn = open_database(&db).expect("open db");
+        let after: Option<String> = conn
+            .query_row(
+                "SELECT ticket_id FROM workflow_runs WHERE id = 'wr1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            after.is_none(),
+            "workflow_run ticket_id should be NULL after ticket deletion, got: {after:?}"
+        );
+    }
 }
