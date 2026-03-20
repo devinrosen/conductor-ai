@@ -1,6 +1,6 @@
 # RFC 008: Feature Branch Coordination
 
-**Status:** Draft
+**Status:** Implemented
 **Date:** 2026-03-18
 **Author:** Devin
 
@@ -191,15 +191,14 @@ conductor feature pr <repo> <name> --squash
 
 ---
 
-## Open Questions
+## Follow-up Issues
 
-1. **Feature branch cleanup** — when a feature is merged, should conductor auto-delete the git branch and associated worktrees? Or leave cleanup manual?
+The following open questions from this RFC have been filed as separate issues:
 
-2. **Stale feature detection** — should conductor warn about features with no activity for N days? Useful for release branches that might be forgotten.
-
-3. **Cross-repo features** — conductor manages multiple repos. Could a feature span repos (e.g., frontend + backend for the same release)? Probably not in v1, but worth considering the data model implications.
-
-4. **Auto-rebase on sub-PR merge** — deferred, but the design should not preclude it. When a sub-PR merges into the feature branch, other open worktrees could be rebased automatically if no conflicts, or a workflow step could be triggered to handle conflicts via an agent.
+1. **Feature branch cleanup** — [#1371](https://github.com/devinrosen/conductor-ai/issues/1371): auto-delete branch and worktrees on merge
+2. **Stale feature detection** — [#1372](https://github.com/devinrosen/conductor-ai/issues/1372): warn about inactive feature branches
+3. **Cross-repo features** — deferred; data model does not preclude it
+4. **Auto-rebase on sub-PR merge** — [#1373](https://github.com/devinrosen/conductor-ai/issues/1373): rebase sibling worktrees when one merges
 
 ---
 
