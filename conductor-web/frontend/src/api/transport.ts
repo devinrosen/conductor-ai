@@ -17,8 +17,6 @@
  *   }
  */
 
-import { invoke } from "@tauri-apps/api/core";
-
 // Tauri v2 injects this global at startup; we use it only for detection.
 declare global {
   interface Window {
@@ -36,10 +34,15 @@ export function isDesktop(): boolean {
   );
 }
 
+// Lazily cached Tauri invoke function to avoid repeated dynamic imports.
+let cachedInvoke: typeof import("@tauri-apps/api/core").invoke | null = null;
+
 /**
  * Invoke a Tauri command by name.
  *
- * Uses `@tauri-apps/api/core` for a stable, version-safe invocation path.
+ * Uses a lazy dynamic import of `@tauri-apps/api/core` so the Tauri SDK is
+ * only bundled when running inside the desktop container (tree-shaken in
+ * web-only builds).
  *
  * In web mode, this function throws — callers should check `isDesktop()` first
  * or use the higher-level API functions in `client.ts` which handle both modes.
@@ -48,5 +51,9 @@ export async function invokeCommand<T>(
   command: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
-  return invoke<T>(command, args);
+  if (!cachedInvoke) {
+    const mod = await import("@tauri-apps/api/core");
+    cachedInvoke = mod.invoke;
+  }
+  return cachedInvoke<T>(command, args);
 }

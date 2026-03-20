@@ -8,7 +8,8 @@ use super::lexer::{Lexer, Token};
 use super::types::{
     AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode,
     GateType, IfNode, InputDecl, InputType, OnFailAction, OnMaxIter, OnTimeout, ParallelNode,
-    ScriptNode, UnlessNode, WhileNode, WorkflowDef, WorkflowNode, WorkflowTrigger,
+    QualityGateConfig, ScriptNode, UnlessNode, WhileNode, WorkflowDef, WorkflowNode,
+    WorkflowTrigger,
 };
 
 // ---------------------------------------------------------------------------
@@ -779,9 +780,11 @@ impl Parser {
                 timeout_secs: 0,
                 on_timeout: OnTimeout::Fail,
                 bot_name,
-                source: Some(source),
-                threshold: Some(threshold),
-                on_fail_action: Some(on_fail_action),
+                quality_gate: Some(QualityGateConfig {
+                    source,
+                    threshold,
+                    on_fail_action,
+                }),
             });
         }
 
@@ -829,9 +832,7 @@ impl Parser {
             timeout_secs,
             on_timeout,
             bot_name,
-            source: None,
-            threshold: None,
-            on_fail_action: None,
+            quality_gate: None,
         })
     }
 

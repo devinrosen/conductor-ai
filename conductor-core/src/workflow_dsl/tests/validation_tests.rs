@@ -1067,9 +1067,9 @@ workflow review {
 }
 
 #[test]
-fn test_quality_gate_validation_missing_source() {
-    // Construct a GateNode directly (bypassing parser which always sets source)
-    // to test the validation branch for missing source.
+fn test_quality_gate_validation_missing_config() {
+    // Construct a GateNode directly (bypassing parser which always sets quality_gate)
+    // to test the validation branch for missing config.
     let mut def = parse_workflow_str(
         r#"
 workflow test {
@@ -1084,47 +1084,18 @@ workflow test {
         "test.wf",
     )
     .unwrap();
-    // Manually clear source to simulate missing field (parser always sets it)
+    // Manually clear quality_gate to simulate missing config
     if let WorkflowNode::Gate(ref mut g) = def.body[1] {
-        g.source = None;
+        g.quality_gate = None;
     }
     let report = validate_workflow_semantics(&def, &no_loader);
-    assert!(!report.is_ok(), "missing source should fail validation");
+    assert!(
+        !report.is_ok(),
+        "missing quality_gate config should fail validation"
+    );
     assert!(
         report.errors.iter().any(|e| e.message.contains("source")),
-        "error should mention missing source: {:?}",
-        report.errors
-    );
-}
-
-#[test]
-fn test_quality_gate_validation_missing_threshold() {
-    let mut def = parse_workflow_str(
-        r#"
-workflow test {
-    meta { targets = ["worktree"] }
-    call review
-    gate quality_gate {
-        source    = "review"
-        threshold = 70
-    }
-}
-"#,
-        "test.wf",
-    )
-    .unwrap();
-    // Manually clear threshold to simulate missing field
-    if let WorkflowNode::Gate(ref mut g) = def.body[1] {
-        g.threshold = None;
-    }
-    let report = validate_workflow_semantics(&def, &no_loader);
-    assert!(!report.is_ok(), "missing threshold should fail validation");
-    assert!(
-        report
-            .errors
-            .iter()
-            .any(|e| e.message.contains("threshold")),
-        "error should mention missing threshold: {:?}",
+        "error should mention missing fields: {:?}",
         report.errors
     );
 }

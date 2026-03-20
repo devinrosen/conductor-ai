@@ -31,7 +31,7 @@ mod api;
 mod lexer;
 mod parser;
 mod script_utils;
-mod types;
+pub(crate) mod types;
 mod validation;
 
 // Re-export everything that is currently public

@@ -27,9 +27,7 @@ pub(super) fn make_gate_node(gate_type: GateType, on_timeout: OnTimeout) -> Gate
         timeout_secs: 1,
         on_timeout,
         bot_name: None,
-        source: None,
-        threshold: None,
-        on_fail_action: None,
+        quality_gate: None,
     }
 }
 

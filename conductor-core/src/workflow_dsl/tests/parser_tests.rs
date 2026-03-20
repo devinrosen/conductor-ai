@@ -2375,12 +2375,13 @@ workflow review {
         WorkflowNode::Gate(g) => {
             assert_eq!(g.gate_type, GateType::QualityGate);
             assert_eq!(g.name, "quality_gate");
-            assert_eq!(g.source.as_deref(), Some("rt-aggregator"));
-            assert_eq!(g.threshold, Some(85));
-            assert_eq!(
-                g.on_fail_action,
-                Some(crate::workflow_dsl::OnFailAction::Fail)
-            );
+            let qg = g
+                .quality_gate
+                .as_ref()
+                .expect("quality_gate config should be present");
+            assert_eq!(qg.source, "rt-aggregator");
+            assert_eq!(qg.threshold, 85);
+            assert_eq!(qg.on_fail_action, crate::workflow_dsl::OnFailAction::Fail);
         }
         _ => panic!("Expected Gate node"),
     }
@@ -2403,10 +2404,14 @@ workflow review {
     match &def.body[1] {
         WorkflowNode::Gate(g) => {
             assert_eq!(g.gate_type, GateType::QualityGate);
-            assert_eq!(g.threshold, Some(70));
+            let qg = g
+                .quality_gate
+                .as_ref()
+                .expect("quality_gate config should be present");
+            assert_eq!(qg.threshold, 70);
             assert_eq!(
-                g.on_fail_action,
-                Some(crate::workflow_dsl::OnFailAction::Continue)
+                qg.on_fail_action,
+                crate::workflow_dsl::OnFailAction::Continue
             );
         }
         _ => panic!("Expected Gate node"),

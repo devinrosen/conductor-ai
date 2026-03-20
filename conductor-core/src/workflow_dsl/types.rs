@@ -342,6 +342,25 @@ pub enum OnFailAction {
     Continue,
 }
 
+/// Configuration specific to `GateType::QualityGate` nodes.
+///
+/// Grouped into a single struct so non-quality-gate construction sites need
+/// only `quality_gate: None` instead of three separate optional fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QualityGateConfig {
+    /// Step key whose structured output is evaluated.
+    pub source: String,
+    /// Minimum confidence score (0-100) required to pass.
+    pub threshold: u32,
+    /// Action when the gate fails (score below threshold).
+    #[serde(default = "default_on_fail")]
+    pub on_fail_action: OnFailAction,
+}
+
+fn default_on_fail() -> OnFailAction {
+    OnFailAction::Fail
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateNode {
     pub name: String,
@@ -355,12 +374,9 @@ pub struct GateNode {
     pub on_timeout: OnTimeout,
     /// Named GitHub App bot identity used for `gh` calls inside this gate.
     pub bot_name: Option<String>,
-    /// Quality gate: step key whose structured output is evaluated.
-    pub source: Option<String>,
-    /// Quality gate: minimum confidence score (0-100) required to pass.
-    pub threshold: Option<u32>,
-    /// Quality gate: action when the gate fails (score below threshold).
-    pub on_fail_action: Option<OnFailAction>,
+    /// Quality gate-specific configuration. Present only when `gate_type == QualityGate`.
+    #[serde(flatten)]
+    pub quality_gate: Option<QualityGateConfig>,
 }
 
 fn default_one() -> u32 {

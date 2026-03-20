@@ -1716,23 +1716,15 @@ fn execute_quality_gate(
     pos: i64,
     iteration: u32,
 ) -> Result<()> {
-    let source = node.source.as_deref().ok_or_else(|| {
+    let qg = node.quality_gate.as_ref().ok_or_else(|| {
         ConductorError::Workflow(format!(
-            "Quality gate '{}' is missing required `source` field",
+            "Quality gate '{}' is missing required quality_gate configuration (source, threshold)",
             node.name
         ))
     })?;
-    let threshold = node.threshold.ok_or_else(|| {
-        ConductorError::Workflow(format!(
-            "Quality gate '{}' is missing required `threshold` field",
-            node.name
-        ))
-    })?;
-    let on_fail_action = node
-        .on_fail_action
-        .as_ref()
-        .cloned()
-        .unwrap_or(OnFailAction::Fail);
+    let source = qg.source.as_str();
+    let threshold = qg.threshold;
+    let on_fail_action = qg.on_fail_action.clone();
 
     let step_id = state.wf_mgr.insert_step(
         &state.workflow_run_id,
@@ -1760,11 +1752,13 @@ fn execute_quality_gate(
                 // Parse JSON and extract confidence field
                 match serde_json::from_str::<serde_json::Value>(json_str) {
                     Ok(val) => {
-                        // Try integer first, then fall back to float
+                        // Try integer first, then fall back to float.
+                        // Clamp to 100 to prevent u64→u32 truncation from wrapping
+                        // large values into the passing range.
                         if let Some(c) = val.get("confidence").and_then(|v| v.as_u64()) {
-                            (c as u32, None)
+                            (c.min(100) as u32, None)
                         } else if let Some(f) = val.get("confidence").and_then(|v| v.as_f64()) {
-                            (f as u32, None)
+                            ((f as u64).min(100) as u32, None)
                         } else {
                             let reason = format!(
                                     "'confidence' key missing or not a number in structured output from '{}'",
@@ -2274,6 +2268,7 @@ pub(super) fn execute_script(
 mod tests {
     use super::*;
     use crate::workflow::types::StepResult;
+    use crate::workflow_dsl::types::QualityGateConfig;
 
     // -----------------------------------------------------------------------
     // Shared test helper: build an ExecutionState backed by a real in-memory DB.
@@ -2903,6 +2898,15 @@ mod tests {
         threshold: Option<u32>,
         on_fail: OnFailAction,
     ) -> GateNode {
+        let quality_gate = match (source, threshold) {
+            (Some(s), Some(t)) => Some(QualityGateConfig {
+                source: s.to_string(),
+                threshold: t,
+                on_fail_action: on_fail,
+            }),
+            // Allow constructing nodes with missing config for error-path tests
+            _ => None,
+        };
         GateNode {
             name: name.to_string(),
             gate_type: GateType::QualityGate,
@@ -2912,9 +2916,7 @@ mod tests {
             timeout_secs: 60,
             on_timeout: OnTimeout::Fail,
             bot_name: None,
-            source: source.map(|s| s.to_string()),
-            threshold,
-            on_fail_action: Some(on_fail),
+            quality_gate,
         }
     }
 
@@ -2985,16 +2987,19 @@ mod tests {
     }
 
     #[test]
-    fn test_quality_gate_errors_when_source_field_missing() {
+    fn test_quality_gate_errors_when_config_missing() {
         let conn = crate::test_helpers::setup_db();
         let config = crate::config::Config::default();
         let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
 
-        let node = make_quality_gate_node("qg", None, Some(70), OnFailAction::Fail);
+        let node = make_quality_gate_node("qg", None, None, OnFailAction::Fail);
         let result = execute_quality_gate(&mut state, &node, 0, 0);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("missing required `source`"), "got: {err}");
+        assert!(
+            err.contains("missing required quality_gate configuration"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -3070,6 +3075,26 @@ mod tests {
         assert!(
             result.is_ok(),
             "float confidence should be handled: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_quality_gate_clamps_large_confidence_to_100() {
+        let conn = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+
+        state.step_results.insert(
+            "review".to_string(),
+            make_step_result(Some(r#"{"confidence": 999999}"#)),
+        );
+
+        // Large value should be clamped to 100, passing threshold of 90
+        let node = make_quality_gate_node("qg", Some("review"), Some(90), OnFailAction::Fail);
+        let result = execute_quality_gate(&mut state, &node, 0, 0);
+        assert!(
+            result.is_ok(),
+            "large confidence should be clamped to 100 and pass: {result:?}"
         );
     }
 
