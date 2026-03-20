@@ -208,8 +208,9 @@ impl App {
                 .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
                 .ok_or_else(|| "No worktree selected".to_string())?
                 .clone();
-            self.worktree_picker_target(&wt)
-                .ok_or_else(|| WorkflowTargetError::Status("Repo not found for this worktree".to_string()))
+            self.worktree_picker_target(&wt).ok_or_else(|| {
+                WorkflowTargetError::Status("Repo not found for this worktree".to_string())
+            })
         } else if self.state.view == View::RepoDetail
             && self.state.repo_detail_focus == RepoDetailFocus::Prs
         {
@@ -251,8 +252,11 @@ impl App {
                 .find(|r| r.id == run_id)
                 .ok_or_else(|| "Workflow run not found".to_string())?
                 .clone();
-            self.workflow_run_picker_target(&run)
-                .ok_or_else(|| WorkflowTargetError::Status("Cannot determine repo for this workflow run".to_string()))
+            self.workflow_run_picker_target(&run).ok_or_else(|| {
+                WorkflowTargetError::Status(
+                    "Cannot determine repo for this workflow run".to_string(),
+                )
+            })
         } else if self.state.view == View::RepoDetail
             && self.state.repo_detail_focus == RepoDetailFocus::Worktrees
         {
@@ -262,8 +266,9 @@ impl App {
                 .get(self.state.detail_wt_index)
                 .ok_or_else(|| "No worktree selected".to_string())?
                 .clone();
-            self.worktree_picker_target(&wt)
-                .ok_or_else(|| WorkflowTargetError::Status("Repo not found for this worktree".to_string()))
+            self.worktree_picker_target(&wt).ok_or_else(|| {
+                WorkflowTargetError::Status("Repo not found for this worktree".to_string())
+            })
         } else if self.state.view == View::Dashboard {
             use crate::state::DashboardRow;
             let rows = self.state.dashboard_rows();
@@ -286,8 +291,9 @@ impl App {
                         .get(wt_idx)
                         .ok_or_else(|| "No worktree selected".to_string())?
                         .clone();
-                    self.worktree_picker_target(&wt)
-                        .ok_or_else(|| WorkflowTargetError::Status("Repo not found for this worktree".to_string()))
+                    self.worktree_picker_target(&wt).ok_or_else(|| {
+                        WorkflowTargetError::Status("Repo not found for this worktree".to_string())
+                    })
                 }
                 None => Err(WorkflowTargetError::Status("No item selected".to_string())),
             }
@@ -299,8 +305,11 @@ impl App {
                 .and_then(|id| self.state.data.workflow_runs.iter().find(|r| &r.id == id))
                 .ok_or_else(|| "No workflow run selected".to_string())?
                 .clone();
-            self.workflow_run_picker_target(&run)
-                .ok_or_else(|| WorkflowTargetError::Status("Cannot determine repo for this workflow run".to_string()))
+            self.workflow_run_picker_target(&run).ok_or_else(|| {
+                WorkflowTargetError::Status(
+                    "Cannot determine repo for this workflow run".to_string(),
+                )
+            })
         } else if self.state.view == View::RepoDetail
             && self.state.repo_detail_focus == RepoDetailFocus::Tickets
         {
@@ -331,7 +340,9 @@ impl App {
                 repo_id: ticket.repo_id.clone(),
             })
         } else {
-            Err(WorkflowTargetError::Status("No valid target for workflow in this context".to_string()))
+            Err(WorkflowTargetError::Status(
+                "No valid target for workflow in this context".to_string(),
+            ))
         }
     }
 
@@ -496,10 +507,8 @@ impl App {
             {
                 Some(d) => d.clone(),
                 None => {
-                    self.state.status_message = Some(format!(
-                        "Workflow definition '{}' not found",
-                        workflow_name
-                    ));
+                    self.state.status_message =
+                        Some(format!("Workflow definition '{}' not found", workflow_name));
                     return;
                 }
             }
@@ -512,8 +521,7 @@ impl App {
             {
                 Some(d) => d.clone(),
                 None => {
-                    self.state.status_message =
-                        Some("No workflow definition selected".to_string());
+                    self.state.status_message = Some("No workflow definition selected".to_string());
                     return;
                 }
             }
