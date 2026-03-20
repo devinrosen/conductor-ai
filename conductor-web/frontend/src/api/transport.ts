@@ -17,6 +17,8 @@
  *   }
  */
 
+import { invoke } from "@tauri-apps/api/core";
+
 // Tauri v2 injects this global at startup; we use it only for detection.
 declare global {
   interface Window {
@@ -46,6 +48,5 @@ export async function invokeCommand<T>(
   command: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
-  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(command, args);
 }

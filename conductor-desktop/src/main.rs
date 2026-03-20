@@ -35,12 +35,11 @@ fn main() {
     let app_state = state::AppState::new(PathBuf::from(&db_path), conn, config);
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::list_repos,
             commands::list_worktrees,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Conductor desktop");
+        .expect("Tauri runtime failed to start (window creation or event loop error)");
 }

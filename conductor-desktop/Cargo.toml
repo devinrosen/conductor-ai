@@ -19,7 +19,6 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 anyhow = "1"
 tauri = { version = "2", features = [] }
-tauri-plugin-shell = "2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

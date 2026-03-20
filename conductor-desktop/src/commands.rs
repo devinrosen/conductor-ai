@@ -28,8 +28,7 @@ pub struct RepoInfo {
 
 #[tauri::command]
 pub fn list_repos(state: State<'_, AppState>) -> Result<Vec<RepoInfo>, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    let config = state.config.lock().map_err(|e| e.to_string())?;
+    let (db, config) = state.lock_both()?;
     let mgr = RepoManager::new(&db, &config);
     let repos = mgr.list().map_err(|e| e.to_string())?;
     Ok(repos
@@ -52,10 +51,11 @@ pub fn list_worktrees(
     state: State<'_, AppState>,
     repo_slug: &str,
 ) -> Result<Vec<Worktree>, String> {
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    let config = state.config.lock().map_err(|e| e.to_string())?;
+    let (db, config) = state.lock_both()?;
     let repo_mgr = RepoManager::new(&db, &config);
-    let repo = repo_mgr.get_by_slug(repo_slug).map_err(|e| e.to_string())?;
+    let repo = repo_mgr
+        .get_by_slug(repo_slug)
+        .map_err(|e| format!("repo '{}': {}", repo_slug, e))?;
     let wt_mgr = WorktreeManager::new(&db, &config);
     wt_mgr
         .list_by_repo_id(&repo.id, false)

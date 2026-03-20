@@ -1394,7 +1394,6 @@ mod tests {
         assert_eq!(count, 1, "grouped notification must claim exactly once");
     }
 
-<<<<<<< HEAD
     // --- fire_agent_run_notification ---
 
     #[test]

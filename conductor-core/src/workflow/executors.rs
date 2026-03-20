@@ -1743,6 +1743,13 @@ fn execute_quality_gate(
         iteration as i64,
     )?;
 
+    // Helper: update_step_status with no run_id, cost, duration, or attempt fields.
+    let set_step_status = |status: WorkflowStepStatus, context: &str| -> Result<()> {
+        state
+            .wf_mgr
+            .update_step_status(&step_id, status, None, Some(context), None, None, None)
+    };
+
     // Look up the source step's structured output
     let (confidence, degradation_reason): (u32, Option<String>) = match state
         .step_results
@@ -1785,15 +1792,7 @@ fn execute_quality_gate(
                 "Quality gate '{}': source step '{}' not found in step results",
                 node.name, source
             );
-            state.wf_mgr.update_step_status(
-                &step_id,
-                WorkflowStepStatus::Failed,
-                None,
-                Some(&msg),
-                None,
-                None,
-                None,
-            )?;
+            set_step_status(WorkflowStepStatus::Failed, &msg)?;
             return Err(ConductorError::Workflow(msg));
         }
     };
@@ -1816,15 +1815,7 @@ fn execute_quality_gate(
             confidence,
             threshold
         );
-        state.wf_mgr.update_step_status(
-            &step_id,
-            WorkflowStepStatus::Completed,
-            None,
-            Some(&context),
-            None,
-            None,
-            None,
-        )?;
+        set_step_status(WorkflowStepStatus::Completed, &context)?;
     } else {
         tracing::warn!(
             "quality_gate '{}': failed (confidence {} < threshold {})",
@@ -1834,29 +1825,16 @@ fn execute_quality_gate(
         );
         match on_fail_action {
             OnFailAction::Fail => {
-                state.wf_mgr.update_step_status(
-                    &step_id,
-                    WorkflowStepStatus::Failed,
-                    None,
-                    Some(&context),
-                    None,
-                    None,
-                    None,
-                )?;
+                set_step_status(WorkflowStepStatus::Failed, &context)?;
                 return Err(ConductorError::Workflow(format!(
                     "Quality gate '{}' failed: confidence {} is below threshold {}",
                     node.name, confidence, threshold
                 )));
             }
             OnFailAction::Continue => {
-                state.wf_mgr.update_step_status(
-                    &step_id,
+                set_step_status(
                     WorkflowStepStatus::Completed,
-                    None,
-                    Some(&format!("{} (on_fail=continue, proceeding)", context)),
-                    None,
-                    None,
-                    None,
+                    &format!("{} (on_fail=continue, proceeding)", context),
                 )?;
             }
         }
@@ -2903,6 +2881,22 @@ mod tests {
     // execute_quality_gate tests
     // -----------------------------------------------------------------------
 
+    fn make_step_result(structured_output: Option<&str>) -> StepResult {
+        StepResult {
+            step_name: "review".to_string(),
+            status: WorkflowStepStatus::Completed,
+            result_text: None,
+            cost_usd: None,
+            num_turns: None,
+            duration_ms: None,
+            markers: vec![],
+            context: String::new(),
+            child_run_id: None,
+            structured_output: structured_output.map(|s| s.to_string()),
+            output_file: None,
+        }
+    }
+
     fn make_quality_gate_node(
         name: &str,
         source: Option<&str>,
@@ -2932,19 +2926,7 @@ mod tests {
 
         state.step_results.insert(
             "review".to_string(),
-            StepResult {
-                step_name: "review".to_string(),
-                status: WorkflowStepStatus::Completed,
-                result_text: None,
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
-                markers: vec![],
-                context: String::new(),
-                child_run_id: None,
-                structured_output: Some(r#"{"confidence": 80}"#.to_string()),
-                output_file: None,
-            },
+            make_step_result(Some(r#"{"confidence": 80}"#)),
         );
 
         let node = make_quality_gate_node("qg", Some("review"), Some(70), OnFailAction::Fail);
@@ -2960,19 +2942,7 @@ mod tests {
 
         state.step_results.insert(
             "review".to_string(),
-            StepResult {
-                step_name: "review".to_string(),
-                status: WorkflowStepStatus::Completed,
-                result_text: None,
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
-                markers: vec![],
-                context: String::new(),
-                child_run_id: None,
-                structured_output: Some(r#"{"confidence": 40}"#.to_string()),
-                output_file: None,
-            },
+            make_step_result(Some(r#"{"confidence": 40}"#)),
         );
 
         let node = make_quality_gate_node("qg", Some("review"), Some(70), OnFailAction::Fail);
@@ -2990,19 +2960,7 @@ mod tests {
 
         state.step_results.insert(
             "review".to_string(),
-            StepResult {
-                step_name: "review".to_string(),
-                status: WorkflowStepStatus::Completed,
-                result_text: None,
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
-                markers: vec![],
-                context: String::new(),
-                child_run_id: None,
-                structured_output: Some(r#"{"confidence": 20}"#.to_string()),
-                output_file: None,
-            },
+            make_step_result(Some(r#"{"confidence": 20}"#)),
         );
 
         let node = make_quality_gate_node("qg", Some("review"), Some(70), OnFailAction::Continue);
@@ -3047,19 +3005,7 @@ mod tests {
 
         state.step_results.insert(
             "review".to_string(),
-            StepResult {
-                step_name: "review".to_string(),
-                status: WorkflowStepStatus::Completed,
-                result_text: None,
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
-                markers: vec![],
-                context: String::new(),
-                child_run_id: None,
-                structured_output: Some("not valid json".to_string()),
-                output_file: None,
-            },
+            make_step_result(Some("not valid json")),
         );
 
         // threshold=0 so even confidence=0 passes
@@ -3079,19 +3025,7 @@ mod tests {
 
         state.step_results.insert(
             "review".to_string(),
-            StepResult {
-                step_name: "review".to_string(),
-                status: WorkflowStepStatus::Completed,
-                result_text: None,
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
-                markers: vec![],
-                context: String::new(),
-                child_run_id: None,
-                structured_output: Some(r#"{"score": 95}"#.to_string()),
-                output_file: None,
-            },
+            make_step_result(Some(r#"{"score": 95}"#)),
         );
 
         // JSON is valid but has no "confidence" key — should fail at threshold 70
@@ -3108,22 +3042,9 @@ mod tests {
         let config = crate::config::Config::default();
         let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
 
-        state.step_results.insert(
-            "review".to_string(),
-            StepResult {
-                step_name: "review".to_string(),
-                status: WorkflowStepStatus::Completed,
-                result_text: None,
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
-                markers: vec![],
-                context: String::new(),
-                child_run_id: None,
-                structured_output: None,
-                output_file: None,
-            },
-        );
+        state
+            .step_results
+            .insert("review".to_string(), make_step_result(None));
 
         let node = make_quality_gate_node("qg", Some("review"), Some(50), OnFailAction::Fail);
         let result = execute_quality_gate(&mut state, &node, 0, 0);
@@ -3140,19 +3061,7 @@ mod tests {
 
         state.step_results.insert(
             "review".to_string(),
-            StepResult {
-                step_name: "review".to_string(),
-                status: WorkflowStepStatus::Completed,
-                result_text: None,
-                cost_usd: None,
-                num_turns: None,
-                duration_ms: None,
-                markers: vec![],
-                context: String::new(),
-                child_run_id: None,
-                structured_output: Some(r#"{"confidence": 85.5}"#.to_string()),
-                output_file: None,
-            },
+            make_step_result(Some(r#"{"confidence": 85.5}"#)),
         );
 
         // Float 85.5 should be truncated to 85 and pass threshold of 70
@@ -3161,6 +3070,25 @@ mod tests {
         assert!(
             result.is_ok(),
             "float confidence should be handled: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_execute_gate_dispatches_quality_gate() {
+        let conn = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+
+        state.step_results.insert(
+            "review".to_string(),
+            make_step_result(Some(r#"{"confidence": 90}"#)),
+        );
+
+        let node = make_quality_gate_node("qg", Some("review"), Some(70), OnFailAction::Fail);
+        let result = execute_gate(&mut state, &node, 0);
+        assert!(
+            result.is_ok(),
+            "execute_gate should dispatch QualityGate correctly: {result:?}"
         );
     }
 }

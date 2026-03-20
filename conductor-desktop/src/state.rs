@@ -23,4 +23,19 @@ impl AppState {
             db_path,
         }
     }
+
+    /// Lock both `db` and `config` mutexes, returning guards or a string error.
+    pub fn lock_both(
+        &self,
+    ) -> Result<
+        (
+            std::sync::MutexGuard<'_, Connection>,
+            std::sync::MutexGuard<'_, Config>,
+        ),
+        String,
+    > {
+        let db = self.db.lock().map_err(|e| e.to_string())?;
+        let config = self.config.lock().map_err(|e| e.to_string())?;
+        Ok((db, config))
+    }
 }
