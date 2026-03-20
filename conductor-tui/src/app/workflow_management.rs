@@ -2,6 +2,8 @@ use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use conductor_core::worktree::WorktreeManager;
+
 use crate::action::Action;
 use crate::state::{ConfirmAction, Modal, View, WorkflowRunDetailFocus};
 
@@ -1490,30 +1492,34 @@ impl App {
         &self,
         run: &conductor_core::workflow::WorkflowRun,
     ) -> Option<crate::state::WorkflowPickerTarget> {
-        let repo_path = if let Some(wt_id) = &run.worktree_id {
+        // Resolve repo_id: try in-memory worktrees first, then DB fallback for
+        // deleted/merged worktrees, then the run's own repo_id field.
+        let resolved_repo_id = if let Some(wt_id) = &run.worktree_id {
             self.state
                 .data
                 .worktrees
                 .iter()
                 .find(|w| &w.id == wt_id)
-                .and_then(|wt| {
-                    self.state
-                        .data
-                        .repos
-                        .iter()
-                        .find(|r| r.id == wt.repo_id)
-                        .map(|r| r.local_path.clone())
+                .map(|wt| wt.repo_id.clone())
+                .or_else(|| {
+                    // Worktree not in memory (deleted/merged) — look up via manager.
+                    WorktreeManager::new(&self.conn, &self.config)
+                        .get_by_id(wt_id)
+                        .ok()
+                        .map(|wt| wt.repo_id)
                 })
-        } else if let Some(repo_id) = &run.repo_id {
+                .or(run.repo_id.clone())
+        } else {
+            run.repo_id.clone()
+        };
+        let repo_path = resolved_repo_id.as_ref().and_then(|repo_id| {
             self.state
                 .data
                 .repos
                 .iter()
                 .find(|r| &r.id == repo_id)
                 .map(|r| r.local_path.clone())
-        } else {
-            None
-        }?;
+        })?;
         let worktree_path = run.worktree_id.as_ref().and_then(|wt_id| {
             self.state
                 .data
