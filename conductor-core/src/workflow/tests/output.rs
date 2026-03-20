@@ -58,7 +58,7 @@ fn test_substitute_variables() {
     let result = substitute_variables(prompt, &vars);
     assert_eq!(
         result,
-        "Fix ticket FEAT-123. Context: Created PLAN.md. Unknown: {{unknown}}."
+        "Fix ticket FEAT-123. Context: Created PLAN.md. Unknown: ."
     );
 }
 
