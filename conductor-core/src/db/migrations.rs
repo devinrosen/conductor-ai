@@ -1,7 +1,11 @@
 use rusqlite::{params, Connection};
 use serde::Deserialize;
 
-use crate::error::Result;
+use crate::error::{ConductorError, Result};
+
+/// The highest migration version this binary knows about.
+/// **When adding a new migration, update this constant to match the new version.**
+pub const LATEST_SCHEMA_VERSION: u32 = 47;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -129,6 +133,19 @@ pub fn run(conn: &Connection) -> Result<()> {
         [],
         |row| row.get(0),
     )?;
+
+    // Stale-binary check: if the DB schema version is newer than what this
+    // binary understands, another (newer) binary already migrated the DB.
+    // Continuing would produce cryptic "no such column" SQL errors.
+    // We check here (before running migrations) because if version >
+    // LATEST_SCHEMA_VERSION, none of the `version < N` guards below will
+    // fire, so `version` still equals the on-disk schema version.
+    if version > LATEST_SCHEMA_VERSION as i64 {
+        return Err(ConductorError::Schema(format!(
+            "Database schema version ({version}) is newer than this binary supports ({LATEST_SCHEMA_VERSION}). \
+             Please rebuild: `cargo build`"
+        )));
+    }
 
     if version < 1 {
         conn.execute_batch(include_str!("migrations/001_initial.sql"))?;
@@ -1330,5 +1347,32 @@ mod tests {
             )
             .unwrap();
         assert_eq!(name, "ok-flow");
+    }
+
+    #[test]
+    fn test_stale_binary_detection() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Run all migrations normally first.
+        run(&conn).unwrap();
+
+        // Simulate a newer binary having migrated the DB further.
+        let future_version = LATEST_SCHEMA_VERSION + 1;
+        bump_version(&conn, future_version).unwrap();
+
+        // Now run() should detect the stale binary and fail.
+        let err = run(&conn).expect_err("should fail with stale binary error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&format!("Database schema version ({future_version})")),
+            "error should mention the DB version, got: {msg}"
+        );
+        assert!(
+            msg.contains(&format!("this binary supports ({LATEST_SCHEMA_VERSION})")),
+            "error should mention the binary version, got: {msg}"
+        );
+        assert!(
+            msg.contains("cargo build"),
+            "error should suggest rebuilding, got: {msg}"
+        );
     }
 }
