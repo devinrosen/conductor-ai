@@ -263,6 +263,35 @@ pub(super) fn tool_upsert_ticket(
     }
 }
 
+pub(super) fn tool_delete_ticket(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::repo::RepoManager;
+    use conductor_core::tickets::TicketSyncer;
+
+    let repo_slug = require_arg!(args, "repo");
+    let source_type = require_arg!(args, "source_type");
+    let source_id = require_arg!(args, "source_id");
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+        Ok(r) => r,
+        Err(e) => return tool_err(e),
+    };
+
+    let syncer = TicketSyncer::new(&conn);
+    match syncer.delete_ticket(&repo.id, source_type, source_id) {
+        Ok(()) => tool_ok(format!(
+            "Deleted ticket {source_type}#{source_id} from {repo_slug}."
+        )),
+        Err(e) => tool_err(format!("delete failed: {e}")),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -648,6 +677,121 @@ mod tests {
             result.is_error,
             Some(true),
             "whitespace in labels should be trimmed and succeed"
+        );
+    }
+
+    // ---- delete ticket tests ----
+
+    fn delete_args(
+        repo: &str,
+        source_type: &str,
+        source_id: &str,
+    ) -> serde_json::Map<String, Value> {
+        let mut m = serde_json::Map::new();
+        m.insert("repo".to_string(), Value::String(repo.to_string()));
+        m.insert(
+            "source_type".to_string(),
+            Value::String(source_type.to_string()),
+        );
+        m.insert(
+            "source_id".to_string(),
+            Value::String(source_id.to_string()),
+        );
+        m
+    }
+
+    #[test]
+    fn test_delete_ticket_missing_repo() {
+        let (_f, db) = make_test_db();
+        let result = tool_delete_ticket(&db, &empty_args());
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("Missing required argument"),
+            "expected missing arg error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_delete_ticket_missing_source_type() {
+        let (_f, db) = make_test_db();
+        let result = tool_delete_ticket(&db, &args_with("repo", "test-repo"));
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("Missing required argument"),
+            "expected missing arg error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_delete_ticket_unknown_repo() {
+        let (_f, db) = make_test_db();
+        let args = delete_args("ghost-repo", "github", "42");
+        let result = tool_delete_ticket(&db, &args);
+        assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn test_delete_ticket_not_found() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+        let args = delete_args("test-repo", "github", "999");
+        let result = tool_delete_ticket(&db, &args);
+        assert_eq!(result.is_error, Some(true));
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("not found") || text.contains("Not found"),
+            "expected not-found error, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_delete_ticket_success() {
+        let (_f, db) = make_test_db();
+        seed_test_repo(&db);
+        // First upsert a ticket
+        let upsert_args = full_ticket_args("test-repo");
+        let upsert_result = tool_upsert_ticket(&db, &upsert_args);
+        assert_ne!(upsert_result.is_error, Some(true), "upsert should succeed");
+
+        // Now delete it
+        let del_args = delete_args("test-repo", "github", "42");
+        let result = tool_delete_ticket(&db, &del_args);
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "delete should succeed, got: {:?}",
+            result
+                .content
+                .first()
+                .and_then(|c| c.as_text())
+                .map(|t| &t.text)
+        );
+        let text = result.content[0]
+            .as_text()
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("Deleted ticket github#42 from test-repo"),
+            "unexpected success message: {text}"
+        );
+
+        // Deleting again should fail (not found)
+        let result2 = tool_delete_ticket(&db, &del_args);
+        assert_eq!(
+            result2.is_error,
+            Some(true),
+            "second delete should fail (not found)"
         );
     }
 }

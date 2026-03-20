@@ -343,6 +343,17 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         )
         .with_annotations(ToolAnnotations::new().destructive(false).read_only(false)),
         Tool::new(
+            "conductor_delete_ticket",
+            "Delete a ticket from conductor by its source key (repo, source_type, source_id). \
+             Cleans up associated workflow run links before deleting.",
+            schema(&[
+                ("repo",        "Repo slug",                                           true),
+                ("source_type", "Source identifier, e.g. 'github', 'jira', 'linear'",  true),
+                ("source_id",   "Unique ID in the source system",                       true),
+            ]),
+        )
+        .with_annotations(ToolAnnotations::new().destructive(true).read_only(false)),
+        Tool::new(
             "conductor_upsert_ticket",
             "Upsert a ticket from any external source into conductor. Idempotent on (repo, source_type, source_id). \
              Use this from a sync workflow to keep tickets current without modifying conductor-ai source code.",
@@ -391,6 +402,7 @@ pub(super) fn dispatch_tool(
         "conductor_validate_workflow" => workflows::tool_validate_workflow(db_path, args),
         "conductor_register_repo" => repos::tool_register_repo(db_path, args),
         "conductor_unregister_repo" => repos::tool_unregister_repo(db_path, args),
+        "conductor_delete_ticket" => tickets::tool_delete_ticket(db_path, args),
         "conductor_upsert_ticket" => tickets::tool_upsert_ticket(db_path, args),
         _ => tool_err(format!("Unknown tool: {name}")),
     }
