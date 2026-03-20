@@ -98,7 +98,8 @@ workflow test {
 
 #[test]
 fn test_semantics_condition_unreachable() {
-    // `review-aggregator` was never produced — only `review-pr` was
+    // `review-aggregator` is an inner step of sub-workflow `review-pr` — the
+    // validator now marks inner steps as produced, matching the runtime.
     let input = r#"
 workflow test {
     meta { targets = ["worktree"] }
@@ -120,10 +121,11 @@ workflow test {
             Err(format!("unknown: {name}"))
         }
     });
-    assert!(!report.is_ok());
-    assert_eq!(report.errors.len(), 1);
-    assert!(report.errors[0].message.contains("review-aggregator"));
-    assert!(report.errors[0].hint.is_some());
+    assert!(
+        report.is_ok(),
+        "Inner step of sub-workflow should be reachable, got: {:?}",
+        report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -151,7 +153,7 @@ workflow test {
 #[test]
 fn test_semantics_condition_inner_step_hint() {
     // The step referenced in the condition is an inner step of a sub-workflow —
-    // the error must mention the step name and include a hint.
+    // now valid because the validator marks inner steps as produced.
     let input = r#"
 workflow parent {
     meta { targets = ["worktree"] }
@@ -174,12 +176,11 @@ workflow parent {
             Err(format!("unknown: {name}"))
         }
     });
-    assert!(!report.is_ok());
-    let err = &report.errors[0];
-    assert!(err.message.contains("review-aggregator"));
-    assert!(err.hint.is_some());
-    let hint = err.hint.as_ref().unwrap();
-    assert!(hint.contains("sub-workflow"));
+    assert!(
+        report.is_ok(),
+        "Inner step of sub-workflow should be reachable in while condition, got: {:?}",
+        report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -790,6 +791,230 @@ workflow test {
     assert!(
         err.contains("my_flag") || err.contains("step.marker"),
         "error should mention the bare identifier or step.marker requirement, got: {err}"
+    );
+}
+
+#[test]
+fn test_semantics_sub_workflow_inner_step_reachable() {
+    // Explicit happy-path: call a sub-workflow, then reference one of its inner
+    // steps in an `if` condition. Should pass validation.
+    let input = r#"
+workflow parent {
+    meta { targets = ["worktree"] }
+    call workflow child
+    if inner-step.done {
+        call notify
+    }
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    let report = validate_workflow_semantics(&def, &|name| {
+        if name == "child" {
+            parse_workflow_str(
+                r#"workflow child {
+                    meta { description = "c" trigger = "manual" targets = ["worktree"] }
+                    call inner-step
+                }"#,
+                "child.wf",
+            )
+            .map_err(|e| e.to_string())
+        } else {
+            Err(format!("unknown: {name}"))
+        }
+    });
+    assert!(
+        report.is_ok(),
+        "Inner step of sub-workflow should be reachable, got: {:?}",
+        report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_semantics_sub_workflow_inner_step_not_confused_with_unrelated() {
+    // Reference a step that does NOT exist in the sub-workflow — should still fail.
+    let input = r#"
+workflow parent {
+    meta { targets = ["worktree"] }
+    call workflow child
+    if nonexistent-step.done {
+        call notify
+    }
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    let report = validate_workflow_semantics(&def, &|name| {
+        if name == "child" {
+            parse_workflow_str(
+                r#"workflow child {
+                    meta { description = "c" trigger = "manual" targets = ["worktree"] }
+                    call inner-step
+                }"#,
+                "child.wf",
+            )
+            .map_err(|e| e.to_string())
+        } else {
+            Err(format!("unknown: {name}"))
+        }
+    });
+    assert!(!report.is_ok());
+    assert!(report.errors[0].message.contains("nonexistent-step"));
+}
+
+#[test]
+fn test_semantics_sub_workflow_loader_error_skips_inner_steps() {
+    // When the loader fails, inner steps are not produced — only the load error
+    // is emitted, plus the unreachable condition error.
+    let input = r#"
+workflow parent {
+    meta { targets = ["worktree"] }
+    call workflow broken
+    if some-inner.done {
+        call notify
+    }
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    let report = validate_workflow_semantics(&def, &no_loader);
+    assert!(!report.is_ok());
+    // Should have at least the load error
+    assert!(
+        report.errors.iter().any(|e| e.message.contains("broken")),
+        "should report sub-workflow load error"
+    );
+    // And the unreachable condition error
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|e| e.message.contains("some-inner")),
+        "should report unreachable condition"
+    );
+}
+
+#[test]
+fn test_semantics_sub_workflow_script_step_produced() {
+    // Sub-workflow has a `script` step — it should be produced in the parent.
+    let input = r#"
+workflow parent {
+    meta { targets = ["worktree"] }
+    call workflow child
+    if run-checks.passed {
+        call deploy
+    }
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    let report = validate_workflow_semantics(&def, &|name| {
+        if name == "child" {
+            Ok(WorkflowDef {
+                name: "child".to_string(),
+                description: String::new(),
+                trigger: WorkflowTrigger::Manual,
+                targets: vec![],
+                inputs: vec![],
+                body: vec![WorkflowNode::Script(ScriptNode {
+                    name: "run-checks".to_string(),
+                    run: "check.sh".to_string(),
+                    env: std::collections::HashMap::new(),
+                    timeout: None,
+                    retries: 0,
+                    on_fail: None,
+                    bot_name: None,
+                })],
+                always: vec![],
+                source_path: "child.wf".to_string(),
+            })
+        } else {
+            Err(format!("unknown: {name}"))
+        }
+    });
+    assert!(
+        report.is_ok(),
+        "Script step of sub-workflow should be reachable, got: {:?}",
+        report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_semantics_sub_workflow_parallel_inner_steps_produced() {
+    // Sub-workflow whose body contains a `parallel` block — each inner call
+    // should be produced in the parent so conditions can reference them.
+    let input = r#"
+workflow parent {
+    meta { targets = ["worktree"] }
+    call workflow child
+    if step-a.done {
+        call followup
+    }
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    let report = validate_workflow_semantics(&def, &|name| {
+        if name == "child" {
+            parse_workflow_str(
+                r#"workflow child {
+                    meta { description = "c" trigger = "manual" targets = ["worktree"] }
+                    parallel {
+                        call step-a
+                        call step-b
+                    }
+                }"#,
+                "child.wf",
+            )
+            .map_err(|e| e.to_string())
+        } else {
+            Err(format!("unknown: {name}"))
+        }
+    });
+    assert!(
+        report.is_ok(),
+        "Parallel inner steps of sub-workflow should be reachable, got: {:?}",
+        report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_semantics_sub_workflow_guarded_inner_steps_not_produced() {
+    // Steps nested inside `if`/`while` in a sub-workflow body should NOT be
+    // bubbled up to the parent — they are conditional and may not run.
+    let input = r#"
+workflow parent {
+    meta { targets = ["worktree"] }
+    call workflow child
+    if guarded-step.done {
+        call followup
+    }
+}
+"#;
+    let def = parse_workflow_str(input, "test.wf").unwrap();
+    let report = validate_workflow_semantics(&def, &|name| {
+        if name == "child" {
+            parse_workflow_str(
+                r#"workflow child {
+                    meta { description = "c" trigger = "manual" targets = ["worktree"] }
+                    call outer-step
+                    if outer-step.done {
+                        call guarded-step
+                    }
+                }"#,
+                "child.wf",
+            )
+            .map_err(|e| e.to_string())
+        } else {
+            Err(format!("unknown: {name}"))
+        }
+    });
+    assert!(
+        !report.is_ok(),
+        "Guarded inner steps of sub-workflow should NOT be produced in parent"
+    );
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|e| e.message.contains("guarded-step")),
+        "Error should mention 'guarded-step', got: {:?}",
+        report.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
 

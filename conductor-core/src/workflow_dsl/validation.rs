@@ -127,6 +127,14 @@ fn validate_nodes<F>(
                                 });
                             }
                         }
+
+                        // Mark inner steps of the sub-workflow as produced,
+                        // matching the runtime's bubble-up behavior.
+                        for sub_node in &sub_def.body {
+                            for key in node_step_keys(sub_node) {
+                                produced.insert(key);
+                            }
+                        }
                     }
                     Err(e) => {
                         errors.push(ValidationError {
@@ -197,6 +205,21 @@ fn validate_nodes<F>(
     }
 }
 
+/// Extract step keys produced by a single workflow node.
+///
+/// Most nodes produce exactly one key; `Parallel` nodes produce one key per
+/// inner call.  Structural nodes (`If`, `While`, etc.) don't directly produce
+/// keys at the top level — their inner steps are handled recursively elsewhere.
+fn node_step_keys(node: &WorkflowNode) -> Vec<String> {
+    match node {
+        WorkflowNode::Call(n) => vec![n.agent.step_key()],
+        WorkflowNode::CallWorkflow(n) => vec![n.workflow.clone()],
+        WorkflowNode::Script(n) => vec![n.name.clone()],
+        WorkflowNode::Parallel(n) => n.calls.iter().map(|c| c.step_key()).collect(),
+        _ => vec![],
+    }
+}
+
 /// Emit a validation error if `step` has not yet been produced.
 fn check_condition_reachable(
     step: &str,
@@ -209,11 +232,7 @@ fn check_condition_reachable(
                 "Condition references step '{}' which has not been produced at this point in the workflow",
                 step
             ),
-            hint: Some(
-                "Note: inner steps of called sub-workflows are not available in this context. \
-                 Use the sub-workflow's own name (the key produced by `call workflow`) as the condition step."
-                    .to_string(),
-            ),
+            hint: None,
         });
     }
 }
