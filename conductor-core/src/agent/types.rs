@@ -156,6 +156,12 @@ pub struct AgentRunEvent {
     pub metadata: Option<String>,
 }
 
+/// Event kind for tool errors captured from agent output.
+pub const EVENT_KIND_TOOL_ERROR: &str = "tool_error";
+
+/// Metadata JSON key that holds the error detail text.
+pub const META_KEY_ERROR_TEXT: &str = "error_text";
+
 impl AgentRunEvent {
     /// Duration in milliseconds, if both timestamps are present and parseable.
     pub fn duration_ms(&self) -> Option<i64> {
@@ -169,13 +175,13 @@ impl AgentRunEvent {
     /// Returns `None` if this is not a `tool_error` event or if the metadata
     /// does not contain an `error_text` field.
     pub fn error_detail_text(&self) -> Option<String> {
-        if self.kind != "tool_error" {
+        if self.kind != EVENT_KIND_TOOL_ERROR {
             return None;
         }
         let meta = self.metadata.as_ref()?;
         let parsed: serde_json::Value = serde_json::from_str(meta).ok()?;
         parsed
-            .get("error_text")
+            .get(META_KEY_ERROR_TEXT)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     }
@@ -261,4 +267,54 @@ pub struct LogResult {
     pub output_tokens: Option<i64>,
     pub cache_read_input_tokens: Option<i64>,
     pub cache_creation_input_tokens: Option<i64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_event(kind: &str, metadata: Option<&str>) -> AgentRunEvent {
+        AgentRunEvent {
+            id: "ev1".into(),
+            run_id: "run1".into(),
+            kind: kind.into(),
+            summary: "test".into(),
+            started_at: "2025-01-01T00:00:00Z".into(),
+            ended_at: None,
+            metadata: metadata.map(String::from),
+        }
+    }
+
+    #[test]
+    fn test_error_detail_text_returns_text_for_tool_error() {
+        let ev = make_event(
+            EVENT_KIND_TOOL_ERROR,
+            Some(r#"{"error_text":"something broke","tool_use_id":"t1"}"#),
+        );
+        assert_eq!(ev.error_detail_text().as_deref(), Some("something broke"));
+    }
+
+    #[test]
+    fn test_error_detail_text_none_for_wrong_kind() {
+        let ev = make_event("tool_use", Some(r#"{"error_text":"something broke"}"#));
+        assert!(ev.error_detail_text().is_none());
+    }
+
+    #[test]
+    fn test_error_detail_text_none_when_no_metadata() {
+        let ev = make_event(EVENT_KIND_TOOL_ERROR, None);
+        assert!(ev.error_detail_text().is_none());
+    }
+
+    #[test]
+    fn test_error_detail_text_none_when_no_error_text_key() {
+        let ev = make_event(EVENT_KIND_TOOL_ERROR, Some(r#"{"tool_use_id":"t1"}"#));
+        assert!(ev.error_detail_text().is_none());
+    }
+
+    #[test]
+    fn test_error_detail_text_none_for_invalid_json() {
+        let ev = make_event(EVENT_KIND_TOOL_ERROR, Some("not json"));
+        assert!(ev.error_detail_text().is_none());
+    }
 }

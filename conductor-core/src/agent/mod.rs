@@ -27,6 +27,7 @@ pub(crate) use tmux::list_live_tmux_windows;
 pub use types::{
     ActiveAgentCounts, AgentCreatedIssue, AgentEvent, AgentRun, AgentRunEvent, ClaudeJsonResult,
     CostPhase, FeedbackRequest, LogResult, PlanStep, RunTreeTotals, TicketAgentTotals,
+    EVENT_KIND_TOOL_ERROR, META_KEY_ERROR_TEXT,
 };
 
 #[cfg(test)]

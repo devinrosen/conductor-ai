@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use super::status::DEFAULT_AGENT_ERROR_MSG;
-use super::types::{AgentEvent, AgentRun, LogResult};
+use super::types::{AgentEvent, AgentRun, LogResult, EVENT_KIND_TOOL_ERROR, META_KEY_ERROR_TEXT};
 
 /// Extract the protocol fields from a `result` JSON event.
 pub fn parse_result_event(event: &serde_json::Value) -> LogResult {
@@ -258,10 +258,10 @@ pub fn parse_events_from_line(line: &str) -> Vec<AgentEvent> {
                         let metadata = serde_json::json!({
                             "tool_use_id": tool_name,
                             "is_error_flag": is_error,
-                            "error_text": error_text,
+                            META_KEY_ERROR_TEXT: error_text,
                         });
                         events.push(AgentEvent {
-                            kind: "tool_error".to_string(),
+                            kind: EVENT_KIND_TOOL_ERROR.to_string(),
                             summary,
                             metadata: Some(metadata.to_string()),
                         });
@@ -457,29 +457,50 @@ const SECRET_KEY_PATTERNS: &[&str] = &[
     "encryptionkey",
 ];
 
+/// Case-insensitive search for `pattern` in `haystack`, returning the byte
+/// offset in `haystack` itself (safe because we never cross into a different
+/// string's byte space).
+fn find_case_insensitive(haystack: &str, pattern: &str) -> Option<usize> {
+    let h_bytes = haystack.as_bytes();
+    let p_bytes = pattern.as_bytes();
+    if p_bytes.is_empty() || p_bytes.len() > h_bytes.len() {
+        return None;
+    }
+    // All SECRET_KEY_PATTERNS are pure ASCII, so byte-level comparison is safe.
+    'outer: for i in 0..=(h_bytes.len() - p_bytes.len()) {
+        for j in 0..p_bytes.len() {
+            if h_bytes[i + j].to_ascii_lowercase() != p_bytes[j] {
+                continue 'outer;
+            }
+        }
+        return Some(i);
+    }
+    None
+}
+
 /// Redact values that look like secrets or credentials from error text.
 ///
 /// Tool output can contain secrets echoed by shell commands (env dumps, config
 /// reads, credential printouts). We redact common patterns before persisting
 /// to SQLite / displaying in the UI.
+///
+/// Also handles `Authorization: Bearer <token>` style headers where the
+/// secret-key word appears *after* the colon.
 fn redact_secrets(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     for line in text.lines() {
         if !result.is_empty() {
             result.push('\n');
         }
-        let lower = line.to_lowercase();
         let mut redacted = false;
         for pattern in SECRET_KEY_PATTERNS {
-            if let Some(key_pos) = lower.find(pattern) {
+            if let Some(key_pos) = find_case_insensitive(line, pattern) {
                 let after_key = key_pos + pattern.len();
                 // Look for = or : separator after the key name
-                let rest = &lower[after_key..];
+                let rest = &line[after_key..];
                 let rest_trimmed = rest.trim_start();
                 if rest_trimmed.starts_with('=') || rest_trimmed.starts_with(':') {
-                    // Find the separator position in the original string
                     let sep_offset = after_key + (rest.len() - rest_trimmed.len());
-                    // Keep everything up to and including the separator + space
                     let sep_end = sep_offset + 1; // past the = or :
                     let value_start = line[sep_end..]
                         .find(|c: char| !c.is_whitespace())
@@ -489,6 +510,25 @@ fn redact_secrets(text: &str) -> String {
                     result.push_str("[REDACTED]");
                     redacted = true;
                     break;
+                }
+                // Handle "Authorization: Bearer <token>" — key appears after separator
+                if key_pos > 0 {
+                    // Walk backwards from key_pos to find `: ` or `= `
+                    let prefix = &line[..key_pos];
+                    let prefix_trimmed = prefix.trim_end();
+                    if prefix_trimmed.ends_with(':') || prefix_trimmed.ends_with('=') {
+                        // The value follows the pattern word + whitespace
+                        let value_start = line[after_key..]
+                            .find(|c: char| !c.is_whitespace())
+                            .map(|i| after_key + i)
+                            .unwrap_or(line.len());
+                        if value_start < line.len() {
+                            result.push_str(&line[..value_start]);
+                            result.push_str("[REDACTED]");
+                            redacted = true;
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -1007,5 +1047,22 @@ mod tests {
         let result = redact_secrets(input);
         assert!(result.contains("[REDACTED]"));
         assert!(!result.contains("mytoken123"));
+    }
+
+    #[test]
+    fn test_redact_secrets_authorization_bearer_header() {
+        let input = "Authorization: Bearer eyJhbGciOi.secret.token";
+        let result = redact_secrets(input);
+        assert!(result.contains("[REDACTED]"), "got: {result}");
+        assert!(!result.contains("eyJhbGciOi"));
+    }
+
+    #[test]
+    fn test_redact_secrets_unicode_safety() {
+        // Turkish İ lowercases to multi-byte "i̇" — ensure no panic
+        let input = "İstanbul_api_key=secret123";
+        let result = redact_secrets(input);
+        assert!(result.contains("[REDACTED]"), "got: {result}");
+        assert!(!result.contains("secret123"));
     }
 }
