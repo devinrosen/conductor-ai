@@ -34,7 +34,7 @@ pub struct TicketInput {
     pub title: String,
     pub body: String,
     pub state: String,
-    pub labels: String,
+    pub labels: Vec<String>,
     pub assignee: Option<String>,
     pub priority: Option<String>,
     pub url: String,
@@ -42,6 +42,25 @@ pub struct TicketInput {
     /// Label details (name + color) for populating the ticket_labels join table.
     /// Pass `vec![]` for sources that do not supply color data.
     pub label_details: Vec<TicketLabelInput>,
+}
+
+const VALID_TICKET_STATES: &[&str] = &["open", "in_progress", "closed"];
+
+impl TicketInput {
+    /// Validate this ticket input, returning an error if any field is invalid.
+    pub fn validate(&self) -> Result<()> {
+        if !VALID_TICKET_STATES.contains(&self.state.as_str()) {
+            return Err(crate::error::ConductorError::InvalidInput(format!(
+                "Invalid ticket state '{}'. Must be one of: open, in_progress, closed.",
+                self.state
+            )));
+        }
+        Ok(())
+    }
+
+    fn labels_json(&self) -> String {
+        serde_json::to_string(&self.labels).unwrap_or_else(|_| "[]".to_string())
+    }
 }
 
 /// Label detail passed in during sync. Carries color alongside the name.
@@ -99,11 +118,16 @@ impl<'a> TicketSyncer<'a> {
 
     /// Upsert a batch of tickets for a repo. Returns the number of tickets upserted.
     pub fn upsert_tickets(&self, repo_id: &str, tickets: &[TicketInput]) -> Result<usize> {
+        for ticket in tickets {
+            ticket.validate()?;
+        }
+
         let tx = self.conn.unchecked_transaction()?;
         let now = Utc::now().to_rfc3339();
 
         for ticket in tickets {
             let id = crate::new_id();
+            let labels_json = ticket.labels_json();
             tx.execute(
                 "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
@@ -125,7 +149,7 @@ impl<'a> TicketSyncer<'a> {
                     ticket.title,
                     ticket.body,
                     ticket.state,
-                    ticket.labels,
+                    labels_json,
                     ticket.assignee,
                     ticket.priority,
                     ticket.url,
@@ -556,7 +580,7 @@ mod tests {
             title: title.to_string(),
             body: String::new(),
             state: "open".to_string(),
-            labels: "[]".to_string(),
+            labels: vec![],
             assignee: None,
             priority: None,
             url: String::new(),
@@ -1182,7 +1206,7 @@ mod tests {
                 color: None,
             },
         ];
-        ticket.labels = r#"["bug","enhancement"]"#.to_string();
+        ticket.labels = vec!["bug".to_string(), "enhancement".to_string()];
         syncer.upsert_tickets("r1", &[ticket]).unwrap();
 
         let ticket_id: String = conn
@@ -1440,7 +1464,7 @@ mod tests {
             title: title.to_string(),
             body: body.to_string(),
             state: "open".to_string(),
-            labels: "[]".to_string(),
+            labels: vec![],
             assignee: None,
             priority: None,
             url: String::new(),

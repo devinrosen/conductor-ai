@@ -286,7 +286,7 @@ pub fn sync_github_issues(
         .map(|issue| {
             let number = issue["number"].as_u64().unwrap_or(0);
             let (label_details, assignee) = parse_issue_metadata(&issue);
-            let label_names: Vec<&str> = label_details.iter().map(|l| l.name.as_str()).collect();
+            let label_names: Vec<String> = label_details.iter().map(|l| l.name.clone()).collect();
 
             TicketInput {
                 source_type: "github".to_string(),
@@ -294,7 +294,7 @@ pub fn sync_github_issues(
                 title: issue["title"].as_str().unwrap_or("").to_string(),
                 body: issue["body"].as_str().unwrap_or("").to_string(),
                 state: "open".to_string(),
-                labels: serde_json::to_string(&label_names).unwrap_or_else(|_| "[]".to_string()),
+                labels: label_names,
                 assignee,
                 priority: None,
                 url: issue["url"].as_str().unwrap_or("").to_string(),
@@ -345,7 +345,7 @@ pub fn fetch_github_issue(
         ConductorError::TicketSync("gh issue view response missing 'number' field".to_string())
     })?;
     let (label_details, assignee) = parse_issue_metadata(&issue);
-    let label_names: Vec<&str> = label_details.iter().map(|l| l.name.as_str()).collect();
+    let label_names: Vec<String> = label_details.iter().map(|l| l.name.clone()).collect();
 
     // gh issue view returns state as "OPEN" or "CLOSED"; normalize to lowercase
     let raw_state = issue["state"].as_str().unwrap_or("OPEN");
@@ -361,7 +361,7 @@ pub fn fetch_github_issue(
         title: issue["title"].as_str().unwrap_or("").to_string(),
         body: issue["body"].as_str().unwrap_or("").to_string(),
         state,
-        labels: serde_json::to_string(&label_names).unwrap_or_else(|_| "[]".to_string()),
+        labels: label_names,
         assignee,
         priority: None,
         url: issue["url"].as_str().unwrap_or("").to_string(),

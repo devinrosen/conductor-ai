@@ -1227,14 +1227,6 @@ fn main() -> Result<()> {
                 assignee,
                 priority,
             } => {
-                let valid_states = ["open", "in_progress", "closed"];
-                if !valid_states.contains(&state.as_str()) {
-                    anyhow::bail!(
-                        "Invalid state '{}'. Must be one of: open, in_progress, closed.",
-                        state
-                    );
-                }
-
                 let repo_obj = RepoManager::new(&conn, &config).get_by_slug(&repo)?;
 
                 let labels_vec: Vec<String> = labels
@@ -1243,8 +1235,6 @@ fn main() -> Result<()> {
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
                     .collect();
-                let labels_json =
-                    serde_json::to_string(&labels_vec).unwrap_or_else(|_| "[]".into());
 
                 let ticket_input = TicketInput {
                     source_type: source_type.clone(),
@@ -1252,7 +1242,7 @@ fn main() -> Result<()> {
                     title,
                     body,
                     state,
-                    labels: labels_json,
+                    labels: labels_vec,
                     label_details: vec![],
                     assignee,
                     priority,

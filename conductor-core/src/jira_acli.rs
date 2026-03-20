@@ -126,7 +126,7 @@ fn parse_jira_issues(json_str: &str, base_url: &str) -> Result<Vec<TicketInput>>
                 title,
                 body,
                 state,
-                labels: serde_json::to_string(&labels).unwrap_or_else(|_| "[]".to_string()),
+                labels,
                 assignee,
                 priority,
                 url,
@@ -194,12 +194,12 @@ mod tests {
             tickets[0].url,
             "https://company.atlassian.net/browse/PROJ-1"
         );
-        assert_eq!(tickets[0].labels, r#"["bug","frontend"]"#);
+        assert_eq!(tickets[0].labels, vec!["bug".to_string(), "frontend".to_string()]);
 
         assert_eq!(tickets[1].source_id, "PROJ-2");
         assert_eq!(tickets[1].state, "in_progress");
         assert_eq!(tickets[1].assignee, None);
-        assert_eq!(tickets[1].labels, "[]");
+        assert_eq!(tickets[1].labels, Vec::<String>::new());
     }
 
     #[test]
@@ -223,7 +223,7 @@ mod tests {
         assert_eq!(tickets[0].state, "open");
         assert_eq!(tickets[0].priority, None);
         assert_eq!(tickets[0].assignee, None);
-        assert_eq!(tickets[0].labels, "[]");
+        assert_eq!(tickets[0].labels, Vec::<String>::new());
     }
 
     #[test]
