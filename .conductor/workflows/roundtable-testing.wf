@@ -15,4 +15,10 @@ workflow roundtable-testing {
   }
 
   call rt-aggregator { output = "roundtable-verdict" retries = 1 }
+
+  gate quality_gate {
+    source    = "rt-aggregator"
+    threshold = 80
+    on_fail   = fail
+  }
 }
