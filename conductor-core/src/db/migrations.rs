@@ -134,6 +134,19 @@ pub fn run(conn: &Connection) -> Result<()> {
         |row| row.get(0),
     )?;
 
+    // Stale-binary check: if the DB schema version is newer than what this
+    // binary understands, another (newer) binary already migrated the DB.
+    // Continuing would produce cryptic "no such column" SQL errors.
+    // We check here (before running migrations) because if version >
+    // LATEST_SCHEMA_VERSION, none of the `version < N` guards below will
+    // fire, so `version` still equals the on-disk schema version.
+    if version > LATEST_SCHEMA_VERSION as i64 {
+        return Err(ConductorError::Schema(format!(
+            "Database schema version ({version}) is newer than this binary supports ({LATEST_SCHEMA_VERSION}). \
+             Please rebuild: `cargo build`"
+        )));
+    }
+
     if version < 1 {
         conn.execute_batch(include_str!("migrations/001_initial.sql"))?;
         bump_version(conn, 1)?;
@@ -865,21 +878,6 @@ pub fn run(conn: &Connection) -> Result<()> {
             )?;
         }
         bump_version(conn, 47)?;
-    }
-
-    // Stale-binary check: if the DB schema version is newer than what this
-    // binary understands, another (newer) binary already migrated the DB.
-    // Continuing would produce cryptic "no such column" SQL errors.
-    let db_version: u32 = conn.query_row(
-        "SELECT CAST(value AS INTEGER) FROM _conductor_meta WHERE key = 'schema_version'",
-        [],
-        |row| row.get(0),
-    )?;
-    if db_version > LATEST_SCHEMA_VERSION {
-        return Err(ConductorError::Schema(format!(
-            "Database schema version ({db_version}) is newer than this binary supports ({LATEST_SCHEMA_VERSION}). \
-             Please rebuild: `cargo build`"
-        )));
     }
 
     Ok(())
