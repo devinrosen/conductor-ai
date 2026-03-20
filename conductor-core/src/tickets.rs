@@ -640,7 +640,10 @@ mod tests {
 
         let latest = syncer.latest_synced_at("r1").unwrap().unwrap();
         // The MAX must be the newer ticket's timestamp, not the backdated one.
-        assert_ne!(latest, old_ts, "MAX should return the most recent timestamp");
+        assert_ne!(
+            latest, old_ts,
+            "MAX should return the most recent timestamp"
+        );
         assert!(
             latest.as_str() > old_ts,
             "latest synced_at should be after the backdated timestamp"
