@@ -218,6 +218,17 @@ impl<'a> TicketSyncer<'a> {
         Ok(count)
     }
 
+    /// Return the most recent `synced_at` timestamp for tickets in a repo.
+    /// Returns `None` when no tickets exist for the repo (i.e. never synced).
+    pub fn latest_synced_at(&self, repo_id: &str) -> Result<Option<String>> {
+        let ts: Option<String> = self.conn.query_row(
+            "SELECT MAX(synced_at) FROM tickets WHERE repo_id = ?1",
+            params![repo_id],
+            |row| row.get(0),
+        )?;
+        Ok(ts)
+    }
+
     /// List tickets, optionally filtered by repo.
     pub fn list(&self, repo_id: Option<&str>) -> Result<Vec<Ticket>> {
         let query = match repo_id {

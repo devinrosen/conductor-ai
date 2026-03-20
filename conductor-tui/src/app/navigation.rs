@@ -645,7 +645,36 @@ impl App {
             self.state.detail_pr_index = 0;
             self.state.pr_last_fetched_at = None;
             if let Some(ref tx) = self.bg_tx {
-                crate::background::spawn_pr_fetch_once(tx.clone(), remote_url, repo_id.clone());
+                crate::background::spawn_pr_fetch_once(
+                    tx.clone(),
+                    remote_url.clone(),
+                    repo_id.clone(),
+                );
+            }
+            // Auto-sync tickets if stale (>5 min since last sync) or never synced.
+            if !self.state.ticket_sync_in_progress {
+                if let Some(ref tx) = self.bg_tx {
+                    let syncer = conductor_core::tickets::TicketSyncer::new(&self.conn);
+                    let is_stale = match syncer.latest_synced_at(&repo_id) {
+                        Ok(Some(ts)) => chrono::DateTime::parse_from_rfc3339(&ts)
+                            .map(|dt| {
+                                chrono::Utc::now().signed_duration_since(dt).num_seconds()
+                                    > crate::background::TICKET_SYNC_STALE_SECS
+                            })
+                            .unwrap_or(true),
+                        Ok(None) => true, // no tickets — treat as stale
+                        Err(_) => false,  // query error — don't sync
+                    };
+                    if is_stale {
+                        self.state.ticket_sync_in_progress = true;
+                        crate::background::spawn_ticket_sync_for_repo(
+                            tx.clone(),
+                            repo_id.clone(),
+                            repo.slug.clone(),
+                            remote_url,
+                        );
+                    }
+                }
             }
             self.rebuild_detail_gates();
             self.state.rebuild_filtered_tickets();

@@ -538,6 +538,78 @@ fn sync_repo(
     }
 }
 
+/// Staleness threshold for auto-sync: skip sync if tickets were synced within this duration.
+pub const TICKET_SYNC_STALE_SECS: i64 = 300; // 5 minutes
+
+/// Spawn a one-shot ticket sync for a single repo. Sends per-source
+/// `TicketSyncComplete`/`TicketSyncFailed` actions followed by `TicketSyncDone`.
+pub fn spawn_ticket_sync_for_repo(
+    tx: BackgroundSender,
+    repo_id: String,
+    repo_slug: String,
+    remote_url: String,
+) {
+    thread::spawn(move || {
+        let db = db_path();
+        let Ok(conn) = open_database(&db) else { return };
+        let Ok(config) = load_config() else { return };
+
+        let syncer = TicketSyncer::new(&conn);
+        let source_mgr = IssueSourceManager::new(&conn);
+        let token_res = github_app::resolve_app_token(&config, "github-issues-sync");
+        let token = token_res.token();
+
+        let sources = source_mgr.list(&repo_id).unwrap_or_default();
+
+        if sources.is_empty() {
+            // Backward compat: auto-detect GitHub from remote_url
+            if let Some((owner, name)) = github::parse_github_remote(&remote_url) {
+                let action = sync_repo(&syncer, &repo_id, &repo_slug, "github", || {
+                    github::sync_github_issues(&owner, &name, token)
+                });
+                let _ = tx.send(action);
+            }
+        } else {
+            for source in sources {
+                match source.source_type.as_str() {
+                    "github" => {
+                        let action = match serde_json::from_str::<GitHubConfig>(&source.config_json)
+                        {
+                            Ok(cfg) => sync_repo(&syncer, &repo_id, &repo_slug, "github", || {
+                                github::sync_github_issues(&cfg.owner, &cfg.repo, token)
+                            }),
+                            Err(e) => Action::TicketSyncFailed {
+                                repo_slug: repo_slug.clone(),
+                                error: format!("invalid github config: {e}"),
+                            },
+                        };
+                        if !tx.send(action) {
+                            return;
+                        }
+                    }
+                    "jira" => {
+                        let action = match serde_json::from_str::<JiraConfig>(&source.config_json) {
+                            Ok(cfg) => sync_repo(&syncer, &repo_id, &repo_slug, "jira", || {
+                                jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url)
+                            }),
+                            Err(e) => Action::TicketSyncFailed {
+                                repo_slug: repo_slug.clone(),
+                                error: format!("invalid jira config: {e}"),
+                            },
+                        };
+                        if !tx.send(action) {
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let _ = tx.send(Action::TicketSyncDone);
+    });
+}
+
 /// Spawn the workflow data poller. Polls workflow runs/steps for the given
 /// worktree and run IDs every `interval` and sends WorkflowDataRefreshed events.
 #[allow(dead_code, clippy::too_many_arguments)]
