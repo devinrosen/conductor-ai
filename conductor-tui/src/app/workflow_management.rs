@@ -2,6 +2,8 @@ use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use conductor_core::worktree::WorktreeManager;
+
 use crate::action::Action;
 use crate::state::{ConfirmAction, Modal, View, WorkflowRunDetailFocus};
 
@@ -1500,14 +1502,11 @@ impl App {
                 .find(|w| &w.id == wt_id)
                 .map(|wt| wt.repo_id.clone())
                 .or_else(|| {
-                    // Worktree not in memory (deleted/merged) — query DB directly.
-                    self.conn
-                        .query_row(
-                            "SELECT repo_id FROM worktrees WHERE id = ?1",
-                            rusqlite::params![wt_id],
-                            |row| row.get::<_, String>(0),
-                        )
+                    // Worktree not in memory (deleted/merged) — look up via manager.
+                    WorktreeManager::new(&self.conn, &self.config)
+                        .get_by_id(wt_id)
                         .ok()
+                        .map(|wt| wt.repo_id)
                 })
                 .or(run.repo_id.clone())
         } else {

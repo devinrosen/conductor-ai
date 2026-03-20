@@ -1919,3 +1919,53 @@ fn test_backfill_migration_skips_runs_with_existing_repo_id() {
         "existing repo_id should not be overwritten"
     );
 }
+
+#[test]
+fn test_backfill_migration_leaves_null_when_worktree_deleted() {
+    // The primary bug scenario: worktree row was already deleted from DB before
+    // the migration runs, so the subquery cannot resolve repo_id.
+    let conn = setup_db();
+
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+
+    // Insert a run referencing worktree w1, then orphan it by pointing
+    // worktree_id at a non-existent ID (simulating a deleted worktree row).
+    conn.execute(
+        "INSERT INTO workflow_runs \
+         (id, workflow_name, worktree_id, parent_run_id, status, dry_run, trigger, started_at) \
+         VALUES ('run-orphan', 'test-wf', 'w1', ?1, 'completed', 0, 'manual', '2025-01-01T00:00:00Z')",
+        params![parent.id],
+    )
+    .unwrap();
+
+    // Temporarily disable FK checks so we can orphan the worktree_id reference,
+    // simulating the real-world scenario where the worktree row was deleted.
+    conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+    conn.execute(
+        "UPDATE workflow_runs SET worktree_id = 'deleted-wt' WHERE id = 'run-orphan'",
+        [],
+    )
+    .unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+
+    // Run the backfill — should leave repo_id as NULL since worktree row is gone.
+    conn.execute_batch(include_str!(
+        "../../db/migrations/048_backfill_workflow_run_repo_id.sql"
+    ))
+    .unwrap();
+
+    let repo_id: Option<String> = conn
+        .query_row(
+            "SELECT repo_id FROM workflow_runs WHERE id = 'run-orphan'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        repo_id.is_none(),
+        "repo_id should remain NULL when worktree row is deleted"
+    );
+}
