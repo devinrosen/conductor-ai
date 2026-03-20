@@ -218,6 +218,17 @@ impl<'a> TicketSyncer<'a> {
         Ok(count)
     }
 
+    /// Return the most recent `synced_at` timestamp for tickets in a repo.
+    /// Returns `None` when no tickets exist for the repo (i.e. never synced).
+    pub fn latest_synced_at(&self, repo_id: &str) -> Result<Option<String>> {
+        let ts: Option<String> = self.conn.query_row(
+            "SELECT MAX(synced_at) FROM tickets WHERE repo_id = ?1",
+            params![repo_id],
+            |row| row.get(0),
+        )?;
+        Ok(ts)
+    }
+
     /// List tickets, optionally filtered by repo.
     pub fn list(&self, repo_id: Option<&str>) -> Result<Vec<Ticket>> {
         let query = match repo_id {
@@ -596,6 +607,61 @@ mod tests {
             |row| row.get(0),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn test_latest_synced_at_no_tickets() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let result = syncer.latest_synced_at("r1").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_latest_synced_at_returns_most_recent() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Insert first ticket, then manually backdate its synced_at.
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "Issue 1")])
+            .unwrap();
+        let old_ts = "2020-01-01T00:00:00Z";
+        conn.execute(
+            "UPDATE tickets SET synced_at = ?1 WHERE source_id = '1'",
+            rusqlite::params![old_ts],
+        )
+        .unwrap();
+
+        // Insert a second ticket — it gets the current timestamp.
+        syncer
+            .upsert_tickets("r1", &[make_ticket("2", "Issue 2")])
+            .unwrap();
+
+        let latest = syncer.latest_synced_at("r1").unwrap().unwrap();
+        // The MAX must be the newer ticket's timestamp, not the backdated one.
+        assert_ne!(
+            latest, old_ts,
+            "MAX should return the most recent timestamp"
+        );
+        assert!(
+            latest.as_str() > old_ts,
+            "latest synced_at should be after the backdated timestamp"
+        );
+    }
+
+    #[test]
+    fn test_latest_synced_at_scoped_to_repo() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "Issue 1")])
+            .unwrap();
+
+        // Different repo has no tickets
+        let ts = syncer.latest_synced_at("other-repo").unwrap();
+        assert!(ts.is_none());
     }
 
     #[test]

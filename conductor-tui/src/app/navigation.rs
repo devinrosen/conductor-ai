@@ -645,7 +645,23 @@ impl App {
             self.state.detail_pr_index = 0;
             self.state.pr_last_fetched_at = None;
             if let Some(ref tx) = self.bg_tx {
-                crate::background::spawn_pr_fetch_once(tx.clone(), remote_url, repo_id.clone());
+                crate::background::spawn_pr_fetch_once(
+                    tx.clone(),
+                    remote_url.clone(),
+                    repo_id.clone(),
+                );
+            }
+            // Auto-sync tickets (staleness check happens in the background thread).
+            if !self.state.ticket_sync_in_progress {
+                if let Some(ref tx) = self.bg_tx {
+                    self.state.ticket_sync_in_progress = true;
+                    crate::background::spawn_ticket_sync_for_repo(
+                        tx.clone(),
+                        repo_id.clone(),
+                        repo.slug.clone(),
+                        remote_url,
+                    );
+                }
             }
             self.rebuild_detail_gates();
             self.state.rebuild_filtered_tickets();
