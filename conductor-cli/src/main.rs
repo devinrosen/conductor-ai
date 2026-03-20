@@ -2552,7 +2552,13 @@ fn run_agent(
                     }
                     // Create a new span for each parsed event; only the last one stays open
                     for ev in &parsed {
-                        match mgr.create_event(run_id, &ev.kind, &ev.summary, &now, None) {
+                        match mgr.create_event(
+                            run_id,
+                            &ev.kind,
+                            &ev.summary,
+                            &now,
+                            ev.metadata.as_deref(),
+                        ) {
                             Ok(db_ev) => last_event_id = Some(db_ev.id),
                             Err(e) => {
                                 eprintln!("[conductor] Warning: could not persist event: {e}")

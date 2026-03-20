@@ -140,6 +140,7 @@ pub fn parse_events_from_line(line: &str) -> Vec<AgentEvent> {
                 events.push(AgentEvent {
                     kind: "system".to_string(),
                     summary: format!("Session started (model: {model})"),
+                    metadata: None,
                 });
             }
         }
@@ -161,6 +162,7 @@ pub fn parse_events_from_line(line: &str) -> Vec<AgentEvent> {
                                         events.push(AgentEvent {
                                             kind: "text".to_string(),
                                             summary: trimmed.to_string(),
+                                            metadata: None,
                                         });
                                     }
                                 }
@@ -176,6 +178,7 @@ pub fn parse_events_from_line(line: &str) -> Vec<AgentEvent> {
                             events.push(AgentEvent {
                                 kind: "tool".to_string(),
                                 summary: desc,
+                                metadata: None,
                             });
                         }
                         _ => {}
@@ -206,15 +209,66 @@ pub fn parse_events_from_line(line: &str) -> Vec<AgentEvent> {
                 events.push(AgentEvent {
                     kind: "error".to_string(),
                     summary: format!("Error: {err_text}"),
+                    metadata: None,
                 });
             } else {
                 events.push(AgentEvent {
                     kind: "result".to_string(),
                     summary: format!("${cost:.4} · {turns} turns · {dur_s:.1}s"),
+                    metadata: None,
                 });
             }
         }
-        // Skip "user" and "rate_limit_event" — noise
+        "user" => {
+            // Parse tool_result blocks for error detection
+            let content = value
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_array());
+
+            if let Some(blocks) = content {
+                for block in blocks {
+                    let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if block_type != "tool_result" {
+                        continue;
+                    }
+
+                    let is_error = block
+                        .get("is_error")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+
+                    // Extract content text — can be a string or array of content blocks
+                    let content_text = extract_tool_result_text(block);
+
+                    if content_text.is_empty() {
+                        continue;
+                    }
+
+                    // Primary: is_error flag set by tool framework
+                    // Secondary: pattern-based detection on output text
+                    if is_error || detect_error_patterns(&content_text) {
+                        let tool_name = block
+                            .get("tool_use_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        let summary = tool_error_summary(tool_name, &content_text);
+                        let error_text = truncate_error_text(&content_text, 2048);
+                        let metadata = serde_json::json!({
+                            "tool_use_id": tool_name,
+                            "is_error_flag": is_error,
+                            "error_text": error_text,
+                        });
+                        events.push(AgentEvent {
+                            kind: "tool_error".to_string(),
+                            summary,
+                            metadata: Some(metadata.to_string()),
+                        });
+                    }
+                }
+            }
+        }
+        // Skip "rate_limit_event" and other unknown types
         _ => {}
     }
 
@@ -304,6 +358,81 @@ pub fn count_turns_incremental(path: &str, prev_offset: u64, prev_count: i64) ->
     }
 
     (offset + complete_end as u64, base_count + new_turns)
+}
+
+/// Extract the text content from a tool_result block.
+/// Content can be a plain string or an array of content blocks.
+fn extract_tool_result_text(block: &serde_json::Value) -> String {
+    if let Some(s) = block.get("content").and_then(|v| v.as_str()) {
+        return s.to_string();
+    }
+    if let Some(arr) = block.get("content").and_then(|v| v.as_array()) {
+        let mut text = String::new();
+        for item in arr {
+            if item.get("type").and_then(|v| v.as_str()) == Some("text") {
+                if let Some(t) = item.get("text").and_then(|v| v.as_str()) {
+                    if !text.is_empty() {
+                        text.push('\n');
+                    }
+                    text.push_str(t);
+                }
+            }
+        }
+        return text;
+    }
+    String::new()
+}
+
+/// Detect well-known crash/error signatures in tool output text.
+/// Conservative pattern set to avoid false positives.
+fn detect_error_patterns(text: &str) -> bool {
+    // Crash signals
+    if text.contains("Segmentation fault")
+        || text.contains("SIGABRT")
+        || text.contains("SIGSEGV")
+        || text.contains("SIGBUS")
+        || text.contains("fatal error")
+    {
+        return true;
+    }
+
+    // Build failures
+    if text.contains("BUILD FAILED") || text.contains("build failed") {
+        return true;
+    }
+
+    // Rust panics
+    if text.contains("thread '") && text.contains("' panicked at") {
+        return true;
+    }
+    if text.contains("core dumped") {
+        return true;
+    }
+
+    false
+}
+
+/// Generate a one-line summary for a tool_error event.
+fn tool_error_summary(_tool_use_id: &str, error_text: &str) -> String {
+    let first_line = error_text
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("(empty)");
+    let truncated: String = first_line.chars().take(120).collect();
+    format!("[tool_error] {truncated}")
+}
+
+/// Truncate error text to a maximum byte length for storage in metadata.
+fn truncate_error_text(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    // Find a char boundary at or before max_bytes
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 /// Extract a human-readable summary for a tool_use event.
@@ -570,6 +699,104 @@ mod tests {
         let (offset, count) = count_turns_incremental(&path, 0, 0);
         assert_eq!(count, 0, "no complete line should yield zero turns");
         assert_eq!(offset, 0, "offset should not advance past partial data");
+    }
+
+    // ---- tool_error / user event parsing tests ----
+
+    #[test]
+    fn test_parse_tool_result_is_error_true() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_abc","content":"Error: command failed with exit code 1","is_error":true}]}}"#;
+        let events = parse_events_from_line(line);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "tool_error");
+        assert!(events[0].summary.contains("tool_error"));
+        assert!(events[0].metadata.is_some());
+        let meta: serde_json::Value =
+            serde_json::from_str(events[0].metadata.as_ref().unwrap()).unwrap();
+        assert_eq!(meta["is_error_flag"], true);
+        assert!(meta["error_text"]
+            .as_str()
+            .unwrap()
+            .contains("command failed"));
+    }
+
+    #[test]
+    fn test_parse_tool_result_pattern_detection() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_xyz","content":"thread 'main' panicked at 'index out of bounds'\nnote: run with RUST_BACKTRACE=1","is_error":false}]}}"#;
+        let events = parse_events_from_line(line);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "tool_error");
+        let meta: serde_json::Value =
+            serde_json::from_str(events[0].metadata.as_ref().unwrap()).unwrap();
+        assert_eq!(meta["is_error_flag"], false);
+    }
+
+    #[test]
+    fn test_parse_tool_result_no_error() {
+        // Clean tool output should not produce tool_error events
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_ok","content":"running 5 tests\ntest result: ok. 5 passed; 0 failed","is_error":false}]}}"#;
+        let events = parse_events_from_line(line);
+        assert!(
+            events.is_empty(),
+            "clean tool output should not emit events"
+        );
+    }
+
+    #[test]
+    fn test_parse_tool_result_build_failed() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_build","content":"** BUILD FAILED **\nThe following build commands failed:\n\tCompileC ...","is_error":false}]}}"#;
+        let events = parse_events_from_line(line);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "tool_error");
+    }
+
+    #[test]
+    fn test_parse_tool_result_segfault() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_seg","content":"Segmentation fault (core dumped)","is_error":false}]}}"#;
+        let events = parse_events_from_line(line);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "tool_error");
+    }
+
+    #[test]
+    fn test_parse_tool_result_content_array() {
+        // Content can be an array of text blocks
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_arr","content":[{"type":"text","text":"fatal error: file not found"}],"is_error":false}]}}"#;
+        let events = parse_events_from_line(line);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "tool_error");
+    }
+
+    #[test]
+    fn test_detect_error_patterns_false_positives() {
+        // Common output that should NOT trigger error detection
+        assert!(!detect_error_patterns("error: unused variable `x`"));
+        assert!(!detect_error_patterns("warning: unused import"));
+        assert!(!detect_error_patterns(
+            "test result: ok. 10 passed; 0 failed"
+        ));
+        assert!(!detect_error_patterns("Build succeeded"));
+        assert!(!detect_error_patterns("error[E0425]: cannot find value"));
+    }
+
+    #[test]
+    fn test_detect_error_patterns_true_positives() {
+        assert!(detect_error_patterns("Segmentation fault"));
+        assert!(detect_error_patterns("received SIGABRT"));
+        assert!(detect_error_patterns("thread 'main' panicked at 'boom'"));
+        assert!(detect_error_patterns("BUILD FAILED"));
+        assert!(detect_error_patterns("fatal error: stdlib.h not found"));
+        assert!(detect_error_patterns("Aborted (core dumped)"));
+    }
+
+    #[test]
+    fn test_truncate_error_text() {
+        let short = "hello";
+        assert_eq!(truncate_error_text(short, 100), "hello");
+
+        let long = "a".repeat(3000);
+        let truncated = truncate_error_text(&long, 2048);
+        assert_eq!(truncated.len(), 2048);
     }
 
     // ---- try_recover_from_log_at tests ----

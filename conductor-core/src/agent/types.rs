@@ -140,6 +140,8 @@ pub struct ClaudeJsonResult {
 pub struct AgentEvent {
     pub kind: String,
     pub summary: String,
+    /// Optional JSON metadata (e.g. structured error details for `tool_error` events).
+    pub metadata: Option<String>,
 }
 
 /// A persisted agent run event (trace/span model) stored in `agent_run_events`.

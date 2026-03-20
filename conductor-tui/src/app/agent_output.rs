@@ -38,7 +38,24 @@ impl App {
 
         let summary_prefix = truncate_to_char_boundary(&ev.summary, 60);
         let title = format!("[{}] {}", ev.kind, summary_prefix);
-        let body = ev.summary.clone();
+        let body = if ev.kind == "tool_error" {
+            // Show the full error text from metadata if available
+            if let Some(ref meta) = ev.metadata {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(meta) {
+                    if let Some(error_text) = parsed.get("error_text").and_then(|v| v.as_str()) {
+                        format!("{}\n\n--- Error Details ---\n{}", ev.summary, error_text)
+                    } else {
+                        ev.summary.clone()
+                    }
+                } else {
+                    ev.summary.clone()
+                }
+            } else {
+                ev.summary.clone()
+            }
+        } else {
+            ev.summary.clone()
+        };
         let line_count = body.lines().count();
 
         self.state.modal = Modal::EventDetail {

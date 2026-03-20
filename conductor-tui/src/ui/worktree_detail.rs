@@ -455,7 +455,7 @@ fn event_style(kind: &str, theme: &crate::theme::Theme) -> Style {
         "tool" => Style::default().fg(theme.label_warning),
         "result" => Style::default().fg(theme.status_completed),
         "system" => Style::default().fg(theme.label_secondary),
-        "error" => Style::default().fg(theme.status_failed),
+        "error" | "tool_error" => Style::default().fg(theme.status_failed),
         "prompt" => Style::default().fg(theme.label_info),
         _ => Style::default(),
     }
