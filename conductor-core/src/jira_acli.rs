@@ -194,7 +194,10 @@ mod tests {
             tickets[0].url,
             "https://company.atlassian.net/browse/PROJ-1"
         );
-        assert_eq!(tickets[0].labels, vec!["bug".to_string(), "frontend".to_string()]);
+        assert_eq!(
+            tickets[0].labels,
+            vec!["bug".to_string(), "frontend".to_string()]
+        );
 
         assert_eq!(tickets[1].source_id, "PROJ-2");
         assert_eq!(tickets[1].state, "in_progress");
