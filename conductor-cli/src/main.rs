@@ -498,6 +498,17 @@ enum TicketCommands {
         /// Filter by repo slug
         repo: Option<String>,
     },
+    /// Delete a ticket by its source key
+    Delete {
+        /// Repo slug
+        repo: String,
+        /// Source type (e.g. "github", "jira", "linear")
+        #[arg(long)]
+        source_type: String,
+        /// Source ID (e.g. issue number or key)
+        #[arg(long)]
+        source_id: String,
+    },
     /// Create or update a ticket from an external source
     Upsert {
         /// Repo slug
@@ -1214,6 +1225,19 @@ fn main() -> Result<()> {
                 let syncer = TicketSyncer::new(&conn);
                 syncer.link_to_worktree(&ticket_id, &worktree_id)?;
                 println!("Linked ticket #{ticket} to worktree '{worktree}'");
+            }
+            TicketCommands::Delete {
+                repo,
+                source_type,
+                source_id,
+            } => {
+                let repo_obj = RepoManager::new(&conn, &config).get_by_slug(&repo)?;
+                let syncer = TicketSyncer::new(&conn);
+                syncer.delete_ticket(&repo_obj.id, &source_type, &source_id)?;
+                println!(
+                    "Deleted ticket {}#{} from {}.",
+                    source_type, source_id, repo
+                );
             }
             TicketCommands::Upsert {
                 repo,

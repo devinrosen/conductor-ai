@@ -362,6 +362,40 @@ impl<'a> TicketSyncer<'a> {
             })
     }
 
+    /// Delete a ticket by its `(repo_id, source_type, source_id)` key.
+    /// NULLs out `workflow_runs.ticket_id` first (that FK lacks ON DELETE SET NULL),
+    /// then deletes the ticket row. Returns an error if no matching ticket exists.
+    pub fn delete_ticket(&self, repo_id: &str, source_type: &str, source_id: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        // Look up the ticket id first so we can clean up the FK.
+        let ticket_id: String = tx
+            .query_row(
+                "SELECT id FROM tickets WHERE repo_id = ?1 AND source_type = ?2 AND source_id = ?3",
+                params![repo_id, source_type, source_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ConductorError::TicketNotFound {
+                    id: format!("{source_type}#{source_id}"),
+                },
+                _ => ConductorError::Database(e),
+            })?;
+
+        // NULL out workflow_runs.ticket_id (FK lacks ON DELETE SET NULL).
+        tx.execute(
+            "UPDATE workflow_runs SET ticket_id = NULL WHERE ticket_id = ?1",
+            params![ticket_id],
+        )?;
+
+        // Delete the ticket row. Cascades handle ticket_labels and feature_tickets;
+        // worktrees.ticket_id is ON DELETE SET NULL.
+        tx.execute("DELETE FROM tickets WHERE id = ?1", params![ticket_id])?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Upsert a batch of synced tickets, close any missing ones, and mark their
     /// worktrees. Returns `(synced, closed)` counts. Errors from the close and
     /// mark steps are logged as warnings rather than propagated, matching the
