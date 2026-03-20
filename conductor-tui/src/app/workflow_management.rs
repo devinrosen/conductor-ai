@@ -5,6 +5,23 @@ use std::sync::Arc;
 use crate::action::Action;
 use crate::state::{ConfirmAction, Modal, View, WorkflowRunDetailFocus};
 
+/// Error type for [`App::resolve_workflow_target`].
+///
+/// Most errors are transient status messages, but some (e.g. a missing repo
+/// for a ticket) should be surfaced as a modal to ensure the user sees them.
+pub(super) enum WorkflowTargetError {
+    /// Show as a transient status-bar message.
+    Status(String),
+    /// Show as a blocking error modal.
+    Modal(String),
+}
+
+impl From<String> for WorkflowTargetError {
+    fn from(s: String) -> Self {
+        WorkflowTargetError::Status(s)
+    }
+}
+
 use super::helpers::{
     build_form_fields, collapse_loop_iterations, send_workflow_result,
     workflow_parse_warning_message,
@@ -180,7 +197,7 @@ impl App {
     /// caller to surface (e.g. via `status_message`).
     pub(super) fn resolve_workflow_target(
         &self,
-    ) -> Result<crate::state::WorkflowPickerTarget, String> {
+    ) -> Result<crate::state::WorkflowPickerTarget, WorkflowTargetError> {
         use crate::state::{RepoDetailFocus, WorkflowPickerTarget};
 
         if self.state.view == View::WorktreeDetail {
@@ -192,7 +209,7 @@ impl App {
                 .ok_or_else(|| "No worktree selected".to_string())?
                 .clone();
             self.worktree_picker_target(&wt)
-                .ok_or_else(|| "Repo not found for this worktree".to_string())
+                .ok_or_else(|| WorkflowTargetError::Status("Repo not found for this worktree".to_string()))
         } else if self.state.view == View::RepoDetail
             && self.state.repo_detail_focus == RepoDetailFocus::Prs
         {
@@ -235,7 +252,7 @@ impl App {
                 .ok_or_else(|| "Workflow run not found".to_string())?
                 .clone();
             self.workflow_run_picker_target(&run)
-                .ok_or_else(|| "Cannot determine repo for this workflow run".to_string())
+                .ok_or_else(|| WorkflowTargetError::Status("Cannot determine repo for this workflow run".to_string()))
         } else if self.state.view == View::RepoDetail
             && self.state.repo_detail_focus == RepoDetailFocus::Worktrees
         {
@@ -246,7 +263,7 @@ impl App {
                 .ok_or_else(|| "No worktree selected".to_string())?
                 .clone();
             self.worktree_picker_target(&wt)
-                .ok_or_else(|| "Repo not found for this worktree".to_string())
+                .ok_or_else(|| WorkflowTargetError::Status("Repo not found for this worktree".to_string()))
         } else if self.state.view == View::Dashboard {
             use crate::state::DashboardRow;
             let rows = self.state.dashboard_rows();
@@ -270,9 +287,9 @@ impl App {
                         .ok_or_else(|| "No worktree selected".to_string())?
                         .clone();
                     self.worktree_picker_target(&wt)
-                        .ok_or_else(|| "Repo not found for this worktree".to_string())
+                        .ok_or_else(|| WorkflowTargetError::Status("Repo not found for this worktree".to_string()))
                 }
-                None => Err("No item selected".to_string()),
+                None => Err(WorkflowTargetError::Status("No item selected".to_string())),
             }
         } else if self.state.view == View::WorkflowRunDetail {
             let run = self
@@ -283,7 +300,7 @@ impl App {
                 .ok_or_else(|| "No workflow run selected".to_string())?
                 .clone();
             self.workflow_run_picker_target(&run)
-                .ok_or_else(|| "Cannot determine repo for this workflow run".to_string())
+                .ok_or_else(|| WorkflowTargetError::Status("Cannot determine repo for this workflow run".to_string()))
         } else if self.state.view == View::RepoDetail
             && self.state.repo_detail_focus == RepoDetailFocus::Tickets
         {
@@ -301,8 +318,10 @@ impl App {
                 .find(|r| r.id == ticket.repo_id)
                 .map(|r| r.local_path.clone())
                 .ok_or_else(|| {
-                    "Cannot run workflow: ticket's repository is not registered in Conductor."
-                        .to_string()
+                    WorkflowTargetError::Modal(
+                        "Cannot run workflow: ticket's repository is not registered in Conductor."
+                            .to_string(),
+                    )
                 })?;
             Ok(WorkflowPickerTarget::Ticket {
                 ticket_id: ticket.id.clone(),
@@ -312,7 +331,7 @@ impl App {
                 repo_id: ticket.repo_id.clone(),
             })
         } else {
-            Err("No valid target for workflow in this context".to_string())
+            Err(WorkflowTargetError::Status("No valid target for workflow in this context".to_string()))
         }
     }
 
@@ -322,8 +341,12 @@ impl App {
 
         let target = match self.resolve_workflow_target() {
             Ok(t) => t,
-            Err(msg) => {
+            Err(WorkflowTargetError::Status(msg)) => {
                 self.state.status_message = Some(msg);
+                return;
+            }
+            Err(WorkflowTargetError::Modal(msg)) => {
+                self.state.modal = Modal::Error { message: msg };
                 return;
             }
         };
@@ -447,22 +470,52 @@ impl App {
         // Resolve target using the consolidated method
         let target = match self.resolve_workflow_target() {
             Ok(t) => t,
-            Err(msg) => {
+            Err(WorkflowTargetError::Status(msg)) => {
                 self.state.status_message = Some(msg);
+                return;
+            }
+            Err(WorkflowTargetError::Modal(msg)) => {
+                self.state.modal = Modal::Error { message: msg };
                 return;
             }
         };
 
-        let def = match self
-            .state
-            .data
-            .workflow_defs
-            .get(self.state.workflow_def_index)
+        // For WorkflowRun targets, look up the workflow def by name from the
+        // run rather than using the currently-highlighted index, which may
+        // point to an unrelated workflow.
+        let def = if let WorkflowPickerTarget::WorkflowRun {
+            ref workflow_name, ..
+        } = target
         {
-            Some(d) => d.clone(),
-            None => {
-                self.state.status_message = Some("No workflow definition selected".to_string());
-                return;
+            match self
+                .state
+                .data
+                .workflow_defs
+                .iter()
+                .find(|d| &d.name == workflow_name)
+            {
+                Some(d) => d.clone(),
+                None => {
+                    self.state.status_message = Some(format!(
+                        "Workflow definition '{}' not found",
+                        workflow_name
+                    ));
+                    return;
+                }
+            }
+        } else {
+            match self
+                .state
+                .data
+                .workflow_defs
+                .get(self.state.workflow_def_index)
+            {
+                Some(d) => d.clone(),
+                None => {
+                    self.state.status_message =
+                        Some("No workflow definition selected".to_string());
+                    return;
+                }
             }
         };
 
