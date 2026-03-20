@@ -545,6 +545,12 @@ pub fn detect_workflow_terminal_transitions<'a>(
     let mut transitions = Vec::new();
 
     for run in &runs {
+        // Sub-workflow notifications are suppressed — failures propagate to the root run.
+        if run.parent_workflow_run_id.is_some() {
+            seen.insert(run.id.clone(), run.status.clone());
+            continue;
+        }
+
         let now_terminal = matches!(
             run.status,
             WorkflowRunStatus::Completed | WorkflowRunStatus::Failed
