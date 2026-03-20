@@ -424,7 +424,7 @@ pub fn fire_gate_notification(
 
 /// Determine the most "actionable" gate type from a slice of optional gate types.
 ///
-/// Priority: `HumanApproval` / `HumanReview` > `PrApproval` > `PrChecks` > `None`.
+/// Priority: `HumanApproval` / `HumanReview` > `PrApproval` > `PrChecks` > `QualityGate` > `None`.
 /// Returns the highest-priority type found, or `None` if the slice is empty.
 fn most_urgent_gate_type<'a>(gate_types: &[Option<&'a GateType>]) -> Option<&'a GateType> {
     let mut best: Option<&GateType> = None;
@@ -435,7 +435,7 @@ fn most_urgent_gate_type<'a>(gate_types: &[Option<&'a GateType>]) -> Option<&'a 
             Some(GateType::PrApproval) => 3,
             Some(GateType::PrChecks) => 2,
             Some(GateType::QualityGate) => 1, // quality gates are non-blocking but still a valid gate type
-            None => 1,
+            None => 0,
         };
         if p > best_priority {
             best_priority = p;
@@ -1342,6 +1342,13 @@ mod tests {
         let (title, body) = grouped_gate_notification_text(&gate_types, "review", None, 2);
         assert_eq!(title, "Conductor \u{2014} Awaiting Your Approval");
         assert_eq!(body, "review: 2 gates pending");
+    }
+
+    #[test]
+    fn grouped_text_quality_gate_wins_over_none() {
+        let gate_types = vec![None, Some(&GateType::QualityGate), None];
+        let (title, _) = grouped_gate_notification_text(&gate_types, "review", None, 3);
+        assert_eq!(title, "Conductor \u{2014} Quality Gate");
     }
 
     // --- fire_grouped_gate_notification ---
