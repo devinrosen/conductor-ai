@@ -1019,6 +1019,53 @@ mod tests {
         assert!(t2[0].succeeded, "should be succeeded=true for Completed");
     }
 
+    fn make_sub_run(id: &str, name: &str, status: WorkflowRunStatus) -> WorkflowRun {
+        let mut run = make_run(id, name, status);
+        run.parent_workflow_run_id = Some("parent-run-1".to_string());
+        run
+    }
+
+    /// Sub-workflow completion must NOT produce a transition notification.
+    #[test]
+    fn test_sub_workflow_completion_suppressed() {
+        let mut seen = HashMap::new();
+        let mut initialized = false;
+
+        // Tick 1: sub-workflow is running
+        let tick1 = [make_sub_run("sub1", "child-wf", WorkflowRunStatus::Running)];
+        let t1 = detect_workflow_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
+        assert!(t1.is_empty());
+
+        // Tick 2: sub-workflow completes — no notification expected
+        let tick2 = [make_sub_run(
+            "sub1",
+            "child-wf",
+            WorkflowRunStatus::Completed,
+        )];
+        let t2 = detect_workflow_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
+        assert!(
+            t2.is_empty(),
+            "sub-workflow completion should be suppressed"
+        );
+    }
+
+    /// Sub-workflow failure must NOT produce a transition notification.
+    #[test]
+    fn test_sub_workflow_failure_suppressed() {
+        let mut seen = HashMap::new();
+        let mut initialized = false;
+
+        // Tick 1: sub-workflow is running
+        let tick1 = [make_sub_run("sub2", "child-wf", WorkflowRunStatus::Running)];
+        let t1 = detect_workflow_terminal_transitions(tick1.iter(), &mut seen, &mut initialized);
+        assert!(t1.is_empty());
+
+        // Tick 2: sub-workflow fails — no notification expected
+        let tick2 = [make_sub_run("sub2", "child-wf", WorkflowRunStatus::Failed)];
+        let t2 = detect_workflow_terminal_transitions(tick2.iter(), &mut seen, &mut initialized);
+        assert!(t2.is_empty(), "sub-workflow failure should be suppressed");
+    }
+
     /// A brand-new run that appears already-terminal on the second tick (e.g.
     /// very fast completion) must trigger a notification.
     #[test]
