@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
-use super::types::{Condition, InputType, ScriptNode, WorkflowDef, WorkflowNode};
+use super::types::{Condition, GateType, InputType, ScriptNode, WorkflowDef, WorkflowNode};
 
 // ---------------------------------------------------------------------------
 // Semantic validation
@@ -194,6 +194,27 @@ fn validate_nodes<F>(
                 validate_nodes(&n.body, produced, errors, loader, bool_inputs);
             }
             WorkflowNode::Gate(n) => {
+                // Quality gates require source and threshold fields.
+                if n.gate_type == GateType::QualityGate {
+                    if n.source.is_none() {
+                        errors.push(ValidationError {
+                            message: format!(
+                                "Quality gate '{}' is missing required `source` field",
+                                n.name
+                            ),
+                            hint: Some("Add `source = \"step_name\"` to reference the step whose structured output should be evaluated".to_string()),
+                        });
+                    }
+                    if n.threshold.is_none() {
+                        errors.push(ValidationError {
+                            message: format!(
+                                "Quality gate '{}' is missing required `threshold` field",
+                                n.name
+                            ),
+                            hint: Some("Add `threshold = 70` (0-100) to set the minimum confidence score required to pass".to_string()),
+                        });
+                    }
+                }
                 // Quality gates reference a prior step's structured output.
                 if let Some(ref source) = n.source {
                     if !produced.contains(source) {

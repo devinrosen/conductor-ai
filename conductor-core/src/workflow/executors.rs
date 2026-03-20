@@ -1744,39 +1744,40 @@ fn execute_quality_gate(
     )?;
 
     // Look up the source step's structured output
-    let confidence: u32 = match state.step_results.get(source) {
+    let (confidence, degradation_reason): (u32, Option<String>) = match state
+        .step_results
+        .get(source)
+    {
         Some(result) => {
             if let Some(ref json_str) = result.structured_output {
                 // Parse JSON and extract confidence field
                 match serde_json::from_str::<serde_json::Value>(json_str) {
-                    Ok(val) => match val.get("confidence").and_then(|v| v.as_u64()) {
-                        Some(c) => c as u32,
-                        None => {
-                            tracing::warn!(
-                                "quality_gate '{}': 'confidence' key missing or not a number in structured output from '{}'",
-                                node.name,
-                                source
-                            );
-                            0
+                    Ok(val) => {
+                        // Try integer first, then fall back to float
+                        if let Some(c) = val.get("confidence").and_then(|v| v.as_u64()) {
+                            (c as u32, None)
+                        } else if let Some(f) = val.get("confidence").and_then(|v| v.as_f64()) {
+                            (f as u32, None)
+                        } else {
+                            let reason = format!(
+                                    "'confidence' key missing or not a number in structured output from '{}'",
+                                    source
+                                );
+                            tracing::warn!("quality_gate '{}': {}", node.name, reason);
+                            (0, Some(reason))
                         }
-                    },
+                    }
                     Err(e) => {
-                        tracing::warn!(
-                            "quality_gate '{}': failed to parse structured output from '{}': {}",
-                            node.name,
-                            source,
-                            e
-                        );
-                        0
+                        let reason =
+                            format!("failed to parse structured output from '{}': {}", source, e);
+                        tracing::warn!("quality_gate '{}': {}", node.name, reason);
+                        (0, Some(reason))
                     }
                 }
             } else {
-                tracing::warn!(
-                    "quality_gate '{}': source step '{}' has no structured output",
-                    node.name,
-                    source
-                );
-                0
+                let reason = format!("source step '{}' has no structured output", source);
+                tracing::warn!("quality_gate '{}': {}", node.name, reason);
+                (0, Some(reason))
             }
         }
         None => {
@@ -1798,12 +1799,15 @@ fn execute_quality_gate(
     };
 
     let passed = confidence >= threshold;
-    let context = format!(
+    let mut context = format!(
         "quality_gate: confidence={}, threshold={}, result={}",
         confidence,
         threshold,
         if passed { "pass" } else { "fail" }
     );
+    if let Some(ref reason) = degradation_reason {
+        context.push_str(&format!(" (confidence defaulted to 0: {})", reason));
+    }
 
     if passed {
         tracing::info!(
@@ -3126,5 +3130,37 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("below threshold"), "got: {err}");
+    }
+
+    #[test]
+    fn test_quality_gate_float_confidence_handled() {
+        let conn = crate::test_helpers::setup_db();
+        let config = crate::config::Config::default();
+        let mut state = make_test_state(&conn, &config, "/tmp", Default::default());
+
+        state.step_results.insert(
+            "review".to_string(),
+            StepResult {
+                step_name: "review".to_string(),
+                status: WorkflowStepStatus::Completed,
+                result_text: None,
+                cost_usd: None,
+                num_turns: None,
+                duration_ms: None,
+                markers: vec![],
+                context: String::new(),
+                child_run_id: None,
+                structured_output: Some(r#"{"confidence": 85.5}"#.to_string()),
+                output_file: None,
+            },
+        );
+
+        // Float 85.5 should be truncated to 85 and pass threshold of 70
+        let node = make_quality_gate_node("qg", Some("review"), Some(70), OnFailAction::Fail);
+        let result = execute_quality_gate(&mut state, &node, 0, 0);
+        assert!(
+            result.is_ok(),
+            "float confidence should be handled: {result:?}"
+        );
     }
 }

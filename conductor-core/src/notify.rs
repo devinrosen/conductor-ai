@@ -434,7 +434,7 @@ fn most_urgent_gate_type<'a>(gate_types: &[Option<&'a GateType>]) -> Option<&'a 
             Some(GateType::HumanApproval) | Some(GateType::HumanReview) => 4,
             Some(GateType::PrApproval) => 3,
             Some(GateType::PrChecks) => 2,
-            Some(GateType::QualityGate) => 0, // quality gates are non-blocking
+            Some(GateType::QualityGate) => 1, // quality gates are non-blocking but still a valid gate type
             None => 1,
         };
         if p > best_priority {
@@ -1326,6 +1326,22 @@ mod tests {
         );
         assert_eq!(title, "Conductor \u{2014} Awaiting PR Review");
         assert_eq!(body, "release on conductor-ai/feat-1095: 1 gates pending");
+    }
+
+    #[test]
+    fn grouped_text_all_quality_gates() {
+        let gate_types = vec![Some(&GateType::QualityGate), Some(&GateType::QualityGate)];
+        let (title, body) = grouped_gate_notification_text(&gate_types, "review", None, 2);
+        assert_eq!(title, "Conductor \u{2014} Quality Gate");
+        assert_eq!(body, "review: 2 gates pending");
+    }
+
+    #[test]
+    fn grouped_text_quality_gate_lower_priority_than_human() {
+        let gate_types = vec![Some(&GateType::QualityGate), Some(&GateType::HumanApproval)];
+        let (title, body) = grouped_gate_notification_text(&gate_types, "review", None, 2);
+        assert_eq!(title, "Conductor \u{2014} Awaiting Your Approval");
+        assert_eq!(body, "review: 2 gates pending");
     }
 
     // --- fire_grouped_gate_notification ---

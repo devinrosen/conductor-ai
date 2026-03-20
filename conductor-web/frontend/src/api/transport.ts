@@ -5,7 +5,7 @@
  * (web) and provides the appropriate transport for API calls.
  *
  * - **Web mode**: Uses `fetch()` against the REST API (default behavior)
- * - **Tauri mode**: Uses `window.__TAURI_INTERNALS__.invoke()` to call Rust commands directly
+ * - **Tauri mode**: Uses `@tauri-apps/api/core` invoke to call Rust commands directly
  *
  * Usage:
  *   import { isDesktop, invokeCommand } from './transport';
@@ -17,12 +17,10 @@
  *   }
  */
 
-// Tauri v2 injects this global at startup.
+// Tauri v2 injects this global at startup; we use it only for detection.
 declare global {
   interface Window {
-    __TAURI_INTERNALS__?: {
-      invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
-    };
+    __TAURI_INTERNALS__?: unknown;
   }
 }
 
@@ -39,8 +37,7 @@ export function isDesktop(): boolean {
 /**
  * Invoke a Tauri command by name.
  *
- * Uses the injected `window.__TAURI_INTERNALS__.invoke()` directly,
- * avoiding any build-time dependency on `@tauri-apps/api`.
+ * Uses `@tauri-apps/api/core` for a stable, version-safe invocation path.
  *
  * In web mode, this function throws — callers should check `isDesktop()` first
  * or use the higher-level API functions in `client.ts` which handle both modes.
@@ -49,11 +46,6 @@ export async function invokeCommand<T>(
   command: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
-  const internals = window.__TAURI_INTERNALS__;
-  if (!internals) {
-    throw new Error(
-      `invokeCommand('${command}') called outside Tauri context`,
-    );
-  }
-  return internals.invoke(command, args) as Promise<T>;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<T>(command, args);
 }
