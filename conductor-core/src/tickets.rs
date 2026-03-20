@@ -610,6 +610,41 @@ mod tests {
     }
 
     #[test]
+    fn test_latest_synced_at_no_tickets() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+        let result = syncer.latest_synced_at("r1").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_latest_synced_at_returns_most_recent() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "Issue 1")])
+            .unwrap();
+
+        let ts = syncer.latest_synced_at("r1").unwrap();
+        assert!(ts.is_some(), "should have a synced_at timestamp");
+    }
+
+    #[test]
+    fn test_latest_synced_at_scoped_to_repo() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        syncer
+            .upsert_tickets("r1", &[make_ticket("1", "Issue 1")])
+            .unwrap();
+
+        // Different repo has no tickets
+        let ts = syncer.latest_synced_at("other-repo").unwrap();
+        assert!(ts.is_none());
+    }
+
+    #[test]
     fn test_sync_and_close_tickets_returns_counts_and_marks_worktrees() {
         let conn = setup_db();
         let syncer = TicketSyncer::new(&conn);

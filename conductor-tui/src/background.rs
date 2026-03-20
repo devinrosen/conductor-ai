@@ -447,53 +447,16 @@ fn sync_all_tickets(tx: &BackgroundSender) {
     let token = token_res.token();
 
     for repo in repos {
-        let sources = source_mgr.list(&repo.id).unwrap_or_default();
-
-        if sources.is_empty() {
-            // Backward compat: auto-detect GitHub from remote_url
-            if let Some((owner, name)) = github::parse_github_remote(&repo.remote_url) {
-                let action = sync_repo(&syncer, &repo.id, &repo.slug, "github", || {
-                    github::sync_github_issues(&owner, &name, token)
-                });
-                if !tx.send(action) {
-                    return;
-                }
-            }
-        } else {
-            for source in sources {
-                match source.source_type.as_str() {
-                    "github" => {
-                        let action = match serde_json::from_str::<GitHubConfig>(&source.config_json)
-                        {
-                            Ok(cfg) => sync_repo(&syncer, &repo.id, &repo.slug, "github", || {
-                                github::sync_github_issues(&cfg.owner, &cfg.repo, token)
-                            }),
-                            Err(e) => Action::TicketSyncFailed {
-                                repo_slug: repo.slug.clone(),
-                                error: format!("invalid github config: {e}"),
-                            },
-                        };
-                        if !tx.send(action) {
-                            return;
-                        }
-                    }
-                    "jira" => {
-                        let action = match serde_json::from_str::<JiraConfig>(&source.config_json) {
-                            Ok(cfg) => sync_repo(&syncer, &repo.id, &repo.slug, "jira", || {
-                                jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url)
-                            }),
-                            Err(e) => Action::TicketSyncFailed {
-                                repo_slug: repo.slug.clone(),
-                                error: format!("invalid jira config: {e}"),
-                            },
-                        };
-                        if !tx.send(action) {
-                            return;
-                        }
-                    }
-                    _ => {}
-                }
-            }
+        if !sync_sources_for_repo(
+            tx,
+            &syncer,
+            &source_mgr,
+            &repo.id,
+            &repo.slug,
+            &repo.remote_url,
+            token,
+        ) {
+            return;
         }
     }
 }
@@ -541,6 +504,67 @@ fn sync_repo(
 /// Staleness threshold for auto-sync: skip sync if tickets were synced within this duration.
 pub const TICKET_SYNC_STALE_SECS: i64 = 300; // 5 minutes
 
+/// Sync sources for a single repo, sending per-source actions to `tx`.
+/// Returns `false` if the channel is closed (caller should stop).
+fn sync_sources_for_repo(
+    tx: &BackgroundSender,
+    syncer: &TicketSyncer,
+    source_mgr: &IssueSourceManager,
+    repo_id: &str,
+    repo_slug: &str,
+    remote_url: &str,
+    token: Option<&str>,
+) -> bool {
+    let sources = source_mgr.list(repo_id).unwrap_or_default();
+
+    if sources.is_empty() {
+        // Backward compat: auto-detect GitHub from remote_url
+        if let Some((owner, name)) = github::parse_github_remote(remote_url) {
+            let action = sync_repo(syncer, repo_id, repo_slug, "github", || {
+                github::sync_github_issues(&owner, &name, token)
+            });
+            if !tx.send(action) {
+                return false;
+            }
+        }
+    } else {
+        for source in sources {
+            match source.source_type.as_str() {
+                "github" => {
+                    let action = match serde_json::from_str::<GitHubConfig>(&source.config_json) {
+                        Ok(cfg) => sync_repo(syncer, repo_id, repo_slug, "github", || {
+                            github::sync_github_issues(&cfg.owner, &cfg.repo, token)
+                        }),
+                        Err(e) => Action::TicketSyncFailed {
+                            repo_slug: repo_slug.to_string(),
+                            error: format!("invalid github config: {e}"),
+                        },
+                    };
+                    if !tx.send(action) {
+                        return false;
+                    }
+                }
+                "jira" => {
+                    let action = match serde_json::from_str::<JiraConfig>(&source.config_json) {
+                        Ok(cfg) => sync_repo(syncer, repo_id, repo_slug, "jira", || {
+                            jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url)
+                        }),
+                        Err(e) => Action::TicketSyncFailed {
+                            repo_slug: repo_slug.to_string(),
+                            error: format!("invalid jira config: {e}"),
+                        },
+                    };
+                    if !tx.send(action) {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    true
+}
+
 /// Spawn a one-shot ticket sync for a single repo. Sends per-source
 /// `TicketSyncComplete`/`TicketSyncFailed` actions followed by `TicketSyncDone`.
 pub fn spawn_ticket_sync_for_repo(
@@ -551,60 +575,29 @@ pub fn spawn_ticket_sync_for_repo(
 ) {
     thread::spawn(move || {
         let db = db_path();
-        let Ok(conn) = open_database(&db) else { return };
-        let Ok(config) = load_config() else { return };
+        let Ok(conn) = open_database(&db) else {
+            let _ = tx.send(Action::TicketSyncDone);
+            return;
+        };
+        let Ok(config) = load_config() else {
+            let _ = tx.send(Action::TicketSyncDone);
+            return;
+        };
 
         let syncer = TicketSyncer::new(&conn);
         let source_mgr = IssueSourceManager::new(&conn);
         let token_res = github_app::resolve_app_token(&config, "github-issues-sync");
         let token = token_res.token();
 
-        let sources = source_mgr.list(&repo_id).unwrap_or_default();
-
-        if sources.is_empty() {
-            // Backward compat: auto-detect GitHub from remote_url
-            if let Some((owner, name)) = github::parse_github_remote(&remote_url) {
-                let action = sync_repo(&syncer, &repo_id, &repo_slug, "github", || {
-                    github::sync_github_issues(&owner, &name, token)
-                });
-                let _ = tx.send(action);
-            }
-        } else {
-            for source in sources {
-                match source.source_type.as_str() {
-                    "github" => {
-                        let action = match serde_json::from_str::<GitHubConfig>(&source.config_json)
-                        {
-                            Ok(cfg) => sync_repo(&syncer, &repo_id, &repo_slug, "github", || {
-                                github::sync_github_issues(&cfg.owner, &cfg.repo, token)
-                            }),
-                            Err(e) => Action::TicketSyncFailed {
-                                repo_slug: repo_slug.clone(),
-                                error: format!("invalid github config: {e}"),
-                            },
-                        };
-                        if !tx.send(action) {
-                            return;
-                        }
-                    }
-                    "jira" => {
-                        let action = match serde_json::from_str::<JiraConfig>(&source.config_json) {
-                            Ok(cfg) => sync_repo(&syncer, &repo_id, &repo_slug, "jira", || {
-                                jira_acli::sync_jira_issues_acli(&cfg.jql, &cfg.url)
-                            }),
-                            Err(e) => Action::TicketSyncFailed {
-                                repo_slug: repo_slug.clone(),
-                                error: format!("invalid jira config: {e}"),
-                            },
-                        };
-                        if !tx.send(action) {
-                            return;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
+        sync_sources_for_repo(
+            &tx,
+            &syncer,
+            &source_mgr,
+            &repo_id,
+            &repo_slug,
+            &remote_url,
+            token,
+        );
 
         let _ = tx.send(Action::TicketSyncDone);
     });
