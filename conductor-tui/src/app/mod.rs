@@ -21,8 +21,8 @@ use crate::state::{AppState, Modal, View, WorkflowDefFocus};
 use crate::theme::Theme;
 use crate::ui;
 
-mod agent_execution;
 mod agent_events;
+mod agent_execution;
 mod crud_operations;
 mod git_operations;
 mod github_discovery;
