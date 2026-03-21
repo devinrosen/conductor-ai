@@ -984,6 +984,20 @@ pub enum WorkflowPickerTarget {
     },
 }
 
+impl WorkflowPickerTarget {
+    /// Returns the workflow target filter string for this picker target.
+    pub fn target_filter(&self) -> &'static str {
+        match self {
+            Self::Pr { .. } => "pr",
+            Self::Worktree { .. } => "worktree",
+            Self::Ticket { .. } => "ticket",
+            Self::Repo { .. } => "repo",
+            Self::WorkflowRun { .. } => "workflow_run",
+            Self::PostCreate { .. } => "worktree",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ConfirmAction {
     /// Carry creation params through the clone-warning confirm flow.
@@ -1408,6 +1422,9 @@ pub struct AppState {
     /// When true, show the persistent workflow column on the right side.
     pub workflow_column_visible: bool,
 
+    /// True while a background thread is loading workflow defs for the picker.
+    pub loading_workflow_picker_defs: bool,
+
     /// Number of unread in-app notifications (updated from background poller).
     pub unread_notification_count: usize,
 
@@ -1782,6 +1799,7 @@ impl AppState {
             show_closed_tickets: false,
             show_completed_workflow_runs: false,
             ticket_sync_in_progress: false,
+            loading_workflow_picker_defs: false,
             column_focus: ColumnFocus::Content,
             workflow_column_visible: true,
             unread_notification_count: 0,
