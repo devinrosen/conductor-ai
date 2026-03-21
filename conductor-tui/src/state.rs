@@ -984,6 +984,20 @@ pub enum WorkflowPickerTarget {
     },
 }
 
+impl WorkflowPickerTarget {
+    /// Returns the workflow target filter string for this picker target.
+    pub fn target_filter(&self) -> &'static str {
+        match self {
+            Self::Pr { .. } => "pr",
+            Self::Worktree { .. } => "worktree",
+            Self::Ticket { .. } => "ticket",
+            Self::Repo { .. } => "repo",
+            Self::WorkflowRun { .. } => "workflow_run",
+            Self::PostCreate { .. } => "worktree",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ConfirmAction {
     /// Carry creation params through the clone-warning confirm flow.
@@ -1408,6 +1422,9 @@ pub struct AppState {
     /// When true, show the persistent workflow column on the right side.
     pub workflow_column_visible: bool,
 
+    /// True while a background thread is loading workflow defs for the picker.
+    pub loading_workflow_picker_defs: bool,
+
     /// Number of unread in-app notifications (updated from background poller).
     pub unread_notification_count: usize,
 
@@ -1782,6 +1799,7 @@ impl AppState {
             show_closed_tickets: false,
             show_completed_workflow_runs: false,
             ticket_sync_in_progress: false,
+            loading_workflow_picker_defs: false,
             column_focus: ColumnFocus::Content,
             workflow_column_visible: true,
             unread_notification_count: 0,
@@ -4789,5 +4807,72 @@ pub(crate) mod tests {
         state.data.workflow_runs.push(run);
         state.selected_workflow_run_id = Some("run3".to_string());
         assert!(!state.selected_run_has_error());
+    }
+
+    // --- WorkflowPickerTarget::target_filter tests ---
+
+    #[test]
+    fn target_filter_pr() {
+        let t = WorkflowPickerTarget::Pr {
+            pr_number: 1,
+            pr_title: String::new(),
+        };
+        assert_eq!(t.target_filter(), "pr");
+    }
+
+    #[test]
+    fn target_filter_worktree() {
+        let t = WorkflowPickerTarget::Worktree {
+            worktree_id: String::new(),
+            worktree_path: String::new(),
+            repo_path: String::new(),
+        };
+        assert_eq!(t.target_filter(), "worktree");
+    }
+
+    #[test]
+    fn target_filter_ticket() {
+        let t = WorkflowPickerTarget::Ticket {
+            ticket_id: String::new(),
+            ticket_title: String::new(),
+            ticket_url: String::new(),
+            repo_id: String::new(),
+            repo_path: String::new(),
+        };
+        assert_eq!(t.target_filter(), "ticket");
+    }
+
+    #[test]
+    fn target_filter_repo() {
+        let t = WorkflowPickerTarget::Repo {
+            repo_id: String::new(),
+            repo_path: String::new(),
+            repo_name: String::new(),
+        };
+        assert_eq!(t.target_filter(), "repo");
+    }
+
+    #[test]
+    fn target_filter_workflow_run() {
+        let t = WorkflowPickerTarget::WorkflowRun {
+            workflow_run_id: String::new(),
+            workflow_name: String::new(),
+            worktree_id: None,
+            worktree_path: None,
+            repo_path: String::new(),
+        };
+        assert_eq!(t.target_filter(), "workflow_run");
+    }
+
+    #[test]
+    fn target_filter_post_create_maps_to_worktree() {
+        let t = WorkflowPickerTarget::PostCreate {
+            worktree_id: String::new(),
+            worktree_path: String::new(),
+            worktree_slug: String::new(),
+            ticket_id: String::new(),
+            repo_path: String::new(),
+        };
+        assert_eq!(t.target_filter(), "worktree");
     }
 }

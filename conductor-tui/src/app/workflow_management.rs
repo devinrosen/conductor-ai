@@ -109,13 +109,15 @@ impl App {
         let wf_mgr = WorkflowManager::new(&self.conn);
 
         if let Some(ref wt_id) = self.state.selected_worktree_id.clone() {
-            // Worktree-scoped: load defs from FS
+            // Worktree-scoped: load defs from FS in a background thread
             if let Some((wt_path, rp)) = self.resolve_worktree_paths(wt_id) {
-                let (defs, warnings) =
-                    WorkflowManager::list_defs(&wt_path, &rp).unwrap_or_default();
-                self.state.data.workflow_defs = defs;
-                if let Some(msg) = workflow_parse_warning_message(&warnings) {
-                    self.state.status_message = Some(msg);
+                if let Some(ref tx) = self.bg_tx {
+                    let tx = tx.clone();
+                    std::thread::spawn(move || {
+                        let (defs, warnings) =
+                            WorkflowManager::list_defs(&wt_path, &rp).unwrap_or_default();
+                        let _ = tx.send(Action::WorkflowDefsReloaded { defs, warnings });
+                    });
                 }
             }
         } else if self.state.view == View::RepoDetail {
@@ -364,67 +366,115 @@ impl App {
             }
         };
 
-        // Filter workflow defs based on target type
-        let defs: Vec<conductor_core::workflow::WorkflowDef> = match &target {
-            WorkflowPickerTarget::Pr { .. } => self
-                .state
-                .data
-                .workflow_defs
-                .iter()
-                .filter(|d| d.targets.iter().any(|t| t == "pr"))
-                .cloned()
+        // Targets that require background disk I/O: spawn and return early.
+        match &target {
+            WorkflowPickerTarget::Ticket { repo_path, .. }
+            | WorkflowPickerTarget::Repo { repo_path, .. }
+            | WorkflowPickerTarget::WorkflowRun { repo_path, .. } => {
+                let rp = repo_path.clone();
+                self.spawn_load_picker_defs(target, rp);
+                return;
+            }
+            _ => {}
+        }
+
+        // Filter workflow defs based on target type (in-memory, no I/O)
+        let filter = target.target_filter();
+        let defs: Vec<conductor_core::workflow::WorkflowDef> = self
+            .state
+            .data
+            .workflow_defs
+            .iter()
+            .filter(|d| d.targets.iter().any(|t| t == filter))
+            .cloned()
+            .collect();
+
+        if defs.is_empty() {
+            self.state.modal = Modal::Error {
+                message: format!(
+                    "No {filter}-compatible workflows found.\nAdd targets: [{filter}] to a workflow definition."
+                ),
+            };
+            return;
+        }
+
+        self.state.modal = Modal::WorkflowPicker {
+            target,
+            items: defs
+                .into_iter()
+                .map(crate::state::WorkflowPickerItem::Workflow)
                 .collect(),
-            WorkflowPickerTarget::Worktree { .. } => self
-                .state
-                .data
-                .workflow_defs
-                .iter()
-                .filter(|d| d.targets.iter().any(|t| t == "worktree"))
-                .cloned()
-                .collect(),
-            WorkflowPickerTarget::Ticket { repo_path, .. } => {
-                conductor_core::workflow::WorkflowManager::list_defs("", repo_path)
-                    .unwrap_or_default()
-                    .0
-                    .into_iter()
-                    .filter(|d| d.targets.iter().any(|t| t == "ticket"))
-                    .collect()
-            }
-            WorkflowPickerTarget::Repo { repo_path, .. } => {
-                conductor_core::workflow::WorkflowManager::list_defs("", repo_path)
-                    .unwrap_or_default()
-                    .0
-                    .into_iter()
-                    .filter(|d| d.targets.iter().any(|t| t == "repo"))
-                    .collect()
-            }
-            WorkflowPickerTarget::WorkflowRun { repo_path, .. } => {
-                conductor_core::workflow::WorkflowManager::list_defs("", repo_path)
-                    .unwrap_or_default()
-                    .0
-                    .into_iter()
-                    .filter(|d| d.targets.iter().any(|t| t == "workflow_run"))
-                    .collect()
-            }
-            // PostCreate targets are handled via PostCreatePickerReady, never
-            // through handle_pick_workflow(), so this arm is unreachable.
-            WorkflowPickerTarget::PostCreate { .. } => {
-                unreachable!("PostCreate targets bypass handle_pick_workflow")
-            }
+            selected: 0,
         };
+    }
+
+    /// Spawn a background thread to load workflow defs from disk for the picker.
+    fn spawn_load_picker_defs(
+        &mut self,
+        target: crate::state::WorkflowPickerTarget,
+        repo_path: String,
+    ) {
+        let Some(ref tx) = self.bg_tx else { return };
+        let tx = tx.clone();
+        self.state.modal = Modal::Progress {
+            message: "Loading workflows…".into(),
+        };
+        self.state.loading_workflow_picker_defs = true;
+        std::thread::spawn(move || {
+            let filter = target.target_filter();
+            match conductor_core::workflow::WorkflowManager::list_defs("", &repo_path) {
+                Ok((all_defs, _warnings)) => {
+                    let defs = all_defs
+                        .into_iter()
+                        .filter(|d| d.targets.iter().any(|t| t == filter))
+                        .collect();
+                    let _ = tx.send(Action::WorkflowPickerDefsLoaded {
+                        target,
+                        defs,
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(Action::WorkflowPickerDefsLoaded {
+                        target,
+                        defs: vec![],
+                        error: Some(e.to_string()),
+                    });
+                }
+            }
+        });
+    }
+
+    /// Handle background result: workflow defs loaded for a picker.
+    pub(super) fn handle_workflow_picker_defs_loaded(
+        &mut self,
+        target: crate::state::WorkflowPickerTarget,
+        defs: Vec<conductor_core::workflow::WorkflowDef>,
+        error: Option<String>,
+    ) {
+        // Guard against race condition: if we're not expecting picker defs
+        // (e.g. user navigated away), silently discard.
+        if !self.state.loading_workflow_picker_defs {
+            return;
+        }
+        self.state.loading_workflow_picker_defs = false;
+
+        // Surface I/O errors instead of silently showing "no workflows found".
+        if let Some(err_msg) = error {
+            self.state.modal = Modal::Error {
+                message: format!("Failed to load workflow definitions: {err_msg}"),
+            };
+            return;
+        }
 
         if defs.is_empty() {
             let kind = match &target {
-                WorkflowPickerTarget::Pr { .. } => "PR",
-                WorkflowPickerTarget::Worktree { .. } => "worktree",
-                // PostCreate is unreachable here (see above), but match
-                // exhaustively to satisfy the compiler.
-                WorkflowPickerTarget::PostCreate { .. } => {
-                    unreachable!("PostCreate targets bypass handle_pick_workflow")
-                }
-                WorkflowPickerTarget::Ticket { .. } => "ticket",
-                WorkflowPickerTarget::Repo { .. } => "repo",
-                WorkflowPickerTarget::WorkflowRun { .. } => "workflow_run",
+                crate::state::WorkflowPickerTarget::Pr { .. } => "PR",
+                crate::state::WorkflowPickerTarget::Worktree { .. } => "worktree",
+                crate::state::WorkflowPickerTarget::PostCreate { .. } => "post-create",
+                crate::state::WorkflowPickerTarget::Ticket { .. } => "ticket",
+                crate::state::WorkflowPickerTarget::Repo { .. } => "repo",
+                crate::state::WorkflowPickerTarget::WorkflowRun { .. } => "workflow_run",
             };
             self.state.modal = Modal::Error {
                 message: format!(
@@ -442,6 +492,18 @@ impl App {
                 .collect(),
             selected: 0,
         };
+    }
+
+    /// Handle background result: worktree-scoped workflow defs reloaded.
+    pub(super) fn handle_workflow_defs_reloaded(
+        &mut self,
+        defs: Vec<conductor_core::workflow::WorkflowDef>,
+        warnings: Vec<conductor_core::workflow::WorkflowWarning>,
+    ) {
+        self.state.data.workflow_defs = defs;
+        if let Some(msg) = workflow_parse_warning_message(&warnings) {
+            self.state.status_message = Some(msg);
+        }
     }
 
     /// Confirm the workflow selection from the generic WorkflowPicker modal.
@@ -1159,40 +1221,43 @@ impl App {
             .and_then(|id| self.state.data.repos.iter().find(|r| &r.id == id))
             .map(|r| r.local_path.clone());
 
-        let all_defs: Vec<conductor_core::workflow::WorkflowDef> =
-            if let Some(ref rp) = repo_local_path {
-                conductor_core::workflow::WorkflowManager::list_defs(rp, rp)
-                    .unwrap_or_default()
-                    .0
-            } else {
-                self.state.data.workflow_defs.clone()
-            };
-
-        let pr_defs: Vec<conductor_core::workflow::WorkflowDef> = all_defs
-            .into_iter()
-            .filter(|d| d.targets.iter().any(|t| t == "pr"))
-            .collect();
-
-        if pr_defs.is_empty() {
-            self.state.modal = Modal::Error {
-                message:
-                    "No PR-compatible workflows found.\nAdd targets: [pr] to a workflow definition."
-                        .to_string(),
-            };
-            return;
-        }
-
-        self.state.modal = Modal::WorkflowPicker {
-            target: crate::state::WorkflowPickerTarget::Pr {
+        if let Some(rp) = repo_local_path {
+            let target = crate::state::WorkflowPickerTarget::Pr {
                 pr_number: pr.number,
                 pr_title: pr.title.clone(),
-            },
-            items: pr_defs
-                .into_iter()
-                .map(crate::state::WorkflowPickerItem::Workflow)
-                .collect(),
-            selected: 0,
-        };
+            };
+            self.spawn_load_picker_defs(target, rp);
+        } else {
+            let pr_defs: Vec<conductor_core::workflow::WorkflowDef> = self
+                .state
+                .data
+                .workflow_defs
+                .iter()
+                .filter(|d| d.targets.iter().any(|t| t == "pr"))
+                .cloned()
+                .collect();
+
+            if pr_defs.is_empty() {
+                self.state.modal = Modal::Error {
+                    message:
+                        "No PR-compatible workflows found.\nAdd targets: [pr] to a workflow definition."
+                            .to_string(),
+                };
+                return;
+            }
+
+            self.state.modal = Modal::WorkflowPicker {
+                target: crate::state::WorkflowPickerTarget::Pr {
+                    pr_number: pr.number,
+                    pr_title: pr.title.clone(),
+                },
+                items: pr_defs
+                    .into_iter()
+                    .map(crate::state::WorkflowPickerItem::Workflow)
+                    .collect(),
+                selected: 0,
+            };
+        }
     }
 
     /// Spawn an ephemeral PR workflow execution in a background thread.
@@ -1784,6 +1849,51 @@ mod tests {
                 assert!(!fields[*active_field].readonly || fields.iter().all(|f| f.readonly));
             }
             other => panic!("Expected Modal::Form, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn handle_defs_loaded_discards_when_not_loading() {
+        let mut app = make_app();
+        // loading_workflow_picker_defs is false by default — simulate a stale result arriving
+        assert!(!app.state.loading_workflow_picker_defs);
+        let target = crate::state::WorkflowPickerTarget::Repo {
+            repo_id: "r1".into(),
+            repo_path: "/tmp".into(),
+            repo_name: "test".into(),
+        };
+        app.handle_workflow_picker_defs_loaded(target, vec![], None);
+        // Modal should remain None — the result was discarded
+        assert!(
+            matches!(app.state.modal, Modal::None),
+            "Expected Modal::None after discarding stale result, got {:?}",
+            app.state.modal
+        );
+    }
+
+    #[test]
+    fn handle_defs_loaded_shows_error_on_io_failure() {
+        let mut app = make_app();
+        app.state.loading_workflow_picker_defs = true;
+        let target = crate::state::WorkflowPickerTarget::Repo {
+            repo_id: "r1".into(),
+            repo_path: "/tmp".into(),
+            repo_name: "test".into(),
+        };
+        app.handle_workflow_picker_defs_loaded(
+            target,
+            vec![],
+            Some("permission denied".to_string()),
+        );
+        assert!(!app.state.loading_workflow_picker_defs);
+        match &app.state.modal {
+            Modal::Error { message } => {
+                assert!(
+                    message.contains("permission denied"),
+                    "Error modal should contain the original error, got: {message}"
+                );
+            }
+            other => panic!("Expected Modal::Error, got {:?}", other),
         }
     }
 }
