@@ -238,12 +238,6 @@ impl App {
             return;
         }
 
-        // PrWorkflowPicker: confirm the selected workflow
-        if matches!(self.state.modal, Modal::PrWorkflowPicker { .. }) {
-            self.handle_pr_workflow_picker_confirm();
-            return;
-        }
-
         // WorkflowPicker: confirm the selected workflow
         if matches!(self.state.modal, Modal::WorkflowPicker { .. }) {
             self.handle_workflow_picker_confirm();

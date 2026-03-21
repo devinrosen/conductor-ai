@@ -375,12 +375,7 @@ impl App {
                 wrap_decrement(selected, sources.len());
                 return;
             }
-            Modal::PrWorkflowPicker {
-                ref workflow_defs,
-                ref mut selected,
-                ..
-            }
-            | Modal::WorkflowPicker {
+            Modal::WorkflowPicker {
                 ref workflow_defs,
                 ref mut selected,
                 ..
@@ -520,12 +515,7 @@ impl App {
                 wrap_increment(selected, sources.len());
                 return;
             }
-            Modal::PrWorkflowPicker {
-                ref workflow_defs,
-                ref mut selected,
-                ..
-            }
-            | Modal::WorkflowPicker {
+            Modal::WorkflowPicker {
                 ref workflow_defs,
                 ref mut selected,
                 ..
