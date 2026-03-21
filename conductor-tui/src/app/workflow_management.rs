@@ -406,12 +406,22 @@ impl App {
                     .filter(|d| d.targets.iter().any(|t| t == "workflow_run"))
                     .collect()
             }
+            WorkflowPickerTarget::PostCreate { repo_path, .. } => {
+                conductor_core::workflow::WorkflowManager::list_defs("", repo_path)
+                    .unwrap_or_default()
+                    .0
+                    .into_iter()
+                    .filter(|d| d.targets.iter().any(|t| t == "worktree"))
+                    .collect()
+            }
         };
 
         if defs.is_empty() {
             let kind = match &target {
                 WorkflowPickerTarget::Pr { .. } => "PR",
-                WorkflowPickerTarget::Worktree { .. } => "worktree",
+                WorkflowPickerTarget::Worktree { .. } | WorkflowPickerTarget::PostCreate { .. } => {
+                    "worktree"
+                }
                 WorkflowPickerTarget::Ticket { .. } => "ticket",
                 WorkflowPickerTarget::Repo { .. } => "repo",
                 WorkflowPickerTarget::WorkflowRun { .. } => "workflow_run",
@@ -426,55 +436,105 @@ impl App {
 
         self.state.modal = Modal::WorkflowPicker {
             target,
-            workflow_defs: defs,
+            items: defs
+                .into_iter()
+                .map(crate::state::WorkflowPickerItem::Workflow)
+                .collect(),
             selected: 0,
         };
     }
 
     /// Confirm the workflow selection from the generic WorkflowPicker modal.
     pub(super) fn handle_workflow_picker_confirm(&mut self) {
-        let (target, def) = if let Modal::WorkflowPicker {
+        use crate::state::{WorkflowPickerItem, WorkflowPickerTarget};
+
+        let (target, item) = if let Modal::WorkflowPicker {
             ref target,
-            ref workflow_defs,
+            ref items,
             selected,
             ..
         } = self.state.modal
         {
-            let def = match workflow_defs.get(selected) {
-                Some(d) => d.clone(),
+            let item = match items.get(selected) {
+                Some(i) => i.clone(),
                 None => return,
             };
-            (target.clone(), def)
+            (target.clone(), item)
         } else {
             return;
         };
 
         self.state.modal = Modal::None;
 
-        let mut prefill = std::collections::HashMap::new();
-        if let crate::state::WorkflowPickerTarget::Worktree {
-            ref worktree_id, ..
-        } = target
-        {
-            if let Some(wt) = self
-                .state
-                .data
-                .worktrees
-                .iter()
-                .find(|w| &w.id == worktree_id)
-            {
-                if let Some(tid) = &wt.ticket_id {
-                    prefill.insert("ticket_id".to_string(), tid.clone());
+        match item {
+            WorkflowPickerItem::Workflow(def) => {
+                let mut prefill = std::collections::HashMap::new();
+                match &target {
+                    WorkflowPickerTarget::Worktree {
+                        ref worktree_id, ..
+                    } => {
+                        if let Some(wt) = self
+                            .state
+                            .data
+                            .worktrees
+                            .iter()
+                            .find(|w| &w.id == worktree_id)
+                        {
+                            if let Some(tid) = &wt.ticket_id {
+                                prefill.insert("ticket_id".to_string(), tid.clone());
+                            }
+                        }
+                    }
+                    WorkflowPickerTarget::PostCreate { ref ticket_id, .. } => {
+                        prefill.insert("ticket_id".to_string(), ticket_id.clone());
+                    }
+                    WorkflowPickerTarget::WorkflowRun {
+                        ref workflow_run_id,
+                        ..
+                    } => {
+                        prefill.insert("workflow_run_id".to_string(), workflow_run_id.clone());
+                    }
+                    _ => {}
+                }
+                // For PostCreate, re-wrap the target as Worktree for execution
+                let exec_target = if let WorkflowPickerTarget::PostCreate {
+                    worktree_id,
+                    worktree_path,
+                    repo_path,
+                    ..
+                } = target
+                {
+                    WorkflowPickerTarget::Worktree {
+                        worktree_id,
+                        worktree_path,
+                        repo_path,
+                    }
+                } else {
+                    target
+                };
+                self.show_workflow_inputs_or_run(exec_target, def, prefill);
+            }
+            WorkflowPickerItem::StartAgent => {
+                if let WorkflowPickerTarget::PostCreate {
+                    worktree_id,
+                    worktree_path,
+                    worktree_slug,
+                    ticket_id,
+                    ..
+                } = target
+                {
+                    self.show_agent_prompt_for_ticket(
+                        worktree_id,
+                        worktree_path,
+                        worktree_slug,
+                        ticket_id,
+                    );
                 }
             }
-        } else if let crate::state::WorkflowPickerTarget::WorkflowRun {
-            ref workflow_run_id,
-            ..
-        } = target
-        {
-            prefill.insert("workflow_run_id".to_string(), workflow_run_id.clone());
+            WorkflowPickerItem::Skip => {
+                // No-op — modal already dismissed
+            }
         }
-        self.show_workflow_inputs_or_run(target, def, prefill);
     }
 
     pub(super) fn handle_run_workflow(&mut self) {
@@ -684,7 +744,13 @@ impl App {
         use crate::state::WorkflowPickerTarget;
 
         match target {
-            WorkflowPickerTarget::Worktree {
+            WorkflowPickerTarget::PostCreate {
+                worktree_id,
+                worktree_path,
+                repo_path,
+                ..
+            }
+            | WorkflowPickerTarget::Worktree {
                 worktree_id,
                 worktree_path,
                 repo_path,
@@ -1131,7 +1197,10 @@ impl App {
                 pr_number: pr.number,
                 pr_title: pr.title.clone(),
             },
-            workflow_defs: pr_defs,
+            items: pr_defs
+                .into_iter()
+                .map(crate::state::WorkflowPickerItem::Workflow)
+                .collect(),
             selected: 0,
         };
     }

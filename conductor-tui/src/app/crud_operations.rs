@@ -4,8 +4,7 @@ use conductor_core::repo::{derive_local_path, RepoManager};
 
 use crate::action::Action;
 use crate::state::{
-    ConfirmAction, FormAction, FormField, FormFieldType, InputAction, Modal, PostCreateChoice,
-    RepoDetailFocus, View,
+    ConfirmAction, FormAction, FormField, FormFieldType, InputAction, Modal, RepoDetailFocus, View,
 };
 
 use super::helpers::derive_worktree_slug;
@@ -525,76 +524,6 @@ impl App {
             };
         } else {
             self.state.status_message = Some("Select a worktree first".to_string());
-        }
-    }
-
-    pub(super) fn handle_post_create_pick(&mut self, index: usize) {
-        // Resolve the selected index while borrowing the modal immutably
-        let actual_index = if let Modal::PostCreatePicker {
-            ref items,
-            selected,
-            ..
-        } = self.state.modal
-        {
-            let idx = if index == usize::MAX { selected } else { index };
-            if idx >= items.len() {
-                return;
-            }
-            idx
-        } else {
-            return;
-        };
-
-        // Take ownership of the modal to avoid cloning the entire items Vec
-        let modal = std::mem::replace(&mut self.state.modal, Modal::None);
-        let (items, worktree_id, worktree_path, worktree_slug, ticket_id, repo_path) =
-            if let Modal::PostCreatePicker {
-                items,
-                worktree_id,
-                worktree_path,
-                worktree_slug,
-                ticket_id,
-                repo_path,
-                ..
-            } = modal
-            {
-                (
-                    items,
-                    worktree_id,
-                    worktree_path,
-                    worktree_slug,
-                    ticket_id,
-                    repo_path,
-                )
-            } else {
-                unreachable!()
-            };
-
-        // Use into_iter to take ownership of the selected item without cloning
-        let choice = items.into_iter().nth(actual_index).unwrap();
-
-        match choice {
-            PostCreateChoice::StartAgent => {
-                self.show_agent_prompt_for_ticket(
-                    worktree_id,
-                    worktree_path,
-                    worktree_slug,
-                    ticket_id,
-                );
-            }
-            PostCreateChoice::RunWorkflow { def, .. } => {
-                let mut prefill = std::collections::HashMap::new();
-                prefill.insert("ticket_id".to_string(), ticket_id.clone());
-                let target = crate::state::WorkflowPickerTarget::Worktree {
-                    worktree_id,
-                    worktree_path,
-                    repo_path,
-                };
-                self.show_workflow_inputs_or_run(target, def, prefill);
-            }
-            PostCreateChoice::Skip => {
-                // No-op — modal already dismissed
-            }
         }
     }
 }

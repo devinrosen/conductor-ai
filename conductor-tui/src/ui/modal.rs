@@ -669,37 +669,13 @@ pub fn render_branch_picker(
     );
 }
 
-pub fn render_post_create_picker(
-    frame: &mut Frame,
-    area: Rect,
-    items: &[crate::state::PostCreateChoice],
-    selected: usize,
-    ticket_source_id: &str,
-    theme: &Theme,
-) {
-    let label_strings: Vec<String> = items.iter().map(|item| format!("{item}")).collect();
-    let labels: Vec<&str> = label_strings.iter().map(|s| s.as_str()).collect();
-    let subtitle = format!("Start work on #{ticket_source_id}?");
-    render_numbered_picker(
-        frame,
-        area,
-        &NumberedPickerConfig {
-            title: "Post-Create Actions",
-            subtitle: &subtitle,
-            labels: &labels,
-            selected,
-            hint: "1-9 select  Enter confirm  Esc skip",
-        },
-        theme,
-    );
-}
-
 pub fn render_workflow_picker(
     frame: &mut Frame,
     area: Rect,
     target: &crate::state::WorkflowPickerTarget,
-    workflow_defs: &[conductor_core::workflow::WorkflowDef],
+    items: &[crate::state::WorkflowPickerItem],
     selected: usize,
+    ticket_source_id: Option<&str>,
     theme: &Theme,
 ) {
     use crate::state::WorkflowPickerTarget;
@@ -742,9 +718,16 @@ pub fn render_workflow_picker(
                 format!("  {workflow_name} ({short_id}…)"),
             )
         }
+        WorkflowPickerTarget::PostCreate { .. } => {
+            let sid = ticket_source_id.unwrap_or("?");
+            (
+                " Post-Create Actions ".to_string(),
+                format!("  Start work on #{sid}?"),
+            )
+        }
     };
 
-    let height = (workflow_defs.len() as u16 + 7).min(25);
+    let height = (items.len() as u16 + 7).min(25);
     let percent_y = ((height as f32 / area.height as f32) * 100.0) as u16;
     let popup = centered_rect(60, percent_y.max(25), area);
     frame.render_widget(Clear, popup);
@@ -758,9 +741,14 @@ pub fn render_workflow_picker(
         Line::from(""),
     ];
 
-    for (i, def) in workflow_defs.iter().enumerate() {
+    for (i, item) in items.iter().enumerate() {
         let is_selected = i == selected;
         let prefix = if is_selected { "▸ " } else { "  " };
+        let num = if i < 9 {
+            format!("{} ", i + 1)
+        } else {
+            "  ".to_string()
+        };
 
         let style = if is_selected {
             Style::default()
@@ -770,13 +758,15 @@ pub fn render_workflow_picker(
             Style::default().fg(theme.label_primary)
         };
 
+        let name = item.name();
+        let description = item.description();
         let mut row = vec![
-            Span::styled(format!("  {prefix}"), style),
-            Span::styled(&def.name, style),
+            Span::styled(format!("  {prefix}{num}"), style),
+            Span::styled(name, style),
         ];
-        if !def.description.is_empty() {
+        if !description.is_empty() {
             row.push(Span::styled(
-                format!("  — {}", def.description),
+                format!("  — {description}"),
                 Style::default().fg(theme.label_secondary),
             ));
         }
@@ -785,7 +775,7 @@ pub fn render_workflow_picker(
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  Enter confirm  Esc cancel",
+        "  1-9 select  Enter confirm  Esc cancel",
         Style::default().fg(theme.label_secondary),
     )));
 

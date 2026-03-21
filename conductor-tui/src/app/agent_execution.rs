@@ -6,7 +6,7 @@ use conductor_core::tickets::build_agent_prompt;
 use conductor_core::worktree::WorktreeManager;
 
 use crate::action::Action;
-use crate::state::{InputAction, Modal, PostCreateChoice};
+use crate::state::{InputAction, Modal, WorkflowPickerItem};
 
 use super::App;
 
@@ -464,14 +464,11 @@ impl App {
                 }
             };
 
-            let mut items = vec![PostCreateChoice::StartAgent];
+            let mut items = vec![WorkflowPickerItem::StartAgent];
             for def in manual_defs {
-                items.push(PostCreateChoice::RunWorkflow {
-                    name: def.name.clone(),
-                    def,
-                });
+                items.push(WorkflowPickerItem::Workflow(def));
             }
-            items.push(PostCreateChoice::Skip);
+            items.push(WorkflowPickerItem::Skip);
 
             if let Some(ref tx) = bg_tx {
                 let _ = tx.send(Action::PostCreatePickerReady {

@@ -630,20 +630,28 @@ pub mod workflow_run_info_row {
     pub const COUNT: usize = 8;
 }
 
-/// Choice offered in the post-worktree-creation picker.
+/// One selectable item in the unified workflow picker.
 #[derive(Clone, Debug)]
-pub enum PostCreateChoice {
+pub enum WorkflowPickerItem {
+    Workflow(WorkflowDef),
     StartAgent,
-    RunWorkflow { name: String, def: WorkflowDef },
     Skip,
 }
 
-impl std::fmt::Display for PostCreateChoice {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl WorkflowPickerItem {
+    pub fn name(&self) -> &str {
         match self {
-            PostCreateChoice::StartAgent => write!(f, "Start agent"),
-            PostCreateChoice::RunWorkflow { name, .. } => write!(f, "Run: {name}"),
-            PostCreateChoice::Skip => write!(f, "Skip"),
+            WorkflowPickerItem::Workflow(def) => &def.name,
+            WorkflowPickerItem::StartAgent => "Start agent",
+            WorkflowPickerItem::Skip => "Skip",
+        }
+    }
+
+    pub fn description(&self) -> &str {
+        match self {
+            WorkflowPickerItem::Workflow(def) => &def.description,
+            WorkflowPickerItem::StartAgent => "Launch an AI agent to work on this ticket",
+            WorkflowPickerItem::Skip => "Dismiss and do nothing",
         }
     }
 }
@@ -803,20 +811,10 @@ pub enum Modal {
         loading: bool,
         error: Option<String>,
     },
-    /// Post-worktree-creation picker: start agent, run a workflow, or skip.
-    PostCreatePicker {
-        items: Vec<PostCreateChoice>,
-        selected: usize,
-        worktree_id: String,
-        worktree_path: String,
-        worktree_slug: String,
-        ticket_id: String,
-        repo_path: String,
-    },
-    /// Generic workflow picker — opened by `w` key in any context.
+    /// Generic workflow picker — opened by `w` key or after worktree creation.
     WorkflowPicker {
         target: WorkflowPickerTarget,
-        workflow_defs: Vec<WorkflowDef>,
+        items: Vec<WorkflowPickerItem>,
         selected: usize,
     },
     /// Non-dismissable progress indicator shown while a background operation runs.
@@ -902,7 +900,6 @@ impl fmt::Debug for Modal {
             }
             Modal::BaseBranchPicker { .. } => write!(f, "Modal::BaseBranchPicker"),
             Modal::BranchPicker { .. } => write!(f, "Modal::BranchPicker"),
-            Modal::PostCreatePicker { .. } => write!(f, "Modal::PostCreatePicker"),
             Modal::WorkflowPicker { ref target, .. } => {
                 write!(f, "Modal::WorkflowPicker(target={target:?})")
             }
@@ -956,6 +953,13 @@ pub enum WorkflowPickerTarget {
         workflow_name: String,
         worktree_id: Option<String>,
         worktree_path: Option<String>,
+        repo_path: String,
+    },
+    PostCreate {
+        worktree_id: String,
+        worktree_path: String,
+        worktree_slug: String,
+        ticket_id: String,
         repo_path: String,
     },
 }

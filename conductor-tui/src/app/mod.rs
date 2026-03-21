@@ -398,7 +398,15 @@ impl App {
                 };
             }
             Action::SelectBranch(index) => self.handle_branch_pick(index),
-            Action::SelectPostCreateChoice(index) => self.handle_post_create_pick(index),
+            Action::SelectWorkflowItem(index) => {
+                if let Modal::WorkflowPicker {
+                    ref mut selected, ..
+                } = self.state.modal
+                {
+                    *selected = index;
+                }
+                self.handle_workflow_picker_confirm();
+            }
             Action::PostCreatePickerReady {
                 items,
                 worktree_id,
@@ -407,14 +415,16 @@ impl App {
                 ticket_id,
                 repo_path,
             } => {
-                self.state.modal = Modal::PostCreatePicker {
+                self.state.modal = Modal::WorkflowPicker {
+                    target: crate::state::WorkflowPickerTarget::PostCreate {
+                        worktree_id,
+                        worktree_path,
+                        worktree_slug,
+                        ticket_id,
+                        repo_path,
+                    },
                     items,
                     selected: 0,
-                    worktree_id,
-                    worktree_path,
-                    worktree_slug,
-                    ticket_id,
-                    repo_path,
                 };
             }
             Action::ManageIssueSources => self.handle_manage_issue_sources(),

@@ -312,11 +312,11 @@ pub enum Action {
     },
     SelectBranch(Option<usize>),
 
-    // Post-create picker (after worktree creation)
-    SelectPostCreateChoice(usize),
-    /// Background result: workflow defs loaded, ready to show post-create picker.
+    /// Select a workflow picker item by number-key shortcut (0-indexed).
+    SelectWorkflowItem(usize),
+    /// Background result: workflow items loaded, ready to show post-create workflow picker.
     PostCreatePickerReady {
-        items: Vec<crate::state::PostCreateChoice>,
+        items: Vec<crate::state::WorkflowPickerItem>,
         worktree_id: String,
         worktree_path: String,
         worktree_slug: String,

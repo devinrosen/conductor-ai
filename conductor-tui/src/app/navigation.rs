@@ -366,14 +366,6 @@ impl App {
                 wrap_decrement(selected, items.len());
                 return;
             }
-            Modal::PostCreatePicker {
-                ref items,
-                ref mut selected,
-                ..
-            } => {
-                wrap_decrement(selected, items.len());
-                return;
-            }
             Modal::IssueSourceManager {
                 ref sources,
                 ref mut selected,
@@ -383,11 +375,11 @@ impl App {
                 return;
             }
             Modal::WorkflowPicker {
-                ref workflow_defs,
+                ref items,
                 ref mut selected,
                 ..
             } => {
-                wrap_decrement(selected, workflow_defs.len());
+                wrap_decrement(selected, items.len());
                 return;
             }
             Modal::GithubDiscoverOrgs {
@@ -510,14 +502,6 @@ impl App {
                 wrap_increment(selected, items.len());
                 return;
             }
-            Modal::PostCreatePicker {
-                ref items,
-                ref mut selected,
-                ..
-            } => {
-                wrap_increment(selected, items.len());
-                return;
-            }
             Modal::IssueSourceManager {
                 ref sources,
                 ref mut selected,
@@ -527,11 +511,11 @@ impl App {
                 return;
             }
             Modal::WorkflowPicker {
-                ref workflow_defs,
+                ref items,
                 ref mut selected,
                 ..
             } => {
-                wrap_increment(selected, workflow_defs.len());
+                wrap_increment(selected, items.len());
                 return;
             }
             Modal::GithubDiscoverOrgs {

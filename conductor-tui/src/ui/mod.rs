@@ -113,20 +113,6 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         } => {
             modal::render_branch_picker(frame, area, items, tree_positions, *selected, &state.theme)
         }
-        Modal::PostCreatePicker {
-            items,
-            selected,
-            ticket_id,
-            ..
-        } => {
-            let source_id = state
-                .data
-                .ticket_map
-                .get(ticket_id)
-                .map(|t| t.source_id.as_str())
-                .unwrap_or("?");
-            modal::render_post_create_picker(frame, area, items, *selected, source_id, &state.theme)
-        }
         Modal::IssueSourceManager {
             repo_slug,
             sources,
@@ -219,16 +205,32 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         ),
         Modal::WorkflowPicker {
             target,
-            workflow_defs,
+            items,
             selected,
-        } => modal::render_workflow_picker(
-            frame,
-            area,
-            target,
-            workflow_defs,
-            *selected,
-            &state.theme,
-        ),
+        } => {
+            let ticket_source_id = if let crate::state::WorkflowPickerTarget::PostCreate {
+                ref ticket_id,
+                ..
+            } = target
+            {
+                state
+                    .data
+                    .ticket_map
+                    .get(ticket_id)
+                    .map(|t| t.source_id.as_str())
+            } else {
+                None
+            };
+            modal::render_workflow_picker(
+                frame,
+                area,
+                target,
+                items,
+                *selected,
+                ticket_source_id,
+                &state.theme,
+            )
+        }
         Modal::Progress { message } => modal::render_progress(frame, area, message, &state.theme),
         Modal::ThemePicker {
             themes,

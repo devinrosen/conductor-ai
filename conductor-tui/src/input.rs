@@ -231,23 +231,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
-        Modal::PostCreatePicker { ref items, .. } => {
-            return match key.code {
-                KeyCode::Esc => Action::DismissModal,
-                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
-                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
-                KeyCode::Enter => Action::SelectPostCreateChoice(usize::MAX),
-                KeyCode::Char(c) if c.is_ascii_digit() => {
-                    let n = c.to_digit(10).unwrap() as usize;
-                    if n >= 1 && n <= items.len() {
-                        Action::SelectPostCreateChoice(n - 1)
-                    } else {
-                        Action::None
-                    }
-                }
-                _ => Action::None,
-            };
-        }
         Modal::GateAction { .. } => {
             return match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Action::ApproveGate,
@@ -258,12 +241,20 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
-        Modal::WorkflowPicker { .. } => {
+        Modal::WorkflowPicker { ref items, .. } => {
             return match key.code {
                 KeyCode::Esc => Action::DismissModal,
                 KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
                 KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
                 KeyCode::Enter => Action::InputSubmit,
+                KeyCode::Char(c) if c.is_ascii_digit() => {
+                    let n = c.to_digit(10).unwrap() as usize;
+                    if n >= 1 && n <= items.len() {
+                        Action::SelectWorkflowItem(n - 1)
+                    } else {
+                        Action::None
+                    }
+                }
                 _ => Action::None,
             };
         }
@@ -602,16 +593,15 @@ mod tests {
         state
     }
 
-    // --- PostCreatePicker tests ---
+    // --- WorkflowPicker tests (post-create variant) ---
 
-    use crate::state::PostCreateChoice;
+    use crate::state::WorkflowPickerItem;
 
-    fn post_create_picker_state(item_count: usize) -> AppState {
-        let mut items = vec![PostCreateChoice::StartAgent];
+    fn workflow_picker_state(item_count: usize) -> AppState {
+        let mut items = vec![WorkflowPickerItem::StartAgent];
         for i in 0..item_count.saturating_sub(2) {
-            items.push(PostCreateChoice::RunWorkflow {
-                name: format!("workflow-{i}"),
-                def: conductor_core::workflow::WorkflowDef {
+            items.push(WorkflowPickerItem::Workflow(
+                conductor_core::workflow::WorkflowDef {
                     name: format!("workflow-{i}"),
                     description: String::new(),
                     trigger: conductor_core::workflow::WorkflowTrigger::Manual,
@@ -621,27 +611,29 @@ mod tests {
                     always: vec![],
                     source_path: String::new(),
                 },
-            });
+            ));
         }
         if item_count >= 2 {
-            items.push(PostCreateChoice::Skip);
+            items.push(WorkflowPickerItem::Skip);
         }
         let mut state = AppState::new();
-        state.modal = Modal::PostCreatePicker {
+        state.modal = Modal::WorkflowPicker {
+            target: crate::state::WorkflowPickerTarget::PostCreate {
+                worktree_id: "wt1".into(),
+                worktree_path: "/tmp/wt".into(),
+                worktree_slug: "wt-slug".into(),
+                repo_path: "/tmp/repo".into(),
+                ticket_id: String::new(),
+            },
             items,
             selected: 0,
-            worktree_id: "wt1".into(),
-            worktree_path: "/tmp/wt".into(),
-            worktree_slug: "wt-slug".into(),
-            repo_path: "/tmp/repo".into(),
-            ticket_id: String::new(),
         };
         state
     }
 
     #[test]
-    fn post_create_picker_esc_dismisses_modal() {
-        let state = post_create_picker_state(3);
+    fn workflow_picker_esc_dismisses_modal() {
+        let state = workflow_picker_state(3);
         assert!(matches!(
             map_key(key(KeyCode::Esc), &state),
             Action::DismissModal
@@ -649,8 +641,8 @@ mod tests {
     }
 
     #[test]
-    fn post_create_picker_up_down_navigation() {
-        let state = post_create_picker_state(3);
+    fn workflow_picker_up_down_navigation() {
+        let state = workflow_picker_state(3);
         assert!(matches!(map_key(key(KeyCode::Up), &state), Action::MoveUp));
         assert!(matches!(
             map_key(key(KeyCode::Down), &state),
@@ -667,30 +659,30 @@ mod tests {
     }
 
     #[test]
-    fn post_create_picker_enter_selects_with_sentinel() {
-        let state = post_create_picker_state(3);
+    fn workflow_picker_enter_submits() {
+        let state = workflow_picker_state(3);
         assert!(matches!(
             map_key(key(KeyCode::Enter), &state),
-            Action::SelectPostCreateChoice(usize::MAX)
+            Action::InputSubmit
         ));
     }
 
     #[test]
-    fn post_create_picker_valid_digit_selects_item() {
-        let state = post_create_picker_state(3); // items: [StartAgent, workflow-0, Skip]
+    fn workflow_picker_valid_digit_selects_item() {
+        let state = workflow_picker_state(3); // items: [StartAgent, workflow-0, Skip]
         assert!(matches!(
             map_key(key(KeyCode::Char('1')), &state),
-            Action::SelectPostCreateChoice(0)
+            Action::SelectWorkflowItem(0)
         ));
         assert!(matches!(
             map_key(key(KeyCode::Char('3')), &state),
-            Action::SelectPostCreateChoice(2)
+            Action::SelectWorkflowItem(2)
         ));
     }
 
     #[test]
-    fn post_create_picker_out_of_range_digit_is_none() {
-        let state = post_create_picker_state(3);
+    fn workflow_picker_out_of_range_digit_is_none() {
+        let state = workflow_picker_state(3);
         // '0' is out of range (valid is 1..=3)
         assert!(matches!(
             map_key(key(KeyCode::Char('0')), &state),
@@ -709,8 +701,8 @@ mod tests {
     }
 
     #[test]
-    fn post_create_picker_unhandled_key_is_none() {
-        let state = post_create_picker_state(3);
+    fn workflow_picker_unhandled_key_is_none() {
+        let state = workflow_picker_state(3);
         assert!(matches!(
             map_key(key(KeyCode::Char('x')), &state),
             Action::None
