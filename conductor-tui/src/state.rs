@@ -2515,6 +2515,81 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn workflow_run_detail_focus_next_with_agent() {
+        assert_eq!(
+            WorkflowRunDetailFocus::Info.next(true),
+            WorkflowRunDetailFocus::Steps
+        );
+        assert_eq!(
+            WorkflowRunDetailFocus::Steps.next(true),
+            WorkflowRunDetailFocus::AgentActivity
+        );
+        assert_eq!(
+            WorkflowRunDetailFocus::AgentActivity.next(true),
+            WorkflowRunDetailFocus::Info
+        );
+    }
+
+    #[test]
+    fn workflow_run_detail_focus_next_without_agent() {
+        assert_eq!(
+            WorkflowRunDetailFocus::Info.next(false),
+            WorkflowRunDetailFocus::Steps
+        );
+        assert_eq!(
+            WorkflowRunDetailFocus::Steps.next(false),
+            WorkflowRunDetailFocus::Info
+        );
+    }
+
+    #[test]
+    fn workflow_run_detail_focus_prev_with_agent() {
+        assert_eq!(
+            WorkflowRunDetailFocus::Info.prev(true),
+            WorkflowRunDetailFocus::AgentActivity
+        );
+        assert_eq!(
+            WorkflowRunDetailFocus::Steps.prev(true),
+            WorkflowRunDetailFocus::Info
+        );
+        assert_eq!(
+            WorkflowRunDetailFocus::AgentActivity.prev(true),
+            WorkflowRunDetailFocus::Steps
+        );
+    }
+
+    #[test]
+    fn workflow_run_detail_focus_prev_without_agent() {
+        assert_eq!(
+            WorkflowRunDetailFocus::Info.prev(false),
+            WorkflowRunDetailFocus::Steps
+        );
+        assert_eq!(
+            WorkflowRunDetailFocus::Steps.prev(false),
+            WorkflowRunDetailFocus::Info
+        );
+    }
+
+    #[test]
+    fn workflow_run_detail_focus_next_prev_are_inverses() {
+        for has_agent in [true, false] {
+            let variants: Vec<WorkflowRunDetailFocus> = if has_agent {
+                vec![
+                    WorkflowRunDetailFocus::Info,
+                    WorkflowRunDetailFocus::Steps,
+                    WorkflowRunDetailFocus::AgentActivity,
+                ]
+            } else {
+                vec![WorkflowRunDetailFocus::Info, WorkflowRunDetailFocus::Steps]
+            };
+            for focus in variants {
+                assert_eq!(focus.next(has_agent).prev(has_agent), focus);
+                assert_eq!(focus.prev(has_agent).next(has_agent), focus);
+            }
+        }
+    }
+
+    #[test]
     fn agent_activity_len_empty() {
         let cache = DataCache::default();
         assert_eq!(cache.agent_activity_len(), 0);

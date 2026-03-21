@@ -27,6 +27,7 @@ mod crud_operations;
 mod git_operations;
 mod github_discovery;
 mod helpers;
+mod info_pane;
 mod input_handling;
 mod modal_dialog;
 mod navigation;
