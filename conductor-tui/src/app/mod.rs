@@ -493,6 +493,7 @@ impl App {
             Action::WorktreeDetailOpen => self.handle_worktree_detail_open(),
             Action::RepoDetailInfoOpen => self.handle_repo_detail_info_open(),
             Action::RepoDetailInfoCopy => self.handle_repo_detail_info_copy(),
+            Action::WorkflowRunDetailCopy => self.handle_workflow_run_detail_copy(),
 
             // Agent (tmux-based)
             Action::LaunchAgent => self.handle_launch_agent(),

@@ -1221,7 +1221,7 @@ pub(super) fn render_runs(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_stateful_widget(list, area, &mut list_state);
 }
 
-/// Render the workflow run detail view: header + split pane (steps | agent activity).
+/// Render the workflow run detail view: info panel + split pane (steps | agent activity).
 pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     let run_info = state
         .selected_workflow_run_id
@@ -1257,19 +1257,29 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         })
         .unwrap_or_default();
 
-    // Header height: 3 base lines + optional worktree lines (branch + path) + optional ticket line + declared inputs + 1 border
-    let worktree_extra = if run_worktree.is_some() { 2 } else { 0 };
-    let ticket_extra = if run_ticket.is_some() { 1 } else { 0 };
-    let inputs_extra = matched_inputs.len();
-    let header_height = 3 + worktree_extra + ticket_extra + inputs_extra + 1;
+    // Info panel: 8 fixed rows + 2 border lines = 10
+    // Plus optional declared inputs rendered below the info panel
+    let info_height: u16 = 10;
+    let inputs_extra = matched_inputs.len() as u16;
+    let inputs_height = if inputs_extra > 0 {
+        inputs_extra + 2 // rows + top/bottom border
+    } else {
+        0
+    };
 
-    // Header area + body
+    // Layout: info panel + optional inputs + body
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(header_height as u16), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(info_height),
+            Constraint::Length(inputs_height),
+            Constraint::Min(0),
+        ])
         .split(area);
 
-    // Header
+    // Info panel (8 fixed rows)
+    let info_focused = state.workflow_run_detail_focus == WorkflowRunDetailFocus::Info;
+
     if let Some(run) = run_info {
         let (status_symbol, status_color) = status_display(&run.status.to_string(), &state.theme);
         let started_display = run
@@ -1278,123 +1288,160 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
             .unwrap_or(&run.started_at)
             .replace('T', " ");
         let summary_display = run.result_summary.as_deref().unwrap_or("—").to_string();
+        let run_id_short = if run.id.len() >= 8 {
+            &run.id[..8]
+        } else {
+            &run.id
+        };
 
-        let mut header_lines = vec![Line::from(vec![
-            Span::styled(
-                " Workflow: ",
-                Style::default().fg(state.theme.label_secondary),
-            ),
-            Span::styled(
-                run.workflow_name.clone(),
-                Style::default()
-                    .fg(state.theme.label_accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  "),
-            Span::styled(status_symbol, Style::default().fg(status_color)),
-        ])];
-
-        if let Some(wt) = run_worktree {
-            header_lines.push(Line::from(vec![
-                Span::styled(
-                    " Branch:   ",
-                    Style::default().fg(state.theme.label_secondary),
-                ),
-                Span::raw(wt.branch.clone()),
-            ]));
-            let display_path = match state.home_dir.as_deref() {
+        let branch_display = run_worktree
+            .map(|wt| wt.branch.clone())
+            .unwrap_or_else(|| "—".to_string());
+        let path_display = run_worktree
+            .map(|wt| match state.home_dir.as_deref() {
                 Some(home) => wt.path.replacen(home, "~", 1),
                 None => wt.path.clone(),
-            };
-            header_lines.push(Line::from(vec![
-                Span::styled(
-                    " Path:     ",
-                    Style::default().fg(state.theme.label_secondary),
-                ),
-                Span::raw(display_path),
-            ]));
-        }
+            })
+            .unwrap_or_else(|| "—".to_string());
+        let ticket_display = run_ticket
+            .map(|t| format!("#{} — {}", t.source_id, t.title))
+            .unwrap_or_else(|| "—".to_string());
 
-        if let Some(ticket) = run_ticket {
-            header_lines.push(Line::from(vec![
+        let label_style = Style::default().fg(state.theme.label_secondary);
+
+        let mut info_lines = vec![
+            // Row 0: Run ID
+            Line::from(vec![
+                Span::styled(" Run ID:   ", label_style),
                 Span::styled(
-                    " Ticket:   ",
-                    Style::default().fg(state.theme.label_secondary),
+                    run_id_short.to_string(),
+                    Style::default().fg(state.theme.label_accent),
                 ),
+            ]),
+            // Row 1: Workflow
+            Line::from(vec![
+                Span::styled(" Workflow: ", label_style),
                 Span::styled(
-                    format!("#{} — {}", ticket.source_id, ticket.title),
+                    run.workflow_name.clone(),
+                    Style::default()
+                        .fg(state.theme.label_accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            // Row 2: Status
+            Line::from(vec![
+                Span::styled(" Status:   ", label_style),
+                Span::styled(status_symbol, Style::default().fg(status_color)),
+                if run.dry_run {
+                    Span::styled(
+                        "  [dry-run]",
+                        Style::default().fg(state.theme.label_warning),
+                    )
+                } else {
+                    Span::raw("")
+                },
+            ]),
+            // Row 3: Branch
+            Line::from(vec![
+                Span::styled(" Branch:   ", label_style),
+                Span::raw(branch_display),
+            ]),
+            // Row 4: Path
+            Line::from(vec![
+                Span::styled(" Path:     ", label_style),
+                Span::raw(path_display),
+            ]),
+            // Row 5: Ticket
+            Line::from(vec![
+                Span::styled(" Ticket:   ", label_style),
+                Span::styled(
+                    ticket_display,
                     Style::default().fg(state.theme.group_header),
                 ),
-            ]));
-        }
-
-        for (decl, val) in &matched_inputs {
-            // Right-pad label to 11 chars total (matching " Branch:   ")
-            // Name is capped at 9 chars (1 space prefix + name + ": " = 11)
-            let name_display = if decl.name.chars().count() > 9 {
-                let truncated: String = decl.name.chars().take(8).collect();
-                format!("{truncated}…")
+            ]),
+            // Row 6: Started
+            Line::from(vec![
+                Span::styled(" Started:  ", label_style),
+                Span::raw(started_display),
+            ]),
+            // Row 7: Summary
+            if run.status == WorkflowRunStatus::Failed {
+                Line::from(vec![
+                    Span::styled(" Error:    ", Style::default().fg(state.theme.label_error)),
+                    Span::styled(
+                        summary_display,
+                        Style::default().fg(state.theme.label_error),
+                    ),
+                ])
             } else {
-                decl.name.clone()
-            };
-            let label = format!(" {name_display}: ");
-            let padded_label = format!("{label:<11}");
-            let value_display = match decl.input_type {
-                InputType::Boolean => {
-                    if *val == "true" {
-                        "[x]".to_string()
-                    } else {
-                        "[ ]".to_string()
-                    }
-                }
-                InputType::String => truncate(val, area.width.saturating_sub(12) as usize),
-            };
-            header_lines.push(Line::from(vec![
-                Span::styled(
-                    padded_label,
-                    Style::default().fg(state.theme.label_secondary),
-                ),
-                Span::raw(value_display),
-            ]));
-        }
-
-        header_lines.push(Line::from(vec![
-            Span::styled(
-                " Started:  ",
-                Style::default().fg(state.theme.label_secondary),
-            ),
-            Span::raw(started_display),
-            if run.dry_run {
-                Span::styled(
-                    "  [dry-run]",
-                    Style::default().fg(state.theme.label_warning),
-                )
-            } else {
-                Span::raw("")
+                Line::from(vec![
+                    Span::styled(" Summary:  ", label_style),
+                    Span::raw(summary_display),
+                ])
             },
-        ]));
-        if run.status == WorkflowRunStatus::Failed {
-            header_lines.push(Line::from(vec![
-                Span::styled(" Error:    ", Style::default().fg(state.theme.label_error)),
-                Span::styled(
-                    summary_display,
-                    Style::default().fg(state.theme.label_error),
-                ),
-            ]));
-        } else {
-            header_lines.push(Line::from(vec![
-                Span::styled(
-                    " Summary:  ",
-                    Style::default().fg(state.theme.label_secondary),
-                ),
-                Span::raw(summary_display),
-            ]));
+        ];
+
+        // Apply selection highlight when Info pane is focused
+        if info_focused {
+            let row = state.workflow_run_info_row;
+            if let Some(line) = info_lines.get_mut(row) {
+                *line =
+                    std::mem::take(line).style(Style::default().add_modifier(Modifier::REVERSED));
+            }
         }
 
-        let header_block = Block::default()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(state.theme.border_inactive));
-        frame.render_widget(Paragraph::new(header_lines).block(header_block), chunks[0]);
+        let info_border_color = if info_focused {
+            state.theme.border_focused
+        } else {
+            state.theme.border_inactive
+        };
+        let info_title = if info_focused {
+            " Info (y=copy, Tab=switch) "
+        } else {
+            " Info "
+        };
+        let info_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(info_border_color))
+            .title(info_title);
+        frame.render_widget(Paragraph::new(info_lines).block(info_block), chunks[0]);
+
+        // Declared inputs (non-selectable, below info panel)
+        if !matched_inputs.is_empty() {
+            let mut input_lines: Vec<Line> = Vec::new();
+            for (decl, val) in &matched_inputs {
+                let name_display = if decl.name.chars().count() > 9 {
+                    let truncated: String = decl.name.chars().take(8).collect();
+                    format!("{truncated}…")
+                } else {
+                    decl.name.clone()
+                };
+                let label = format!(" {name_display}: ");
+                let padded_label = format!("{label:<11}");
+                let value_display = match decl.input_type {
+                    InputType::Boolean => {
+                        if *val == "true" {
+                            "[x]".to_string()
+                        } else {
+                            "[ ]".to_string()
+                        }
+                    }
+                    InputType::String => truncate(val, area.width.saturating_sub(12) as usize),
+                };
+                input_lines.push(Line::from(vec![
+                    Span::styled(
+                        padded_label,
+                        Style::default().fg(state.theme.label_secondary),
+                    ),
+                    Span::raw(value_display),
+                ]));
+            }
+            let inputs_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(state.theme.border_inactive))
+                .title(" Inputs ");
+            frame.render_widget(Paragraph::new(input_lines).block(inputs_block), chunks[1]);
+        }
     }
 
     // Determine if the selected step has agent activity to show
@@ -1408,7 +1455,7 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         let body_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-            .split(chunks[1]);
+            .split(chunks[2]);
 
         let focus = state.workflow_run_detail_focus;
         render_step_list(frame, body_chunks[0], state, focus);
@@ -1416,7 +1463,7 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     } else {
         // Full-width step list when no agent activity to show —
         // force Steps focus since agent pane is hidden.
-        render_step_list(frame, chunks[1], state, WorkflowRunDetailFocus::Steps);
+        render_step_list(frame, chunks[2], state, WorkflowRunDetailFocus::Steps);
     }
 }
 

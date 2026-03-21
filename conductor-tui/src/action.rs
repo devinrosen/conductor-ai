@@ -183,6 +183,8 @@ pub enum Action {
     RepoDetailInfoOpen,
     /// Copy the value of the selected row in the RepoDetail info pane.
     RepoDetailInfoCopy,
+    /// Copy the value of the selected row in the WorkflowRunDetail info pane.
+    WorkflowRunDetailCopy,
     ScrollLeft,
     ScrollRight,
 

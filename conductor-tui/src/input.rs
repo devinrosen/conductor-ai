@@ -1,7 +1,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::action::Action;
-use crate::state::{AppState, ColumnFocus, Modal, View, WorktreeDetailFocus};
+use crate::state::{
+    AppState, ColumnFocus, Modal, View, WorkflowRunDetailFocus, WorktreeDetailFocus,
+};
 
 /// Map a key event to an action based on the current app state.
 /// Priority: Modal > Filter > Normal keybindings.
@@ -440,6 +442,15 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
     // View-specific keybindings (WorkflowRunDetail)
     if state.view == View::WorkflowRunDetail {
+        // Info-pane-specific keys (j/k/y only when Info is focused)
+        if state.workflow_run_detail_focus == WorkflowRunDetailFocus::Info {
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => return Action::MoveDown,
+                KeyCode::Char('k') | KeyCode::Up => return Action::MoveUp,
+                KeyCode::Char('y') => return Action::WorkflowRunDetailCopy,
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Char('x') => return Action::CancelWorkflow,
             KeyCode::Char('r') => return Action::ResumeWorkflow,

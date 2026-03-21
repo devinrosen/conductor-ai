@@ -1,8 +1,9 @@
 use ratatui::widgets::ListState;
 
 use crate::state::{
-    info_row, repo_info_row, DashboardRow, FormField, Modal, RepoDetailFocus, View,
-    WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowsFocus, WorktreeDetailFocus,
+    info_row, repo_info_row, workflow_run_info_row, DashboardRow, FormField, Modal,
+    RepoDetailFocus, View, WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowsFocus,
+    WorktreeDetailFocus,
 };
 
 use super::helpers::{clamp_increment, max_scroll, wrap_decrement, wrap_increment};
@@ -108,7 +109,7 @@ impl App {
                     self.state.repo_detail_focus = self.state.repo_detail_focus.next();
                 }
                 View::WorkflowRunDetail => {
-                    self.toggle_workflow_run_detail_focus();
+                    self.next_workflow_run_detail_focus();
                 }
                 View::WorktreeDetail => {
                     self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
@@ -138,7 +139,7 @@ impl App {
                     self.state.repo_detail_focus = self.state.repo_detail_focus.prev();
                 }
                 View::WorkflowRunDetail => {
-                    self.toggle_workflow_run_detail_focus();
+                    self.prev_workflow_run_detail_focus();
                 }
                 View::WorktreeDetail => {
                     self.state.worktree_detail_focus = self.state.worktree_detail_focus.toggle();
@@ -148,12 +149,18 @@ impl App {
         }
     }
 
-    /// Toggle focus between Steps and Agent Activity panes, but only if the
-    /// selected step has agent activity to show.
-    pub(super) fn toggle_workflow_run_detail_focus(&mut self) {
-        if self.state.selected_step_has_agent() {
-            self.state.workflow_run_detail_focus = self.state.workflow_run_detail_focus.toggle();
-        }
+    /// Cycle focus forward: Info → Steps → AgentActivity → Info.
+    /// AgentActivity is skipped when the selected step has no agent.
+    pub(super) fn next_workflow_run_detail_focus(&mut self) {
+        let has_agent = self.state.selected_step_has_agent();
+        self.state.workflow_run_detail_focus = self.state.workflow_run_detail_focus.next(has_agent);
+    }
+
+    /// Cycle focus backward: Info ← Steps ← AgentActivity ← Info.
+    /// AgentActivity is skipped when the selected step has no agent.
+    pub(super) fn prev_workflow_run_detail_focus(&mut self) {
+        let has_agent = self.state.selected_step_has_agent();
+        self.state.workflow_run_detail_focus = self.state.workflow_run_detail_focus.prev(has_agent);
     }
 
     pub(super) fn workflow_column_move_up(&mut self) {
@@ -441,6 +448,10 @@ impl App {
                 }
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
+                WorkflowRunDetailFocus::Info => {
+                    self.state.workflow_run_info_row =
+                        self.state.workflow_run_info_row.saturating_sub(1);
+                }
                 WorkflowRunDetailFocus::Steps => {
                     let old = self.state.workflow_step_index;
                     self.state.workflow_step_index = old.saturating_sub(1);
@@ -591,6 +602,12 @@ impl App {
                 }
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
+                WorkflowRunDetailFocus::Info => {
+                    clamp_increment(
+                        &mut self.state.workflow_run_info_row,
+                        workflow_run_info_row::COUNT,
+                    );
+                }
                 WorkflowRunDetailFocus::Steps => {
                     let old = self.state.workflow_step_index;
                     clamp_increment(

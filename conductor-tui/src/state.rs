@@ -508,14 +508,40 @@ impl WorkflowsFocus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkflowRunDetailFocus {
+    Info,
     Steps,
     AgentActivity,
 }
 
 impl WorkflowRunDetailFocus {
-    pub fn toggle(self) -> Self {
+    /// Cycle forward: Info → Steps → AgentActivity → Info.
+    /// Skips AgentActivity when `has_agent` is false.
+    pub fn next(self, has_agent: bool) -> Self {
         match self {
-            Self::Steps => Self::AgentActivity,
+            Self::Info => Self::Steps,
+            Self::Steps => {
+                if has_agent {
+                    Self::AgentActivity
+                } else {
+                    Self::Info
+                }
+            }
+            Self::AgentActivity => Self::Info,
+        }
+    }
+
+    /// Cycle backward: Info ← Steps ← AgentActivity ← Info.
+    /// Skips AgentActivity when `has_agent` is false.
+    pub fn prev(self, has_agent: bool) -> Self {
+        match self {
+            Self::Info => {
+                if has_agent {
+                    Self::AgentActivity
+                } else {
+                    Self::Steps
+                }
+            }
+            Self::Steps => Self::Info,
             Self::AgentActivity => Self::Steps,
         }
     }
@@ -586,6 +612,22 @@ pub mod repo_info_row {
     pub const AGENT_ISSUES: usize = 6;
     /// Total number of navigable rows (used for bounds clamping).
     pub const COUNT: usize = 7;
+}
+
+/// Named row indices for the WorkflowRunDetail info panel.
+/// These constants must stay in sync with the row order rendered in
+/// `ui/workflows.rs::render_run_detail()`.
+pub mod workflow_run_info_row {
+    pub const RUN_ID: usize = 0;
+    pub const WORKFLOW: usize = 1;
+    pub const STATUS: usize = 2;
+    pub const BRANCH: usize = 3;
+    pub const PATH: usize = 4;
+    pub const TICKET: usize = 5;
+    pub const STARTED: usize = 6;
+    pub const SUMMARY: usize = 7;
+    /// Total number of navigable rows (used for bounds clamping).
+    pub const COUNT: usize = 8;
 }
 
 /// Choice offered in the post-worktree-creation picker.
@@ -1316,6 +1358,8 @@ pub struct AppState {
     pub workflow_run_index: usize,
     pub workflow_step_index: usize,
     pub workflow_run_detail_focus: WorkflowRunDetailFocus,
+    /// Selected row index in the WorkflowRunDetail info panel (for j/k navigation and y copy).
+    pub workflow_run_info_row: usize,
     pub step_agent_event_index: usize,
     /// Currently selected workflow run ID (for detail view)
     pub selected_workflow_run_id: Option<String>,
@@ -1711,6 +1755,7 @@ impl AppState {
             workflow_run_index: 0,
             workflow_step_index: 0,
             workflow_run_detail_focus: WorkflowRunDetailFocus::Steps,
+            workflow_run_info_row: 0,
             step_agent_event_index: 0,
             selected_workflow_run_id: None,
             collapsed_workflow_run_ids: HashSet::new(),
@@ -1864,6 +1909,9 @@ impl AppState {
                 (idx, self.data.agent_activity_len())
             }
             View::WorkflowRunDetail => match self.workflow_run_detail_focus {
+                WorkflowRunDetailFocus::Info => {
+                    (self.workflow_run_info_row, workflow_run_info_row::COUNT)
+                }
                 WorkflowRunDetailFocus::Steps => {
                     (self.workflow_step_index, self.data.workflow_steps.len())
                 }
@@ -1899,6 +1947,7 @@ impl AppState {
                 self.agent_list_state.borrow_mut().select(Some(index));
             }
             View::WorkflowRunDetail => match self.workflow_run_detail_focus {
+                WorkflowRunDetailFocus::Info => self.workflow_run_info_row = index,
                 WorkflowRunDetailFocus::Steps => self.workflow_step_index = index,
                 WorkflowRunDetailFocus::AgentActivity => self.step_agent_event_index = index,
             },

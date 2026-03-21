@@ -210,6 +210,73 @@ impl App {
         };
         self.copy_text_to_clipboard(text);
     }
+
+    pub(super) fn handle_workflow_run_detail_copy(&mut self) {
+        use crate::state::workflow_run_info_row;
+
+        let row = self.state.workflow_run_info_row;
+        let run = self
+            .state
+            .selected_workflow_run_id
+            .as_ref()
+            .and_then(|id| self.state.data.workflow_runs.iter().find(|r| &r.id == id));
+        let Some(run) = run.cloned() else { return };
+
+        let worktree = run
+            .worktree_id
+            .as_ref()
+            .and_then(|wid| self.state.data.worktrees.iter().find(|wt| &wt.id == wid));
+        let ticket = worktree.and_then(|wt| {
+            wt.ticket_id
+                .as_ref()
+                .and_then(|tid| self.state.data.ticket_map.get(tid))
+        });
+
+        let text = match row {
+            workflow_run_info_row::RUN_ID => run.id.clone(),
+            workflow_run_info_row::WORKFLOW => run.workflow_name.clone(),
+            workflow_run_info_row::STATUS => run.status.to_string(),
+            workflow_run_info_row::BRANCH => {
+                if let Some(wt) = worktree {
+                    wt.branch.clone()
+                } else {
+                    self.state.status_message = Some("No branch".to_string());
+                    return;
+                }
+            }
+            workflow_run_info_row::PATH => {
+                if let Some(wt) = worktree {
+                    wt.path.clone()
+                } else {
+                    self.state.status_message = Some("No path".to_string());
+                    return;
+                }
+            }
+            workflow_run_info_row::TICKET => {
+                if let Some(t) = ticket {
+                    if t.url.is_empty() {
+                        t.source_id.clone()
+                    } else {
+                        t.url.clone()
+                    }
+                } else {
+                    self.state.status_message = Some("No ticket".to_string());
+                    return;
+                }
+            }
+            workflow_run_info_row::STARTED => run.started_at.clone(),
+            workflow_run_info_row::SUMMARY => {
+                if let Some(ref s) = run.result_summary {
+                    s.clone()
+                } else {
+                    self.state.status_message = Some("No summary".to_string());
+                    return;
+                }
+            }
+            _ => return,
+        };
+        self.copy_text_to_clipboard(text);
+    }
 }
 
 /// Extract the last fenced code block (```...```) from a reader (line-by-line streaming).
