@@ -406,21 +406,21 @@ impl App {
                     .filter(|d| d.targets.iter().any(|t| t == "workflow_run"))
                     .collect()
             }
-            WorkflowPickerTarget::PostCreate { repo_path, .. } => {
-                conductor_core::workflow::WorkflowManager::list_defs("", repo_path)
-                    .unwrap_or_default()
-                    .0
-                    .into_iter()
-                    .filter(|d| d.targets.iter().any(|t| t == "worktree"))
-                    .collect()
+            // PostCreate targets are handled via PostCreatePickerReady, never
+            // through handle_pick_workflow(), so this arm is unreachable.
+            WorkflowPickerTarget::PostCreate { .. } => {
+                unreachable!("PostCreate targets bypass handle_pick_workflow")
             }
         };
 
         if defs.is_empty() {
             let kind = match &target {
                 WorkflowPickerTarget::Pr { .. } => "PR",
-                WorkflowPickerTarget::Worktree { .. } | WorkflowPickerTarget::PostCreate { .. } => {
-                    "worktree"
+                WorkflowPickerTarget::Worktree { .. } => "worktree",
+                // PostCreate is unreachable here (see above), but match
+                // exhaustively to satisfy the compiler.
+                WorkflowPickerTarget::PostCreate { .. } => {
+                    unreachable!("PostCreate targets bypass handle_pick_workflow")
                 }
                 WorkflowPickerTarget::Ticket { .. } => "ticket",
                 WorkflowPickerTarget::Repo { .. } => "repo",
@@ -496,23 +496,7 @@ impl App {
                     }
                     _ => {}
                 }
-                // For PostCreate, re-wrap the target as Worktree for execution
-                let exec_target = if let WorkflowPickerTarget::PostCreate {
-                    worktree_id,
-                    worktree_path,
-                    repo_path,
-                    ..
-                } = target
-                {
-                    WorkflowPickerTarget::Worktree {
-                        worktree_id,
-                        worktree_path,
-                        repo_path,
-                    }
-                } else {
-                    target
-                };
-                self.show_workflow_inputs_or_run(exec_target, def, prefill);
+                self.show_workflow_inputs_or_run(target, def, prefill);
             }
             WorkflowPickerItem::StartAgent => {
                 if let WorkflowPickerTarget::PostCreate {
@@ -693,18 +677,24 @@ impl App {
         use crate::state::WorkflowPickerTarget;
 
         // Active-run check must happen before showing the model picker
-        if let WorkflowPickerTarget::Worktree {
-            ref worktree_id, ..
-        } = target
-        {
-            if self.active_run_blocks_dispatch(worktree_id) {
-                return;
+        match &target {
+            WorkflowPickerTarget::Worktree {
+                ref worktree_id, ..
             }
+            | WorkflowPickerTarget::PostCreate {
+                ref worktree_id, ..
+            } => {
+                if self.active_run_blocks_dispatch(worktree_id) {
+                    return;
+                }
+            }
+            _ => {}
         }
 
         // Resolve the effective model from the per-worktree → per-repo → global config chain
         let (effective_default, effective_source) = match &target {
-            WorkflowPickerTarget::Worktree { worktree_id, .. } => {
+            WorkflowPickerTarget::Worktree { worktree_id, .. }
+            | WorkflowPickerTarget::PostCreate { worktree_id, .. } => {
                 self.resolve_model_for_worktree(worktree_id)
             }
             _ => match self.config.general.model.clone() {

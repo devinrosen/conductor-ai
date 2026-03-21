@@ -630,11 +630,18 @@ pub mod workflow_run_info_row {
     pub const COUNT: usize = 8;
 }
 
-/// One selectable item in the unified workflow picker.
+/// One selectable item in the workflow picker modal.
+///
+/// `Workflow` is used in all picker contexts.  `StartAgent` and `Skip` are
+/// extras appended only by the **post-create** flow (after a worktree is
+/// created with a linked ticket) so the user can launch an agent or dismiss
+/// instead of choosing a workflow.
 #[derive(Clone, Debug)]
 pub enum WorkflowPickerItem {
     Workflow(WorkflowDef),
+    /// Post-create only: launch an AI agent on the new worktree.
     StartAgent,
+    /// Post-create only: dismiss without running anything.
     Skip,
 }
 
