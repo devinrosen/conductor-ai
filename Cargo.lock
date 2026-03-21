@@ -748,6 +748,7 @@ dependencies = [
  "axum",
  "conductor-core",
  "conductor-web",
+ "http",
  "rusqlite",
  "serde",
  "serde_json",

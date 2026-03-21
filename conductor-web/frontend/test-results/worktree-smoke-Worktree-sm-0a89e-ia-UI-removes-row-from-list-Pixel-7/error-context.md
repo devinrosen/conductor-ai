@@ -1,0 +1,50 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - heading "Conductor" [level=1] [ref=e6]
+      - button "Close menu" [ref=e7]: ✕
+    - navigation [ref=e8]:
+      - link "Activity" [ref=e9] [cursor=pointer]:
+        - /url: /
+      - link "Repos" [ref=e10] [cursor=pointer]:
+        - /url: /repos
+      - link "Workflows" [ref=e11] [cursor=pointer]:
+        - /url: /workflows
+      - link "Tickets" [ref=e12] [cursor=pointer]:
+        - /url: /tickets
+      - generic [ref=e13]: Repos
+      - link "e2e-repo-1774135341436-adde65" [ref=e14] [cursor=pointer]:
+        - /url: /repos/01KM9B9WNM1X71AT021WMMJJFG
+      - link "e2e-repo-1774135367375-402aa3" [ref=e15] [cursor=pointer]:
+        - /url: /repos/01KM9BAP06M9BPKMDM1S212F34
+    - generic [ref=e16]:
+      - link "Settings" [ref=e17] [cursor=pointer]:
+        - /url: /settings
+      - generic [ref=e18]: Press ? for shortcuts
+  - main [ref=e19]:
+    - generic [ref=e20]:
+      - button "Open menu" [ref=e21]: ☰
+      - generic [ref=e22]: Conductor
+      - button "Notifications" [ref=e25]:
+        - img [ref=e26]
+    - generic [ref=e29]:
+      - paragraph [ref=e30]: Repo not found
+      - link "Back to dashboard" [ref=e31] [cursor=pointer]:
+        - /url: /
+  - generic [ref=e32]:
+    - link "Activity" [ref=e33] [cursor=pointer]:
+      - /url: /
+      - img [ref=e34]
+      - text: Activity
+    - link "Repos" [ref=e36] [cursor=pointer]:
+      - /url: /repos
+      - img [ref=e37]
+      - text: Repos
+    - link "Workflows" [ref=e39] [cursor=pointer]:
+      - /url: /workflows
+      - img [ref=e40]
+      - text: Workflows
+```

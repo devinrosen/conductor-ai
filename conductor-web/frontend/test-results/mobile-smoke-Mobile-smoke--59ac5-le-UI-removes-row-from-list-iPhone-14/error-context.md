@@ -1,0 +1,94 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - heading "Conductor" [level=1] [ref=e6]
+      - button "Close menu" [ref=e7]: ✕
+    - navigation [ref=e8]:
+      - link "Activity" [ref=e9]:
+        - /url: /
+      - link "Repos" [ref=e10]:
+        - /url: /repos
+      - link "Workflows" [ref=e11]:
+        - /url: /workflows
+      - link "Tickets" [ref=e12]:
+        - /url: /tickets
+      - generic [ref=e13]: Repos
+      - generic [ref=e14]: Loading...
+      - link "e2e-repo-1774135339566-ba0118" [ref=e15]:
+        - /url: /repos/01KM9B9TV6B8QGH6WA1M1D7CVJ
+      - link "e2e-repo-1774135341436-adde65" [ref=e16]:
+        - /url: /repos/01KM9B9WNM1X71AT021WMMJJFG
+      - link "e2e-repo-1774135356090-4142ff" [ref=e17]:
+        - /url: /repos/01KM9BAAZHE9ZFVKNBP11TG0KJ
+      - link "e2e-repo-1774135358102-80aa4f" [ref=e18]:
+        - /url: /repos/01KM9BACYCH5EX9RHPXK9C6HXB
+      - link "e2e-repo-1774135359191-c23eaa" [ref=e19]:
+        - /url: /repos/01KM9BAE0ECMD66QXPDADKX4ZA
+    - generic [ref=e20]:
+      - link "Settings" [ref=e21]:
+        - /url: /settings
+      - generic [ref=e22]: Press ? for shortcuts
+  - main [ref=e23]:
+    - generic [ref=e24]:
+      - button "Open menu" [ref=e25]: ☰
+      - generic [ref=e26]: Conductor
+      - button "Notifications" [ref=e29]:
+        - img [ref=e30]
+    - generic [ref=e33]:
+      - generic [ref=e34]:
+        - generic [ref=e35]:
+          - heading "e2e-repo-1774135356090-4142ff" [level=2] [ref=e36]
+          - button "Delete Repo" [ref=e37]
+        - generic [ref=e38]:
+          - term [ref=e39]: Remote
+          - definition [ref=e40]: file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-OxCrSJ
+          - term [ref=e41]: Local Path
+          - definition [ref=e42]: /var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-OxCrSJ
+          - term [ref=e43]: Default Branch
+          - definition [ref=e44]: main
+          - term [ref=e45]: Model
+          - definition [ref=e46]:
+            - generic [ref=e47]:
+              - generic [ref=e48]: Not set
+              - button "Edit" [ref=e49]
+          - term [ref=e50]: Agent Issue Creation
+          - definition [ref=e51]:
+            - button "Disabled" [ref=e52]
+      - generic [ref=e53]:
+        - generic [ref=e54]:
+          - generic [ref=e55]:
+            - heading "Issue Sources" [level=3] [ref=e56]
+            - paragraph [ref=e57]: Configure where tickets are synced from for this repo.
+          - button "Add Source" [ref=e58]
+        - generic [ref=e59]: No issue sources configured
+      - generic [ref=e60]:
+        - generic [ref=e61]:
+          - heading "Worktrees" [level=3] [ref=e62]
+          - generic [ref=e63]:
+            - button "Show completed" [ref=e64]
+            - button "Create Worktree" [ref=e65]
+        - generic [ref=e66]: No worktrees yet
+      - generic [ref=e67]:
+        - generic [ref=e68]:
+          - heading "Tickets" [level=3] [ref=e69]
+          - generic [ref=e70]:
+            - button "Show closed" [ref=e71]
+            - button "Sync Tickets" [ref=e72]
+        - generic [ref=e73]: No tickets synced yet
+  - generic [ref=e74]:
+    - link "Activity" [ref=e75]:
+      - /url: /
+      - img [ref=e76]
+      - text: Activity
+    - link "Repos" [ref=e78]:
+      - /url: /repos
+      - img [ref=e79]
+      - text: Repos
+    - link "Workflows" [ref=e81]:
+      - /url: /workflows
+      - img [ref=e82]
+      - text: Workflows
+```

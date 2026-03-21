@@ -1,0 +1,50 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - heading "Conductor" [level=1] [ref=e6]
+      - button "Close menu" [ref=e7]: ✕
+    - navigation [ref=e8]:
+      - link "Activity" [ref=e9] [cursor=pointer]:
+        - /url: /
+      - link "Repos" [ref=e10] [cursor=pointer]:
+        - /url: /repos
+      - link "Workflows" [ref=e11] [cursor=pointer]:
+        - /url: /workflows
+      - link "Tickets" [ref=e12] [cursor=pointer]:
+        - /url: /tickets
+      - generic [ref=e13]: Repos
+      - generic [ref=e14]: No repos yet
+    - generic [ref=e15]:
+      - link "Settings" [ref=e16] [cursor=pointer]:
+        - /url: /settings
+      - generic [ref=e17]: Press ? for shortcuts
+  - main [ref=e18]:
+    - generic [ref=e19]:
+      - button "Open menu" [ref=e20]: ☰
+      - generic [ref=e21]: Conductor
+      - button "Notifications" [ref=e24]:
+        - img [ref=e25]
+    - generic [ref=e28]:
+      - generic [ref=e29]:
+        - heading "Repos" [level=2] [ref=e30]
+        - generic [ref=e31]:
+          - button "Discover from GitHub" [ref=e32]
+          - button "Register Repo" [ref=e33]
+      - generic [ref=e34]: No repos registered yet. Register one to get started.
+  - generic [ref=e35]:
+    - link "Activity" [ref=e36] [cursor=pointer]:
+      - /url: /
+      - img [ref=e37]
+      - text: Activity
+    - link "Repos" [ref=e39] [cursor=pointer]:
+      - /url: /repos
+      - img [ref=e40]
+      - text: Repos
+    - link "Workflows" [ref=e42] [cursor=pointer]:
+      - /url: /workflows
+      - img [ref=e43]
+      - text: Workflows
+```
