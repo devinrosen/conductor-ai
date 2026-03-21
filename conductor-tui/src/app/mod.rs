@@ -22,7 +22,7 @@ use crate::theme::Theme;
 use crate::ui;
 
 mod agent_execution;
-mod agent_output;
+mod agent_events;
 mod crud_operations;
 mod git_operations;
 mod github_discovery;
@@ -1125,7 +1125,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::agent_output::extract_last_code_block;
+    use super::agent_events::extract_last_code_block;
     use super::helpers::{
         clamp_increment, collapse_loop_iterations, wrap_decrement, wrap_increment,
     };
