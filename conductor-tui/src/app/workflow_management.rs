@@ -1126,40 +1126,14 @@ impl App {
             return;
         }
 
-        self.state.modal = Modal::PrWorkflowPicker {
-            pr_number: pr.number,
-            pr_title: pr.title.clone(),
+        self.state.modal = Modal::WorkflowPicker {
+            target: crate::state::WorkflowPickerTarget::Pr {
+                pr_number: pr.number,
+                pr_title: pr.title.clone(),
+            },
             workflow_defs: pr_defs,
             selected: 0,
         };
-    }
-
-    pub(super) fn handle_pr_workflow_picker_confirm(&mut self) {
-        use crate::state::WorkflowPickerTarget;
-
-        let (pr_number, def) = if let Modal::PrWorkflowPicker {
-            pr_number,
-            ref workflow_defs,
-            selected,
-            ..
-        } = self.state.modal
-        {
-            let def = match workflow_defs.get(selected) {
-                Some(d) => d.clone(),
-                None => return,
-            };
-            (pr_number, def)
-        } else {
-            return;
-        };
-
-        self.state.modal = Modal::None;
-
-        let target = WorkflowPickerTarget::Pr {
-            pr_number,
-            pr_title: String::new(),
-        };
-        self.show_workflow_inputs_or_run(target, def, std::collections::HashMap::new());
     }
 
     /// Spawn an ephemeral PR workflow execution in a background thread.
