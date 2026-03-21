@@ -422,14 +422,26 @@ impl App {
         self.state.loading_workflow_picker_defs = true;
         std::thread::spawn(move || {
             let filter = target.target_filter();
-            let defs: Vec<conductor_core::workflow::WorkflowDef> =
-                conductor_core::workflow::WorkflowManager::list_defs("", &repo_path)
-                    .unwrap_or_default()
-                    .0
-                    .into_iter()
-                    .filter(|d| d.targets.iter().any(|t| t == filter))
-                    .collect();
-            let _ = tx.send(Action::WorkflowPickerDefsLoaded { target, defs });
+            match conductor_core::workflow::WorkflowManager::list_defs("", &repo_path) {
+                Ok((all_defs, _warnings)) => {
+                    let defs = all_defs
+                        .into_iter()
+                        .filter(|d| d.targets.iter().any(|t| t == filter))
+                        .collect();
+                    let _ = tx.send(Action::WorkflowPickerDefsLoaded {
+                        target,
+                        defs,
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(Action::WorkflowPickerDefsLoaded {
+                        target,
+                        defs: vec![],
+                        error: Some(e.to_string()),
+                    });
+                }
+            }
         });
     }
 
@@ -438,6 +450,7 @@ impl App {
         &mut self,
         target: crate::state::WorkflowPickerTarget,
         defs: Vec<conductor_core::workflow::WorkflowDef>,
+        error: Option<String>,
     ) {
         // Guard against race condition: if we're not expecting picker defs
         // (e.g. user navigated away), silently discard.
@@ -445,6 +458,14 @@ impl App {
             return;
         }
         self.state.loading_workflow_picker_defs = false;
+
+        // Surface I/O errors instead of silently showing "no workflows found".
+        if let Some(err_msg) = error {
+            self.state.modal = Modal::Error {
+                message: format!("Failed to load workflow definitions: {err_msg}"),
+            };
+            return;
+        }
 
         if defs.is_empty() {
             let kind = match &target {
@@ -1828,6 +1849,51 @@ mod tests {
                 assert!(!fields[*active_field].readonly || fields.iter().all(|f| f.readonly));
             }
             other => panic!("Expected Modal::Form, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn handle_defs_loaded_discards_when_not_loading() {
+        let mut app = make_app();
+        // loading_workflow_picker_defs is false by default — simulate a stale result arriving
+        assert!(!app.state.loading_workflow_picker_defs);
+        let target = crate::state::WorkflowPickerTarget::Repo {
+            repo_id: "r1".into(),
+            repo_path: "/tmp".into(),
+            repo_name: "test".into(),
+        };
+        app.handle_workflow_picker_defs_loaded(target, vec![], None);
+        // Modal should remain None — the result was discarded
+        assert!(
+            matches!(app.state.modal, Modal::None),
+            "Expected Modal::None after discarding stale result, got {:?}",
+            app.state.modal
+        );
+    }
+
+    #[test]
+    fn handle_defs_loaded_shows_error_on_io_failure() {
+        let mut app = make_app();
+        app.state.loading_workflow_picker_defs = true;
+        let target = crate::state::WorkflowPickerTarget::Repo {
+            repo_id: "r1".into(),
+            repo_path: "/tmp".into(),
+            repo_name: "test".into(),
+        };
+        app.handle_workflow_picker_defs_loaded(
+            target,
+            vec![],
+            Some("permission denied".to_string()),
+        );
+        assert!(!app.state.loading_workflow_picker_defs);
+        match &app.state.modal {
+            Modal::Error { message } => {
+                assert!(
+                    message.contains("permission denied"),
+                    "Error modal should contain the original error, got: {message}"
+                );
+            }
+            other => panic!("Expected Modal::Error, got {:?}", other),
         }
     }
 }

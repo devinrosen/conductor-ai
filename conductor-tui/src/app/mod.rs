@@ -407,8 +407,12 @@ impl App {
                 }
                 self.handle_workflow_picker_confirm();
             }
-            Action::WorkflowPickerDefsLoaded { target, defs } => {
-                self.handle_workflow_picker_defs_loaded(target, defs);
+            Action::WorkflowPickerDefsLoaded {
+                target,
+                defs,
+                error,
+            } => {
+                self.handle_workflow_picker_defs_loaded(target, defs, error);
             }
             Action::WorkflowDefsReloaded { defs, warnings } => {
                 self.handle_workflow_defs_reloaded(defs, warnings);

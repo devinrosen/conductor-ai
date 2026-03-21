@@ -358,6 +358,8 @@ pub enum Action {
     WorkflowPickerDefsLoaded {
         target: crate::state::WorkflowPickerTarget,
         defs: Vec<WorkflowDef>,
+        /// If list_defs failed, carries the error message so the user sees the real reason.
+        error: Option<String>,
     },
     /// Background result: worktree-scoped workflow defs reloaded.
     WorkflowDefsReloaded {
