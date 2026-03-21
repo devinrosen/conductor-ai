@@ -509,16 +509,23 @@ impl WorkflowsFocus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkflowRunDetailFocus {
     Info,
+    Error,
     Steps,
     AgentActivity,
 }
 
 impl WorkflowRunDetailFocus {
-    /// Cycle forward: Info → Steps → AgentActivity → Info.
-    /// Skips AgentActivity when `has_agent` is false.
-    pub fn next(self, has_agent: bool) -> Self {
+    /// Cycle forward: Info → Error (if has_error) → Steps → AgentActivity (if has_agent) → Info.
+    pub fn next(self, has_agent: bool, has_error: bool) -> Self {
         match self {
-            Self::Info => Self::Steps,
+            Self::Info => {
+                if has_error {
+                    Self::Error
+                } else {
+                    Self::Steps
+                }
+            }
+            Self::Error => Self::Steps,
             Self::Steps => {
                 if has_agent {
                     Self::AgentActivity
@@ -530,9 +537,8 @@ impl WorkflowRunDetailFocus {
         }
     }
 
-    /// Cycle backward: Info ← Steps ← AgentActivity ← Info.
-    /// Skips AgentActivity when `has_agent` is false.
-    pub fn prev(self, has_agent: bool) -> Self {
+    /// Cycle backward: Info ← Error (if has_error) ← Steps ← AgentActivity (if has_agent) ← Info.
+    pub fn prev(self, has_agent: bool, has_error: bool) -> Self {
         match self {
             Self::Info => {
                 if has_agent {
@@ -541,7 +547,14 @@ impl WorkflowRunDetailFocus {
                     Self::Steps
                 }
             }
-            Self::Steps => Self::Info,
+            Self::Error => Self::Info,
+            Self::Steps => {
+                if has_error {
+                    Self::Error
+                } else {
+                    Self::Info
+                }
+            }
             Self::AgentActivity => Self::Steps,
         }
     }
@@ -1359,6 +1372,8 @@ pub struct AppState {
     pub workflow_run_detail_focus: WorkflowRunDetailFocus,
     /// Selected row index in the WorkflowRunDetail info panel (for j/k navigation and y copy).
     pub workflow_run_info_row: usize,
+    /// Vertical scroll offset for the Error pane in WorkflowRunDetail.
+    pub error_pane_scroll: u16,
     pub step_agent_event_index: usize,
     /// Currently selected workflow run ID (for detail view)
     pub selected_workflow_run_id: Option<String>,
@@ -1755,6 +1770,7 @@ impl AppState {
             workflow_step_index: 0,
             workflow_run_detail_focus: WorkflowRunDetailFocus::Steps,
             workflow_run_info_row: 0,
+            error_pane_scroll: 0,
             step_agent_event_index: 0,
             selected_workflow_run_id: None,
             collapsed_workflow_run_ids: HashSet::new(),
@@ -1911,6 +1927,7 @@ impl AppState {
                 WorkflowRunDetailFocus::Info => {
                     (self.workflow_run_info_row, workflow_run_info_row::COUNT)
                 }
+                WorkflowRunDetailFocus::Error => (self.error_pane_scroll as usize, 0),
                 WorkflowRunDetailFocus::Steps => {
                     (self.workflow_step_index, self.data.workflow_steps.len())
                 }
@@ -1947,6 +1964,7 @@ impl AppState {
             }
             View::WorkflowRunDetail => match self.workflow_run_detail_focus {
                 WorkflowRunDetailFocus::Info => self.workflow_run_info_row = index,
+                WorkflowRunDetailFocus::Error => self.error_pane_scroll = index as u16,
                 WorkflowRunDetailFocus::Steps => self.workflow_step_index = index,
                 WorkflowRunDetailFocus::AgentActivity => self.step_agent_event_index = index,
             },
@@ -2376,6 +2394,18 @@ impl AppState {
         self.data.tickets.get(self.ticket_index)
     }
 
+    /// Returns true if the selected workflow run has failed with a non-empty result_summary.
+    pub fn selected_run_has_error(&self) -> bool {
+        self.selected_workflow_run_id
+            .as_ref()
+            .and_then(|id| self.data.workflow_runs.iter().find(|r| &r.id == id))
+            .map(|run| {
+                run.status == WorkflowRunStatus::Failed
+                    && run.result_summary.as_ref().is_some_and(|s| !s.is_empty())
+            })
+            .unwrap_or(false)
+    }
+
     /// Returns true if the currently selected workflow step has a child agent run.
     pub fn selected_step_has_agent(&self) -> bool {
         self.data
@@ -2514,57 +2544,109 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn workflow_run_detail_focus_next_with_agent() {
+    fn workflow_run_detail_focus_next_with_agent_no_error() {
         assert_eq!(
-            WorkflowRunDetailFocus::Info.next(true),
+            WorkflowRunDetailFocus::Info.next(true, false),
             WorkflowRunDetailFocus::Steps
         );
         assert_eq!(
-            WorkflowRunDetailFocus::Steps.next(true),
+            WorkflowRunDetailFocus::Steps.next(true, false),
             WorkflowRunDetailFocus::AgentActivity
         );
         assert_eq!(
-            WorkflowRunDetailFocus::AgentActivity.next(true),
+            WorkflowRunDetailFocus::AgentActivity.next(true, false),
             WorkflowRunDetailFocus::Info
         );
     }
 
     #[test]
-    fn workflow_run_detail_focus_next_without_agent() {
+    fn workflow_run_detail_focus_next_without_agent_no_error() {
         assert_eq!(
-            WorkflowRunDetailFocus::Info.next(false),
+            WorkflowRunDetailFocus::Info.next(false, false),
             WorkflowRunDetailFocus::Steps
         );
         assert_eq!(
-            WorkflowRunDetailFocus::Steps.next(false),
+            WorkflowRunDetailFocus::Steps.next(false, false),
             WorkflowRunDetailFocus::Info
         );
     }
 
     #[test]
-    fn workflow_run_detail_focus_prev_with_agent() {
+    fn workflow_run_detail_focus_next_with_error() {
         assert_eq!(
-            WorkflowRunDetailFocus::Info.prev(true),
+            WorkflowRunDetailFocus::Info.next(false, true),
+            WorkflowRunDetailFocus::Error
+        );
+        assert_eq!(
+            WorkflowRunDetailFocus::Error.next(false, true),
+            WorkflowRunDetailFocus::Steps
+        );
+        assert_eq!(
+            WorkflowRunDetailFocus::Steps.next(false, true),
+            WorkflowRunDetailFocus::Info
+        );
+    }
+
+    #[test]
+    fn workflow_run_detail_focus_next_with_agent_and_error() {
+        assert_eq!(
+            WorkflowRunDetailFocus::Info.next(true, true),
+            WorkflowRunDetailFocus::Error
+        );
+        assert_eq!(
+            WorkflowRunDetailFocus::Error.next(true, true),
+            WorkflowRunDetailFocus::Steps
+        );
+        assert_eq!(
+            WorkflowRunDetailFocus::Steps.next(true, true),
             WorkflowRunDetailFocus::AgentActivity
         );
         assert_eq!(
-            WorkflowRunDetailFocus::Steps.prev(true),
+            WorkflowRunDetailFocus::AgentActivity.next(true, true),
+            WorkflowRunDetailFocus::Info
+        );
+    }
+
+    #[test]
+    fn workflow_run_detail_focus_prev_with_agent_no_error() {
+        assert_eq!(
+            WorkflowRunDetailFocus::Info.prev(true, false),
+            WorkflowRunDetailFocus::AgentActivity
+        );
+        assert_eq!(
+            WorkflowRunDetailFocus::Steps.prev(true, false),
             WorkflowRunDetailFocus::Info
         );
         assert_eq!(
-            WorkflowRunDetailFocus::AgentActivity.prev(true),
+            WorkflowRunDetailFocus::AgentActivity.prev(true, false),
             WorkflowRunDetailFocus::Steps
         );
     }
 
     #[test]
-    fn workflow_run_detail_focus_prev_without_agent() {
+    fn workflow_run_detail_focus_prev_without_agent_no_error() {
         assert_eq!(
-            WorkflowRunDetailFocus::Info.prev(false),
+            WorkflowRunDetailFocus::Info.prev(false, false),
             WorkflowRunDetailFocus::Steps
         );
         assert_eq!(
-            WorkflowRunDetailFocus::Steps.prev(false),
+            WorkflowRunDetailFocus::Steps.prev(false, false),
+            WorkflowRunDetailFocus::Info
+        );
+    }
+
+    #[test]
+    fn workflow_run_detail_focus_prev_with_error() {
+        assert_eq!(
+            WorkflowRunDetailFocus::Info.prev(false, true),
+            WorkflowRunDetailFocus::Steps
+        );
+        assert_eq!(
+            WorkflowRunDetailFocus::Steps.prev(false, true),
+            WorkflowRunDetailFocus::Error
+        );
+        assert_eq!(
+            WorkflowRunDetailFocus::Error.prev(false, true),
             WorkflowRunDetailFocus::Info
         );
     }
@@ -2572,18 +2654,28 @@ pub(crate) mod tests {
     #[test]
     fn workflow_run_detail_focus_next_prev_are_inverses() {
         for has_agent in [true, false] {
-            let variants: Vec<WorkflowRunDetailFocus> = if has_agent {
-                vec![
-                    WorkflowRunDetailFocus::Info,
-                    WorkflowRunDetailFocus::Steps,
-                    WorkflowRunDetailFocus::AgentActivity,
-                ]
-            } else {
-                vec![WorkflowRunDetailFocus::Info, WorkflowRunDetailFocus::Steps]
-            };
-            for focus in variants {
-                assert_eq!(focus.next(has_agent).prev(has_agent), focus);
-                assert_eq!(focus.prev(has_agent).next(has_agent), focus);
+            for has_error in [true, false] {
+                let variants: Vec<WorkflowRunDetailFocus> = {
+                    let mut v = vec![WorkflowRunDetailFocus::Info];
+                    if has_error {
+                        v.push(WorkflowRunDetailFocus::Error);
+                    }
+                    v.push(WorkflowRunDetailFocus::Steps);
+                    if has_agent {
+                        v.push(WorkflowRunDetailFocus::AgentActivity);
+                    }
+                    v
+                };
+                for focus in variants {
+                    assert_eq!(
+                        focus.next(has_agent, has_error).prev(has_agent, has_error),
+                        focus
+                    );
+                    assert_eq!(
+                        focus.prev(has_agent, has_error).next(has_agent, has_error),
+                        focus
+                    );
+                }
             }
         }
     }

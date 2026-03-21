@@ -161,6 +161,23 @@ impl App {
 
     pub(super) fn handle_workflow_run_detail_copy(&mut self) {
         use crate::state::workflow_run_info_row;
+        use crate::state::WorkflowRunDetailFocus;
+
+        // When the Error pane is focused, copy the full result_summary text.
+        if self.state.workflow_run_detail_focus == WorkflowRunDetailFocus::Error {
+            let text = self
+                .state
+                .selected_workflow_run_id
+                .as_ref()
+                .and_then(|id| self.state.data.workflow_runs.iter().find(|r| &r.id == id))
+                .and_then(|run| run.result_summary.clone());
+            if let Some(text) = text {
+                self.copy_text_to_clipboard(text);
+            } else {
+                self.state.status_message = Some("No error text to copy".to_string());
+            }
+            return;
+        }
 
         let row = self.state.workflow_run_info_row;
         let run = self

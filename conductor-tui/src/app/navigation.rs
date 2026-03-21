@@ -149,18 +149,34 @@ impl App {
         }
     }
 
-    /// Cycle focus forward: Info → Steps → AgentActivity → Info.
-    /// AgentActivity is skipped when the selected step has no agent.
+    /// Cycle focus forward: Info → Error (if visible) → Steps → AgentActivity → Info.
+    /// Error is skipped when the run has no error; AgentActivity is skipped when
+    /// the selected step has no agent.
     pub(super) fn next_workflow_run_detail_focus(&mut self) {
         let has_agent = self.state.selected_step_has_agent();
-        self.state.workflow_run_detail_focus = self.state.workflow_run_detail_focus.next(has_agent);
+        let has_error = self.state.selected_run_has_error();
+        self.state.workflow_run_detail_focus = self
+            .state
+            .workflow_run_detail_focus
+            .next(has_agent, has_error);
+        if self.state.workflow_run_detail_focus == WorkflowRunDetailFocus::Error {
+            self.state.error_pane_scroll = 0;
+        }
     }
 
-    /// Cycle focus backward: Info ← Steps ← AgentActivity ← Info.
-    /// AgentActivity is skipped when the selected step has no agent.
+    /// Cycle focus backward: Info ← Error (if visible) ← Steps ← AgentActivity ← Info.
+    /// Error is skipped when the run has no error; AgentActivity is skipped when
+    /// the selected step has no agent.
     pub(super) fn prev_workflow_run_detail_focus(&mut self) {
         let has_agent = self.state.selected_step_has_agent();
-        self.state.workflow_run_detail_focus = self.state.workflow_run_detail_focus.prev(has_agent);
+        let has_error = self.state.selected_run_has_error();
+        self.state.workflow_run_detail_focus = self
+            .state
+            .workflow_run_detail_focus
+            .prev(has_agent, has_error);
+        if self.state.workflow_run_detail_focus == WorkflowRunDetailFocus::Error {
+            self.state.error_pane_scroll = 0;
+        }
     }
 
     pub(super) fn workflow_column_move_up(&mut self) {
@@ -289,6 +305,7 @@ impl App {
                         self.state.workflow_step_index = 0;
                         self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
                         self.state.step_agent_event_index = 0;
+                        self.state.error_pane_scroll = 0;
                         self.state.column_focus = crate::state::ColumnFocus::Content;
                         self.reload_workflow_steps();
                     } else {
@@ -323,6 +340,7 @@ impl App {
                         self.state.workflow_step_index = 0;
                         self.state.workflow_run_detail_focus = WorkflowRunDetailFocus::Steps;
                         self.state.step_agent_event_index = 0;
+                        self.state.error_pane_scroll = 0;
                         self.state.column_focus = crate::state::ColumnFocus::Content;
                         self.reload_workflow_steps();
                     }
@@ -438,6 +456,9 @@ impl App {
                 WorkflowRunDetailFocus::Info => {
                     self.state.workflow_run_info_row =
                         self.state.workflow_run_info_row.saturating_sub(1);
+                }
+                WorkflowRunDetailFocus::Error => {
+                    self.state.error_pane_scroll = self.state.error_pane_scroll.saturating_sub(1);
                 }
                 WorkflowRunDetailFocus::Steps => {
                     let old = self.state.workflow_step_index;
@@ -581,6 +602,9 @@ impl App {
                         &mut self.state.workflow_run_info_row,
                         workflow_run_info_row::COUNT,
                     );
+                }
+                WorkflowRunDetailFocus::Error => {
+                    self.state.error_pane_scroll = self.state.error_pane_scroll.saturating_add(1);
                 }
                 WorkflowRunDetailFocus::Steps => {
                     let old = self.state.workflow_step_index;

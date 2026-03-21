@@ -442,6 +442,15 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => {}
             }
         }
+        // Error-pane-specific keys (j/k scroll, y copies full error text)
+        if state.workflow_run_detail_focus == WorkflowRunDetailFocus::Error {
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => return Action::MoveDown,
+                KeyCode::Char('k') | KeyCode::Up => return Action::MoveUp,
+                KeyCode::Char('y') => return Action::WorkflowRunDetailCopy,
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Char('x') => return Action::CancelWorkflow,
             KeyCode::Char('r') => return Action::ResumeWorkflow,

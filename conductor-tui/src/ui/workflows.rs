@@ -1267,12 +1267,43 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         0
     };
 
-    // Layout: info panel + optional inputs + body
+    // Error pane: visible only for Failed runs with a non-empty result_summary
+    let has_error = state.selected_run_has_error();
+    let error_text = if has_error {
+        run_info
+            .and_then(|r| r.result_summary.as_deref())
+            .unwrap_or("")
+    } else {
+        ""
+    };
+    let error_height: u16 = if has_error {
+        // Estimate wrapped line count: each line of text wraps within available width
+        let avail_width = area.width.saturating_sub(4).max(1) as usize; // borders + padding
+        let wrapped_lines: usize = error_text
+            .lines()
+            .map(|l| {
+                let len = l.len();
+                if len == 0 {
+                    1
+                } else {
+                    len.div_ceil(avail_width)
+                }
+            })
+            .sum::<usize>()
+            .max(1);
+        let capped = wrapped_lines.min(6) as u16;
+        capped + 2 // content + borders
+    } else {
+        0
+    };
+
+    // Layout: info panel + optional inputs + optional error pane + body
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(info_height),
             Constraint::Length(inputs_height),
+            Constraint::Length(error_height),
             Constraint::Min(0),
         ])
         .split(area);
@@ -1364,8 +1395,13 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
                 Span::styled(" Started:  ", label_style),
                 Span::raw(started_display),
             ]),
-            // Row 7: Summary
-            if run.status == WorkflowRunStatus::Failed {
+            // Row 7: Summary (show "see pane below" when Error pane is visible)
+            if has_error {
+                Line::from(vec![
+                    Span::styled(" Summary:  ", label_style),
+                    Span::styled("—", Style::default().fg(state.theme.label_secondary)),
+                ])
+            } else if run.status == WorkflowRunStatus::Failed {
                 Line::from(vec![
                     Span::styled(" Error:    ", Style::default().fg(state.theme.label_error)),
                     Span::styled(
@@ -1444,6 +1480,11 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         }
     }
 
+    // Render error pane (chunk 2) when visible
+    if has_error {
+        render_error_pane(frame, chunks[2], state, error_text);
+    }
+
     // Determine if the selected step has agent activity to show
     let selected_step = state.data.workflow_steps.get(state.workflow_step_index);
     let has_agent_activity = selected_step
@@ -1455,7 +1496,7 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
         let body_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-            .split(chunks[2]);
+            .split(chunks[3]);
 
         let focus = state.workflow_run_detail_focus;
         render_step_list(frame, body_chunks[0], state, focus);
@@ -1463,8 +1504,27 @@ pub fn render_run_detail(frame: &mut Frame, area: Rect, state: &AppState) {
     } else {
         // Full-width step list when no agent activity to show —
         // force Steps focus since agent pane is hidden.
-        render_step_list(frame, chunks[2], state, WorkflowRunDetailFocus::Steps);
+        render_step_list(frame, chunks[3], state, WorkflowRunDetailFocus::Steps);
     }
+}
+
+fn render_error_pane(frame: &mut Frame, area: Rect, state: &AppState, error_text: &str) {
+    let focused = state.workflow_run_detail_focus == WorkflowRunDetailFocus::Error;
+    let border_color = state.theme.label_error;
+    let title = if focused {
+        " Error (y=copy, Tab=switch) "
+    } else {
+        " Error "
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .title(title);
+    let paragraph = Paragraph::new(error_text.to_string())
+        .style(Style::default().fg(state.theme.label_error))
+        .block(block)
+        .scroll((state.error_pane_scroll, 0));
+    frame.render_widget(paragraph, area);
 }
 
 fn render_step_list(
