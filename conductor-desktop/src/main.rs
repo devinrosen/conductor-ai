@@ -24,7 +24,8 @@ use conductor_core::agent::AgentManager;
 use conductor_core::config::{db_path, load_config};
 use conductor_core::db::open_database;
 use conductor_web::routes::api_router;
-use tower_http::cors::{Any, CorsLayer};
+use http::header::HeaderValue;
+use tower_http::cors::CorsLayer;
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -104,16 +105,15 @@ fn main() {
                         .port();
                     let _ = port_tx.send(Ok(port));
 
-                    // Restrict CORS to Tauri webview origins only — Any would allow arbitrary
-                    // web pages on the user's system browser to call the embedded API.
-                    use axum::http::HeaderValue;
+                    // Restrict to Tauri webview origins: tauri://localhost (macOS/Linux)
+                    // and http://tauri.localhost (Windows).
                     let cors = CorsLayer::new()
                         .allow_origin([
                             HeaderValue::from_static("tauri://localhost"),
                             HeaderValue::from_static("http://tauri.localhost"),
                         ])
-                        .allow_methods(Any)
-                        .allow_headers(Any);
+                        .allow_methods(tower_http::cors::Any)
+                        .allow_headers(tower_http::cors::Any);
 
                     let router = api_router().layer(cors).with_state(web_state);
 

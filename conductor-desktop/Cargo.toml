@@ -22,6 +22,7 @@ anyhow = "1"
 tauri = { version = "2", features = [] }
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
+http = "1"
 tower-http = { version = "0.6", features = ["cors"] }
 
 [build-dependencies]
