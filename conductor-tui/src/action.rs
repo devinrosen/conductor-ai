@@ -354,6 +354,17 @@ pub enum Action {
         notifications: Vec<conductor_core::notification_manager::Notification>,
     },
 
+    /// Background result: workflow defs loaded from disk for a picker.
+    WorkflowPickerDefsLoaded {
+        target: crate::state::WorkflowPickerTarget,
+        defs: Vec<WorkflowDef>,
+    },
+    /// Background result: worktree-scoped workflow defs reloaded.
+    WorkflowDefsReloaded {
+        defs: Vec<WorkflowDef>,
+        warnings: Vec<WorkflowWarning>,
+    },
+
     // Timer tick — also triggers workflow data refresh on workflow views
     Tick,
 
