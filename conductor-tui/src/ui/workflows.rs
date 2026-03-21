@@ -1523,7 +1523,7 @@ fn render_error_pane(frame: &mut Frame, area: Rect, state: &AppState, error_text
     let paragraph = Paragraph::new(error_text.to_string())
         .style(Style::default().fg(state.theme.label_error))
         .block(block)
-        .scroll((state.error_pane_scroll, 0));
+        .scroll((state.error_pane_scroll as u16, 0));
     frame.render_widget(paragraph, area);
 }
 

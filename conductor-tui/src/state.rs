@@ -1373,7 +1373,7 @@ pub struct AppState {
     /// Selected row index in the WorkflowRunDetail info panel (for j/k navigation and y copy).
     pub workflow_run_info_row: usize,
     /// Vertical scroll offset for the Error pane in WorkflowRunDetail.
-    pub error_pane_scroll: u16,
+    pub error_pane_scroll: usize,
     pub step_agent_event_index: usize,
     /// Currently selected workflow run ID (for detail view)
     pub selected_workflow_run_id: Option<String>,
@@ -1927,7 +1927,7 @@ impl AppState {
                 WorkflowRunDetailFocus::Info => {
                     (self.workflow_run_info_row, workflow_run_info_row::COUNT)
                 }
-                WorkflowRunDetailFocus::Error => (self.error_pane_scroll as usize, 0),
+                WorkflowRunDetailFocus::Error => (self.error_pane_scroll, 0),
                 WorkflowRunDetailFocus::Steps => {
                     (self.workflow_step_index, self.data.workflow_steps.len())
                 }
@@ -1964,7 +1964,7 @@ impl AppState {
             }
             View::WorkflowRunDetail => match self.workflow_run_detail_focus {
                 WorkflowRunDetailFocus::Info => self.workflow_run_info_row = index,
-                WorkflowRunDetailFocus::Error => self.error_pane_scroll = index as u16,
+                WorkflowRunDetailFocus::Error => self.error_pane_scroll = index,
                 WorkflowRunDetailFocus::Steps => self.workflow_step_index = index,
                 WorkflowRunDetailFocus::AgentActivity => self.step_agent_event_index = index,
             },
@@ -4720,5 +4720,74 @@ pub(crate) mod tests {
             ancestors_are_last: vec![false, true],
         };
         assert_eq!(pos.to_prefix(), "│   ├ ");
+    }
+
+    fn make_workflow_run(
+        id: &str,
+        status: WorkflowRunStatus,
+        summary: Option<&str>,
+    ) -> WorkflowRun {
+        WorkflowRun {
+            id: id.to_string(),
+            workflow_name: "test".to_string(),
+            worktree_id: None,
+            parent_run_id: String::new(),
+            status,
+            dry_run: false,
+            trigger: "manual".to_string(),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+            ended_at: None,
+            result_summary: summary.map(|s| s.to_string()),
+            definition_snapshot: None,
+            inputs: std::collections::HashMap::new(),
+            ticket_id: None,
+            repo_id: None,
+            parent_workflow_run_id: None,
+            target_label: None,
+            default_bot_name: None,
+            iteration: 0,
+            blocked_on: None,
+            feature_id: None,
+        }
+    }
+
+    #[test]
+    fn selected_run_has_error_no_selected_run() {
+        let state = AppState::new();
+        assert!(!state.selected_run_has_error());
+    }
+
+    #[test]
+    fn selected_run_has_error_run_not_found() {
+        let mut state = AppState::new();
+        state.selected_workflow_run_id = Some("nonexistent".to_string());
+        assert!(!state.selected_run_has_error());
+    }
+
+    #[test]
+    fn selected_run_has_error_failed_with_summary() {
+        let mut state = AppState::new();
+        let run = make_workflow_run("run1", WorkflowRunStatus::Failed, Some("step X failed"));
+        state.data.workflow_runs.push(run);
+        state.selected_workflow_run_id = Some("run1".to_string());
+        assert!(state.selected_run_has_error());
+    }
+
+    #[test]
+    fn selected_run_has_error_failed_empty_summary() {
+        let mut state = AppState::new();
+        let run = make_workflow_run("run2", WorkflowRunStatus::Failed, Some(""));
+        state.data.workflow_runs.push(run);
+        state.selected_workflow_run_id = Some("run2".to_string());
+        assert!(!state.selected_run_has_error());
+    }
+
+    #[test]
+    fn selected_run_has_error_completed_with_summary() {
+        let mut state = AppState::new();
+        let run = make_workflow_run("run3", WorkflowRunStatus::Completed, Some("all good"));
+        state.data.workflow_runs.push(run);
+        state.selected_workflow_run_id = Some("run3".to_string());
+        assert!(!state.selected_run_has_error());
     }
 }
