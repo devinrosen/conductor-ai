@@ -98,11 +98,20 @@ fn main() {
                             return;
                         }
                     };
-                    let port = listener.local_addr().unwrap().port();
+                    let port = listener
+                        .local_addr()
+                        .expect("Failed to get local address from bound listener")
+                        .port();
                     let _ = port_tx.send(Ok(port));
 
+                    // Restrict CORS to Tauri webview origins only — Any would allow arbitrary
+                    // web pages on the user's system browser to call the embedded API.
+                    use axum::http::HeaderValue;
                     let cors = CorsLayer::new()
-                        .allow_origin(Any)
+                        .allow_origin([
+                            HeaderValue::from_static("tauri://localhost"),
+                            HeaderValue::from_static("http://tauri.localhost"),
+                        ])
                         .allow_methods(Any)
                         .allow_headers(Any);
 
