@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { getApiOrigin } from "../api/transport";
 
 /** All SSE event types emitted by the backend. */
 export type ConductorEventType =
@@ -62,15 +63,8 @@ function dispatch(eventType: ConductorEventType, e: MessageEvent) {
   }
 }
 
-function openSharedSource() {
-  if (sharedSource && sharedSource.readyState !== EventSource.CLOSED) return;
-
-  // Clean up any dead connection before creating a new one
-  if (sharedSource) {
-    closeSharedSource();
-  }
-
-  const source = new EventSource("/api/events");
+function connectSource(origin: string) {
+  const source = new EventSource(`${origin}/api/events`);
   sharedSource = source;
 
   for (const type of ALL_EVENT_TYPES) {
@@ -88,6 +82,18 @@ function openSharedSource() {
       }
     }
   };
+}
+
+function openSharedSource() {
+  if (sharedSource && sharedSource.readyState !== EventSource.CLOSED) return;
+
+  // Clean up any dead connection before creating a new one
+  if (sharedSource) {
+    closeSharedSource();
+  }
+
+  // Resolve the API origin (async for desktop mode), then connect.
+  getApiOrigin().then((origin) => connectSource(origin));
 }
 
 function closeSharedSource() {

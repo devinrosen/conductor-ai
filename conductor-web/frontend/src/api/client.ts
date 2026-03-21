@@ -27,11 +27,11 @@ import type {
   FeedbackRequest,
   Notification,
 } from "./types";
-
-const BASE = "/api";
+import { getApiBaseUrl } from "./transport";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
+  const base = await getApiBaseUrl();
+  const res = await fetch(`${base}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
