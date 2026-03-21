@@ -46,6 +46,7 @@ type Subscriber = {
 
 /** Shared singleton state — one EventSource for all hook instances. */
 let sharedSource: EventSource | null = null;
+let connecting = false;
 let subscribers: Set<Subscriber> = new Set();
 let boundListeners: [string, EventListener][] = [];
 
@@ -86,17 +87,23 @@ function connectSource(origin: string) {
 
 function openSharedSource() {
   if (sharedSource && sharedSource.readyState !== EventSource.CLOSED) return;
+  if (connecting) return;
 
   // Clean up any dead connection before creating a new one
   if (sharedSource) {
     closeSharedSource();
   }
 
-  // Resolve the API origin (async for desktop mode), then connect.
-  getApiOrigin().then((origin) => connectSource(origin));
+  // Guard against concurrent callers all entering before the async origin resolves.
+  connecting = true;
+  getApiOrigin().then((origin) => {
+    connecting = false;
+    connectSource(origin);
+  });
 }
 
 function closeSharedSource() {
+  connecting = false;
   if (!sharedSource) return;
   for (const [type, listener] of boundListeners) {
     sharedSource.removeEventListener(type, listener);

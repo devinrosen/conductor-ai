@@ -68,6 +68,9 @@ export async function getApiBaseUrl(): Promise<string> {
   return cachedBaseUrl;
 }
 
+// Cached origin for SSE connections — resolved once, reused to avoid redundant IPC calls.
+let cachedOrigin: string | null = null;
+
 /**
  * Returns the base origin for non-API connections (e.g. EventSource).
  *
@@ -75,9 +78,13 @@ export async function getApiBaseUrl(): Promise<string> {
  * - Desktop mode: `http://127.0.0.1:{port}`
  */
 export async function getApiOrigin(): Promise<string> {
+  if (cachedOrigin !== null) return cachedOrigin;
+
   if (isDesktop()) {
     const port = await invokeCommand<number>("get_api_port");
-    return `http://127.0.0.1:${port}`;
+    cachedOrigin = `http://127.0.0.1:${port}`;
+  } else {
+    cachedOrigin = "";
   }
-  return "";
+  return cachedOrigin;
 }

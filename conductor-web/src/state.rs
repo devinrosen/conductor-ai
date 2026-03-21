@@ -15,3 +15,15 @@ pub struct AppState {
     /// `None` in production. Populated in tests that need deterministic synchronization.
     pub workflow_done_notify: Option<Arc<Notify>>,
 }
+
+impl AppState {
+    /// Construct a production `AppState` with the given connection, config, and event bus capacity.
+    pub fn new(conn: Connection, config: Config, event_capacity: usize) -> Self {
+        Self {
+            db: Arc::new(Mutex::new(conn)),
+            config: Arc::new(RwLock::new(config)),
+            events: EventBus::new(event_capacity),
+            workflow_done_notify: None,
+        }
+    }
+}
