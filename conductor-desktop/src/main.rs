@@ -22,7 +22,7 @@ mod state;
 
 use axum::http::HeaderValue;
 use conductor_core::agent::AgentManager;
-use conductor_core::config::{db_path, load_config};
+use conductor_core::config::{conductor_dir, load_config};
 use conductor_core::db::open_database;
 use conductor_web::routes::api_router_with_cors;
 
@@ -45,7 +45,9 @@ fn main() {
         .setup(|app| {
             use tauri::Manager;
 
-            let db_path_val = db_path();
+            // Always use the global database — the desktop app manages all
+            // repos, so worktree-local DB detection must be bypassed.
+            let db_path_val = conductor_dir().join("conductor.db");
             let conn = open_database(&db_path_val).expect("Failed to open conductor database");
             let config = load_config().expect("Failed to load conductor config");
 
