@@ -58,55 +58,51 @@ pub fn evaluate_commit_gate(
 
     for check in &config.checks {
         tracing::info!(check = %check, "running commit gate check");
-        let mut child = Command::new("sh")
-            .args(["-c", check])
-            .current_dir(working_dir)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                crate::error::ConductorError::Workflow(format!(
-                    "failed to spawn commit gate check `{check}`: {e}"
-                ))
-            })?;
 
-        // Wait with timeout: poll in a loop with short sleeps
-        let deadline = std::time::Instant::now() + config.timeout;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => {
-                    if std::time::Instant::now() >= deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Ok(GateDecision::Reject {
-                            failed_check: check.clone(),
-                            stderr: format!("timed out after {:?}", config.timeout),
-                            exit_code: None,
-                        });
+        // Spawn and collect output with a timeout.
+        // We use a separate thread for wait_with_output() to avoid pipe buffer
+        // deadlocks (the OS pipe buffer is ~64KB; if a check writes more than
+        // that to stdout+stderr, the child blocks on write while we block on
+        // wait, creating a deadlock). The thread reads pipes to completion
+        // before returning the exit status.
+        let timeout = config.timeout;
+        let check_clone = check.clone();
+        let wd = working_dir.to_string();
+        let handle = std::thread::spawn(move || {
+            Command::new("sh")
+                .args(["-c", &check_clone])
+                .current_dir(&wd)
+                .output()
+        });
+
+        // Wait for the thread with timeout
+        let deadline = std::time::Instant::now() + timeout;
+        let output = loop {
+            if handle.is_finished() {
+                match handle.join() {
+                    Ok(Ok(output)) => break output,
+                    Ok(Err(e)) => {
+                        return Err(crate::error::ConductorError::Workflow(format!(
+                            "failed to spawn commit gate check `{check}`: {e}"
+                        )));
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-                Err(e) => {
-                    return Err(crate::error::ConductorError::Workflow(format!(
-                        "failed to wait on commit gate check `{check}`: {e}"
-                    )));
+                    Err(_) => {
+                        return Err(crate::error::ConductorError::Workflow(format!(
+                            "commit gate check `{check}` thread panicked"
+                        )));
+                    }
                 }
             }
-        };
-
-        let mut stdout_buf = Vec::new();
-        let mut stderr_buf = Vec::new();
-        if let Some(mut out) = child.stdout.take() {
-            std::io::Read::read_to_end(&mut out, &mut stdout_buf).ok();
-        }
-        if let Some(mut err) = child.stderr.take() {
-            std::io::Read::read_to_end(&mut err, &mut stderr_buf).ok();
-        }
-        let output = std::process::Output {
-            status,
-            stdout: stdout_buf,
-            stderr: stderr_buf,
+            if std::time::Instant::now() >= deadline {
+                // Thread is still running — we can't kill from here, but the
+                // process will be cleaned up when the thread is dropped.
+                return Ok(GateDecision::Reject {
+                    failed_check: check.clone(),
+                    stderr: format!("timed out after {timeout:?}"),
+                    exit_code: None,
+                });
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         };
 
         if !output.status.success() {

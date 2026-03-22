@@ -830,10 +830,9 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
     // 1. Check for uncommitted changes in the repo working tree
     let output = git_in(repo_path).args(["status", "--porcelain"]).output()?;
     if output.status.success() && !output.stdout.is_empty() {
-        return Err(ConductorError::Git(SubprocessFailure::from_message(
-            "git status --porcelain",
+        return Err(ConductorError::InvalidInput(
             "uncommitted changes on base branch, please commit or stash first".to_string(),
-        )));
+        ));
     }
 
     // 2. Fetch from remote (soft failure — warn and allow local-only creation)

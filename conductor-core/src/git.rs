@@ -99,7 +99,7 @@ where
         crate::retry::RetryOutcome::Success { value, .. } => Ok(value),
         crate::retry::RetryOutcome::Exhausted { last_error, .. } => Err(last_error),
         crate::retry::RetryOutcome::Cancelled => {
-            Err(ConductorError::Workflow("retry cancelled".to_string()))
+            unreachable!("cancellation predicate is || false")
         }
     }
 }

@@ -204,7 +204,9 @@ impl<'a> WorkflowManager<'a> {
         }
 
         // Warn-only FSM guard: log invalid transitions but do not reject.
+        // Debug builds only to avoid extra DB round-trip on the hot path.
         // Part of: fsm-state-specification-template@1.0.0
+        #[cfg(debug_assertions)]
         if let Ok(current) = self.conn.query_row(
             "SELECT status FROM workflow_runs WHERE id = ?1",
             params![workflow_run_id],
