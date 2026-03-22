@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 48;
+pub const LATEST_SCHEMA_VERSION: u32 = 50;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -885,6 +885,22 @@ pub fn run(conn: &Connection) -> Result<()> {
             "migrations/048_backfill_workflow_run_repo_id.sql"
         ))?;
         bump_version(conn, 48)?;
+    }
+
+    // Wave 2: Agent communication tables (7 tables)
+    // Part of: structured-handoff-protocol@1.1.0, decision-log-as-shared-memory@1.0.0,
+    // threaded-blocker-comments@1.1.0, cross-agent-delegation-protocol@1.0.0,
+    // council-decision-architecture@1.0.0
+    if version < 49 {
+        conn.execute_batch(include_str!("migrations/049_agent_communication.sql"))?;
+        bump_version(conn, 49)?;
+    }
+
+    // Wave 2: Agent identity tables (templates + artifacts)
+    // Part of: agent-template-standardization@1.2.0, artifact-mediated-agent-communication@1.0.0
+    if version < 50 {
+        conn.execute_batch(include_str!("migrations/050_agent_identity.sql"))?;
+        bump_version(conn, 50)?;
     }
 
     Ok(())
