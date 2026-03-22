@@ -89,9 +89,7 @@ impl<'a> RecoveryManager<'a> {
         })?;
 
         for row in rows {
-            let (id, name, status, updated) = row.map_err(|e| {
-                ConductorError::Workflow(format!("failed to read stale workflow row: {e}"))
-            })?;
+            let (id, name, status, updated) = row.map_err(ConductorError::Database)?;
             stale.push(StuckState {
                 entity_type: "workflow_run".to_string(),
                 entity_id: id.clone(),
@@ -121,12 +119,15 @@ impl<'a> RecoveryManager<'a> {
                 repo_stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
             let mut v = Vec::new();
             for row in rows {
-                v.push(row.map_err(|e| {
-                    ConductorError::Workflow(format!("failed to read repo row: {e}"))
-                })?);
+                v.push(row.map_err(ConductorError::Database)?);
             }
             v
         };
+
+        // Prepare the worktree slug query once, reused per repo
+        let mut wt_stmt = self
+            .conn
+            .prepare("SELECT slug FROM worktrees WHERE repo_id = ?1")?;
 
         for (repo_id, _repo_slug, workspace_dir) in repos {
             let ws_path = Path::new(&workspace_dir);
@@ -134,17 +135,12 @@ impl<'a> RecoveryManager<'a> {
                 continue;
             }
 
-            // Single query: fetch all known worktree slugs for this repo
+            // Single query per repo: fetch all known worktree slugs
             let known_slugs: HashSet<String> = {
-                let mut wt_stmt = self
-                    .conn
-                    .prepare("SELECT slug FROM worktrees WHERE repo_id = ?1")?;
                 let rows = wt_stmt.query_map(params![repo_id], |row| row.get(0))?;
                 let mut set = HashSet::new();
                 for row in rows {
-                    set.insert(row.map_err(|e| {
-                        ConductorError::Workflow(format!("failed to read worktree slug: {e}"))
-                    })?);
+                    set.insert(row.map_err(ConductorError::Database)?);
                 }
                 set
             };

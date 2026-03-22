@@ -93,10 +93,14 @@ where
             ConductorError::Git(f) | ConductorError::GhCli(f) => crate::retry::is_transient(f),
             _ => false,
         },
+        || false, // No cancellation support at this level; callers run in background threads
     );
     match outcome {
         crate::retry::RetryOutcome::Success { value, .. } => Ok(value),
         crate::retry::RetryOutcome::Exhausted { last_error, .. } => Err(last_error),
+        crate::retry::RetryOutcome::Cancelled => {
+            Err(ConductorError::Workflow("retry cancelled".to_string()))
+        }
     }
 }
 

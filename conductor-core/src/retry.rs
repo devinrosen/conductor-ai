@@ -44,25 +44,36 @@ pub enum RetryOutcome<T, E> {
         #[allow(dead_code)]
         attempts: u32,
     },
+    /// Retry was cancelled via the cancellation callback.
+    Cancelled,
 }
 
 /// Execute `operation` with bounded retry and exponential backoff.
 ///
 /// `is_retriable` classifies each error: returns `true` for transient errors
 /// that should be retried, `false` for permanent errors that should fail immediately.
-pub fn retry_with_backoff<T, E, F, R>(
+///
+/// `is_cancelled` is checked before each retry and during backoff sleep (every 100ms).
+/// When it returns `true`, the retry loop exits with `RetryOutcome::Cancelled`.
+/// Pass `|| false` if cancellation is not needed.
+pub fn retry_with_backoff<T, E, F, R, C>(
     config: &RetryConfig,
     mut operation: F,
     is_retriable: R,
+    is_cancelled: C,
 ) -> RetryOutcome<T, E>
 where
     F: FnMut() -> Result<T, E>,
     R: Fn(&E) -> bool,
+    C: Fn() -> bool,
 {
     let mut attempts = 0u32;
     let mut backoff = config.initial_backoff;
 
     loop {
+        if is_cancelled() {
+            return RetryOutcome::Cancelled;
+        }
         attempts += 1;
         match operation() {
             Ok(value) => return RetryOutcome::Success { value, attempts },
@@ -73,7 +84,14 @@ where
                         attempts,
                     };
                 }
-                std::thread::sleep(backoff);
+                // Sleep in short intervals to allow cooperative cancellation
+                let deadline = std::time::Instant::now() + backoff;
+                while std::time::Instant::now() < deadline {
+                    if is_cancelled() {
+                        return RetryOutcome::Cancelled;
+                    }
+                    std::thread::sleep(Duration::from_millis(100).min(backoff));
+                }
                 backoff = Duration::from_secs_f64(
                     (backoff.as_secs_f64() * config.backoff_multiplier)
                         .min(config.max_backoff.as_secs_f64()),
@@ -146,13 +164,13 @@ mod tests {
             initial_backoff: Duration::from_millis(1),
             ..Default::default()
         };
-        let result = retry_with_backoff(&config, || Ok::<_, String>(42), |_| true);
+        let result = retry_with_backoff(&config, || Ok::<_, String>(42), |_| true, || false);
         match result {
             RetryOutcome::Success { value, attempts } => {
                 assert_eq!(value, 42);
                 assert_eq!(attempts, 1);
             }
-            RetryOutcome::Exhausted { .. } => panic!("expected success"),
+            other => panic!("expected success, got {other:?}"),
         }
     }
 
@@ -164,7 +182,12 @@ mod tests {
             max_backoff: Duration::from_millis(10),
             ..Default::default()
         };
-        let result = retry_with_backoff(&config, || Err::<(), _>("transient"), |_: &&str| true);
+        let result = retry_with_backoff(
+            &config,
+            || Err::<(), _>("transient"),
+            |_: &&str| true,
+            || false,
+        );
         match result {
             RetryOutcome::Exhausted {
                 last_error,
@@ -173,7 +196,7 @@ mod tests {
                 assert_eq!(last_error, "transient");
                 assert_eq!(attempts, 3);
             }
-            RetryOutcome::Success { .. } => panic!("expected exhaustion"),
+            other => panic!("expected exhaustion, got {other:?}"),
         }
     }
 
@@ -197,13 +220,14 @@ mod tests {
                 }
             },
             |_: &&str| true,
+            || false,
         );
         match result {
             RetryOutcome::Success { value, attempts } => {
                 assert_eq!(value, "done");
                 assert_eq!(attempts, 3);
             }
-            RetryOutcome::Exhausted { .. } => panic!("expected success after retries"),
+            other => panic!("expected success after retries, got {other:?}"),
         }
     }
 
@@ -222,12 +246,13 @@ mod tests {
                 Err::<(), _>("permanent")
             },
             |_: &&str| false, // not retriable
+            || false,
         );
         match result {
             RetryOutcome::Exhausted { attempts, .. } => {
                 assert_eq!(attempts, 1);
             }
-            RetryOutcome::Success { .. } => panic!("expected immediate failure"),
+            other => panic!("expected immediate failure, got {other:?}"),
         }
     }
 
@@ -240,7 +265,7 @@ mod tests {
             max_backoff: Duration::from_secs(5),
         };
         let start = Instant::now();
-        let _ = retry_with_backoff(&config, || Err::<(), _>("fail"), |_: &&str| true);
+        let _ = retry_with_backoff(&config, || Err::<(), _>("fail"), |_: &&str| true, || false);
         let elapsed = start.elapsed();
         // Should sleep ~50ms + ~100ms = ~150ms total (with some tolerance)
         assert!(

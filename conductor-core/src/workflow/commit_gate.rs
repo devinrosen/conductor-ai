@@ -17,6 +17,18 @@ pub struct CommitGateConfig {
     pub checks: Vec<String>,
     /// Whether the gate is active.
     pub enabled: bool,
+    /// Timeout per check command. Default: 5 minutes.
+    pub timeout: std::time::Duration,
+}
+
+impl Default for CommitGateConfig {
+    fn default() -> Self {
+        Self {
+            checks: vec![],
+            enabled: false,
+            timeout: std::time::Duration::from_secs(300),
+        }
+    }
 }
 
 /// Result of evaluating the commit gate.
@@ -46,15 +58,56 @@ pub fn evaluate_commit_gate(
 
     for check in &config.checks {
         tracing::info!(check = %check, "running commit gate check");
-        let output = Command::new("sh")
+        let mut child = Command::new("sh")
             .args(["-c", check])
             .current_dir(working_dir)
-            .output()
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
             .map_err(|e| {
                 crate::error::ConductorError::Workflow(format!(
                     "failed to spawn commit gate check `{check}`: {e}"
                 ))
             })?;
+
+        // Wait with timeout: poll in a loop with short sleeps
+        let deadline = std::time::Instant::now() + config.timeout;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Ok(GateDecision::Reject {
+                            failed_check: check.clone(),
+                            stderr: format!("timed out after {:?}", config.timeout),
+                            exit_code: None,
+                        });
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                Err(e) => {
+                    return Err(crate::error::ConductorError::Workflow(format!(
+                        "failed to wait on commit gate check `{check}`: {e}"
+                    )));
+                }
+            }
+        };
+
+        let mut stdout_buf = Vec::new();
+        let mut stderr_buf = Vec::new();
+        if let Some(mut out) = child.stdout.take() {
+            std::io::Read::read_to_end(&mut out, &mut stdout_buf).ok();
+        }
+        if let Some(mut err) = child.stderr.take() {
+            std::io::Read::read_to_end(&mut err, &mut stderr_buf).ok();
+        }
+        let output = std::process::Output {
+            status,
+            stdout: stdout_buf,
+            stderr: stderr_buf,
+        };
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -142,6 +195,7 @@ mod tests {
         let config = CommitGateConfig {
             checks: vec!["true".to_string()],
             enabled: true,
+            ..Default::default()
         };
         let result = evaluate_commit_gate(tmp.path().to_str().unwrap(), &config).unwrap();
         assert!(matches!(result, GateDecision::Accept));
@@ -153,6 +207,7 @@ mod tests {
         let config = CommitGateConfig {
             checks: vec!["false".to_string()],
             enabled: true,
+            ..Default::default()
         };
         let result = evaluate_commit_gate(tmp.path().to_str().unwrap(), &config).unwrap();
         assert!(matches!(result, GateDecision::Reject { .. }));
@@ -163,6 +218,7 @@ mod tests {
         let config = CommitGateConfig {
             checks: vec!["false".to_string()],
             enabled: false,
+            ..Default::default()
         };
         let result = evaluate_commit_gate("/tmp", &config).unwrap();
         assert!(matches!(result, GateDecision::Accept));
@@ -173,6 +229,7 @@ mod tests {
         let config = CommitGateConfig {
             checks: vec![],
             enabled: true,
+            ..Default::default()
         };
         let result = evaluate_commit_gate("/tmp", &config).unwrap();
         assert!(matches!(result, GateDecision::Accept));
@@ -188,6 +245,7 @@ mod tests {
                 "true".to_string(), // should not be reached
             ],
             enabled: true,
+            ..Default::default()
         };
         let result = evaluate_commit_gate(tmp.path().to_str().unwrap(), &config).unwrap();
         match result {
