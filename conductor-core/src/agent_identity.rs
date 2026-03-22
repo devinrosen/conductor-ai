@@ -434,116 +434,76 @@ pub struct AgentTemplate {
     pub updated_at: String,
 }
 
-/// Insert a new agent template.
-#[allow(dead_code, clippy::too_many_arguments)]
-pub fn create_agent_template(
-    conn: &Connection,
-    name: &str,
-    persona: &PersonaConfig,
-    role: &AgentRole,
-    namespace: &AgentNamespace,
-    model_tier: Option<&ModelTier>,
-    model_override: Option<&str>,
-    capabilities: &[String],
-    delegation_table: &[String],
-    output_contract: Option<&str>,
-) -> Result<String> {
-    let id = ulid::Ulid::new().to_string();
-    let tier: u8 = match role {
-        AgentRole::Execution => 0,
-        AgentRole::Specialist | AgentRole::Reviewer => 1,
-        AgentRole::Planning => 2,
-        AgentRole::Supervisor => 3,
-    };
-    let caps_json = serde_json::to_string(capabilities).unwrap_or_else(|_| "[]".to_string());
-    let deleg_json = serde_json::to_string(delegation_table).unwrap_or_else(|_| "[]".to_string());
-    let mt_str = model_tier.map(|t| t.to_string());
-
-    conn.execute(
-        "INSERT INTO agent_templates (id, name, persona_name, persona_depth, persona_credentials, domain_grounding, philosophy, role, tier, namespace, model_tier, model_override, capabilities, delegation_table, output_contract)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-        params![
-            id,
-            name,
-            persona.name,
-            persona.depth.to_string(),
-            persona.credentials,
-            persona.domain_grounding,
-            persona.philosophy,
-            role.to_string(),
-            tier,
-            namespace.to_string(),
-            mt_str,
-            model_override,
-            caps_json,
-            deleg_json,
-            output_contract,
-        ],
-    )?;
-
-    Ok(id)
+/// Manager for agent template CRUD operations, following conductor's Manager pattern.
+pub struct AgentTemplateManager<'a> {
+    conn: &'a Connection,
 }
 
-/// Get an agent template by name.
-#[allow(dead_code)]
-pub fn get_agent_template(conn: &Connection, name: &str) -> Result<Option<AgentTemplate>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, name, persona_name, persona_depth, persona_credentials, domain_grounding, philosophy, role, tier, namespace, model_tier, model_override, capabilities, delegation_table, output_contract, version, created_at, updated_at
-         FROM agent_templates WHERE name = ?1",
-    )?;
-
-    let mut rows = stmt.query_map(params![name], |row| {
-        let depth_str: String = row.get(3)?;
-        let role_str: String = row.get(7)?;
-        let ns_str: String = row.get(9)?;
-        let mt_str: Option<String> = row.get(10)?;
-        let caps_str: String = row.get(12)?;
-        let deleg_str: String = row.get(13)?;
-
-        Ok(AgentTemplate {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            persona: PersonaConfig {
-                name: row.get(2)?,
-                depth: depth_str.parse().unwrap_or_default(),
-                credentials: row.get(4)?,
-                domain_grounding: row.get(5)?,
-                philosophy: row.get(6)?,
-            },
-            role: role_str.parse().unwrap_or_default(),
-            tier: row.get(8)?,
-            namespace: ns_str.parse().unwrap_or_default(),
-            model_tier: mt_str.and_then(|s| s.parse().ok()),
-            model_override: row.get(11)?,
-            capabilities: serde_json::from_str(&caps_str).unwrap_or_default(),
-            delegation_table: serde_json::from_str(&deleg_str).unwrap_or_default(),
-            output_contract: row.get(14)?,
-            version: row.get(15)?,
-            created_at: row.get(16)?,
-            updated_at: row.get(17)?,
-        })
-    })?;
-
-    match rows.next() {
-        Some(Ok(t)) => Ok(Some(t)),
-        Some(Err(e)) => Err(e.into()),
-        None => Ok(None),
+impl<'a> AgentTemplateManager<'a> {
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
-}
 
-/// List agent templates filtered by namespace.
-#[allow(dead_code)]
-pub fn list_templates_by_namespace(
-    conn: &Connection,
-    namespace: &AgentNamespace,
-) -> Result<Vec<AgentTemplate>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, name, persona_name, persona_depth, persona_credentials, domain_grounding, philosophy, role, tier, namespace, model_tier, model_override, capabilities, delegation_table, output_contract, version, created_at, updated_at
-         FROM agent_templates WHERE namespace = ?1 ORDER BY name",
-    )?;
+    /// Insert a new agent template.
+    #[allow(dead_code, clippy::too_many_arguments)]
+    pub fn create_agent_template(
+        &self,
+        name: &str,
+        persona: &PersonaConfig,
+        role: &AgentRole,
+        namespace: &AgentNamespace,
+        model_tier: Option<&ModelTier>,
+        model_override: Option<&str>,
+        capabilities: &[String],
+        delegation_table: &[String],
+        output_contract: Option<&str>,
+    ) -> Result<String> {
+        let id = ulid::Ulid::new().to_string();
+        let tier: u8 = match role {
+            AgentRole::Execution => 0,
+            AgentRole::Specialist | AgentRole::Reviewer => 1,
+            AgentRole::Planning => 2,
+            AgentRole::Supervisor => 3,
+        };
+        let caps_json = serde_json::to_string(capabilities).unwrap_or_else(|_| "[]".to_string());
+        let deleg_json =
+            serde_json::to_string(delegation_table).unwrap_or_else(|_| "[]".to_string());
+        let mt_str = model_tier.map(|t| t.to_string());
 
-    let rows = stmt
-        .query_map(params![namespace.to_string()], |row| {
+        self.conn.execute(
+            "INSERT INTO agent_templates (id, name, persona_name, persona_depth, persona_credentials, domain_grounding, philosophy, role, tier, namespace, model_tier, model_override, capabilities, delegation_table, output_contract)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                id,
+                name,
+                persona.name,
+                persona.depth.to_string(),
+                persona.credentials,
+                persona.domain_grounding,
+                persona.philosophy,
+                role.to_string(),
+                tier,
+                namespace.to_string(),
+                mt_str,
+                model_override,
+                caps_json,
+                deleg_json,
+                output_contract,
+            ],
+        )?;
+
+        Ok(id)
+    }
+
+    /// Get an agent template by name.
+    #[allow(dead_code)]
+    pub fn get_agent_template(&self, name: &str) -> Result<Option<AgentTemplate>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, persona_name, persona_depth, persona_credentials, domain_grounding, philosophy, role, tier, namespace, model_tier, model_override, capabilities, delegation_table, output_contract, version, created_at, updated_at
+             FROM agent_templates WHERE name = ?1",
+        )?;
+
+        let mut rows = stmt.query_map(params![name], |row| {
             let depth_str: String = row.get(3)?;
             let role_str: String = row.get(7)?;
             let ns_str: String = row.get(9)?;
@@ -573,11 +533,62 @@ pub fn list_templates_by_namespace(
                 created_at: row.get(16)?,
                 updated_at: row.get(17)?,
             })
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
+        })?;
 
-    Ok(rows)
+        match rows.next() {
+            Some(Ok(t)) => Ok(Some(t)),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
+    /// List agent templates filtered by namespace.
+    #[allow(dead_code)]
+    pub fn list_templates_by_namespace(
+        &self,
+        namespace: &AgentNamespace,
+    ) -> Result<Vec<AgentTemplate>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, persona_name, persona_depth, persona_credentials, domain_grounding, philosophy, role, tier, namespace, model_tier, model_override, capabilities, delegation_table, output_contract, version, created_at, updated_at
+             FROM agent_templates WHERE namespace = ?1 ORDER BY name",
+        )?;
+
+        let rows = stmt
+            .query_map(params![namespace.to_string()], |row| {
+                let depth_str: String = row.get(3)?;
+                let role_str: String = row.get(7)?;
+                let ns_str: String = row.get(9)?;
+                let mt_str: Option<String> = row.get(10)?;
+                let caps_str: String = row.get(12)?;
+                let deleg_str: String = row.get(13)?;
+
+                Ok(AgentTemplate {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    persona: PersonaConfig {
+                        name: row.get(2)?,
+                        depth: depth_str.parse().unwrap_or_default(),
+                        credentials: row.get(4)?,
+                        domain_grounding: row.get(5)?,
+                        philosophy: row.get(6)?,
+                    },
+                    role: role_str.parse().unwrap_or_default(),
+                    tier: row.get(8)?,
+                    namespace: ns_str.parse().unwrap_or_default(),
+                    model_tier: mt_str.and_then(|s| s.parse().ok()),
+                    model_override: row.get(11)?,
+                    capabilities: serde_json::from_str(&caps_str).unwrap_or_default(),
+                    delegation_table: serde_json::from_str(&deleg_str).unwrap_or_default(),
+                    output_contract: row.get(14)?,
+                    version: row.get(15)?,
+                    created_at: row.get(16)?,
+                    updated_at: row.get(17)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(rows)
+    }
 }
 
 #[cfg(test)]
@@ -778,6 +789,7 @@ mod tests {
     #[test]
     fn template_create_and_get() {
         let conn = setup_db();
+        let mgr = AgentTemplateManager::new(&conn);
         let persona = PersonaConfig {
             name: Some("Test Agent".to_string()),
             depth: PersonaDepth::Standard,
@@ -786,22 +798,22 @@ mod tests {
             philosophy: None,
         };
 
-        let id = create_agent_template(
-            &conn,
-            "test-agent",
-            &persona,
-            &AgentRole::Specialist,
-            &AgentNamespace::User,
-            Some(&ModelTier::Standard),
-            None,
-            &["code_review".to_string()],
-            &["execution".to_string()],
-            None,
-        )
-        .unwrap();
+        let id = mgr
+            .create_agent_template(
+                "test-agent",
+                &persona,
+                &AgentRole::Specialist,
+                &AgentNamespace::User,
+                Some(&ModelTier::Standard),
+                None,
+                &["code_review".to_string()],
+                &["execution".to_string()],
+                None,
+            )
+            .unwrap();
         assert!(!id.is_empty());
 
-        let tmpl = get_agent_template(&conn, "test-agent").unwrap().unwrap();
+        let tmpl = mgr.get_agent_template("test-agent").unwrap().unwrap();
         assert_eq!(tmpl.name, "test-agent");
         assert_eq!(tmpl.persona.name, Some("Test Agent".to_string()));
         assert_eq!(tmpl.persona.depth, PersonaDepth::Standard);
@@ -815,10 +827,10 @@ mod tests {
     #[test]
     fn template_list_by_namespace() {
         let conn = setup_db();
+        let mgr = AgentTemplateManager::new(&conn);
         let persona = PersonaConfig::default();
 
-        create_agent_template(
-            &conn,
+        mgr.create_agent_template(
             "sys-agent",
             &persona,
             &AgentRole::Reviewer,
@@ -830,8 +842,7 @@ mod tests {
             None,
         )
         .unwrap();
-        create_agent_template(
-            &conn,
+        mgr.create_agent_template(
             "usr-agent",
             &persona,
             &AgentRole::Execution,
@@ -844,11 +855,15 @@ mod tests {
         )
         .unwrap();
 
-        let system = list_templates_by_namespace(&conn, &AgentNamespace::System).unwrap();
+        let system = mgr
+            .list_templates_by_namespace(&AgentNamespace::System)
+            .unwrap();
         assert_eq!(system.len(), 1);
         assert_eq!(system[0].name, "sys-agent");
 
-        let user = list_templates_by_namespace(&conn, &AgentNamespace::User).unwrap();
+        let user = mgr
+            .list_templates_by_namespace(&AgentNamespace::User)
+            .unwrap();
         assert_eq!(user.len(), 1);
         assert_eq!(user[0].name, "usr-agent");
     }
@@ -856,7 +871,8 @@ mod tests {
     #[test]
     fn template_get_nonexistent() {
         let conn = setup_db();
-        let result = get_agent_template(&conn, "does-not-exist").unwrap();
+        let mgr = AgentTemplateManager::new(&conn);
+        let result = mgr.get_agent_template("does-not-exist").unwrap();
         assert!(result.is_none());
     }
 }
