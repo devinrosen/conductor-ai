@@ -53,6 +53,9 @@ export interface Theme {
   heritage: string;
   unlockCondition: string;
   unlockMessage: string;
+  unlockHint: string;
+  unlockProgressLabel: string;
+  hidden: boolean;
   palette: ThemePalette;
   typography: ThemeTypography;
   surfaces: ThemeSurfaces;
@@ -108,6 +111,9 @@ const conductorClassic: Theme = {
   heritage: "British Railways corporate livery + Pullman luxury coaches",
   unlockCondition: "always",
   unlockMessage: "The original.",
+  unlockHint: "The original.",
+  unlockProgressLabel: "",
+  hidden: false,
   palette: {
     gray50: "#0A1628", gray100: "#162440", gray200: "#232D42", gray300: "#2A3550",
     gray400: "#4A5568", gray500: "#7B8494", gray600: "#7B8494", gray700: "#9CA3B0",
@@ -128,6 +134,9 @@ const londonUnderground: Theme = {
   heritage: "Harry Beck's tube map, Johnston typeface, the roundel",
   unlockCondition: "repos_registered >= 5",
   unlockMessage: "You're running a network now.",
+  unlockHint: "Mind the gap.",
+  unlockProgressLabel: "Repos registered",
+  hidden: false,
   palette: {
     gray50: "#0A0E1A", gray100: "#1A2040", gray200: "#222B52", gray300: "#2A3360",
     gray400: "#505872", gray500: "#8890A0", gray600: "#8890A0", gray700: "#A0A8B8",
@@ -159,6 +168,9 @@ const swissFederal: Theme = {
   heritage: "Josef Muller-Brockmann's SBB design manual, the station clock",
   unlockCondition: "workflow_streak >= 10",
   unlockMessage: "Swiss precision.",
+  unlockHint: "Precision in motion.",
+  unlockProgressLabel: "Consecutive successful workflows",
+  hidden: false,
   palette: {
     gray50: "#0D0D0D", gray100: "#1F1F1F", gray200: "#2A2A2A", gray300: "#383838",
     gray400: "#555555", gray500: "#999999", gray600: "#999999", gray700: "#BBBBBB",
@@ -194,6 +206,9 @@ const shinkansen: Theme = {
   heritage: "Japanese station signage, E5 Hayabusa, sakura season",
   unlockCondition: "prs_merged >= 50",
   unlockMessage: "High-speed operations.",
+  unlockHint: "High-speed elegance.",
+  unlockProgressLabel: "PRs merged",
+  hidden: false,
   palette: {
     gray50: "#0B1015", gray100: "#1A2330", gray200: "#222E3E", gray300: "#2A3648",
     gray400: "#4A5568", gray500: "#7A8694", gray600: "#7A8694", gray700: "#9AA6B4",
@@ -226,6 +241,9 @@ const platform934: Theme = {
   heritage: "Hogwarts Express, King's Cross Station, magical Victorian railway",
   unlockCondition: "hidden",
   unlockMessage: "You found it.",
+  unlockHint: "Something magical this way comes...",
+  unlockProgressLabel: "",
+  hidden: true,
   palette: {
     gray50: "#1A0A0A", gray100: "#2E1A1A", gray200: "#3A2222", gray300: "#4A2E2E",
     gray400: "#6B5445", gray500: "#9C8672", gray600: "#9C8672", gray700: "#B8A08A",
@@ -260,6 +278,9 @@ const orientExpress: Theme = {
   heritage: "Lalique glass, marquetry wood panels, brass fittings",
   unlockCondition: "usage_years >= 1",
   unlockMessage: "A seasoned traveler.",
+  unlockHint: "A journey through time.",
+  unlockProgressLabel: "Years of use",
+  hidden: false,
   palette: {
     gray50: "#0C1A15", gray100: "#1B3A30", gray200: "#244A3D", gray300: "#2E5A4A",
     gray400: "#6B6050", gray500: "#A09480", gray600: "#A09480", gray700: "#B8AC98",
@@ -294,6 +315,9 @@ const nycSubway: Theme = {
   heritage: "Massimo Vignelli's 1972 subway map, Helvetica signage",
   unlockCondition: "parallel_agents >= 10",
   unlockMessage: "Running a 24/7 operation.",
+  unlockHint: "The city that never sleeps.",
+  unlockProgressLabel: "Parallel agent sessions",
+  hidden: false,
   palette: {
     gray50: "#0A0A0A", gray100: "#1E1E1E", gray200: "#282828", gray300: "#363636",
     gray400: "#585858", gray500: "#909090", gray600: "#909090", gray700: "#B0B0B0",
@@ -330,6 +354,9 @@ const transSiberian: Theme = {
   heritage: "World's longest railway, Russian railway heritage",
   unlockCondition: "workflow_steps >= 20",
   unlockMessage: "The longest journey.",
+  unlockHint: "The longest journey begins.",
+  unlockProgressLabel: "Steps in a single workflow",
+  hidden: false,
   palette: {
     gray50: "#070D08", gray100: "#162218", gray200: "#1E2E20", gray300: "#263828",
     gray400: "#566058", gray500: "#8A9A8C", gray600: "#8A9A8C", gray700: "#A4B4A6",
@@ -362,6 +389,9 @@ const pullmanClass: Theme = {
   heritage: "George Pullman's luxury sleeping cars, community contribution",
   unlockCondition: "oss_contributor",
   unlockMessage: "First class, always.",
+  unlockHint: "For those who contribute.",
+  unlockProgressLabel: "OSS contributions",
+  hidden: false,
   palette: {
     gray50: "#120C06", gray100: "#28200E", gray200: "#342A16", gray300: "#40341E",
     gray400: "#6B5C3E", gray500: "#A08A60", gray600: "#A08A60", gray700: "#B8A278",
