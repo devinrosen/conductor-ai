@@ -8,6 +8,8 @@
 
 use std::process::Command;
 
+use crate::git::git_in;
+
 /// Configuration for the commit verification gate.
 #[derive(Debug, Clone)]
 pub struct CommitGateConfig {
@@ -79,21 +81,17 @@ pub fn detect_agent_commits(
     working_dir: &str,
     before_sha: &str,
 ) -> crate::error::Result<Vec<String>> {
-    let output = Command::new("git")
-        .args(["log", "--format=%H", &format!("{before_sha}..HEAD")])
-        .current_dir(working_dir)
-        .output()
-        .map_err(|e| {
-            crate::error::ConductorError::Git(crate::error::SubprocessFailure::from_message(
-                "git log",
-                format!("failed to detect agent commits: {e}"),
-            ))
-        })?;
-
-    if !output.status.success() {
-        // No commits or invalid range — treat as no commits
-        return Ok(vec![]);
-    }
+    let output = match crate::git::check_output(git_in(working_dir).args([
+        "log",
+        "--format=%H",
+        &format!("{before_sha}..HEAD"),
+    ])) {
+        Ok(o) => o,
+        Err(_) => {
+            // Non-zero exit (e.g. invalid range) — treat as no commits
+            return Ok(vec![]);
+        }
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let shas: Vec<String> = stdout
@@ -108,12 +106,8 @@ pub fn detect_agent_commits(
 
 /// Capture the current HEAD SHA for later comparison.
 pub fn capture_head_sha(working_dir: &str) -> Option<String> {
-    Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(working_dir)
-        .output()
+    crate::git::check_output(git_in(working_dir).args(["rev-parse", "HEAD"]))
         .ok()
-        .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 

@@ -140,3 +140,57 @@ impl std::str::FromStr for WorkflowStepStatus {
 }
 
 crate::impl_sql_enum!(WorkflowStepStatus);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_terminal_states() {
+        assert!(WorkflowRunStatus::Completed.is_terminal());
+        assert!(WorkflowRunStatus::Failed.is_terminal());
+        assert!(WorkflowRunStatus::Cancelled.is_terminal());
+        assert!(!WorkflowRunStatus::Pending.is_terminal());
+        assert!(!WorkflowRunStatus::Running.is_terminal());
+        assert!(!WorkflowRunStatus::Waiting.is_terminal());
+    }
+
+    #[test]
+    fn run_active_states() {
+        assert!(WorkflowRunStatus::Pending.is_active());
+        assert!(WorkflowRunStatus::Running.is_active());
+        assert!(WorkflowRunStatus::Waiting.is_active());
+        assert!(!WorkflowRunStatus::Completed.is_active());
+        assert!(!WorkflowRunStatus::Failed.is_active());
+        assert!(!WorkflowRunStatus::Cancelled.is_active());
+    }
+
+    #[test]
+    fn step_terminal_states() {
+        assert!(WorkflowStepStatus::Completed.is_terminal());
+        assert!(WorkflowStepStatus::Failed.is_terminal());
+        assert!(WorkflowStepStatus::Skipped.is_terminal());
+        assert!(WorkflowStepStatus::TimedOut.is_terminal());
+        assert!(!WorkflowStepStatus::Pending.is_terminal());
+        assert!(!WorkflowStepStatus::Running.is_terminal());
+        assert!(!WorkflowStepStatus::Waiting.is_terminal());
+    }
+
+    #[test]
+    fn run_terminal_and_active_are_mutually_exclusive() {
+        let all = [
+            WorkflowRunStatus::Pending,
+            WorkflowRunStatus::Running,
+            WorkflowRunStatus::Completed,
+            WorkflowRunStatus::Failed,
+            WorkflowRunStatus::Cancelled,
+            WorkflowRunStatus::Waiting,
+        ];
+        for s in all {
+            assert!(
+                s.is_terminal() != s.is_active(),
+                "{s} should be exactly one of terminal or active"
+            );
+        }
+    }
+}

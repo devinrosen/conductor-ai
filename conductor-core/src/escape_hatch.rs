@@ -7,6 +7,7 @@
 
 /// Classification of override risk level.
 #[derive(Debug, Clone, serde::Serialize)]
+#[allow(dead_code)] // Low tier will be used for non-destructive overrides
 pub enum OverrideTier {
     /// Self-service: --force flag, low risk of data loss.
     Low,

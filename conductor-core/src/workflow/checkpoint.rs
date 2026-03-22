@@ -110,7 +110,9 @@ pub fn remove_checkpoint(workflow_run_id: &str) -> std::io::Result<()> {
 /// Build a checkpoint from the current workflow manager state.
 ///
 /// Queries the DB to collect step statuses and progress.
-pub fn build_checkpoint(
+/// This is `pub(crate)` to avoid leaking raw `&Connection` through the public API.
+#[allow(dead_code)] // Will be called from engine.rs when checkpoint writes are wired in
+pub(crate) fn build_checkpoint(
     conn: &rusqlite::Connection,
     workflow_run_id: &str,
     last_action: &str,
@@ -129,8 +131,7 @@ pub fn build_checkpoint(
         .query_map(rusqlite::params![workflow_run_id], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let total = steps.len() as u32;
     let completed = steps.iter().filter(|(_, s, _)| s == "completed").count() as u32;

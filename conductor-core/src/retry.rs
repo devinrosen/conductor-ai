@@ -33,9 +33,17 @@ impl Default for RetryConfig {
 #[derive(Debug)]
 pub enum RetryOutcome<T, E> {
     /// Operation succeeded after `attempts` tries.
-    Success { value: T, attempts: u32 },
+    Success {
+        value: T,
+        #[allow(dead_code)]
+        attempts: u32,
+    },
     /// All retry attempts exhausted.
-    Exhausted { last_error: E, attempts: u32 },
+    Exhausted {
+        last_error: E,
+        #[allow(dead_code)]
+        attempts: u32,
+    },
 }
 
 /// Execute `operation` with bounded retry and exponential backoff.

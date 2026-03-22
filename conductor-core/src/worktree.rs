@@ -661,12 +661,9 @@ impl<'a> WorktreeManager<'a> {
             })?;
 
         if !worktree.is_active() {
-            return Err(ConductorError::Git(SubprocessFailure::from_message(
-                "worktree-status-check",
-                format!(
-                    "worktree '{}' is not active (status: {})",
-                    wt_slug, worktree.status
-                ),
+            return Err(ConductorError::InvalidInput(format!(
+                "worktree '{}' is not active (status: {})",
+                wt_slug, worktree.status
             )));
         }
 
