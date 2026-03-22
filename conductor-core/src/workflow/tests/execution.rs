@@ -903,6 +903,7 @@ fn test_cannot_start_workflow_run_when_active() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
     let err = execute_workflow(&input).unwrap_err();
     assert!(
@@ -950,6 +951,7 @@ fn test_can_start_workflow_run_after_completion() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
     // Guard should pass; empty workflow completes successfully.
     let result = execute_workflow(&input);
@@ -999,6 +1001,7 @@ fn test_child_workflow_not_blocked_by_parent() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
     let result = execute_workflow(&input);
     assert!(
@@ -1042,6 +1045,7 @@ fn test_run_id_notify_slot_is_populated() {
         run_id_notify: Some(std::sync::Arc::clone(&slot)),
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
 
     execute_workflow(&input).expect("workflow should complete");
@@ -1093,6 +1097,7 @@ fn test_execute_workflow_falls_back_to_repo_root_when_worktree_path_missing() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
 
     let result = execute_workflow(&input).expect(
@@ -2058,6 +2063,7 @@ fn test_execute_workflow_injects_repo_variables() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -2111,6 +2117,7 @@ fn test_execute_workflow_injects_ticket_variables() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -2168,6 +2175,7 @@ fn test_execute_workflow_existing_input_not_overwritten_by_injection() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -2212,6 +2220,7 @@ fn test_execute_workflow_unknown_ticket_id_returns_error() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -2247,6 +2256,7 @@ fn test_execute_workflow_unknown_repo_id_returns_error() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
     assert!(
         execute_workflow(&input).is_err(),
@@ -2287,6 +2297,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
     let result1 = execute_workflow(&input1);
     assert!(
@@ -2321,6 +2332,7 @@ fn test_execute_workflow_ephemeral_skips_concurrent_guard() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
     let result2 = execute_workflow(&input2);
     assert!(
@@ -2661,6 +2673,7 @@ fn test_execute_workflow_iteration_persisted() {
         run_id_notify: Some(slot.clone()),
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
 
     let result = execute_workflow(&input);
@@ -2736,6 +2749,7 @@ fn test_execute_workflow_fails_on_invalid_schema() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
 
     let err = execute_workflow(&input).unwrap_err();
@@ -2811,6 +2825,7 @@ fn test_execute_workflow_fails_on_invalid_schema_parse() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
 
     let err = execute_workflow(&input).unwrap_err();
@@ -2890,6 +2905,7 @@ fn test_execute_workflow_passes_preflight_with_valid_schema() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
 
     // execute_workflow should pass pre-flight validation (schema exists and is valid).
@@ -2944,6 +2960,7 @@ fn test_execute_workflow_injects_feature_variables() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -2995,6 +3012,7 @@ fn test_execute_workflow_invalid_feature_id_returns_error() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
     let err = execute_workflow(&input).unwrap_err();
     assert!(
@@ -3061,6 +3079,7 @@ fn test_call_workflow_propagates_feature_id_to_child() {
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
 
@@ -3151,6 +3170,7 @@ fn test_call_workflow_propagates_triggered_by_hook_to_child() {
         run_id_notify: None,
         triggered_by_hook: true,
         conductor_bin_dir: None,
+        force: false,
     };
     let result = execute_workflow(&input).unwrap();
     assert!(result.all_succeeded);
@@ -3252,6 +3272,7 @@ on_complete = "should-not-fire"
         run_id_notify: None,
         triggered_by_hook: true,
         conductor_bin_dir: None,
+        force: false,
     };
 
     let result = execute_workflow(&input).unwrap();
@@ -3319,6 +3340,7 @@ on_complete = "nonexistent-hook-wf"
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
 
     let result = execute_workflow(&input).unwrap();
@@ -3376,6 +3398,7 @@ on_complete = "post-complete"
         run_id_notify: None,
         triggered_by_hook: false,
         conductor_bin_dir: None,
+        force: false,
     };
 
     let result = execute_workflow(&input).unwrap();

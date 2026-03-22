@@ -1594,6 +1594,7 @@ fn main() -> Result<()> {
                             triggered_by_hook: false,
                             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(
                             ),
+                            force: false,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1649,6 +1650,7 @@ fn main() -> Result<()> {
                             triggered_by_hook: false,
                             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(
                             ),
+                            force: false,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1704,6 +1706,7 @@ fn main() -> Result<()> {
                             triggered_by_hook: false,
                             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(
                             ),
+                            force: false,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
@@ -1762,6 +1765,7 @@ fn main() -> Result<()> {
                             triggered_by_hook: false,
                             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(
                             ),
+                            force: false,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
