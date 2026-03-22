@@ -1,11 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <!-- Background -->
-  <rect width="16" height="16" rx="3.5" fill="#0F1D36"/>
+  <rect width="512" height="512" rx="112" fill="#0F1D36"/>
 
-  <!-- Bold C — maximum simplicity -->
-  <path d="M 11 3.5 A 5.5 5.5 0 1 0 11 12.5"
-        fill="none" stroke="#CD853F" stroke-width="2.8" stroke-linecap="round"/>
+  <!-- Clean bold C — flat brass, no gradient -->
+  <path d="M 330 115 A 175 175 0 1 0 330 397"
+        fill="none" stroke="#CD953F" stroke-width="44" stroke-linecap="round"/>
 
-  <!-- Single green dot -->
-  <circle cx="12.2" cy="8" r="1.6" fill="#39B54A"/>
+  <!-- Single green signal — flat, clean -->
+  <circle cx="370" cy="256" r="30" fill="#39B54A"/>
 </svg>
