@@ -7,6 +7,11 @@
       "dependencies": {
         "@fontsource-variable/inter": "^5.2.8",
         "@fontsource-variable/jetbrains-mono": "^5.2.8",
+        "@fontsource-variable/libre-baskerville": "^5.2.1",
+        "@fontsource-variable/overpass": "^5.2.8",
+        "@fontsource-variable/playfair-display": "^5.2.8",
+        "@fontsource-variable/raleway": "^5.2.8",
+        "@fontsource/josefin-sans": "^5.2.8",
         "@tauri-apps/api": "^2.0.0",
         "react": "^19.2.0",
         "react-dom": "^19.2.0",
@@ -293,6 +298,16 @@
     "@fontsource-variable/inter": ["@fontsource-variable/inter@5.2.8", "", {}, "sha512-kOfP2D+ykbcX/P3IFnokOhVRNoTozo5/JxhAIVYLpea/UBmCQ/YWPBfWIDuBImXX/15KH+eKh4xpEUyS2sQQGQ=="],
 
     "@fontsource-variable/jetbrains-mono": ["@fontsource-variable/jetbrains-mono@5.2.8", "", {}, "sha512-WBA9elru6Jdp5df2mES55wuOO0WIrn3kpXnI4+W2ek5u3ZgLS9XS4gmIlcQhiZOWEKl95meYdvK7xI+ETLCq/Q=="],
+
+    "@fontsource-variable/libre-baskerville": ["@fontsource-variable/libre-baskerville@5.2.1", "", {}, "sha512-O1FvkY4XMmIkoG6F+YS8cQKxLh0w0+h85ats/3gRnAAo4WEFUaja5efq07pA0tUI5biNZQi2dLmIznD8F7EkMg=="],
+
+    "@fontsource-variable/overpass": ["@fontsource-variable/overpass@5.2.8", "", {}, "sha512-7/gP2f9ylVFYEhdyeHl6JSEcmNQ5QBdDs5BuT4V+FqSvkk9XjwdikmtTJuNTRWevMAhBkTUWf/dm68G2SbMdjQ=="],
+
+    "@fontsource-variable/playfair-display": ["@fontsource-variable/playfair-display@5.2.8", "", {}, "sha512-ZzVIXPOrL85yyOvZYoBzUszIJM+xKkHqni4IYn2CVLaGQQdJR8sBeC8yFNgjxSJ7ludTwta8qpULeOFuk5X75A=="],
+
+    "@fontsource-variable/raleway": ["@fontsource-variable/raleway@5.2.8", "", {}, "sha512-PahqGI7bkz4a80m91Jt65DRsuFQmRip5vGDbI9sChVSKjLrdDfXbeGIwnTPi/ZVCOoQrbLnqzBOLQpLohnz+WA=="],
+
+    "@fontsource/josefin-sans": ["@fontsource/josefin-sans@5.2.8", "", {}, "sha512-bGY9VWF01JQc5pAOF3+tLlm75dpwJrRhd5CzY3/oyksvdZQbtwOHSDuu20VGxbBDx2/JQdllNvSJFgqI4QGGqg=="],
 
     "@humanfs/core": ["@humanfs/core@0.19.1", "", {}, "sha512-5DyQ4+1JEUzejeK1JGICcideyfUbGixgS9jNgex5nqkW+cY7WZhxBigmieN5Qnw9ZosSNVC9KQKyb+GUaGyKUA=="],
 
