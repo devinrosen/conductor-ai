@@ -1,5 +1,45 @@
 use thiserror::Error;
 
+/// Structured data from a failed subprocess invocation.
+///
+/// Preserves the command string, exit code, and captured output so callers can
+/// programmatically classify failures (transient vs permanent, auth vs network, etc.)
+/// instead of parsing opaque error messages.
+///
+/// Part of: semantic-exit-code-convention@1.0.0, bounded-retry-with-escalation@1.0.0
+#[derive(Debug, Clone)]
+pub struct SubprocessFailure {
+    pub command: String,
+    pub exit_code: Option<i32>,
+    pub stderr: String,
+    pub stdout: String,
+}
+
+impl SubprocessFailure {
+    /// Convenience constructor for call sites that only have a pre-formatted message
+    /// (e.g. spawn failures where no Output is available).
+    pub fn from_message(command: &str, message: String) -> Self {
+        Self {
+            command: command.to_string(),
+            exit_code: None,
+            stderr: message,
+            stdout: String::new(),
+        }
+    }
+}
+
+impl std::fmt::Display for SubprocessFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.stderr.is_empty() {
+            write!(f, "{} failed: {}", self.command, self.stderr)
+        } else if let Some(code) = self.exit_code {
+            write!(f, "{} exited with code {}", self.command, code)
+        } else {
+            write!(f, "{} failed", self.command)
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ConductorError {
     #[error("database error: {0}")]
@@ -18,10 +58,10 @@ pub enum ConductorError {
     WorktreeAlreadyExists { slug: String },
 
     #[error("git error: {0}")]
-    Git(String),
+    Git(SubprocessFailure),
 
     #[error("gh cli error: {0}")]
-    GhCli(String),
+    GhCli(SubprocessFailure),
 
     #[error("config error: {0}")]
     Config(String),

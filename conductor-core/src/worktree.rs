@@ -7,7 +7,7 @@ use std::process::Command;
 
 use crate::config::Config;
 use crate::db::query_collect;
-use crate::error::{ConductorError, Result};
+use crate::error::{ConductorError, Result, SubprocessFailure};
 use crate::git::{check_gh_output, check_output, git_in};
 use crate::repo::RepoManager;
 
@@ -653,9 +653,12 @@ impl<'a> WorktreeManager<'a> {
             })?;
 
         if !worktree.is_active() {
-            return Err(ConductorError::Git(format!(
-                "worktree '{}' is not active (status: {})",
-                wt_slug, worktree.status
+            return Err(ConductorError::Git(SubprocessFailure::from_message(
+                "worktree-status-check",
+                format!(
+                    "worktree '{}' is not active (status: {})",
+                    wt_slug, worktree.status
+                ),
             )));
         }
 
@@ -822,9 +825,10 @@ fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Result<Vec<Stri
     // 1. Check for uncommitted changes in the repo working tree
     let output = git_in(repo_path).args(["status", "--porcelain"]).output()?;
     if output.status.success() && !output.stdout.is_empty() {
-        return Err(ConductorError::Git(
+        return Err(ConductorError::Git(SubprocessFailure::from_message(
+            "git status --porcelain",
             "uncommitted changes on base branch, please commit or stash first".to_string(),
-        ));
+        )));
     }
 
     // 2. Fetch from remote (soft failure — warn and allow local-only creation)
@@ -973,8 +977,9 @@ fn parse_pr_view_output(raw: &str) -> Result<(String, String, String, bool)> {
     let raw = raw.trim();
     let parts: Vec<&str> = raw.splitn(4, '|').collect();
     if parts.len() < 4 {
-        return Err(ConductorError::GhCli(format!(
-            "unexpected gh pr view output: {raw}"
+        return Err(ConductorError::GhCli(SubprocessFailure::from_message(
+            "gh pr view",
+            format!("unexpected gh pr view output: {raw}"),
         )));
     }
     let head_branch = parts[0].to_string();
