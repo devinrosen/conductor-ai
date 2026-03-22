@@ -45,6 +45,7 @@ pub mod notification_manager;
 pub mod notify;
 pub mod orchestrator;
 pub mod prompt_config;
+pub mod recovery;
 pub mod repo;
 pub mod retry;
 pub mod schema_config;
