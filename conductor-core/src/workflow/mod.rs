@@ -6,6 +6,7 @@
 
 mod batch_validate;
 pub mod checkpoint;
+pub mod commit_gate;
 pub(crate) mod constants;
 pub(crate) mod engine;
 pub(crate) mod executors;
