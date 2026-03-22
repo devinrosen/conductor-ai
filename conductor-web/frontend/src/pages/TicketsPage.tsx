@@ -180,7 +180,7 @@ export function TicketsPage() {
       ) : filtered.length === 0 ? (
         <EmptyState
           message={
-            filter || selectedLabels.size > 0 ? "No tickets match your filter" : "No tickets synced yet"
+            filter || selectedLabels.size > 0 ? "No tickets match your filter" : "No tickets issued. Sync your issues to start the journey."
           }
         />
       ) : (
