@@ -1,6 +1,7 @@
 import { NavLink } from "react-router";
 import { useRepos } from "./AppShell";
 import { NotificationBell } from "../notifications/NotificationBell";
+import { isDesktop } from "../../api/transport";
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   `block px-3 py-2 rounded-md text-sm ${
@@ -76,7 +77,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         ))}
 
         {!loading && repos.length === 0 && (
-          <div className="px-3 py-2 text-sm text-gray-400">No repos yet</div>
+          <div className="px-3 py-2 text-sm text-gray-400">
+            {isDesktop() ? "The station is quiet" : "No repos yet"}
+          </div>
         )}
       </nav>
 
