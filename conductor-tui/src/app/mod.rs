@@ -1683,4 +1683,743 @@ workflow my-wf {
         assert_eq!(advance_form_field(&fields, 0, true), Some(0));
         assert_eq!(advance_form_field(&fields, 0, false), Some(0));
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Task 2: Navigation tests
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn back_from_repo_detail_goes_to_dashboard() {
+        let mut app = make_app();
+        app.state.view = View::RepoDetail;
+        app.state.selected_repo_id = Some("r1".into());
+        app.update(Action::Back);
+        assert_eq!(app.state.view, View::Dashboard);
+        assert!(app.state.selected_repo_id.is_none());
+    }
+
+    #[test]
+    fn back_from_worktree_detail_with_repo_goes_to_repo_detail() {
+        let mut app = make_app();
+        app.state.view = View::WorktreeDetail;
+        app.state.selected_repo_id = Some("r1".into());
+        app.state.selected_worktree_id = Some("w1".into());
+        app.update(Action::Back);
+        assert_eq!(app.state.view, View::RepoDetail);
+        assert!(app.state.selected_worktree_id.is_none());
+    }
+
+    #[test]
+    fn back_from_worktree_detail_without_repo_goes_to_dashboard() {
+        let mut app = make_app();
+        app.state.view = View::WorktreeDetail;
+        app.state.selected_repo_id = None;
+        app.state.selected_worktree_id = Some("w1".into());
+        app.update(Action::Back);
+        assert_eq!(app.state.view, View::Dashboard);
+        assert!(app.state.selected_worktree_id.is_none());
+    }
+
+    #[test]
+    fn back_from_workflow_def_detail_restores_previous_view() {
+        let mut app = make_app();
+        app.state.view = View::WorkflowDefDetail;
+        app.state.previous_view = Some(View::RepoDetail);
+        app.update(Action::Back);
+        assert_eq!(app.state.view, View::RepoDetail);
+        assert!(app.state.selected_workflow_def.is_none());
+        assert_eq!(app.state.column_focus, crate::state::ColumnFocus::Workflow);
+        assert_eq!(
+            app.state.workflows_focus,
+            crate::state::WorkflowsFocus::Defs
+        );
+    }
+
+    #[test]
+    fn back_from_workflow_step_tree_exits_pane_not_view() {
+        let mut app = make_app();
+        app.state.column_focus = crate::state::ColumnFocus::Workflow;
+        app.state.workflows_focus = crate::state::WorkflowsFocus::Defs;
+        app.state.workflow_def_focus = crate::state::WorkflowDefFocus::Steps;
+        app.state.view = View::Dashboard;
+        app.update(Action::Back);
+        // Should exit the step tree pane, not the view
+        assert_eq!(
+            app.state.workflow_def_focus,
+            crate::state::WorkflowDefFocus::List
+        );
+        assert_eq!(app.state.view, View::Dashboard);
+    }
+
+    #[test]
+    fn next_panel_cycles_repo_detail_focus() {
+        let mut app = make_app();
+        app.state.view = View::RepoDetail;
+        app.state.column_focus = crate::state::ColumnFocus::Content;
+        app.state.repo_detail_focus = crate::state::RepoDetailFocus::Info;
+        // Cycle: Info → Worktrees → Prs → Tickets → Info
+        app.update(Action::NextPanel);
+        assert_eq!(
+            app.state.repo_detail_focus,
+            crate::state::RepoDetailFocus::Worktrees
+        );
+        app.update(Action::NextPanel);
+        assert_eq!(
+            app.state.repo_detail_focus,
+            crate::state::RepoDetailFocus::Prs
+        );
+        app.update(Action::NextPanel);
+        assert_eq!(
+            app.state.repo_detail_focus,
+            crate::state::RepoDetailFocus::Tickets
+        );
+    }
+
+    #[test]
+    fn prev_panel_cycles_repo_detail_focus_backward() {
+        let mut app = make_app();
+        app.state.view = View::RepoDetail;
+        app.state.column_focus = crate::state::ColumnFocus::Content;
+        app.state.repo_detail_focus = crate::state::RepoDetailFocus::Worktrees;
+        app.update(Action::PrevPanel);
+        assert_eq!(
+            app.state.repo_detail_focus,
+            crate::state::RepoDetailFocus::Info
+        );
+    }
+
+    #[test]
+    fn next_panel_toggles_worktree_detail_focus() {
+        let mut app = make_app();
+        app.state.view = View::WorktreeDetail;
+        app.state.column_focus = crate::state::ColumnFocus::Content;
+        app.state.worktree_detail_focus = crate::state::WorktreeDetailFocus::InfoPanel;
+        app.update(Action::NextPanel);
+        assert_eq!(
+            app.state.worktree_detail_focus,
+            crate::state::WorktreeDetailFocus::LogPanel
+        );
+        app.update(Action::NextPanel);
+        assert_eq!(
+            app.state.worktree_detail_focus,
+            crate::state::WorktreeDetailFocus::InfoPanel
+        );
+    }
+
+    #[test]
+    fn clamp_indices_handles_empty_lists() {
+        let mut app = make_app();
+        app.state.dashboard_index = 5;
+        // With no data, dashboard_rows is empty → index stays as-is (clamp only when len > 0)
+        app.clamp_indices();
+        // dashboard_rows is empty so the clamp block doesn't fire
+        assert_eq!(app.state.dashboard_index, 5);
+    }
+
+    #[test]
+    fn move_down_dashboard_clamps_at_end() {
+        let mut app = make_app();
+        app.state.view = View::Dashboard;
+        app.state.column_focus = crate::state::ColumnFocus::Content;
+        // No repos/worktrees → dashboard_rows is empty
+        app.update(Action::MoveDown);
+        assert_eq!(app.state.dashboard_index, 0);
+    }
+
+    #[test]
+    fn move_up_dashboard_clamps_at_zero() {
+        let mut app = make_app();
+        app.state.view = View::Dashboard;
+        app.state.column_focus = crate::state::ColumnFocus::Content;
+        app.state.dashboard_index = 0;
+        app.update(Action::MoveUp);
+        assert_eq!(app.state.dashboard_index, 0);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Task 3: Modal dialog tests
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn confirm_quit_sets_should_quit() {
+        let mut app = make_app();
+        app.state.modal = Modal::Confirm {
+            title: "Confirm Quit".into(),
+            message: "Quit?".into(),
+            on_confirm: crate::state::ConfirmAction::Quit,
+        };
+        app.update(Action::ConfirmYes);
+        assert!(app.state.should_quit);
+    }
+
+    #[test]
+    fn show_confirm_quit_no_agents_generic_message() {
+        let mut app = make_app();
+        app.show_confirm_quit();
+        if let Modal::Confirm { message, .. } = &app.state.modal {
+            assert_eq!(message, "Quit conductor?");
+        } else {
+            panic!("expected Confirm modal");
+        }
+    }
+
+    #[test]
+    fn show_confirm_quit_with_running_agents_includes_count() {
+        let mut app = make_app();
+        // Insert a running agent run
+        app.state.data.latest_agent_runs.insert(
+            "wt1".into(),
+            conductor_core::agent::AgentRun {
+                id: "run1".into(),
+                worktree_id: Some("wt1".into()),
+                claude_session_id: None,
+                prompt: String::new(),
+                status: conductor_core::agent::AgentRunStatus::Running,
+                result_text: None,
+                cost_usd: None,
+                num_turns: None,
+                duration_ms: None,
+                started_at: "2024-01-01T00:00:00Z".into(),
+                ended_at: None,
+                tmux_window: None,
+                log_file: None,
+                model: None,
+                plan: None,
+                parent_run_id: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_input_tokens: None,
+                cache_creation_input_tokens: None,
+                bot_name: None,
+            },
+        );
+        app.show_confirm_quit();
+        if let Modal::Confirm { message, .. } = &app.state.modal {
+            assert!(
+                message.contains("1 agent is running"),
+                "expected agent count in message: {message}"
+            );
+        } else {
+            panic!("expected Confirm modal");
+        }
+    }
+
+    #[test]
+    fn delete_worktree_no_bg_tx_no_crash() {
+        let mut app = make_app();
+        assert!(app.bg_tx.is_none());
+        app.execute_confirm_action(crate::state::ConfirmAction::DeleteWorktree {
+            repo_slug: "test".into(),
+            wt_slug: "test-wt".into(),
+        });
+        // No crash, modal should not change to Progress (because bg_tx is None → early return)
+        assert!(matches!(app.state.modal, Modal::None));
+    }
+
+    #[test]
+    fn unregister_repo_no_bg_tx_no_crash() {
+        let mut app = make_app();
+        assert!(app.bg_tx.is_none());
+        app.execute_confirm_action(crate::state::ConfirmAction::UnregisterRepo {
+            repo_slug: "test".into(),
+        });
+        assert!(matches!(app.state.modal, Modal::None));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Task 4: Git operations result handling tests
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn push_complete_ok_clears_modal_sets_status() {
+        let mut app = make_app();
+        app.state.modal = Modal::Progress {
+            message: "Pushing…".into(),
+        };
+        app.update(Action::PushComplete {
+            result: Ok("Pushed to origin/feat-x".into()),
+        });
+        assert!(matches!(app.state.modal, Modal::None));
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Pushed to origin/feat-x")
+        );
+    }
+
+    #[test]
+    fn push_complete_err_shows_error_modal() {
+        let mut app = make_app();
+        app.update(Action::PushComplete {
+            result: Err("auth failed".into()),
+        });
+        if let Modal::Error { message } = &app.state.modal {
+            assert!(message.contains("auth failed"));
+        } else {
+            panic!("expected Error modal");
+        }
+    }
+
+    #[test]
+    fn pr_create_complete_ok_sets_status() {
+        let mut app = make_app();
+        app.update(Action::PrCreateComplete {
+            result: Ok("https://github.com/x/y/pull/1".into()),
+        });
+        assert!(matches!(app.state.modal, Modal::None));
+        let msg = app.state.status_message.as_deref().unwrap();
+        assert!(msg.contains("PR created"));
+    }
+
+    #[test]
+    fn pr_create_complete_err_shows_error() {
+        let mut app = make_app();
+        app.update(Action::PrCreateComplete {
+            result: Err("no commits".into()),
+        });
+        assert!(matches!(app.state.modal, Modal::Error { .. }));
+    }
+
+    #[test]
+    fn worktree_delete_complete_ok_navigates_to_dashboard() {
+        let mut app = make_app();
+        app.state.view = View::WorktreeDetail;
+        app.state.selected_worktree_id = Some("w1".into());
+        app.update(Action::WorktreeDeleteComplete {
+            wt_slug: "feat-x".into(),
+            result: Ok("Merged".into()),
+        });
+        assert!(matches!(app.state.modal, Modal::None));
+        assert_eq!(app.state.view, View::Dashboard);
+        assert!(app.state.selected_worktree_id.is_none());
+        let msg = app.state.status_message.as_deref().unwrap();
+        assert!(msg.contains("feat-x") && msg.contains("Merged"));
+    }
+
+    #[test]
+    fn worktree_delete_complete_err_shows_error() {
+        let mut app = make_app();
+        app.update(Action::WorktreeDeleteComplete {
+            wt_slug: "feat-x".into(),
+            result: Err("worktree busy".into()),
+        });
+        assert!(matches!(app.state.modal, Modal::Error { .. }));
+    }
+
+    #[test]
+    fn repo_unregister_complete_ok_navigates_to_dashboard() {
+        let mut app = make_app();
+        app.state.view = View::RepoDetail;
+        app.state.selected_repo_id = Some("r1".into());
+        app.update(Action::RepoUnregisterComplete {
+            repo_slug: "my-repo".into(),
+            result: Ok(()),
+        });
+        assert_eq!(app.state.view, View::Dashboard);
+        assert!(app.state.selected_repo_id.is_none());
+        let msg = app.state.status_message.as_deref().unwrap();
+        assert!(msg.contains("my-repo"));
+    }
+
+    #[test]
+    fn repo_unregister_complete_err_shows_error() {
+        let mut app = make_app();
+        app.update(Action::RepoUnregisterComplete {
+            repo_slug: "my-repo".into(),
+            result: Err("has worktrees".into()),
+        });
+        assert!(matches!(app.state.modal, Modal::Error { .. }));
+    }
+
+    #[test]
+    fn background_error_shows_error_modal() {
+        let mut app = make_app();
+        app.update(Action::BackgroundError {
+            message: "something broke".into(),
+        });
+        if let Modal::Error { message } = &app.state.modal {
+            assert_eq!(message, "something broke");
+        } else {
+            panic!("expected Error modal");
+        }
+    }
+
+    #[test]
+    fn background_success_sets_status_message() {
+        let mut app = make_app();
+        app.update(Action::BackgroundSuccess {
+            message: "done".into(),
+        });
+        assert_eq!(app.state.status_message.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn handle_push_no_worktree_selected() {
+        let mut app = make_app();
+        app.state.selected_worktree_id = None;
+        app.handle_push();
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Select a worktree first")
+        );
+    }
+
+    #[test]
+    fn handle_create_pr_no_worktree_selected() {
+        let mut app = make_app();
+        app.state.selected_worktree_id = None;
+        app.handle_create_pr();
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Select a worktree first")
+        );
+    }
+
+    #[test]
+    fn handle_sync_tickets_already_in_progress() {
+        let mut app = make_app();
+        app.state.ticket_sync_in_progress = true;
+        app.handle_sync_tickets();
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Sync already in progress...")
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Task 5: Input handling tests
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn form_char_appends_to_active_field() {
+        let mut app = make_app();
+        app.state.modal = Modal::Form {
+            title: "Test".into(),
+            fields: vec![FormField {
+                label: "Name".into(),
+                value: String::new(),
+                placeholder: String::new(),
+                manually_edited: false,
+                required: false,
+                readonly: false,
+                field_type: crate::state::FormFieldType::Text,
+            }],
+            active_field: 0,
+            on_submit: crate::state::FormAction::RegisterRepo,
+        };
+        app.update(Action::FormChar('x'));
+        if let Modal::Form { ref fields, .. } = app.state.modal {
+            assert_eq!(fields[0].value, "x");
+            assert!(fields[0].manually_edited);
+        } else {
+            panic!("expected Form modal");
+        }
+    }
+
+    #[test]
+    fn form_backspace_removes_last_char() {
+        let mut app = make_app();
+        app.state.modal = Modal::Form {
+            title: "Test".into(),
+            fields: vec![FormField {
+                label: "Name".into(),
+                value: "abc".into(),
+                placeholder: String::new(),
+                manually_edited: true,
+                required: false,
+                readonly: false,
+                field_type: crate::state::FormFieldType::Text,
+            }],
+            active_field: 0,
+            on_submit: crate::state::FormAction::RegisterRepo,
+        };
+        app.update(Action::FormBackspace);
+        if let Modal::Form { ref fields, .. } = app.state.modal {
+            assert_eq!(fields[0].value, "ab");
+        } else {
+            panic!("expected Form modal");
+        }
+    }
+
+    #[test]
+    fn form_next_prev_field_skips_readonly() {
+        let mut app = make_app();
+        app.state.modal = Modal::Form {
+            title: "Test".into(),
+            fields: vec![
+                FormField {
+                    label: "A".into(),
+                    value: String::new(),
+                    placeholder: String::new(),
+                    manually_edited: false,
+                    required: false,
+                    readonly: false,
+                    field_type: crate::state::FormFieldType::Text,
+                },
+                FormField {
+                    label: "B".into(),
+                    value: String::new(),
+                    placeholder: String::new(),
+                    manually_edited: false,
+                    required: false,
+                    readonly: true,
+                    field_type: crate::state::FormFieldType::Text,
+                },
+                FormField {
+                    label: "C".into(),
+                    value: String::new(),
+                    placeholder: String::new(),
+                    manually_edited: false,
+                    required: false,
+                    readonly: false,
+                    field_type: crate::state::FormFieldType::Text,
+                },
+            ],
+            active_field: 0,
+            on_submit: crate::state::FormAction::RegisterRepo,
+        };
+        // Next from 0 should skip readonly field 1 and land on 2
+        app.update(Action::FormNextField);
+        if let Modal::Form { active_field, .. } = app.state.modal {
+            assert_eq!(active_field, 2);
+        } else {
+            panic!("expected Form modal");
+        }
+        // Prev from 2 should skip readonly field 1 and land on 0
+        app.update(Action::FormPrevField);
+        if let Modal::Form { active_field, .. } = app.state.modal {
+            assert_eq!(active_field, 0);
+        } else {
+            panic!("expected Form modal");
+        }
+    }
+
+    #[test]
+    fn input_char_appends_to_modal_value() {
+        let mut app = make_app();
+        app.state.modal = Modal::Input {
+            title: "Test".into(),
+            prompt: "Enter:".into(),
+            value: "hel".into(),
+            on_submit: crate::state::InputAction::CreateWorktree {
+                repo_slug: "r".into(),
+                ticket_id: None,
+            },
+        };
+        app.update(Action::InputChar('l'));
+        app.update(Action::InputChar('o'));
+        if let Modal::Input { ref value, .. } = app.state.modal {
+            assert_eq!(value, "hello");
+        } else {
+            panic!("expected Input modal");
+        }
+    }
+
+    #[test]
+    fn input_backspace_removes_from_modal_value() {
+        let mut app = make_app();
+        app.state.modal = Modal::Input {
+            title: "Test".into(),
+            prompt: "Enter:".into(),
+            value: "abc".into(),
+            on_submit: crate::state::InputAction::CreateWorktree {
+                repo_slug: "r".into(),
+                ticket_id: None,
+            },
+        };
+        app.update(Action::InputBackspace);
+        if let Modal::Input { ref value, .. } = app.state.modal {
+            assert_eq!(value, "ab");
+        } else {
+            panic!("expected Input modal");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Task 6: Theme management tests
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn themes_loaded_opens_theme_picker_modal() {
+        let mut app = make_app();
+        let themes = vec![
+            ("conductor".to_string(), "Conductor".to_string()),
+            ("dark".to_string(), "Dark".to_string()),
+        ];
+        let loaded_themes = vec![Theme::default(), Theme::default()];
+        app.handle_themes_loaded(themes.clone(), loaded_themes, vec![]);
+        if let Modal::ThemePicker {
+            themes: ref t,
+            selected,
+            ..
+        } = app.state.modal
+        {
+            assert_eq!(t.len(), 2);
+            // Default config theme is None → fallback "conductor" → should select idx 0
+            assert_eq!(selected, 0);
+        } else {
+            panic!("expected ThemePicker modal");
+        }
+    }
+
+    #[test]
+    fn theme_preview_updates_theme() {
+        let mut app = make_app();
+        let default_theme = Theme::default();
+        let other_theme = Theme::default(); // same type, different instance
+        app.state.modal = Modal::ThemePicker {
+            themes: vec![("a".into(), "A".into()), ("b".into(), "B".into())],
+            loaded_themes: vec![default_theme, other_theme],
+            selected: 0,
+            original_theme: default_theme,
+            original_name: "a".into(),
+        };
+        app.handle_theme_preview(1);
+        if let Modal::ThemePicker { selected, .. } = app.state.modal {
+            assert_eq!(selected, 1);
+        } else {
+            panic!("expected ThemePicker modal");
+        }
+    }
+
+    #[test]
+    fn theme_save_complete_ok_sets_status() {
+        let mut app = make_app();
+        app.update(Action::ThemeSaveComplete {
+            result: Ok("Theme set to \"dark\"".into()),
+        });
+        assert!(matches!(app.state.modal, Modal::None));
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Theme set to \"dark\"")
+        );
+    }
+
+    #[test]
+    fn theme_save_complete_err_shows_error() {
+        let mut app = make_app();
+        app.update(Action::ThemeSaveComplete {
+            result: Err("permission denied".into()),
+        });
+        if let Modal::Error { message } = &app.state.modal {
+            assert!(message.contains("permission denied"));
+        } else {
+            panic!("expected Error modal");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Task 7: URL operations tests
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn selected_ticket_url_from_ticket_info_modal() {
+        let mut app = make_app();
+        app.state.modal = Modal::TicketInfo {
+            ticket: Box::new(conductor_core::tickets::Ticket {
+                id: "t1".into(),
+                repo_id: "r1".into(),
+                source_type: "github".into(),
+                source_id: "123".into(),
+                title: "Test".into(),
+                body: "body".into(),
+                state: "open".into(),
+                labels: "".into(),
+                assignee: None,
+                priority: None,
+                url: "https://github.com/x/y/issues/123".into(),
+                synced_at: "2024-01-01T00:00:00Z".into(),
+                raw_json: "{}".into(),
+            }),
+        };
+        assert_eq!(
+            app.selected_ticket_url(),
+            Some("https://github.com/x/y/issues/123".into())
+        );
+    }
+
+    #[test]
+    fn selected_ticket_url_no_ticket_available() {
+        let app = make_app();
+        assert!(app.selected_ticket_url().is_none());
+    }
+
+    #[test]
+    fn repo_web_url_with_valid_github_remote() {
+        let mut app = make_app();
+        let repo = conductor_core::repo::Repo {
+            id: "r1".into(),
+            slug: "my-repo".into(),
+            local_path: "/tmp/my-repo".into(),
+            remote_url: "https://github.com/user/my-repo.git".into(),
+            default_branch: "main".into(),
+            workspace_dir: "/tmp".into(),
+            created_at: "2024-01-01T00:00:00Z".into(),
+            model: None,
+            allow_agent_issue_creation: false,
+        };
+        app.state.selected_repo_id = Some("r1".into());
+        app.state.data.repos = vec![repo];
+        let url = app.repo_web_url();
+        assert_eq!(url, Some("https://github.com/user/my-repo".into()));
+    }
+
+    #[test]
+    fn repo_web_url_no_selected_repo() {
+        let app = make_app();
+        assert!(app.repo_web_url().is_none());
+    }
+
+    #[test]
+    fn selected_pr_url_with_pr() {
+        let mut app = make_app();
+        app.state.detail_prs = vec![conductor_core::github::GithubPr {
+            number: 1,
+            title: "PR".into(),
+            url: "https://github.com/x/y/pull/1".into(),
+            author: "user".into(),
+            head_ref_name: "feat-x".into(),
+            state: "open".into(),
+            is_draft: false,
+            review_decision: None,
+            ci_status: "success".into(),
+        }];
+        app.state.detail_pr_index = 0;
+        assert_eq!(
+            app.selected_pr_url(),
+            Some("https://github.com/x/y/pull/1".into())
+        );
+    }
+
+    #[test]
+    fn selected_pr_url_empty_list() {
+        let app = make_app();
+        assert!(app.selected_pr_url().is_none());
+    }
+
+    #[test]
+    fn selected_ticket_url_from_repo_detail_tickets() {
+        let mut app = make_app();
+        app.state.view = View::RepoDetail;
+        app.state.repo_detail_focus = crate::state::RepoDetailFocus::Tickets;
+        app.state.filtered_detail_tickets = vec![conductor_core::tickets::Ticket {
+            id: "t1".into(),
+            repo_id: "r1".into(),
+            source_type: "github".into(),
+            source_id: "42".into(),
+            title: "A ticket".into(),
+            body: "".into(),
+            state: "open".into(),
+            labels: "".into(),
+            assignee: None,
+            priority: None,
+            url: "https://github.com/x/y/issues/42".into(),
+            synced_at: "2024-01-01T00:00:00Z".into(),
+            raw_json: "{}".into(),
+        }];
+        app.state.detail_ticket_index = 0;
+        assert_eq!(
+            app.selected_ticket_url(),
+            Some("https://github.com/x/y/issues/42".into())
+        );
+    }
 }
