@@ -244,6 +244,17 @@ impl<'a> WorktreeManager<'a> {
             let fm = crate::feature::FeatureManager::new(self.conn, self.config);
             match fm.ensure_feature_for_branch(&repo, base_branch, None) {
                 Ok(Some(feature)) => {
+                    // Link the worktree's ticket to the feature so downstream
+                    // resolution (e.g. workflow engine) can derive the correct
+                    // base branch for PR targeting.
+                    if let Some(ref tid) = worktree.ticket_id {
+                        if let Err(e) = fm.link_ticket(&feature.id, tid) {
+                            warnings.push(format!(
+                                "Warning: failed to link ticket {} to feature '{}': {}",
+                                tid, feature.name, e
+                            ));
+                        }
+                    }
                     warnings.push(format!(
                         "Auto-registered feature '{}' for branch '{}'",
                         feature.name, feature.branch
@@ -2080,6 +2091,70 @@ mod tests {
             features.iter().any(|f| f.branch == "feat/parent"),
             "expected a feature for 'feat/parent' to be auto-registered, got: {features:?}"
         );
+    }
+
+    #[test]
+    fn test_create_links_ticket_to_auto_registered_feature() {
+        let (tmp, remote, local) = setup_repo_with_remote();
+
+        // Create a feature branch in the repo to use as a non-default base
+        git(&["checkout", "-b", "feat/parent"], &local);
+        let file = local.join("feature.txt");
+        fs::write(&file, "feature work").unwrap();
+        git(&["add", "feature.txt"], &local);
+        git(&["commit", "-m", "feature commit"], &local);
+        git(&["push", "-u", "origin", "feat/parent"], &local);
+        git(&["checkout", "main"], &local);
+
+        let conn = crate::test_helpers::setup_db();
+        let mut config = Config::default();
+        config.general.workspace_root = tmp.path().to_path_buf();
+
+        let repo_mgr = crate::repo::RepoManager::new(&conn, &config);
+        repo_mgr
+            .register(
+                "myrepo",
+                local.to_str().unwrap(),
+                remote.to_str().unwrap(),
+                Some(tmp.path().join("workspaces/myrepo").to_str().unwrap()),
+            )
+            .unwrap();
+
+        // Insert a ticket so we can pass its ID to create()
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, url, synced_at)
+             VALUES ('t1', (SELECT id FROM repos LIMIT 1), 'github', '42', 'Test ticket', 'http://example.com', '2025-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        let mgr = WorktreeManager::new(&conn, &config);
+        let (_wt, _warnings) = mgr
+            .create(
+                "myrepo",
+                "feat-child",
+                Some("feat/parent"),
+                Some("t1"),
+                None,
+            )
+            .expect("create should succeed");
+
+        // The auto-registered feature should be linked to the ticket
+        let fm = crate::feature::FeatureManager::new(&conn, &config);
+        let features = fm.list_active("myrepo").unwrap();
+        let feature = features
+            .iter()
+            .find(|f| f.branch == "feat/parent")
+            .expect("feature should be auto-registered");
+
+        let linked: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM feature_tickets WHERE feature_id = ?1 AND ticket_id = ?2",
+                rusqlite::params![feature.id, "t1"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(linked, "ticket should be linked to auto-registered feature");
     }
 
     #[test]
