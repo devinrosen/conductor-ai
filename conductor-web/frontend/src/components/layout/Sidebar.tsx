@@ -1,6 +1,7 @@
 import { NavLink } from "react-router";
 import { useRepos } from "./AppShell";
 import { NotificationBell } from "../notifications/NotificationBell";
+import { StationClock } from "../shared/StationClock";
 
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
@@ -28,7 +29,10 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       `}
     >
       <div className="px-3 py-3 border-b border-gray-200 flex items-center justify-between">
-        <h1 className="text-base font-bold text-gray-900">Conductor</h1>
+        <div className="flex items-center gap-2">
+          <StationClock size={24} />
+          <h1 className="text-base font-bold text-gray-900">Conductor</h1>
+        </div>
         <div className="hidden md:block">
           <NotificationBell />
         </div>

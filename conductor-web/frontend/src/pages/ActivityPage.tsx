@@ -6,6 +6,7 @@ import type { AgentRun, WorkflowRun, FeedbackRequest } from "../api/types";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { agentStatusColor } from "../utils/agentStats";
+import { SplitFlap } from "../components/shared/SplitFlap";
 import { WorkflowRunTree } from "../components/workflows/WorkflowRunTree";
 import {
   useConductorEvents,
@@ -184,7 +185,15 @@ export function ActivityPage() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-bold text-gray-900">Activity</h2>
+      <div className="flex items-center gap-3">
+        <h2 className="text-lg font-bold text-gray-900">Activity</h2>
+        {!isEmpty && (
+          <SplitFlap
+            text={`${activity.activeWorkflowRuns.length} RUNS · ${activity.pendingFeedback.length} PENDING`}
+            length={24}
+          />
+        )}
+      </div>
 
       {error && <ErrorBanner message={error} />}
       {actionError && <ErrorBanner message={actionError} />}

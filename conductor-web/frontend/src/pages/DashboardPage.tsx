@@ -10,6 +10,7 @@ import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
+import { WelcomeAboard } from "../components/shared/WelcomeAboard";
 import { agentStatusColor } from "../utils/agentStats";
 import {
   useConductorEvents,
@@ -103,6 +104,10 @@ export function DashboardPage() {
   ]);
 
   if (reposLoading) return <LoadingSpinner />;
+
+  if (repos.length === 0) {
+    return <WelcomeAboard onRepoCreated={refreshRepos} />;
+  }
 
   return (
     <div className="space-y-4">
