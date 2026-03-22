@@ -912,6 +912,61 @@ fn test_cannot_start_workflow_run_when_active() {
     );
 }
 
+/// Verify that force=true cancels the active run and allows a new one.
+/// Part of: process-escape-hatch@1.0.0
+#[test]
+fn test_force_bypasses_active_workflow_guard() {
+    let conn = setup_db();
+    let config = Config::default();
+    let exec_config = WorkflowExecConfig::default();
+    let agent_mgr = AgentManager::new(&conn);
+    let parent = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let wf_mgr = WorkflowManager::new(&conn);
+    let run = wf_mgr
+        .create_workflow_run("running-wf", Some("w1"), &parent.id, false, "manual", None)
+        .unwrap();
+    wf_mgr
+        .update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+
+    let workflow = make_empty_workflow();
+    let input = WorkflowExecInput {
+        conn: &conn,
+        config: &config,
+        workflow: &workflow,
+        worktree_id: Some("w1"),
+        working_dir: "/tmp/ws/feat-test",
+        repo_path: "/tmp/repo",
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: &exec_config,
+        inputs: HashMap::new(),
+        depth: 0,
+        parent_workflow_run_id: None,
+        target_label: None,
+        default_bot_name: None,
+        feature_id: None,
+        iteration: 0,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+        force: true,
+    };
+    // With force=true, the active run should be cancelled and a new one starts
+    let result = execute_workflow(&input);
+    assert!(
+        !matches!(result, Err(ConductorError::WorkflowRunAlreadyActive { .. })),
+        "force=true should bypass WorkflowRunAlreadyActive, got: {result:?}"
+    );
+
+    // Verify the old run was cancelled
+    let old_run = wf_mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(old_run.status.to_string(), "cancelled");
+}
+
 #[test]
 fn test_can_start_workflow_run_after_completion() {
     let conn = setup_db();

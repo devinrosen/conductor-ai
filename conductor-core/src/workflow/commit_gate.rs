@@ -59,31 +59,32 @@ pub fn evaluate_commit_gate(
     for check in &config.checks {
         tracing::info!(check = %check, "running commit gate check");
 
-        // Spawn and collect output with a timeout.
-        // We use a separate thread for wait_with_output() to avoid pipe buffer
-        // deadlocks (the OS pipe buffer is ~64KB; if a check writes more than
-        // that to stdout+stderr, the child blocks on write while we block on
-        // wait, creating a deadlock). The thread reads pipes to completion
-        // before returning the exit status.
-        let timeout = config.timeout;
-        let check_clone = check.clone();
-        let wd = working_dir.to_string();
-        let handle = std::thread::spawn(move || {
-            Command::new("sh")
-                .args(["-c", &check_clone])
-                .current_dir(&wd)
-                .output()
-        });
+        // Spawn child and wait_with_output in a separate thread to avoid
+        // pipe buffer deadlocks. Share the child's PID so we can kill it on timeout.
+        let child = Command::new("sh")
+            .args(["-c", check])
+            .current_dir(working_dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                crate::error::ConductorError::Workflow(format!(
+                    "failed to spawn commit gate check `{check}`: {e}"
+                ))
+            })?;
 
-        // Wait for the thread with timeout
-        let deadline = std::time::Instant::now() + timeout;
+        let child_id = child.id();
+        // Drain pipes in a thread (prevents deadlock), then wait for exit.
+        let handle = std::thread::spawn(move || child.wait_with_output());
+
+        let deadline = std::time::Instant::now() + config.timeout;
         let output = loop {
             if handle.is_finished() {
                 match handle.join() {
                     Ok(Ok(output)) => break output,
                     Ok(Err(e)) => {
                         return Err(crate::error::ConductorError::Workflow(format!(
-                            "failed to spawn commit gate check `{check}`: {e}"
+                            "commit gate check `{check}` failed: {e}"
                         )));
                     }
                     Err(_) => {
@@ -94,11 +95,13 @@ pub fn evaluate_commit_gate(
                 }
             }
             if std::time::Instant::now() >= deadline {
-                // Thread is still running — we can't kill from here, but the
-                // process will be cleaned up when the thread is dropped.
+                // Kill the child process to prevent subprocess leaks
+                let _ = Command::new("kill")
+                    .args(["-9", &child_id.to_string()])
+                    .output();
                 return Ok(GateDecision::Reject {
                     failed_check: check.clone(),
-                    stderr: format!("timed out after {timeout:?}"),
+                    stderr: format!("timed out after {:?}", config.timeout),
                     exit_code: None,
                 });
             }

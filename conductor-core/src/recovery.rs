@@ -55,13 +55,15 @@ pub enum RecoveryAction {
 /// Part of: emergency-recovery-protocol@1.0.0
 pub struct RecoveryManager<'a> {
     conn: &'a Connection,
-    #[allow(dead_code)]
-    config: &'a Config,
+    _config: &'a Config,
 }
 
 impl<'a> RecoveryManager<'a> {
     pub fn new(conn: &'a Connection, config: &'a Config) -> Self {
-        Self { conn, config }
+        Self {
+            conn,
+            _config: config,
+        }
     }
 
     /// Scan for stuck workflow runs (status=running/waiting with stale updated_at).
