@@ -33,7 +33,7 @@ impl Default for RecoveryConfig {
 }
 
 /// A detected stuck state requiring recovery.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StuckState {
     pub entity_type: String,
     pub entity_id: String,
@@ -42,7 +42,7 @@ pub struct StuckState {
 }
 
 /// Recovery actions ordered by escalation tier.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum RecoveryAction {
     /// Tier 1: Cancel a stale workflow run.
     CancelStaleRun { run_id: String },

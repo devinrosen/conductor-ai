@@ -97,6 +97,8 @@ pub fn evaluate_commit_gate(
                     if std::time::Instant::now() >= deadline {
                         let _ = child.kill();
                         let _ = child.wait();
+                        // Join the drain thread so it doesn't leak
+                        let _ = drain_handle.join();
                         return Ok(GateDecision::Reject {
                             failed_check: check.clone(),
                             stderr: format!("timed out after {:?}", config.timeout),
@@ -106,6 +108,7 @@ pub fn evaluate_commit_gate(
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
                 Err(e) => {
+                    let _ = drain_handle.join();
                     return Err(crate::error::ConductorError::Workflow(format!(
                         "commit gate check `{check}` wait failed: {e}"
                     )));
