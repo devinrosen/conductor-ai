@@ -11,11 +11,11 @@
     </radialGradient>
   </defs>
 
-  <!-- Background -->
-  <rect width="512" height="512" rx="112" fill="#0F1D36"/>
+  <!-- Background — full bleed, no rx. macOS applies its own superellipse mask. -->
+  <rect width="512" height="512" fill="#0F1D36"/>
 
-  <!-- Artwork group — scaled to 75% and centered for macOS icon padding -->
-  <g transform="translate(256, 256) scale(0.72) translate(-256, -256)">
+  <!-- Artwork — scaled to 82% for Apple HIG icon safe zone -->
+  <g transform="translate(256, 256) scale(0.82) translate(-256, -256)">
     <!-- Bold C stroke -->
     <path d="M 330 115 A 175 175 0 1 0 330 397"
           fill="none" stroke="url(#brass)" stroke-width="44" stroke-linecap="round"/>
