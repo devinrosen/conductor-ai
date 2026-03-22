@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { railwayError } from "../utils/railwayErrors";
 
 interface UseApiResult<T> {
   data: T | null;
@@ -23,7 +24,7 @@ export function useApi<T>(
       const result = await fetcher();
       setData(result);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unknown error");
+      setError(railwayError(e instanceof Error ? e.message : "Unknown error"));
     } finally {
       setLoading(false);
     }

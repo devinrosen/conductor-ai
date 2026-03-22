@@ -247,12 +247,12 @@ export function WorktreeDetailPage() {
 
   async function handlePush() {
     setPushing(true);
-    setPushResult(null);
+    setPushResult("All aboard! Pushing to origin\u2026");
     try {
       const result = await api.pushWorktree(worktreeId!);
-      setPushResult(result.message);
+      setPushResult("\uD83D\uDE82 Departed! " + result.message);
     } catch (err) {
-      setPushResult(err instanceof Error ? err.message : "Push failed");
+      setPushResult(err instanceof Error ? err.message : "Departure delayed \u2014 push failed");
     } finally {
       setPushing(false);
     }
@@ -260,12 +260,12 @@ export function WorktreeDetailPage() {
 
   async function handleCreatePr(draft: boolean) {
     setCreatingPr(true);
-    setPrResult(null);
+    setPrResult("All aboard! Creating PR\u2026");
     try {
       const result = await api.createPr(worktreeId!, draft);
-      setPrResult(result.url);
+      setPrResult("\uD83D\uDE82 Departed! " + result.url);
     } catch (err) {
-      setPrResult(err instanceof Error ? err.message : "PR creation failed");
+      setPrResult(err instanceof Error ? err.message : "Couldn\u2019t issue departure notice");
     } finally {
       setCreatingPr(false);
     }
@@ -277,9 +277,10 @@ export function WorktreeDetailPage() {
     try {
       await api.linkTicket(worktreeId!, selectedTicketId);
       setSelectedTicketId("");
+      setPushResult("\uD83C\uDFAB Ticket punched!");
       refetchWorktrees();
     } catch (err) {
-      setPushResult(err instanceof Error ? err.message : "Link failed");
+      setPushResult(err instanceof Error ? err.message : "Coupling failed \u2014 couldn\u2019t link ticket");
     } finally {
       setLinkingTicket(false);
     }
