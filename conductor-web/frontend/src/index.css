@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
 
 /*
  * Conductor Classic — Railway-heritage dark theme.
@@ -8,9 +10,14 @@
  *
  * Palette: British Railways corporate livery + Pullman luxury coaches.
  * Status: Three-aspect railway signal system (green/amber/red).
+ * Typography: Inter (UI), JetBrains Mono (code/data).
  */
 
 @theme {
+  /* ── Typography ── */
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+
   /* ── Gray → Conductor dark palette ── */
   --color-gray-50:  #0A1628;
   --color-gray-100: #162440;

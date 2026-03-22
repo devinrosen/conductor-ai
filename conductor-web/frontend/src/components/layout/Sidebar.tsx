@@ -4,7 +4,7 @@ import { NotificationBell } from "../notifications/NotificationBell";
 
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
-  `block px-3 py-2 rounded-md text-sm ${
+  `block px-2.5 py-1.5 rounded-md text-sm ${
     isActive
       ? "bg-indigo-100 text-indigo-700 font-medium"
       : "text-gray-700 hover:bg-gray-100"
@@ -27,8 +27,8 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         md:static md:translate-x-0 md:inset-auto md:pointer-events-auto
       `}
     >
-      <div className="px-4 py-4 border-b border-gray-200 flex items-center justify-between">
-        <h1 className="text-lg font-bold text-gray-900">Conductor</h1>
+      <div className="px-3 py-3 border-b border-gray-200 flex items-center justify-between">
+        <h1 className="text-base font-bold text-gray-900">Conductor</h1>
         <div className="hidden md:block">
           <NotificationBell />
         </div>
@@ -43,7 +43,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         </button>
       </div>
 
-      <nav className="flex-1 overflow-auto p-3 space-y-1">
+      <nav className="flex-1 overflow-auto p-2 space-y-0.5">
         <NavLink to="/" end className={linkClass}>
           Activity
         </NavLink>
@@ -56,7 +56,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <NavLink to="/tickets" className={linkClass}>
           Tickets
         </NavLink>
-        <div className="pt-4 pb-1 px-3">
+        <div className="pt-3 pb-1 px-2.5">
           <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
             Repos
           </span>
@@ -83,12 +83,13 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         )}
       </nav>
 
-      <div className="border-t border-gray-200 p-3">
+      <div className="border-t border-gray-200 p-2">
         <NavLink to="/settings" className={linkClass}>
           Settings
         </NavLink>
-        <div className="mt-2 px-3 text-xs text-gray-400">
-          Press <kbd className="px-1 py-0.5 bg-gray-100 rounded text-gray-500 font-mono text-[10px]">?</kbd> for shortcuts
+        <div className="mt-2 px-2.5 text-xs text-gray-400 space-y-0.5">
+          <div><kbd className="px-1 py-0.5 bg-gray-100 rounded text-gray-500 font-mono text-[10px]">&#8984;K</kbd> command palette</div>
+          <div><kbd className="px-1 py-0.5 bg-gray-100 rounded text-gray-500 font-mono text-[10px]">?</kbd> shortcuts</div>
         </div>
       </div>
     </aside>
