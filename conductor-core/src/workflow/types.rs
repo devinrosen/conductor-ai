@@ -357,6 +357,11 @@ pub struct WorkflowExecInput<'a> {
     /// Directory containing the conductor binary, injected into script step PATH.
     /// Resolved by the caller (binary crate) so the library doesn't call `current_exe()`.
     pub conductor_bin_dir: Option<std::path::PathBuf>,
+    /// When true, bypass the WorkflowRunAlreadyActive guard by cancelling the
+    /// existing run before starting a new one. Only applies to top-level runs
+    /// (depth == 0); not propagated to child workflows or hook-triggered runs.
+    /// Part of: process-escape-hatch@1.0.0
+    pub force: bool,
 }
 
 /// Owned inputs for [`execute_workflow_standalone`], avoiding lifetime issues
@@ -384,6 +389,8 @@ pub struct WorkflowExecStandalone {
     pub triggered_by_hook: bool,
     /// Directory containing the conductor binary, injected into script step PATH.
     pub conductor_bin_dir: Option<std::path::PathBuf>,
+    /// When true, bypass the WorkflowRunAlreadyActive guard. Part of: process-escape-hatch@1.0.0
+    pub force: bool,
 }
 
 /// Owned inputs for [`resume_workflow_standalone`], avoiding lifetime issues

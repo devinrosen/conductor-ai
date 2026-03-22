@@ -267,12 +267,25 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
 
     // Guard: prevent multiple concurrent top-level runs on the same worktree
     // (skipped for ephemeral PR runs which have no registered worktree).
+    // When force=true, cancel the existing run instead of rejecting.
+    // Part of: process-escape-hatch@1.0.0
     if input.depth == 0 {
         if let Some(wt_id) = input.worktree_id {
             if let Some(active) = wf_mgr.get_active_run_for_worktree(wt_id)? {
-                return Err(ConductorError::WorkflowRunAlreadyActive {
-                    name: active.workflow_name,
-                });
+                if input.force {
+                    crate::escape_hatch::log_override(&crate::escape_hatch::OverrideRecord {
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                        operation: "workflow run".to_string(),
+                        constraint_bypassed: "WorkflowRunAlreadyActive".to_string(),
+                        justification: "--force flag".to_string(),
+                        tier: crate::escape_hatch::OverrideTier::High,
+                    });
+                    wf_mgr.cancel_run(&active.id, "force override: new run requested")?;
+                } else {
+                    return Err(ConductorError::WorkflowRunAlreadyActive {
+                        name: active.workflow_name,
+                    });
+                }
             }
         }
     }
@@ -604,6 +617,7 @@ fn evaluate_hooks(
             run_id_notify: None,
             triggered_by_hook: true,
             conductor_bin_dir: state.conductor_bin_dir.clone(),
+            force: false,
         };
 
         match execute_workflow(&hook_input) {
@@ -649,6 +663,7 @@ pub fn execute_workflow_standalone(params: &WorkflowExecStandalone) -> Result<Wo
         run_id_notify: params.run_id_notify.clone(),
         triggered_by_hook: params.triggered_by_hook,
         conductor_bin_dir: params.conductor_bin_dir.clone(),
+        force: params.force,
     };
 
     execute_workflow(&input)

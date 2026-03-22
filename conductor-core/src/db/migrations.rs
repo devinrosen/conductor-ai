@@ -1048,7 +1048,10 @@ mod tests {
         // Call with a closure that always fails.
         let result = with_foreign_keys_off(&conn, || {
             Err(crate::error::ConductorError::Git(
-                "simulated migration error".to_string(),
+                crate::error::SubprocessFailure::from_message(
+                    "test",
+                    "simulated migration error".to_string(),
+                ),
             ))
         });
         assert!(result.is_err(), "helper must propagate the closure error");

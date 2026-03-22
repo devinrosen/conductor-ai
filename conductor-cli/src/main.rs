@@ -1535,7 +1535,7 @@ fn main() -> Result<()> {
                         Ok(result) => report_workflow_result(result),
                         Err(e) => {
                             eprintln!("Workflow execution failed: {e}");
-                            std::process::exit(1);
+                            std::process::exit(e.exit_code());
                         }
                     }
                 } else if let Some(repo_slug) = repo_flag {
@@ -1587,12 +1587,13 @@ fn main() -> Result<()> {
                             triggered_by_hook: false,
                             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(
                             ),
+                            force: false,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
                         Err(e) => {
                             eprintln!("Workflow execution failed: {e}");
-                            std::process::exit(1);
+                            std::process::exit(e.exit_code());
                         }
                     }
                 } else if let Some(run_id) = workflow_run {
@@ -1642,12 +1643,13 @@ fn main() -> Result<()> {
                             triggered_by_hook: false,
                             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(
                             ),
+                            force: false,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
                         Err(e) => {
                             eprintln!("Workflow execution failed: {e}");
-                            std::process::exit(1);
+                            std::process::exit(e.exit_code());
                         }
                     }
                 } else if let Some(ticket_id) = ticket {
@@ -1697,12 +1699,13 @@ fn main() -> Result<()> {
                             triggered_by_hook: false,
                             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(
                             ),
+                            force: false,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
                         Err(e) => {
                             eprintln!("Workflow execution failed: {e}");
-                            std::process::exit(1);
+                            std::process::exit(e.exit_code());
                         }
                     }
                 } else {
@@ -1755,12 +1758,13 @@ fn main() -> Result<()> {
                             triggered_by_hook: false,
                             conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(
                             ),
+                            force: false,
                         },
                     ) {
                         Ok(result) => report_workflow_result(result),
                         Err(e) => {
                             eprintln!("Workflow execution failed: {e}");
-                            std::process::exit(1);
+                            std::process::exit(e.exit_code());
                         }
                     }
                 }
@@ -2017,7 +2021,7 @@ fn main() -> Result<()> {
                     }
                     Err(e) => {
                         eprintln!("Workflow resume failed: {e}");
-                        std::process::exit(1);
+                        std::process::exit(e.exit_code());
                     }
                 }
             }
