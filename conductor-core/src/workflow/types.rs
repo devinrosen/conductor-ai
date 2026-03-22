@@ -358,7 +358,9 @@ pub struct WorkflowExecInput<'a> {
     /// Resolved by the caller (binary crate) so the library doesn't call `current_exe()`.
     pub conductor_bin_dir: Option<std::path::PathBuf>,
     /// When true, bypass the WorkflowRunAlreadyActive guard by cancelling the
-    /// existing run before starting a new one. Part of: process-escape-hatch@1.0.0
+    /// existing run before starting a new one. Only applies to top-level runs
+    /// (depth == 0); not propagated to child workflows or hook-triggered runs.
+    /// Part of: process-escape-hatch@1.0.0
     pub force: bool,
 }
 

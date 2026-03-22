@@ -108,6 +108,8 @@ pub fn evaluate_commit_gate(
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
                 Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
                     let _ = drain_handle.join();
                     return Err(crate::error::ConductorError::Workflow(format!(
                         "commit gate check `{check}` wait failed: {e}"
