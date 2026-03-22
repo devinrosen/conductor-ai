@@ -5,6 +5,7 @@ import type { WorkflowRun, WorkflowRunStep } from "../api/types";
 import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
+import { TrainProgress } from "../components/shared/TrainProgress";
 
 export function WorkflowRunDetailPage() {
   const { repoId, worktreeId, runId } = useParams<{
@@ -162,6 +163,13 @@ export function WorkflowRunDetailPage() {
           <> · Ended <TimeAgo date={run.ended_at} /></>
         )}
       </div>
+
+      {/* Train progress overview */}
+      {steps.length > 0 && (
+        <TrainProgress
+          steps={steps.map((s) => ({ name: s.step_name, status: s.status }))}
+        />
+      )}
 
       {/* Steps */}
       <section>
