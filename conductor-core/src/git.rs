@@ -49,6 +49,57 @@ fn run_command(
     Ok(output)
 }
 
+/// Run a git command with bounded retry for transient failures.
+///
+/// `build_cmd` is called on each attempt to produce a fresh `Command`
+/// (since `Command::output()` consumes the command's state).
+///
+/// Part of: bounded-retry-with-escalation@1.0.0
+pub(crate) fn check_output_with_retry<F>(
+    config: &crate::retry::RetryConfig,
+    build_cmd: F,
+) -> Result<std::process::Output>
+where
+    F: Fn() -> Command,
+{
+    check_with_retry(config, build_cmd, ConductorError::Git)
+}
+
+/// Run a gh CLI command with bounded retry for transient failures.
+///
+/// Part of: bounded-retry-with-escalation@1.0.0
+pub(crate) fn check_gh_output_with_retry<F>(
+    config: &crate::retry::RetryConfig,
+    build_cmd: F,
+) -> Result<std::process::Output>
+where
+    F: Fn() -> Command,
+{
+    check_with_retry(config, build_cmd, ConductorError::GhCli)
+}
+
+fn check_with_retry<F>(
+    config: &crate::retry::RetryConfig,
+    build_cmd: F,
+    make_err: fn(SubprocessFailure) -> ConductorError,
+) -> Result<std::process::Output>
+where
+    F: Fn() -> Command,
+{
+    let outcome = crate::retry::retry_with_backoff(
+        config,
+        || run_command(&mut build_cmd(), make_err),
+        |err: &ConductorError| match err {
+            ConductorError::Git(f) | ConductorError::GhCli(f) => crate::retry::is_transient(f),
+            _ => false,
+        },
+    );
+    match outcome {
+        crate::retry::RetryOutcome::Success { value, .. } => Ok(value),
+        crate::retry::RetryOutcome::Exhausted { last_error, .. } => Err(last_error),
+    }
+}
+
 /// Check if a local branch exists in the given repo.
 ///
 /// Runs `git branch --list <branch>` and returns `true` if the output is non-empty.

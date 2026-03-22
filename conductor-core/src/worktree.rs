@@ -8,7 +8,9 @@ use std::process::Command;
 use crate::config::Config;
 use crate::db::query_collect;
 use crate::error::{ConductorError, Result, SubprocessFailure};
-use crate::git::{check_gh_output, check_output, git_in};
+use crate::git::{
+    check_gh_output, check_gh_output_with_retry, check_output, check_output_with_retry, git_in,
+};
 use crate::repo::RepoManager;
 
 /// Typed representation of the three worktree lifecycle states stored in the DB.
@@ -595,7 +597,13 @@ impl<'a> WorktreeManager<'a> {
     pub fn push(&self, repo_slug: &str, name: &str) -> Result<String> {
         let (_repo, worktree) = self.get_active_worktree(repo_slug, name)?;
 
-        check_output(git_in(&worktree.path).args(["push", "-u", "origin", &worktree.branch]))?;
+        let wt_path = worktree.path.clone();
+        let branch = worktree.branch.clone();
+        check_output_with_retry(&crate::retry::RetryConfig::default(), || {
+            let mut cmd = git_in(&wt_path);
+            cmd.args(["push", "-u", "origin", &branch]);
+            cmd
+        })?;
 
         Ok(format!(
             "Pushed {} to origin/{}",
@@ -959,7 +967,13 @@ fn remove_git_artifacts(repo_path: &str, worktree_path: &str, branch: &str) {
 /// Uses `git clone -- <remote_url> <local_path>` so that a `remote_url`
 /// starting with `-` cannot be misinterpreted as a flag.
 fn clone_repo(remote_url: &str, local_path: &str) -> Result<()> {
-    check_output(Command::new("git").args(["clone", "--", remote_url, local_path]))?;
+    let url = remote_url.to_string();
+    let path = local_path.to_string();
+    check_output_with_retry(&crate::retry::RetryConfig::default(), || {
+        let mut cmd = Command::new("git");
+        cmd.args(["clone", "--", &url, &path]);
+        cmd
+    })?;
     Ok(())
 }
 
@@ -997,19 +1011,23 @@ fn parse_pr_view_output(raw: &str) -> Result<(String, String, String, bool)> {
 /// branch is fetched from there.
 fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String, String)> {
     // 1. Resolve the PR's head branch name, base branch, and repository info
-    let output = check_gh_output(
-        Command::new("gh")
-            .args([
-                "pr",
-                "view",
-                &pr_number.to_string(),
-                "--json",
-                "headRefName,baseRefName,headRepository,isCrossRepository",
-                "--jq",
-                ".headRefName + \"|\" + .baseRefName + \"|\" + .headRepository.owner.login + \"/\" + .headRepository.name + \"|\" + (.isCrossRepository | tostring)",
-            ])
-            .current_dir(repo_path),
-    )?;
+    let pr_str = pr_number.to_string();
+    let rp = repo_path.to_string();
+    let retry = crate::retry::RetryConfig::default();
+    let output = check_gh_output_with_retry(&retry, || {
+        let mut cmd = Command::new("gh");
+        cmd.args([
+            "pr",
+            "view",
+            &pr_str,
+            "--json",
+            "headRefName,baseRefName,headRepository,isCrossRepository",
+            "--jq",
+            ".headRefName + \"|\" + .baseRefName + \"|\" + .headRepository.owner.login + \"/\" + .headRepository.name + \"|\" + (.isCrossRepository | tostring)",
+        ])
+        .current_dir(&rp);
+        cmd
+    })?;
 
     let raw = String::from_utf8_lossy(&output.stdout);
     let (head_branch, base_branch, head_repo, is_fork) = parse_pr_view_output(&raw)?;
@@ -1020,11 +1038,14 @@ fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String, String)> 
         let fork_owner = head_repo.split('/').next().unwrap_or(&head_repo);
 
         // Look up the fork's clone URL via gh api
-        let url_output = check_gh_output(
-            Command::new("gh")
-                .args(["api", &format!("repos/{head_repo}"), "--jq", ".clone_url"])
-                .current_dir(repo_path),
-        )?;
+        let api_path = format!("repos/{head_repo}");
+        let rp2 = rp.clone();
+        let url_output = check_gh_output_with_retry(&retry, || {
+            let mut cmd = Command::new("gh");
+            cmd.args(["api", &api_path, "--jq", ".clone_url"])
+                .current_dir(&rp2);
+            cmd
+        })?;
 
         let fork_url = String::from_utf8_lossy(&url_output.stdout)
             .trim()
@@ -1036,18 +1057,23 @@ fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String, String)> 
             .output();
 
         // Fetch the branch from the fork remote
-        check_output(git_in(repo_path).args([
-            "fetch",
-            fork_owner,
-            &format!("{head_branch}:{head_branch}"),
-        ]))?;
+        let fork_remote = fork_owner.to_string();
+        let refspec = format!("{head_branch}:{head_branch}");
+        let rp3 = rp.clone();
+        check_output_with_retry(&retry, || {
+            let mut cmd = git_in(&rp3);
+            cmd.args(["fetch", &fork_remote, &refspec]);
+            cmd
+        })?;
     } else {
         // Same-repo PR: fetch from origin
-        check_output(git_in(repo_path).args([
-            "fetch",
-            "origin",
-            &format!("{head_branch}:{head_branch}"),
-        ]))?;
+        let refspec = format!("{head_branch}:{head_branch}");
+        let rp3 = rp.clone();
+        check_output_with_retry(&retry, || {
+            let mut cmd = git_in(&rp3);
+            cmd.args(["fetch", "origin", &refspec]);
+            cmd
+        })?;
     }
 
     Ok((head_branch, base_branch))
