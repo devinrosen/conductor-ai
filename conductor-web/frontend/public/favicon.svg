@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Background -->
+  <rect width="16" height="16" rx="3.5" fill="#0F1D36"/>
+
+  <!-- Bold C — maximum simplicity -->
+  <path d="M 11 3.5 A 5.5 5.5 0 1 0 11 12.5"
+        fill="none" stroke="#CD853F" stroke-width="2.8" stroke-linecap="round"/>
+
+  <!-- Single green dot -->
+  <circle cx="12.2" cy="8" r="1.6" fill="#39B54A"/>
+</svg>
