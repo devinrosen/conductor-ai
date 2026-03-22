@@ -635,6 +635,13 @@ fn report_workflow_result(result: conductor_core::workflow::WorkflowResult) {
     }
 }
 
+/// Extract semantic exit code from a ConductorError.
+///
+/// Part of: semantic-exit-code-convention@1.0.0
+fn semantic_exit_code(err: &ConductorError) -> i32 {
+    err.exit_code()
+}
+
 fn main() -> Result<()> {
     // Initialize tracing subscriber so workflow engine log events appear on
     // stderr for CLI users.  Respects RUST_LOG; defaults to `info`.
@@ -1535,7 +1542,7 @@ fn main() -> Result<()> {
                         Ok(result) => report_workflow_result(result),
                         Err(e) => {
                             eprintln!("Workflow execution failed: {e}");
-                            std::process::exit(1);
+                            std::process::exit(semantic_exit_code(&e));
                         }
                     }
                 } else if let Some(repo_slug) = repo_flag {
@@ -1592,7 +1599,7 @@ fn main() -> Result<()> {
                         Ok(result) => report_workflow_result(result),
                         Err(e) => {
                             eprintln!("Workflow execution failed: {e}");
-                            std::process::exit(1);
+                            std::process::exit(semantic_exit_code(&e));
                         }
                     }
                 } else if let Some(run_id) = workflow_run {
@@ -1647,7 +1654,7 @@ fn main() -> Result<()> {
                         Ok(result) => report_workflow_result(result),
                         Err(e) => {
                             eprintln!("Workflow execution failed: {e}");
-                            std::process::exit(1);
+                            std::process::exit(semantic_exit_code(&e));
                         }
                     }
                 } else if let Some(ticket_id) = ticket {
@@ -1702,7 +1709,7 @@ fn main() -> Result<()> {
                         Ok(result) => report_workflow_result(result),
                         Err(e) => {
                             eprintln!("Workflow execution failed: {e}");
-                            std::process::exit(1);
+                            std::process::exit(semantic_exit_code(&e));
                         }
                     }
                 } else {
@@ -1760,7 +1767,7 @@ fn main() -> Result<()> {
                         Ok(result) => report_workflow_result(result),
                         Err(e) => {
                             eprintln!("Workflow execution failed: {e}");
-                            std::process::exit(1);
+                            std::process::exit(semantic_exit_code(&e));
                         }
                     }
                 }
@@ -2017,7 +2024,7 @@ fn main() -> Result<()> {
                     }
                     Err(e) => {
                         eprintln!("Workflow resume failed: {e}");
-                        std::process::exit(1);
+                        std::process::exit(semantic_exit_code(&e));
                     }
                 }
             }

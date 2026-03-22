@@ -112,4 +112,46 @@ pub enum ConductorError {
     FeatureAlreadyExists { name: String },
 }
 
+impl ConductorError {
+    /// Semantic exit code for this error.
+    ///
+    /// Ranges:
+    ///   0      = success
+    ///   1      = unspecified / anyhow fallthrough
+    ///   10-19  = infrastructure (DB, I/O)
+    ///   20-29  = user input / entity-not-found errors
+    ///   30-39  = subprocess / external tool failures
+    ///   40-49  = configuration errors
+    ///   50-59  = agent subsystem
+    ///   60-69  = workflow subsystem
+    ///
+    /// Part of: semantic-exit-code-convention@1.0.0
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::Database(_) => 10,
+            Self::Io(_) => 11,
+            Self::RepoNotFound { .. } => 20,
+            Self::RepoAlreadyExists { .. } => 21,
+            Self::WorktreeNotFound { .. } => 22,
+            Self::WorktreeAlreadyExists { .. } => 23,
+            Self::IssueSourceAlreadyExists { .. } => 24,
+            Self::TicketNotFound { .. } => 25,
+            Self::TicketAlreadyLinked => 26,
+            Self::InvalidInput(_) => 27,
+            Self::FeatureNotFound { .. } => 28,
+            Self::FeatureAlreadyExists { .. } => 29,
+            Self::Git(_) => 30,
+            Self::GhCli(_) => 31,
+            Self::TicketSync(_) => 32,
+            Self::Config(_) => 40,
+            Self::AgentConfig(_) => 41,
+            Self::Schema(_) => 42,
+            Self::Agent(_) => 50,
+            Self::FeedbackNotPending { .. } => 51,
+            Self::Workflow(_) => 60,
+            Self::WorkflowRunAlreadyActive { .. } => 61,
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, ConductorError>;
