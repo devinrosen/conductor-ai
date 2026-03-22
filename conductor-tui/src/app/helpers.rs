@@ -223,6 +223,16 @@ pub(super) fn build_form_fields(inputs: &[conductor_core::workflow::InputDecl]) 
         .collect()
 }
 
+/// Filter `steps` to only those from the latest iteration for each `step_name`.
+/// Keeps `workflow_step_index` valid since it's an index into the filtered list.
+pub(super) fn collapse_loop_iterations(
+    mut steps: Vec<conductor_core::workflow::WorkflowRunStep>,
+) -> Vec<conductor_core::workflow::WorkflowRunStep> {
+    let max_iter = crate::state::max_iter_by_step_name(&steps);
+    steps.retain(|s| s.iteration == *max_iter.get(&s.step_name).unwrap_or(&0));
+    steps
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,14 +431,4 @@ mod tests {
         assert_eq!(fields[0].value, "main");
         assert!(fields[0].placeholder.is_empty());
     }
-}
-
-/// Filter `steps` to only those from the latest iteration for each `step_name`.
-/// Keeps `workflow_step_index` valid since it's an index into the filtered list.
-pub(super) fn collapse_loop_iterations(
-    mut steps: Vec<conductor_core::workflow::WorkflowRunStep>,
-) -> Vec<conductor_core::workflow::WorkflowRunStep> {
-    let max_iter = crate::state::max_iter_by_step_name(&steps);
-    steps.retain(|s| s.iteration == *max_iter.get(&s.step_name).unwrap_or(&0));
-    steps
 }

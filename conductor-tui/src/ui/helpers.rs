@@ -32,6 +32,17 @@ pub fn shorten_paths(summary: &str, worktree_path: &str, home_dir: Option<&str>)
     }
 }
 
+/// Format a workflow condition for display. Uses `step.marker` notation for
+/// step-marker conditions and the bare input name for boolean inputs.
+pub fn format_condition(c: &conductor_core::workflow::Condition) -> String {
+    match c {
+        conductor_core::workflow::Condition::StepMarker { step, marker } => {
+            format!("{step}.{marker}")
+        }
+        conductor_core::workflow::Condition::BoolInput { input } => input.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,16 +135,5 @@ mod tests {
             input: "dry_run".into(),
         };
         assert_eq!(format_condition(&c), "dry_run");
-    }
-}
-
-/// Format a workflow condition for display. Uses `step.marker` notation for
-/// step-marker conditions and the bare input name for boolean inputs.
-pub fn format_condition(c: &conductor_core::workflow::Condition) -> String {
-    match c {
-        conductor_core::workflow::Condition::StepMarker { step, marker } => {
-            format!("{step}.{marker}")
-        }
-        conductor_core::workflow::Condition::BoolInput { input } => input.clone(),
     }
 }
