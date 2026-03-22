@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { getApiOrigin } from "../api/transport";
 
 /** All SSE event types emitted by the backend. */
 export type ConductorEventType =
@@ -45,6 +46,7 @@ type Subscriber = {
 
 /** Shared singleton state — one EventSource for all hook instances. */
 let sharedSource: EventSource | null = null;
+let connecting = false;
 let subscribers: Set<Subscriber> = new Set();
 let boundListeners: [string, EventListener][] = [];
 
@@ -62,15 +64,8 @@ function dispatch(eventType: ConductorEventType, e: MessageEvent) {
   }
 }
 
-function openSharedSource() {
-  if (sharedSource && sharedSource.readyState !== EventSource.CLOSED) return;
-
-  // Clean up any dead connection before creating a new one
-  if (sharedSource) {
-    closeSharedSource();
-  }
-
-  const source = new EventSource("/api/events");
+function connectSource(origin: string) {
+  const source = new EventSource(`${origin}/api/events`);
   sharedSource = source;
 
   for (const type of ALL_EVENT_TYPES) {
@@ -90,7 +85,25 @@ function openSharedSource() {
   };
 }
 
+function openSharedSource() {
+  if (sharedSource && sharedSource.readyState !== EventSource.CLOSED) return;
+  if (connecting) return;
+
+  // Clean up any dead connection before creating a new one
+  if (sharedSource) {
+    closeSharedSource();
+  }
+
+  // Guard against concurrent callers all entering before the async origin resolves.
+  connecting = true;
+  getApiOrigin().then((origin) => {
+    connecting = false;
+    connectSource(origin);
+  });
+}
+
 function closeSharedSource() {
+  connecting = false;
   if (!sharedSource) return;
   for (const [type, listener] of boundListeners) {
     sharedSource.removeEventListener(type, listener);

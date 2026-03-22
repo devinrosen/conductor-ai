@@ -1,65 +1,18 @@
-//! Tauri command bridge — exposes conductor-core managers to the frontend.
+//! Tauri command bridge for the desktop app.
 //!
-//! Each function is a `#[tauri::command]` that Tauri's IPC layer exposes to
-//! the JavaScript frontend via `invoke()`.
+//! The desktop app embeds the full conductor-web axum server on a random
+//! localhost port. The only Tauri IPC command needed is `get_api_port` so the
+//! frontend knows where to send `fetch()` and `EventSource` requests.
 
-use conductor_core::repo::RepoManager;
-use conductor_core::worktree::{Worktree, WorktreeManager};
-use serde::Serialize;
 use tauri::State;
 
-use crate::state::AppState;
+use crate::state::ApiPort;
 
-// ---------------------------------------------------------------------------
-// Response types
-// ---------------------------------------------------------------------------
-
-#[derive(Serialize)]
-pub struct RepoInfo {
-    pub id: String,
-    pub slug: String,
-    pub remote_url: String,
-    pub default_branch: String,
-}
-
-// ---------------------------------------------------------------------------
-// Repo commands
-// ---------------------------------------------------------------------------
-
+/// Returns the port of the embedded HTTP API server so the frontend
+/// can direct `fetch()` and `EventSource` to `http://localhost:{port}`.
 #[tauri::command]
-pub fn list_repos(state: State<'_, AppState>) -> Result<Vec<RepoInfo>, String> {
-    let (db, config) = state.lock_both()?;
-    let mgr = RepoManager::new(&db, &config);
-    let repos = mgr.list().map_err(|e| format!("list repos: {e}"))?;
-    Ok(repos
-        .into_iter()
-        .map(|r| RepoInfo {
-            id: r.id,
-            slug: r.slug,
-            remote_url: r.remote_url,
-            default_branch: r.default_branch,
-        })
-        .collect())
-}
-
-// ---------------------------------------------------------------------------
-// Worktree commands
-// ---------------------------------------------------------------------------
-
-#[tauri::command]
-pub fn list_worktrees(
-    state: State<'_, AppState>,
-    repo_slug: &str,
-) -> Result<Vec<Worktree>, String> {
-    let (db, config) = state.lock_both()?;
-    let repo_mgr = RepoManager::new(&db, &config);
-    let repo = repo_mgr
-        .get_by_slug(repo_slug)
-        .map_err(|e| format!("repo '{}': {}", repo_slug, e))?;
-    let wt_mgr = WorktreeManager::new(&db, &config);
-    wt_mgr
-        .list_by_repo_id(&repo.id, false)
-        .map_err(|e| format!("list worktrees for repo '{}': {}", repo_slug, e))
+pub fn get_api_port(port: State<'_, ApiPort>) -> u16 {
+    port.0
 }
 
 // ---------------------------------------------------------------------------
@@ -68,8 +21,6 @@ pub fn list_worktrees(
 
 /// On macOS, GUI apps don't inherit the user's shell PATH. This function
 /// resolves common tool locations (homebrew, cargo) and prepends them.
-///
-/// Learned from global-sdlc's Wails desktop implementation.
 pub fn fixup_macos_path() {
     if cfg!(target_os = "macos") {
         let cargo_bin = match std::env::var("HOME") {

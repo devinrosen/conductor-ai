@@ -4,8 +4,6 @@
   "identifier": "ai.conductor.desktop",
   "build": {
     "frontendDist": "../conductor-web/frontend/dist",
-    "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "cd conductor-web/frontend && bun run dev",
     "beforeBuildCommand": "cd conductor-web/frontend && bun run build"
   },
   "app": {
@@ -20,7 +18,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:* http://localhost:*"
     }
   },
   "bundle": {
