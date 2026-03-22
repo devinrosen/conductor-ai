@@ -28,6 +28,7 @@ pub fn is_valid_run_transition(from: &WorkflowRunStatus, to: &WorkflowRunStatus)
 }
 
 /// Check if a workflow step status transition is valid.
+#[allow(dead_code)] // Will be wired into step-level guards in a follow-up
 pub fn is_valid_step_transition(from: &WorkflowStepStatus, to: &WorkflowStepStatus) -> bool {
     use WorkflowStepStatus::*;
     matches!(
@@ -63,6 +64,7 @@ pub fn warn_invalid_run_transition(run_id: &str, from: &WorkflowRunStatus, to: &
 }
 
 /// Log a warning for an invalid step transition (warn-only guard mode).
+#[allow(dead_code)] // Will be wired into step-level guards in a follow-up
 pub fn warn_invalid_step_transition(
     step_id: &str,
     from: &WorkflowStepStatus,

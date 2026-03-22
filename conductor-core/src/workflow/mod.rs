@@ -5,6 +5,7 @@
 //! adding workflow-level tracking in `workflow_runs` / `workflow_run_steps`.
 
 mod batch_validate;
+pub mod checkpoint;
 pub(crate) mod constants;
 pub(crate) mod engine;
 pub(crate) mod executors;
