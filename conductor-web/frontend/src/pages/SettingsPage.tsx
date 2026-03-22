@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
 import { ModelPicker } from "../components/shared/ModelPicker";
+import { ThemePicker } from "../components/shared/ThemePicker";
 
 export function SettingsPage() {
   const { data: globalConfig, refetch: refetchGlobalConfig } = useApi(
@@ -29,6 +30,17 @@ export function SettingsPage() {
   return (
     <div className="space-y-8">
       <h2 className="text-xl font-bold text-gray-900">Settings</h2>
+
+      {/* Theme Section */}
+      <section>
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-1">
+          Theme
+        </h3>
+        <p className="text-sm text-gray-500 mb-3">
+          Choose a railway heritage theme. Each is inspired by an iconic rail design system.
+        </p>
+        <ThemePicker />
+      </section>
 
       {/* Global Model Section */}
       <section>
