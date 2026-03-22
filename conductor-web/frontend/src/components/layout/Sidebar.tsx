@@ -38,8 +38,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
     >
       <div className="px-3 py-3 border-b border-gray-200 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <StationClock size={24} />
+          <img src="/logo.svg" alt="Conductor" className="w-7 h-7 shrink-0" />
           <h1 className="text-base font-bold text-gray-900">Conductor</h1>
+          <StationClock size={20} />
         </div>
         <div className="hidden md:block">
           <NotificationBell />

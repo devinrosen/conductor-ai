@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="brassL" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#B8892A"/>
+      <stop offset="50%" stop-color="#9E6B2A"/>
+      <stop offset="100%" stop-color="#7A5220"/>
+    </linearGradient>
+    <linearGradient id="bgL" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F0F2F5"/>
+      <stop offset="100%" stop-color="#E4E7EC"/>
+    </linearGradient>
+    <radialGradient id="gGlowL" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#2D9A3E"/>
+      <stop offset="50%" stop-color="#2D9A3E" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#2D9A3E" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="112" fill="url(#bgL)"/>
+  <rect width="512" height="512" rx="112" fill="none"
+        stroke="#C8CDD5" stroke-width="2"/>
+
+  <!-- The C -->
+  <path d="M 338 122 A 172 172 0 1 0 338 390"
+        fill="none" stroke="url(#brassL)" stroke-width="56" stroke-linecap="round"/>
+  <path d="M 332 148 A 144 144 0 1 0 332 364"
+        fill="none" stroke="url(#bgL)" stroke-width="22" stroke-linecap="round"/>
+
+  <!-- Signal lights -->
+  <circle cx="382" cy="212" r="22" fill="#2D9A3E"/>
+  <circle cx="382" cy="212" r="36" fill="url(#gGlowL)"/>
+  <circle cx="376" cy="206" r="6" fill="#FFF" opacity="0.3"/>
+
+  <circle cx="382" cy="262" r="18" fill="#E08600" opacity="0.2"/>
+  <circle cx="382" cy="262" r="18" fill="none" stroke="#E08600" stroke-width="1.5" opacity="0.2"/>
+
+  <circle cx="382" cy="308" r="18" fill="#C02A1C" opacity="0.15"/>
+  <circle cx="382" cy="308" r="18" fill="none" stroke="#C02A1C" stroke-width="1.5" opacity="0.15"/>
+</svg>

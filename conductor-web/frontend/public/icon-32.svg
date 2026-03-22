@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="b32" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#EDCF72"/>
+      <stop offset="50%" stop-color="#CD853F"/>
+      <stop offset="100%" stop-color="#9E6B2A"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="32" height="32" rx="7" fill="#0F1D36"/>
+
+  <!-- Bold C arc — simplified, no inner channel at this size -->
+  <path d="M 21.5 7 A 11 11 0 1 0 21.5 25"
+        fill="none" stroke="url(#b32)" stroke-width="4.5" stroke-linecap="round"/>
+
+  <!-- Signal dots — just green active, others as tiny hints -->
+  <circle cx="24" cy="13" r="2.2" fill="#39B54A"/>
+  <circle cx="24" cy="17" r="1.5" fill="#FF9500" opacity="0.25"/>
+  <circle cx="24" cy="20.5" r="1.5" fill="#D73020" opacity="0.2"/>
+</svg>
