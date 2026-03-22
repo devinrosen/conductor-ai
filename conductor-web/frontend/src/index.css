@@ -68,6 +68,25 @@
   }
 }
 
+/* ── Locked theme swatch shimmer ── */
+.swatch-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.04) 40%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.04) 60%,
+    transparent 100%
+  );
+  animation: swatch-shimmer 2s ease-in-out infinite;
+}
+@keyframes swatch-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
 /* ── Focus ring ── */
 *:focus-visible { outline-color: #2B5EA7; }
 
