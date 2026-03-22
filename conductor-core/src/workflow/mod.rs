@@ -7,7 +7,9 @@
 mod batch_validate;
 pub mod checkpoint;
 pub mod commit_gate;
+pub mod composition;
 pub(crate) mod constants;
+pub mod deliberation;
 pub(crate) mod engine;
 pub(crate) mod executors;
 pub(crate) mod helpers;
