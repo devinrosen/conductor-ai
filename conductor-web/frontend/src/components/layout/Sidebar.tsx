@@ -5,11 +5,19 @@ import { StationClock } from "../shared/StationClock";
 
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
-  `block px-2.5 py-1.5 rounded-md text-sm ${
+  `flex items-center justify-between px-2.5 py-1.5 rounded-md text-sm ${
     isActive
       ? "bg-indigo-100 text-indigo-700 font-medium"
       : "text-gray-700 hover:bg-gray-100"
   }`;
+
+function ShortcutHint({ keys }: { keys: string }) {
+  return (
+    <span className="text-[10px] text-gray-400 font-mono hidden md:inline">
+      {keys}
+    </span>
+  );
+}
 
 interface SidebarProps {
   open: boolean;
@@ -49,7 +57,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
       <nav className="flex-1 overflow-auto p-2 space-y-0.5">
         <NavLink to="/" end className={linkClass}>
-          Activity
+          Activity <ShortcutHint keys="g d" />
         </NavLink>
         <NavLink to="/repos" className={linkClass}>
           Repos
@@ -58,7 +66,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           Workflows
         </NavLink>
         <NavLink to="/tickets" className={linkClass}>
-          Tickets
+          Tickets <ShortcutHint keys="g t" />
         </NavLink>
         <div className="pt-3 pb-1 px-2.5">
           <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
@@ -89,7 +97,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
       <div className="border-t border-gray-200 p-2">
         <NavLink to="/settings" className={linkClass}>
-          Settings
+          Settings <ShortcutHint keys="g s" />
         </NavLink>
         <div className="mt-2 px-2.5 text-xs text-gray-400 space-y-0.5">
           <div><kbd className="px-1 py-0.5 bg-gray-100 rounded text-gray-500 font-mono text-[10px]">&#8984;K</kbd> command palette</div>

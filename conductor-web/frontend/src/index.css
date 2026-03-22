@@ -121,3 +121,53 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #4A5568;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * Heritage theme special effects
+ *
+ * Each theme sets data-theme on <html>. These rules add per-theme
+ * visual tweaks beyond the color palette.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+/* Swiss Federal — sharp corners, no border-radius, strict grid */
+[data-theme="swiss-federal"] * {
+  border-radius: 0 !important;
+}
+[data-theme="swiss-federal"] .rounded-full {
+  border-radius: 9999px !important; /* preserve pills/badges */
+}
+
+/* NYC Subway — brutalist, no shadows, no rounded corners */
+[data-theme="nyc-subway"] * {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+[data-theme="nyc-subway"] .rounded-full {
+  border-radius: 9999px !important;
+}
+
+/* Shinkansen — speed-line transitions on navigation */
+[data-theme="shinkansen"] main {
+  transition: transform 200ms ease-out;
+}
+
+/* Platform 9¾ — warm golden glow behind active elements */
+[data-theme="platform-9-three-quarters"] .bg-indigo-100 {
+  box-shadow: 0 0 12px 2px rgba(201, 168, 76, 0.15);
+}
+
+/* Orient Express — Art Deco double-line borders on cards */
+[data-theme="orient-express"] .border {
+  border-width: 2px;
+}
+
+/* Trans-Siberian — slower, more contemplative transitions */
+[data-theme="trans-siberian"] * {
+  transition-duration: 300ms !important;
+}
+
+/* Pullman Class — warm double-line card borders */
+[data-theme="pullman-class"] .rounded-lg {
+  border-width: 2px;
+  border-style: double;
+}

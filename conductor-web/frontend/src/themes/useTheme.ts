@@ -3,6 +3,12 @@ import { defaultTheme, getThemeById, type Theme, type ThemePalette } from "./the
 
 const STORAGE_KEY = "conductor-theme";
 
+function applyTheme(theme: Theme) {
+  const root = document.documentElement;
+  root.setAttribute("data-theme", theme.id);
+  applyPalette(theme.palette);
+}
+
 function applyPalette(palette: ThemePalette) {
   const root = document.documentElement;
   root.style.setProperty("--color-gray-50", palette.gray50);
@@ -59,7 +65,7 @@ export function useTheme() {
 
   // Apply palette on mount and when theme changes
   useEffect(() => {
-    applyPalette(theme.palette);
+    applyTheme(theme);
   }, [theme]);
 
   const setTheme = useCallback((t: Theme) => {
@@ -80,5 +86,5 @@ export function useTheme() {
  */
 export function applyInitialTheme() {
   const theme = loadSavedTheme();
-  applyPalette(theme.palette);
+  applyTheme(theme);
 }
