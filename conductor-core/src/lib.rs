@@ -29,6 +29,8 @@ pub(crate) use impl_sql_enum;
 pub mod agent;
 pub mod agent_comm;
 pub mod agent_config;
+pub mod agent_identity;
+pub mod agent_orchestration;
 pub mod agent_runtime;
 pub mod config;
 pub mod db;
