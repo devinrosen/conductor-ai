@@ -784,11 +784,7 @@ impl<'a> FeatureManager<'a> {
 
     /// Link a single ticket to a feature (idempotent — uses INSERT OR IGNORE).
     pub fn link_ticket(&self, feature_id: &str, ticket_id: &str) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR IGNORE INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
-            params![feature_id, ticket_id],
-        )?;
-        Ok(())
+        self.link_tickets_internal(feature_id, &[ticket_id.to_string()])
     }
 
     fn link_tickets_internal(&self, feature_id: &str, ticket_ids: &[String]) -> Result<()> {

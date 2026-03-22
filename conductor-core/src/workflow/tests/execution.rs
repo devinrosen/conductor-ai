@@ -3406,3 +3406,60 @@ on_complete = "post-complete"
         "hook run should link to parent"
     );
 }
+
+/// Regression test for #1405: when a worktree has a non-default base branch
+/// and no feature is resolved, execute_workflow should inject
+/// feature_base_branch from the worktree's effective base.
+#[test]
+fn test_execute_workflow_worktree_fallback_base_branch() {
+    let conn = setup_db();
+    let config: &'static Config = Box::leak(Box::new(Config::default()));
+
+    // Insert a worktree with a custom base_branch ("develop") that differs
+    // from the repo/config default ("main").
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at) \
+         VALUES ('wt-custom-base', 'r1', 'feat-custom', 'feat/custom', 'develop', '/tmp/ws/feat-custom', 'active', '2024-01-01T00:00:00Z')",
+        [],
+    ).unwrap();
+
+    let workflow = make_empty_workflow();
+    let exec_config = WorkflowExecConfig::default();
+
+    let input = crate::workflow::types::WorkflowExecInput {
+        conn: &conn,
+        config,
+        workflow: &workflow,
+        worktree_id: Some("wt-custom-base"),
+        working_dir: "/tmp/ws/feat-custom",
+        repo_path: "/tmp/repo",
+        model: None,
+        exec_config: &exec_config,
+        inputs: HashMap::new(),
+        ticket_id: None,
+        repo_id: None,
+        depth: 0,
+        parent_workflow_run_id: None,
+        target_label: None,
+        default_bot_name: None,
+        iteration: 0,
+        feature_id: None,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+    };
+
+    let result = crate::workflow::engine::execute_workflow(&input).unwrap();
+
+    // Fetch the persisted workflow run and verify the injected base branch.
+    let wf_mgr = WorkflowManager::new(&conn);
+    let run = wf_mgr
+        .get_workflow_run(&result.workflow_run_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        run.inputs.get("feature_base_branch").map(String::as_str),
+        Some("develop"),
+        "feature_base_branch should equal the worktree's custom base_branch, not default 'main'"
+    );
+}
