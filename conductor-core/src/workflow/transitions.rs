@@ -1,9 +1,10 @@
-//! Central transition tables for workflow FSM state machines.
+//! Central transition table for workflow run FSM.
 //!
-//! Defines which state transitions are valid for WorkflowRunStatus and
-//! WorkflowStepStatus. Used as a warn-only guard initially — invalid
-//! transitions are logged but not rejected until the full test suite
-//! confirms zero unexpected warnings.
+//! Defines which state transitions are valid for WorkflowRunStatus.
+//! Used as a warn-only guard (debug builds only) — invalid transitions
+//! are logged but not rejected.
+//!
+//! Step-level transitions will be added when step guards are wired in.
 //!
 //! Part of: fsm-state-specification-template@1.0.0
 

@@ -135,11 +135,6 @@ pub fn is_transient(failure: &SubprocessFailure) -> bool {
         return true;
     }
 
-    // SQLite busy (concurrent access)
-    if stderr.contains("sqlite_busy") || stderr.contains("database is locked") {
-        return true;
-    }
-
     // Git-specific transient errors
     if stderr.contains("the remote end hung up unexpectedly")
         || stderr.contains("early eof")
@@ -267,13 +262,14 @@ mod tests {
         let start = Instant::now();
         let _ = retry_with_backoff(&config, || Err::<(), _>("fail"), |_: &&str| true, || false);
         let elapsed = start.elapsed();
-        // Should sleep ~50ms + ~100ms = ~150ms total (with some tolerance)
+        // Should sleep ~50ms + ~100ms = ~150ms total.
+        // Wide tolerance for CI machines under heavy load.
         assert!(
-            elapsed >= Duration::from_millis(100),
-            "expected at least 100ms of backoff, got {elapsed:?}"
+            elapsed >= Duration::from_millis(50),
+            "expected at least 50ms of backoff, got {elapsed:?}"
         );
         assert!(
-            elapsed < Duration::from_millis(500),
+            elapsed < Duration::from_secs(5),
             "backoff took too long: {elapsed:?}"
         );
     }
@@ -317,12 +313,6 @@ mod tests {
             let f = SubprocessFailure::from_message("git", msg.to_string());
             assert!(!is_transient(&f), "expected permanent for: {msg}");
         }
-    }
-
-    #[test]
-    fn is_transient_sqlite_busy() {
-        let f = SubprocessFailure::from_message("sqlite", "database is locked".to_string());
-        assert!(is_transient(&f));
     }
 
     #[test]

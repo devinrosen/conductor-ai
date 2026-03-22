@@ -61,7 +61,7 @@ pub fn evaluate_commit_gate(
 
         // Spawn child and wait_with_output in a separate thread to avoid
         // pipe buffer deadlocks. Share the child's PID so we can kill it on timeout.
-        let child = Command::new("sh")
+        let mut child = Command::new("sh")
             .args(["-c", check])
             .current_dir(working_dir)
             .stdout(std::process::Stdio::piped())
@@ -73,39 +73,51 @@ pub fn evaluate_commit_gate(
                 ))
             })?;
 
-        let child_id = child.id();
-        // Drain pipes in a thread (prevents deadlock), then wait for exit.
-        let handle = std::thread::spawn(move || child.wait_with_output());
+        // Drain pipes in a background thread to prevent pipe buffer deadlocks,
+        // while polling the child for exit in the main thread with a timeout.
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+        let drain_handle = std::thread::spawn(move || {
+            let mut stdout_buf = Vec::new();
+            let mut stderr_buf = Vec::new();
+            if let Some(mut out) = stdout_pipe {
+                std::io::Read::read_to_end(&mut out, &mut stdout_buf).ok();
+            }
+            if let Some(mut err) = stderr_pipe {
+                std::io::Read::read_to_end(&mut err, &mut stderr_buf).ok();
+            }
+            (stdout_buf, stderr_buf)
+        });
 
         let deadline = std::time::Instant::now() + config.timeout;
-        let output = loop {
-            if handle.is_finished() {
-                match handle.join() {
-                    Ok(Ok(output)) => break output,
-                    Ok(Err(e)) => {
-                        return Err(crate::error::ConductorError::Workflow(format!(
-                            "commit gate check `{check}` failed: {e}"
-                        )));
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Ok(GateDecision::Reject {
+                            failed_check: check.clone(),
+                            stderr: format!("timed out after {:?}", config.timeout),
+                            exit_code: None,
+                        });
                     }
-                    Err(_) => {
-                        return Err(crate::error::ConductorError::Workflow(format!(
-                            "commit gate check `{check}` thread panicked"
-                        )));
-                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                Err(e) => {
+                    return Err(crate::error::ConductorError::Workflow(format!(
+                        "commit gate check `{check}` wait failed: {e}"
+                    )));
                 }
             }
-            if std::time::Instant::now() >= deadline {
-                // Kill the child process to prevent subprocess leaks
-                let _ = Command::new("kill")
-                    .args(["-9", &child_id.to_string()])
-                    .output();
-                return Ok(GateDecision::Reject {
-                    failed_check: check.clone(),
-                    stderr: format!("timed out after {:?}", config.timeout),
-                    exit_code: None,
-                });
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+        };
+
+        let (stdout_buf, stderr_buf) = drain_handle.join().unwrap_or_default();
+        let output = std::process::Output {
+            status,
+            stdout: stdout_buf,
+            stderr: stderr_buf,
         };
 
         if !output.status.success() {

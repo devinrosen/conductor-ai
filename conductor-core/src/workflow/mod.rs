@@ -5,10 +5,8 @@
 //! adding workflow-level tracking in `workflow_runs` / `workflow_run_steps`.
 
 mod batch_validate;
-#[allow(dead_code)]
-pub(crate) mod checkpoint;
-#[allow(dead_code)]
-pub(crate) mod commit_gate;
+pub mod checkpoint;
+pub mod commit_gate;
 pub(crate) mod constants;
 pub(crate) mod engine;
 pub(crate) mod executors;
