@@ -203,6 +203,18 @@ impl<'a> WorkflowManager<'a> {
             ));
         }
 
+        // Warn-only FSM guard: log invalid transitions but do not reject.
+        // Part of: fsm-state-specification-template@1.0.0
+        if let Ok(current) = self.conn.query_row(
+            "SELECT status FROM workflow_runs WHERE id = ?1",
+            params![workflow_run_id],
+            |row| row.get::<_, String>(0),
+        ) {
+            if let Ok(from) = current.parse::<WorkflowRunStatus>() {
+                super::transitions::warn_invalid_run_transition(workflow_run_id, &from, &status);
+            }
+        }
+
         let now = Utc::now().to_rfc3339();
         let is_terminal = matches!(
             status,

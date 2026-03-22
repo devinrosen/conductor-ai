@@ -53,6 +53,18 @@ impl WorkflowRunStatus {
     pub fn active_strings() -> Vec<String> {
         Self::ACTIVE.iter().map(|s| s.to_string()).collect()
     }
+
+    /// Whether this status is terminal (no further transitions expected).
+    /// Part of: fsm-state-specification-template@1.0.0
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+
+    /// Whether this status is active (run is in progress or waiting).
+    /// Part of: fsm-state-specification-template@1.0.0
+    pub fn is_active(&self) -> bool {
+        matches!(self, Self::Pending | Self::Running | Self::Waiting)
+    }
 }
 
 crate::impl_sql_enum!(WorkflowRunStatus);
@@ -97,6 +109,17 @@ impl WorkflowStepStatus {
             Self::Waiting => "wait",
             Self::TimedOut => "tout",
         }
+    }
+}
+
+impl WorkflowStepStatus {
+    /// Whether this status is terminal (no further transitions expected).
+    /// Part of: fsm-state-specification-template@1.0.0
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Skipped | Self::TimedOut
+        )
     }
 }
 
