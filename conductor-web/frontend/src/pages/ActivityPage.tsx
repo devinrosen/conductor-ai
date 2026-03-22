@@ -183,8 +183,8 @@ export function ActivityPage() {
     activity.activeWorkflowRuns.length === 0;
 
   return (
-    <div className="space-y-6">
-      <h2 className="text-xl font-bold text-gray-900">Activity</h2>
+    <div className="space-y-4">
+      <h2 className="text-lg font-bold text-gray-900">Activity</h2>
 
       {error && <ErrorBanner message={error} />}
       {actionError && <ErrorBanner message={actionError} />}
@@ -192,7 +192,7 @@ export function ActivityPage() {
       {/* Pending Feedback */}
       {activity.pendingFeedback.length > 0 && (
         <section>
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-2">
             Pending Feedback
           </h3>
           <div className="space-y-3">
@@ -241,7 +241,7 @@ export function ActivityPage() {
       {/* Active Agent Runs */}
       {activity.activeAgentRuns.length > 0 && (
         <section>
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-2">
             Active Agent Runs
           </h3>
           <div className="space-y-2">
@@ -277,7 +277,7 @@ export function ActivityPage() {
 
       {/* Active Workflow Runs */}
       <section>
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-2">
             Active Workflow Runs
           </h3>
           <WorkflowRunTree
@@ -290,8 +290,8 @@ export function ActivityPage() {
       {/* Empty state */}
       {isEmpty && !error && (
         <div className="text-center py-16 text-gray-400">
-          <p className="text-lg font-medium">No active runs</p>
-          <p className="text-sm mt-1">Start an agent or workflow to see activity here.</p>
+          <p className="text-lg font-medium">The engine house is still</p>
+          <p className="text-sm mt-1">Launch an agent or workflow to fire up the locomotive.</p>
         </div>
       )}
     </div>
