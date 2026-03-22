@@ -1,125 +1,116 @@
 @import "tailwindcss";
 
 /*
- * Conductor Classic — Railway-heritage dark theme for the desktop app.
+ * Conductor Classic — Railway-heritage dark theme.
  *
- * Applied when <html class="desktop"> is set (Tauri detection in main.tsx).
- * Web UI is unaffected — it keeps the default Tailwind light theme.
+ * Uses Tailwind v4's @theme directive to override color tokens at the
+ * theme layer, ensuring our palette takes precedence everywhere.
  *
- * Palette inspired by British Railways corporate livery + Pullman luxury coaches.
- * Signal colors follow the three-aspect railway signal system (green/amber/red).
+ * Palette: British Railways corporate livery + Pullman luxury coaches.
+ * Status: Three-aspect railway signal system (green/amber/red).
  */
 
-.desktop {
-  /* ── Backgrounds ── */
-  --cd-bg-deep: #0A1628;
-  --cd-bg-base: #0F1D32;
-  --cd-bg-raised: #162440;
-  --cd-bg-overlay: #1C2D4F;
+@theme {
+  /* ── Gray → Conductor dark palette ── */
+  --color-gray-50:  #0A1628;
+  --color-gray-100: #162440;
+  --color-gray-200: #232D42;
+  --color-gray-300: #2A3550;
+  --color-gray-400: #4A5568;
+  --color-gray-500: #7B8494;
+  --color-gray-600: #7B8494;
+  --color-gray-700: #9CA3B0;
+  --color-gray-800: #C8CDD5;
+  --color-gray-900: #D8DCE2;
+  --color-gray-950: #E8EBF0;
 
-  /* ── Text ── */
-  --cd-text-primary: #C8CDD5;
-  --cd-text-secondary: #7B8494;
-  --cd-text-muted: #4A5568;
+  /* white → dark base */
+  --color-white: #0F1D32;
 
-  /* ── Accents ── */
-  --cd-accent: #2B5EA7;          /* Rail Blue */
-  --cd-accent-warm: #CD853F;     /* Brass */
-  --cd-accent-glow: #EBC47F;     /* Pullman Cream */
+  /* ── Indigo → Rail Blue / Pullman Cream ── */
+  --color-indigo-50:  #0F1D32;
+  --color-indigo-100: #1C2D4F;
+  --color-indigo-200: #1C3A6A;
+  --color-indigo-300: #2B5EA7;
+  --color-indigo-400: #3A74C4;
+  --color-indigo-500: #2B5EA7;
+  --color-indigo-600: #EBC47F;
+  --color-indigo-700: #EBC47F;
+  --color-indigo-800: #CD853F;
 
-  /* ── Signal status ── */
-  --cd-status-go: #39B54A;       /* Signal Green */
-  --cd-status-caution: #FF9500;  /* Signal Amber */
-  --cd-status-stop: #D73020;     /* Signal Red */
+  /* ── Blue → Rail Blue ── */
+  --color-blue-50:  #0F1D32;
+  --color-blue-100: #162440;
+  --color-blue-200: #1C3A6A;
+  --color-blue-300: #2B5EA7;
+  --color-blue-400: #3A74C4;
+  --color-blue-500: #2B5EA7;
+  --color-blue-600: #2B5EA7;
+  --color-blue-700: #1E4A8A;
+  --color-blue-800: #163670;
+  --color-blue-900: #0F2550;
 
-  /* ── Neutrals ── */
-  --cd-border: #232D42;          /* Track Iron */
-  --cd-border-subtle: #1a2236;
+  /* ── Signal Green ── */
+  --color-green-50:  #0B1E14;
+  --color-green-100: #0F2D1C;
+  --color-green-300: #2A8C3E;
+  --color-green-400: #39B54A;
+  --color-green-500: #39B54A;
+  --color-green-600: #39B54A;
+  --color-green-700: #2A8C3E;
+  --color-green-900: #0F2D1C;
 
-  color-scheme: dark;
-  background-color: var(--cd-bg-deep);
-  color: var(--cd-text-primary);
+  /* ── Signal Amber ── */
+  --color-yellow-50:  #1E1808;
+  --color-yellow-100: #2D2410;
+  --color-yellow-300: #CC7A00;
+  --color-yellow-400: #FF9500;
+  --color-yellow-500: #FF9500;
+  --color-yellow-600: #FF9500;
+  --color-yellow-700: #CC7A00;
+  --color-yellow-800: #996000;
+  --color-yellow-900: #2D2410;
+  --color-amber-50:  #1E1808;
+  --color-amber-200: #CC7A00;
+  --color-amber-400: #FF9500;
+
+  /* ── Signal Red ── */
+  --color-red-50:  #1E0C0A;
+  --color-red-100: #2D1210;
+  --color-red-300: #C02A1A;
+  --color-red-400: #D73020;
+  --color-red-500: #D73020;
+  --color-red-600: #D73020;
+  --color-red-700: #B02818;
+  --color-red-800: #8C2014;
+  --color-red-900: #2D1210;
 }
 
-/* ── Base element overrides for desktop ── */
-
-.desktop body {
-  background-color: var(--cd-bg-deep);
-  color: var(--cd-text-primary);
-}
-
-/* ── Background overrides ── */
-.desktop .bg-gray-50  { background-color: var(--cd-bg-deep) !important; }
-.desktop .bg-white    { background-color: var(--cd-bg-base) !important; }
-.desktop .bg-gray-100 { background-color: var(--cd-bg-raised) !important; }
-.desktop .bg-gray-200 { background-color: var(--cd-bg-overlay) !important; }
-
-/* ── Text overrides ── */
-.desktop .text-gray-900 { color: var(--cd-text-primary) !important; }
-.desktop .text-gray-800 { color: var(--cd-text-primary) !important; }
-.desktop .text-gray-700 { color: var(--cd-text-secondary) !important; }
-.desktop .text-gray-600 { color: var(--cd-text-secondary) !important; }
-.desktop .text-gray-500 { color: var(--cd-text-muted) !important; }
-.desktop .text-gray-400 { color: var(--cd-text-muted) !important; }
-
-/* ── Border overrides ── */
-.desktop .border-gray-200 { border-color: var(--cd-border) !important; }
-.desktop .border-gray-300 { border-color: var(--cd-border) !important; }
-.desktop .border-gray-100 { border-color: var(--cd-border-subtle) !important; }
-
-/* ── Accent / interactive overrides ── */
-.desktop .bg-indigo-100   { background-color: color-mix(in srgb, var(--cd-accent) 20%, transparent) !important; }
-.desktop .text-indigo-700 { color: var(--cd-accent-glow) !important; }
-.desktop .text-indigo-600 { color: var(--cd-accent-glow) !important; }
-.desktop .bg-blue-600     { background-color: var(--cd-accent) !important; }
-.desktop .bg-blue-700     { background-color: color-mix(in srgb, var(--cd-accent) 80%, black) !important; }
-.desktop .hover\:bg-blue-700:hover { background-color: color-mix(in srgb, var(--cd-accent) 80%, black) !important; }
-.desktop .hover\:bg-gray-100:hover { background-color: var(--cd-bg-raised) !important; }
-
-/* ── Signal status colors ── */
-.desktop .text-green-600,
-.desktop .text-green-700   { color: var(--cd-status-go) !important; }
-.desktop .bg-green-100     { background-color: color-mix(in srgb, var(--cd-status-go) 15%, transparent) !important; }
-.desktop .bg-green-500,
-.desktop .bg-green-600     { background-color: var(--cd-status-go) !important; }
-
-.desktop .text-yellow-600,
-.desktop .text-yellow-700,
-.desktop .text-amber-600   { color: var(--cd-status-caution) !important; }
-.desktop .bg-yellow-100,
-.desktop .bg-amber-100     { background-color: color-mix(in srgb, var(--cd-status-caution) 15%, transparent) !important; }
-.desktop .bg-yellow-500    { background-color: var(--cd-status-caution) !important; }
-
-.desktop .text-red-600,
-.desktop .text-red-700     { color: var(--cd-status-stop) !important; }
-.desktop .bg-red-100       { background-color: color-mix(in srgb, var(--cd-status-stop) 15%, transparent) !important; }
-.desktop .bg-red-500,
-.desktop .bg-red-600       { background-color: var(--cd-status-stop) !important; }
-
-/* ── Kbd / code styling ── */
-.desktop kbd,
-.desktop .bg-gray-100.rounded {
-  background-color: var(--cd-bg-overlay) !important;
-  color: var(--cd-text-secondary) !important;
+@layer base {
+  body {
+    background-color: var(--color-gray-50);
+    color: var(--color-gray-800);
+    color-scheme: dark;
+  }
 }
 
 /* ── Focus ring ── */
-.desktop *:focus-visible {
-  outline-color: var(--cd-accent);
+*:focus-visible {
+  outline-color: #2B5EA7;
 }
 
-/* ── Scrollbar (webkit) ── */
-.desktop ::-webkit-scrollbar {
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-.desktop ::-webkit-scrollbar-track {
-  background: var(--cd-bg-deep);
+::-webkit-scrollbar-track {
+  background: #0A1628;
 }
-.desktop ::-webkit-scrollbar-thumb {
-  background: var(--cd-border);
+::-webkit-scrollbar-thumb {
+  background: #232D42;
   border-radius: 4px;
 }
-.desktop ::-webkit-scrollbar-thumb:hover {
-  background: var(--cd-text-muted);
+::-webkit-scrollbar-thumb:hover {
+  background: #4A5568;
 }

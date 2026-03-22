@@ -15,7 +15,6 @@ import { KeyboardShortcutHelp } from "../shared/KeyboardShortcutHelp";
 import { NotificationBell } from "../notifications/NotificationBell";
 import { ToastContainer } from "../notifications/ToastContainer";
 import { useToast } from "../../hooks/useToast";
-import { isDesktop } from "../../api/transport";
 
 interface ReposContextValue {
   repos: Repo[];
@@ -84,23 +83,20 @@ export function AppShell() {
   useConductorEvents(handlers);
 
   if (error && !repos) {
-    const desktop = isDesktop();
     return (
       <div className="flex h-screen items-center justify-center bg-gray-50">
         <div className="max-w-md text-center p-8">
           <h1 className="text-xl font-semibold text-gray-900 mb-2">
-            {desktop ? "Signal lost" : "Unable to connect"}
+            Signal lost
           </h1>
           <p className="text-gray-600 mb-4">
-            {desktop
-              ? `Couldn\u2019t reach the station. ${error}`
-              : error}
+            Couldn&rsquo;t reach the station. {error}
           </p>
           <button
             onClick={refetch}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
           >
-            {desktop ? "Try again" : "Retry"}
+            Try again
           </button>
         </div>
       </div>

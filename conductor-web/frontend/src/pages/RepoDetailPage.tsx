@@ -293,7 +293,7 @@ export function RepoDetailPage() {
         {wtLoading ? (
           <LoadingSpinner />
         ) : !worktrees || worktrees.length === 0 ? (
-          <EmptyState message="No worktrees yet" />
+          <EmptyState message="No platforms active. Create a worktree to lay some track." />
         ) : (
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
             <table className="w-full text-sm min-w-[520px]">
@@ -356,7 +356,7 @@ export function RepoDetailPage() {
         {ticketsLoading ? (
           <LoadingSpinner />
         ) : !tickets || tickets.length === 0 ? (
-          <EmptyState message="No tickets synced yet" />
+          <EmptyState message="No tickets issued. Sync your issues to start the journey." />
         ) : (
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
             <table className="w-full text-sm min-w-[480px]">

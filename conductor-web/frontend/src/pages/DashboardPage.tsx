@@ -130,7 +130,7 @@ export function DashboardPage() {
           Repos
         </h3>
         {repos.length === 0 ? (
-          <EmptyState message="No repos registered yet. Register one to get started." />
+          <EmptyState message="The station is quiet. Register a repo to get the trains running." />
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {repos.map((repo) => (
@@ -150,7 +150,7 @@ export function DashboardPage() {
           Active Worktrees
         </h3>
         {activeWorktrees.length === 0 ? (
-          <EmptyState message="No active worktrees" />
+          <EmptyState message="No platforms active. Create a worktree to lay some track." />
         ) : (
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
             <table className="w-full text-sm min-w-[480px]">
