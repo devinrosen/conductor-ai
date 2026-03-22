@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <defs>
     <linearGradient id="brass" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#E8C56C"/>
@@ -9,20 +9,27 @@
       <stop offset="60%" stop-color="#39B54A" stop-opacity="0.2"/>
       <stop offset="100%" stop-color="#39B54A" stop-opacity="0"/>
     </radialGradient>
+    <!-- Apple-style superellipse approximation -->
+    <clipPath id="icon-mask">
+      <rect x="0" y="0" width="1024" height="1024" rx="228" ry="228"/>
+    </clipPath>
   </defs>
 
-  <!-- Background — full bleed, no rx. macOS applies its own superellipse mask. -->
-  <rect width="512" height="512" fill="#0F1D36"/>
+  <!-- Clipped to Apple-style rounded rect -->
+  <g clip-path="url(#icon-mask)">
+    <!-- Background fills the full clipped area -->
+    <rect width="1024" height="1024" fill="#0F1D36"/>
 
-  <!-- Artwork — scaled to 82% for Apple HIG icon safe zone -->
-  <g transform="translate(256, 256) scale(0.82) translate(-256, -256)">
-    <!-- Bold C stroke -->
-    <path d="M 330 115 A 175 175 0 1 0 330 397"
-          fill="none" stroke="url(#brass)" stroke-width="44" stroke-linecap="round"/>
+    <!-- Artwork centered and scaled -->
+    <g transform="translate(512, 512) scale(1.65) translate(-256, -256)">
+      <!-- Bold C stroke -->
+      <path d="M 330 115 A 175 175 0 1 0 330 397"
+            fill="none" stroke="url(#brass)" stroke-width="44" stroke-linecap="round"/>
 
-    <!-- Green signal dot -->
-    <circle cx="370" cy="256" r="32" fill="#39B54A"/>
-    <circle cx="370" cy="256" r="50" fill="url(#glow)"/>
-    <circle cx="362" cy="248" r="8" fill="#FFF" opacity="0.25"/>
+      <!-- Green signal dot -->
+      <circle cx="370" cy="256" r="32" fill="#39B54A"/>
+      <circle cx="370" cy="256" r="50" fill="url(#glow)"/>
+      <circle cx="362" cy="248" r="8" fill="#FFF" opacity="0.25"/>
+    </g>
   </g>
 </svg>
