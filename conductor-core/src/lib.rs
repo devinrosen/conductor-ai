@@ -27,6 +27,7 @@ macro_rules! impl_sql_enum {
 pub(crate) use impl_sql_enum;
 
 pub mod agent;
+pub mod agent_comm;
 pub mod agent_config;
 pub mod agent_runtime;
 pub mod config;

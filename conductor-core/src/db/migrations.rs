@@ -887,6 +887,22 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 48)?;
     }
 
+    // Wave 2: Agent communication tables (7 tables)
+    // Part of: structured-handoff-protocol@1.1.0, decision-log-as-shared-memory@1.0.0,
+    // threaded-blocker-comments@1.1.0, cross-agent-delegation-protocol@1.0.0,
+    // council-decision-architecture@1.0.0
+    if version < 49 {
+        conn.execute_batch(include_str!("migrations/049_agent_communication.sql"))?;
+        bump_version(conn, 49)?;
+    }
+
+    // Wave 2: Agent identity tables (templates + artifacts)
+    // Part of: agent-template-standardization@1.2.0, artifact-mediated-agent-communication@1.0.0
+    if version < 50 {
+        conn.execute_batch(include_str!("migrations/050_agent_identity.sql"))?;
+        bump_version(conn, 50)?;
+    }
+
     Ok(())
 }
 
