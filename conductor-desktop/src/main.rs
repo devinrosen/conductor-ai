@@ -20,6 +20,7 @@
 mod commands;
 mod state;
 
+use axum::http::HeaderValue;
 use conductor_core::agent::AgentManager;
 use conductor_core::config::{db_path, load_config};
 use conductor_core::db::open_database;
@@ -104,11 +105,16 @@ fn main() {
                         .port();
                     let _ = port_tx.send(Ok(port));
 
-                    // Allow any origin — the server only listens on 127.0.0.1 so
-                    // only local processes can reach it. The Tauri webview origin
-                    // varies by platform and isn't worth enumerating.
+                    // Restrict to Tauri webview origins only.
+                    // - tauri://localhost  → macOS / Linux (Tauri custom protocol)
+                    // - http://tauri.localhost → Windows (localhost-mapped protocol)
+                    // The server only binds on 127.0.0.1, but a browser tab on any
+                    // origin could still reach it without this restriction.
                     let cors = CorsLayer::new()
-                        .allow_origin(Any)
+                        .allow_origin([
+                            HeaderValue::from_static("tauri://localhost"),
+                            HeaderValue::from_static("http://tauri.localhost"),
+                        ])
                         .allow_methods(Any)
                         .allow_headers(Any);
 
