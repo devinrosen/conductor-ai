@@ -1,64 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
     <linearGradient id="brass" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#EDCF72"/>
-      <stop offset="40%" stop-color="#CD853F"/>
-      <stop offset="100%" stop-color="#9E6B2A"/>
+      <stop offset="0%" stop-color="#E8C56C"/>
+      <stop offset="100%" stop-color="#B8862A"/>
     </linearGradient>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#132448"/>
-      <stop offset="100%" stop-color="#0B1830"/>
-    </linearGradient>
-    <radialGradient id="gGlow" cx="50%" cy="50%" r="50%">
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
       <stop offset="0%" stop-color="#39B54A"/>
-      <stop offset="50%" stop-color="#39B54A" stop-opacity="0.25"/>
+      <stop offset="60%" stop-color="#39B54A" stop-opacity="0.2"/>
       <stop offset="100%" stop-color="#39B54A" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="aGlow" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#FF9500" stop-opacity="0.15"/>
-      <stop offset="100%" stop-color="#FF9500" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="rGlow" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#D73020" stop-opacity="0.1"/>
-      <stop offset="100%" stop-color="#D73020" stop-opacity="0"/>
     </radialGradient>
   </defs>
 
-  <!-- Background — macOS-style superellipse approximation -->
-  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- Background -->
+  <rect width="512" height="512" rx="112" fill="#0F1D36"/>
 
-  <!-- Subtle inner shadow for depth -->
-  <rect width="512" height="512" rx="112" fill="none"
-        stroke="#000" stroke-width="2" opacity="0.2"/>
-  <rect x="2" y="2" width="508" height="508" rx="110" fill="none"
-        stroke="#2B5EA7" stroke-width="1" opacity="0.15"/>
+  <!-- Clean bold C — single stroke, no inner channel -->
+  <path d="M 330 115 A 175 175 0 1 0 330 397"
+        fill="none" stroke="url(#brass)" stroke-width="44" stroke-linecap="round"/>
 
-  <!-- The C — bold brass arc -->
-  <path d="M 338 122 A 172 172 0 1 0 338 390"
-        fill="none" stroke="url(#brass)" stroke-width="56" stroke-linecap="round"/>
-
-  <!-- Inner channel carved out of the C to create the rail/track feel -->
-  <path d="M 332 148 A 144 144 0 1 0 332 364"
-        fill="none" stroke="url(#bg)" stroke-width="22" stroke-linecap="round"/>
-
-  <!-- Thin highlight on outer edge of track for dimension -->
-  <path d="M 344 112 A 182 182 0 1 0 344 400"
-        fill="none" stroke="#EDCF72" stroke-width="1.5" opacity="0.3" stroke-linecap="round"/>
-
-  <!-- Signal lights in the C gap -->
-  <!-- Green — active, with glow -->
-  <circle cx="382" cy="212" r="22" fill="#39B54A"/>
-  <circle cx="382" cy="212" r="36" fill="url(#gGlow)"/>
-  <!-- Specular highlight on green -->
-  <circle cx="376" cy="206" r="6" fill="#FFF" opacity="0.25"/>
-
-  <!-- Amber — dim -->
-  <circle cx="382" cy="262" r="18" fill="#FF9500" opacity="0.18"/>
-  <circle cx="382" cy="262" r="26" fill="url(#aGlow)"/>
-  <circle cx="382" cy="262" r="18" fill="none" stroke="#FF9500" stroke-width="1.5" opacity="0.15"/>
-
-  <!-- Red — dim -->
-  <circle cx="382" cy="308" r="18" fill="#D73020" opacity="0.14"/>
-  <circle cx="382" cy="308" r="26" fill="url(#rGlow)"/>
-  <circle cx="382" cy="308" r="18" fill="none" stroke="#D73020" stroke-width="1.5" opacity="0.12"/>
+  <!-- Single green signal dot — larger, centered in the gap -->
+  <circle cx="370" cy="256" r="32" fill="#39B54A"/>
+  <circle cx="370" cy="256" r="50" fill="url(#glow)"/>
+  <circle cx="362" cy="248" r="8" fill="#FFF" opacity="0.25"/>
 </svg>
