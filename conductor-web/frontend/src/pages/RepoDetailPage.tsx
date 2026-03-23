@@ -28,10 +28,20 @@ export function RepoDetailPage() {
 
   const [showClosedTickets, setShowClosedTickets] = useState(false);
   const [showCompletedWorktrees, setShowCompletedWorktrees] = useState(false);
+  const [ticketFilterInput, setTicketFilterInput] = useState("");
   const [ticketFilter, setTicketFilter] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [filterHelpOpen, setFilterHelpOpen] = useState(false);
   const filterInputRef = useRef<HTMLInputElement>(null);
+
+  const applyFilter = useCallback(() => {
+    setTicketFilter(ticketFilterInput);
+  }, [ticketFilterInput]);
+
+  const clearFilter = useCallback(() => {
+    setTicketFilterInput("");
+    setTicketFilter("");
+  }, []);
 
   const {
     data: worktrees,
@@ -153,58 +163,60 @@ export function RepoDetailPage() {
   }
 
   // Filter tickets — supports structured filters like label:bug assignee:lauren
-  // or plain text search across all fields.
+  // or plain text search across all fields. Only runs when user clicks Search.
   const filteredTickets = useMemo(() => {
     if (!tickets) return [];
     const raw = ticketFilter.trim();
     if (!raw) return tickets;
 
     // Parse structured filters: field:value or field:"value with spaces"
+    const fields = ["title", "label", "state", "assignee", "priority", "source", "#"];
     const filters: { field: string; value: string }[] = [];
-    let freeText = raw;
+    let remaining = raw;
 
-    const filterRegex = /(title|label|state|assignee|priority|source|#):(?:"([^"]+)"|(\S+))/gi;
-    let match;
-    while ((match = filterRegex.exec(raw)) !== null) {
-      filters.push({ field: match[1].toLowerCase(), value: (match[2] ?? match[3]).toLowerCase() });
-      freeText = freeText.replace(match[0], "");
+    for (const field of fields) {
+      // Match field:"quoted value" or field:unquoted
+      const quotedRe = new RegExp(`${field.replace("#", "\\#")}:"([^"]+)"`, "gi");
+      const unquotedRe = new RegExp(`${field.replace("#", "\\#")}:(\\S+)`, "gi");
+
+      let m;
+      while ((m = quotedRe.exec(raw)) !== null) {
+        filters.push({ field, value: m[1].toLowerCase() });
+        remaining = remaining.replace(m[0], "");
+      }
+      while ((m = unquotedRe.exec(raw)) !== null) {
+        // Skip if this was already matched as a quoted filter
+        if (!remaining.includes(m[0])) continue;
+        filters.push({ field, value: m[1].toLowerCase() });
+        remaining = remaining.replace(m[0], "");
+      }
     }
-    freeText = freeText.trim().toLowerCase();
+    const freeText = remaining.trim().toLowerCase();
+
+    const fieldMatch = (field: string, value: string, ticket: Ticket): boolean => {
+      switch (field) {
+        case "title": return ticket.title.toLowerCase().includes(value);
+        case "label": return !!ticket.labels && ticket.labels.toLowerCase().includes(value);
+        case "state": return ticket.state.toLowerCase().includes(value);
+        case "assignee": return !!ticket.assignee && ticket.assignee.toLowerCase().includes(value);
+        case "#": return ticket.source_id.toLowerCase().includes(value);
+        case "priority": return !!ticket.priority && ticket.priority.toLowerCase().includes(value);
+        case "source": return ticket.source_type.toLowerCase().includes(value);
+        default: return true;
+      }
+    };
 
     return tickets.filter((t) => {
-      // Structured filters — all must match
       for (const f of filters) {
-        switch (f.field) {
-          case "title":
-            if (!t.title.toLowerCase().includes(f.value)) return false;
-            break;
-          case "label":
-            if (!t.labels || !t.labels.toLowerCase().includes(f.value)) return false;
-            break;
-          case "state":
-            if (!t.state.toLowerCase().includes(f.value)) return false;
-            break;
-          case "assignee":
-            if (!t.assignee || !t.assignee.toLowerCase().includes(f.value)) return false;
-            break;
-          case "#":
-            if (!t.source_id.toLowerCase().includes(f.value)) return false;
-            break;
-          case "priority":
-            if (!t.priority || !t.priority.toLowerCase().includes(f.value)) return false;
-            break;
-          case "source":
-            if (!t.source_type.toLowerCase().includes(f.value)) return false;
-            break;
-        }
+        if (!fieldMatch(f.field, f.value, t)) return false;
       }
-      // Free text — match across all fields
       if (freeText) {
         return (
           t.title.toLowerCase().includes(freeText) ||
           t.source_id.toLowerCase().includes(freeText) ||
           (t.labels && t.labels.toLowerCase().includes(freeText)) ||
-          (t.assignee && t.assignee.toLowerCase().includes(freeText))
+          (t.assignee && t.assignee.toLowerCase().includes(freeText)) ||
+          t.state.toLowerCase().includes(freeText)
         );
       }
       return true;
@@ -458,16 +470,34 @@ export function RepoDetailPage() {
         {/* Ticket filter bar */}
         {tickets && tickets.length > 0 && (
           <div className="mb-2 flex items-center gap-2">
-            <div className="relative flex-1">
+            <form
+              className="relative flex-1 flex items-center gap-1.5"
+              onSubmit={(e) => { e.preventDefault(); applyFilter(); }}
+            >
               <input
                 ref={filterInputRef}
                 type="text"
-                value={ticketFilter}
-                onChange={(e) => setTicketFilter(e.target.value)}
+                value={ticketFilterInput}
+                onChange={(e) => setTicketFilterInput(e.target.value)}
                 placeholder="Filter tickets..."
-                className="w-full px-3 py-1.5 text-sm rounded-md border border-gray-200 bg-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                className="flex-1 px-3 py-1.5 text-sm rounded-md border border-gray-200 bg-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
               />
-            </div>
+              <button
+                type="submit"
+                className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-100"
+              >
+                Search
+              </button>
+              {ticketFilter && (
+                <button
+                  type="button"
+                  onClick={clearFilter}
+                  className="px-2 py-1.5 text-sm rounded-md text-gray-400 hover:text-gray-600"
+                >
+                  Clear
+                </button>
+              )}
+            </form>
             <div className="relative">
               <button
                 onClick={() => setFilterHelpOpen((v) => !v)}
@@ -497,8 +527,8 @@ export function RepoDetailPage() {
                       <button
                         key={key}
                         onClick={() => {
-                          const prefix = ticketFilter && !ticketFilter.endsWith(" ") ? " " : "";
-                          setTicketFilter((v) => v + prefix + key);
+                          const prefix = ticketFilterInput && !ticketFilterInput.endsWith(" ") ? " " : "";
+                          setTicketFilterInput((v) => v + prefix + key);
                           setFilterHelpOpen(false);
                           requestAnimationFrame(() => filterInputRef.current?.focus());
                         }}
