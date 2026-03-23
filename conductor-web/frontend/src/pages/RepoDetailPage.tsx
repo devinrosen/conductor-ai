@@ -291,7 +291,7 @@ export function RepoDetailPage() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden gap-3">
       {/* Compact header: slug + branch + settings toggle */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
@@ -405,8 +405,11 @@ export function RepoDetailPage() {
         </div>
       )}
 
+      {/* Content area — splits remaining space between worktrees and tickets */}
+      <div className="flex-1 flex flex-col gap-3 min-h-0 overflow-hidden">
+
       {/* Worktrees */}
-      <section>
+      <section className="flex flex-col min-h-0">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
             Worktrees {worktrees ? `(${worktrees.length})` : ""}
@@ -430,9 +433,9 @@ export function RepoDetailPage() {
         ) : !worktrees || worktrees.length === 0 ? (
           <EmptyState message="No platforms active. Create a worktree to lay some track." />
         ) : (
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-y-auto overflow-x-auto flex-1 min-h-0 max-h-[30vh]">
             <table className="w-full text-sm min-w-[520px]">
-              <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
+              <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase sticky top-0 z-10">
                 <tr>
                   <th className="px-3 py-1.5">Branch</th>
                   <th className="px-3 py-1.5">Status</th>
@@ -460,7 +463,7 @@ export function RepoDetailPage() {
       </section>
 
       {/* Tickets */}
-      <section>
+      <section className="flex flex-col flex-1 min-h-0">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
             Tickets {tickets ? `(${filteredTickets.length}${activeFilterCount > 0 ? ` of ${tickets.length}` : ""})` : ""}
@@ -517,7 +520,7 @@ export function RepoDetailPage() {
         ) : filteredTickets.length === 0 ? (
           <EmptyState message="No tickets match your filter." />
         ) : (
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden max-h-[60vh] overflow-y-auto">
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-y-auto flex-1 min-h-0">
             <table className="w-full text-sm min-w-[480px]">
               <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase sticky top-0 z-10">
                 <tr>
@@ -632,6 +635,8 @@ export function RepoDetailPage() {
           </div>
         )}
       </section>
+
+      </div>{/* end content area */}
 
       {/* Dialogs */}
       {selectedTicket && (
