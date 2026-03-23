@@ -14,13 +14,15 @@ import { useListNav } from "../hooks/useListNav";
 export function TicketsPage() {
   const { repos } = useRepos();
   const [showClosed, setShowClosed] = useState(false);
-  const { data: tickets, loading } = useApi(
+  const { data: tickets, loading, refetch: refetchTickets } = useApi(
     () => api.listAllTickets(showClosed),
     [showClosed],
   );
-  const { data: ticketTotals } = useApi(() => api.ticketAgentTotals(), []);
-  const { data: allLabels } = useApi(() => api.ticketLabels(), []);
+  const { data: ticketTotals, refetch: refetchTotals } = useApi(() => api.ticketAgentTotals(), []);
+  const { data: allLabels, refetch: refetchLabels } = useApi(() => api.ticketLabels(), []);
   const [filter, setFilter] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
   const [selectedLabels, setSelectedLabels] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Ticket | null>(null);
   const filterRef = useRef<HTMLInputElement>(null);
@@ -29,6 +31,24 @@ export function TicketsPage() {
   const [stateFilter, setStateFilter] = useState<Set<string>>(new Set());
   const [assigneeFilter, setAssigneeFilter] = useState<Set<string>>(new Set());
   const [openFilterCol, setOpenFilterCol] = useState<string | null>(null);
+
+  async function handleSyncAll() {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const results = await Promise.all(repos.map((r) => api.syncTickets(r.id).then((res) => ({ slug: r.slug, ...res }))));
+      const totalSynced = results.reduce((n, r) => n + r.synced, 0);
+      const totalClosed = results.reduce((n, r) => n + r.closed, 0);
+      setSyncResult(`Synced ${totalSynced}, closed ${totalClosed} across ${results.length} repo${results.length === 1 ? "" : "s"}`);
+      refetchTickets();
+      refetchTotals();
+      refetchLabels();
+    } catch (err) {
+      setSyncResult(err instanceof Error ? err.message : "Sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   const repoMap = useMemo(() => {
     const map: Record<string, Repo> = {};
@@ -177,6 +197,9 @@ export function TicketsPage() {
           Tickets {tickets ? `(${filtered.length}${activeFilterCount > 0 ? ` of ${tickets.length}` : ""})` : ""}
         </h2>
         <div className="flex items-center gap-2">
+          {syncResult && (
+            <span className="text-xs text-gray-500">{syncResult}</span>
+          )}
           <button
             onClick={() => setShowClosed((v) => !v)}
             className={`px-3 py-1.5 text-sm rounded-md border ${
@@ -186,6 +209,13 @@ export function TicketsPage() {
             }`}
           >
             {showClosed ? "Hiding open only" : "Show closed"}
+          </button>
+          <button
+            onClick={handleSyncAll}
+            disabled={syncing || repos.length === 0}
+            className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            {syncing ? "Syncing..." : "Sync All Tickets"}
           </button>
         </div>
       </div>
