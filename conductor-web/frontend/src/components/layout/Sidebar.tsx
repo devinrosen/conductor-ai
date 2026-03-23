@@ -2,7 +2,37 @@ import { NavLink } from "react-router";
 import { useRepos } from "./AppShell";
 import { NotificationBell } from "../notifications/NotificationBell";
 import { StationClock } from "../shared/StationClock";
+import { ThemeLogo } from "../shared/ThemeLogo";
 
+// Per-theme repo indicator colors (cycling palette)
+const indicatorColors = [
+  "#2B5EA7", "#39B54A", "#FF9500", "#D73020", "#CD853F",
+  "#00B5AD", "#9B0056", "#6CBE45", "#B36305", "#0098D4",
+];
+
+function RepoIndicator({ index }: { index: number }) {
+  const theme = document.documentElement.getAttribute("data-theme") ?? "conductor-classic";
+  const color = indicatorColors[index % indicatorColors.length];
+  const s = 7;
+
+  // Shape varies by theme
+  switch (theme) {
+    case "swiss-federal":
+    case "nyc-subway":
+      // Square
+      return <span className="shrink-0" style={{ width: s, height: s, backgroundColor: color, display: "inline-block" }} />;
+    case "orient-express":
+    case "pullman-class":
+      // Diamond
+      return <span className="shrink-0" style={{ width: s, height: s, backgroundColor: color, display: "inline-block", transform: "rotate(45deg)" }} />;
+    case "shinkansen":
+      // Horizontal bar
+      return <span className="shrink-0 rounded-sm" style={{ width: 10, height: 3, backgroundColor: color, display: "inline-block" }} />;
+    default:
+      // Circle (Classic, London, 9¾, Trans-Siberian)
+      return <span className="shrink-0 rounded-full" style={{ width: s, height: s, backgroundColor: color, display: "inline-block" }} />;
+  }
+}
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   `flex items-center justify-between px-2.5 py-1.5 rounded-md text-sm ${
@@ -39,7 +69,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       <div className="px-3 py-3 border-b border-gray-200 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <StationClock size={20} />
-          <img src="/logo-header.svg" alt="Conductor" className="w-7 h-7 shrink-0" />
+          <ThemeLogo size={24} />
           <h1 className="text-base font-bold text-gray-900">Conductor</h1>
         </div>
         <div className="hidden md:block">
@@ -79,13 +109,16 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           <div className="px-3 py-2 text-sm text-gray-400">Loading...</div>
         )}
 
-        {repos.map((repo) => (
+        {repos.map((repo, i) => (
           <NavLink
             key={repo.id}
             to={`/repos/${repo.id}`}
             className={linkClass}
           >
-            {repo.slug}
+            <span className="flex items-center gap-1.5">
+              <RepoIndicator index={i} />
+              {repo.slug}
+            </span>
           </NavLink>
         ))}
 
