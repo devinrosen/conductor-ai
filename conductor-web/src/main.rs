@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use conductor_core::agent::AgentManager;
-use conductor_core::config::{db_path, ensure_dirs, load_config};
+use conductor_core::config::{conductor_dir, ensure_dirs, load_config};
 use conductor_core::db::open_database;
 use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::{Any, CorsLayer};
@@ -18,7 +18,9 @@ async fn main() -> Result<()> {
 
     let config = load_config()?;
     ensure_dirs(&config)?;
-    let conn = open_database(&db_path())?;
+    // Always use the global database — the web server manages all repos,
+    // so worktree-local DB detection must be bypassed.
+    let conn = open_database(&conductor_dir().join("conductor.db"))?;
 
     // Reap orphaned agent runs on startup.
     let agent_mgr = AgentManager::new(&conn);

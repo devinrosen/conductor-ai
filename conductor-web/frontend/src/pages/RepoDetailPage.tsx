@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import { useParams, Link, useNavigate } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { useApi } from "../hooks/useApi";
@@ -30,6 +30,8 @@ export function RepoDetailPage() {
   const [showCompletedWorktrees, setShowCompletedWorktrees] = useState(false);
   const [ticketFilter, setTicketFilter] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [filterHelpOpen, setFilterHelpOpen] = useState(false);
+  const filterInputRef = useRef<HTMLInputElement>(null);
 
   const {
     data: worktrees,
@@ -161,7 +163,7 @@ export function RepoDetailPage() {
     const filters: { field: string; value: string }[] = [];
     let freeText = raw;
 
-    const filterRegex = /(title|label|state|assignee|#):(?:"([^"]+)"|(\S+))/gi;
+    const filterRegex = /(title|label|state|assignee|priority|source|#):(?:"([^"]+)"|(\S+))/gi;
     let match;
     while ((match = filterRegex.exec(raw)) !== null) {
       filters.push({ field: match[1].toLowerCase(), value: (match[2] ?? match[3]).toLowerCase() });
@@ -187,6 +189,12 @@ export function RepoDetailPage() {
             break;
           case "#":
             if (!t.source_id.toLowerCase().includes(f.value)) return false;
+            break;
+          case "priority":
+            if (!t.priority || !t.priority.toLowerCase().includes(f.value)) return false;
+            break;
+          case "source":
+            if (!t.source_type.toLowerCase().includes(f.value)) return false;
             break;
         }
       }
@@ -452,32 +460,63 @@ export function RepoDetailPage() {
           <div className="mb-2 flex items-center gap-2">
             <div className="relative flex-1">
               <input
+                ref={filterInputRef}
                 type="text"
                 value={ticketFilter}
                 onChange={(e) => setTicketFilter(e.target.value)}
-                placeholder="Filter tickets\u2026"
+                placeholder="Filter tickets..."
                 className="w-full px-3 py-1.5 text-sm rounded-md border border-gray-200 bg-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
               />
             </div>
-            <div className="relative group">
+            <div className="relative">
               <button
-                className="w-6 h-6 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 text-xs"
+                onClick={() => setFilterHelpOpen((v) => !v)}
+                className={`w-6 h-6 flex items-center justify-center rounded-full text-xs ${
+                  filterHelpOpen
+                    ? "bg-indigo-100 text-indigo-600"
+                    : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                }`}
                 aria-label="Filter help"
               >
                 ?
               </button>
-              <div className="absolute right-0 top-8 w-64 p-3 rounded-lg border border-gray-200 bg-white shadow-lg text-xs text-gray-600 hidden group-hover:block z-20 space-y-1.5">
-                <p className="font-medium text-gray-800">Filter syntax</p>
-                <p>Type freely to search all fields, or use column filters:</p>
-                <div className="font-mono text-[11px] space-y-0.5 text-gray-500">
-                  <p><span className="text-indigo-500">label:</span>bug</p>
-                  <p><span className="text-indigo-500">assignee:</span>lauren</p>
-                  <p><span className="text-indigo-500">state:</span>open</p>
-                  <p><span className="text-indigo-500">title:</span>&quot;feature request&quot;</p>
-                  <p><span className="text-indigo-500">#:</span>1234</p>
+              {filterHelpOpen && (
+                <div className="absolute right-0 top-8 w-72 p-3 rounded-lg border border-gray-200 bg-white shadow-lg text-xs text-gray-600 z-20 space-y-2">
+                  <p className="font-medium text-gray-800">Filter by column</p>
+                  <p>Click a field to add it to the search, or type freely to search all fields.</p>
+                  <div className="space-y-1">
+                    {[
+                      { key: "title:", desc: "Ticket title", example: "title:\"feature request\"" },
+                      { key: "#:", desc: "Ticket number", example: "#:1234" },
+                      { key: "label:", desc: "Label name", example: "label:bug" },
+                      { key: "state:", desc: "open or closed", example: "state:open" },
+                      { key: "assignee:", desc: "Assigned user", example: "assignee:lauren" },
+                      { key: "priority:", desc: "Priority level", example: "priority:high" },
+                      { key: "source:", desc: "Source type", example: "source:github" },
+                    ].map(({ key, desc, example }) => (
+                      <button
+                        key={key}
+                        onClick={() => {
+                          const prefix = ticketFilter && !ticketFilter.endsWith(" ") ? " " : "";
+                          setTicketFilter((v) => v + prefix + key);
+                          setFilterHelpOpen(false);
+                          requestAnimationFrame(() => filterInputRef.current?.focus());
+                        }}
+                        className="w-full text-left flex items-center justify-between gap-2 px-2 py-1 rounded hover:bg-gray-100 transition-colors"
+                      >
+                        <span>
+                          <span className="font-mono text-indigo-500">{key}</span>
+                          <span className="text-gray-400 ml-1">{desc}</span>
+                        </span>
+                        <span className="font-mono text-[10px] text-gray-300">{example}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-gray-400 pt-1 border-t border-gray-100">
+                    Combine: <span className="font-mono">label:bug assignee:lauren</span>
+                  </p>
                 </div>
-                <p>Combine filters: <span className="font-mono text-[11px]">label:bug assignee:lauren</span></p>
-              </div>
+              )}
             </div>
           </div>
         )}
