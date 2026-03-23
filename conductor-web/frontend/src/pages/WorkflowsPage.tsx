@@ -26,10 +26,12 @@ export function WorkflowsPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
 
-  // Filters
+  // Filters & sorting
   const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
   const [nameFilter, setNameFilter] = useState("");
   const [searchText, setSearchText] = useState("");
+  const [sortCol, setSortCol] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
   // Picker state
   const [pickerStep, setPickerStep] = useState<PickerStep | null>(null);
@@ -108,10 +110,30 @@ export function WorkflowsPage() {
         r.ctx.branch.toLowerCase().includes(q)
       );
     }
+    if (sortCol) {
+      result = [...result].sort((a, b) => {
+        let va = "", vb = "";
+        switch (sortCol) {
+          case "workflow": va = a.run.workflow_name; vb = b.run.workflow_name; break;
+          case "target": va = a.ctx.repoSlug + a.ctx.branch; vb = b.ctx.repoSlug + b.ctx.branch; break;
+          case "status": va = a.run.status; vb = b.run.status; break;
+          case "started": va = a.run.started_at; vb = b.run.started_at; break;
+        }
+        const cmp = va.localeCompare(vb);
+        return sortDir === "asc" ? cmp : -cmp;
+      });
+    }
     return result;
-  }, [runs, statusFilter, nameFilter, searchText]);
+  }, [runs, statusFilter, nameFilter, searchText, sortCol, sortDir]);
 
   const activeFilterCount = statusFilter.size + (nameFilter ? 1 : 0) + (searchText ? 1 : 0);
+
+  const toggleSort = useCallback((col: string) => {
+    if (sortCol === col) { setSortDir((d) => d === "asc" ? "desc" : "asc"); }
+    else { setSortCol(col); setSortDir("asc"); }
+  }, [sortCol]);
+
+  const sortArrow = (col: string) => sortCol === col ? (sortDir === "asc" ? "\u25B2" : "\u25BC") : null;
 
   const handleCancelWorkflow = async (runId: string) => {
     try {
@@ -307,10 +329,26 @@ export function WorkflowsPage() {
             <table className="w-full text-sm min-w-[600px]">
               <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase sticky top-0 z-10">
                 <tr>
-                  <th className="px-3 py-1.5">Workflow</th>
-                  <th className="px-3 py-1.5">Target</th>
-                  <th className="px-3 py-1.5">Status</th>
-                  <th className="px-3 py-1.5">Started</th>
+                  <th className="px-3 py-1.5">
+                    <button onClick={() => toggleSort("workflow")} className="hover:text-gray-800 flex items-center gap-1">
+                      Workflow {sortArrow("workflow") && <span>{sortArrow("workflow")}</span>}
+                    </button>
+                  </th>
+                  <th className="px-3 py-1.5">
+                    <button onClick={() => toggleSort("target")} className="hover:text-gray-800 flex items-center gap-1">
+                      Target {sortArrow("target") && <span>{sortArrow("target")}</span>}
+                    </button>
+                  </th>
+                  <th className="px-3 py-1.5">
+                    <button onClick={() => toggleSort("status")} className="hover:text-gray-800 flex items-center gap-1">
+                      Status {sortArrow("status") && <span>{sortArrow("status")}</span>}
+                    </button>
+                  </th>
+                  <th className="px-3 py-1.5">
+                    <button onClick={() => toggleSort("started")} className="hover:text-gray-800 flex items-center gap-1">
+                      Started {sortArrow("started") && <span>{sortArrow("started")}</span>}
+                    </button>
+                  </th>
                   <th className="px-3 py-1.5">Actions</th>
                 </tr>
               </thead>
