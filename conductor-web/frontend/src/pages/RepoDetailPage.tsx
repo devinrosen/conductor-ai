@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useParams, Link, useNavigate } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { useApi } from "../hooks/useApi";
@@ -28,20 +28,14 @@ export function RepoDetailPage() {
 
   const [showClosedTickets, setShowClosedTickets] = useState(false);
   const [showCompletedWorktrees, setShowCompletedWorktrees] = useState(false);
-  const [ticketFilterInput, setTicketFilterInput] = useState("");
-  const [ticketFilter, setTicketFilter] = useState("");
+  const [ticketSearch, setTicketSearch] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [filterHelpOpen, setFilterHelpOpen] = useState(false);
-  const filterInputRef = useRef<HTMLInputElement>(null);
-
-  const applyFilter = useCallback(() => {
-    setTicketFilter(ticketFilterInput);
-  }, [ticketFilterInput]);
-
-  const clearFilter = useCallback(() => {
-    setTicketFilterInput("");
-    setTicketFilter("");
-  }, []);
+  const [sortCol, setSortCol] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [stateFilter, setStateFilter] = useState<Set<string>>(new Set());
+  const [labelFilter, setLabelFilter] = useState<Set<string>>(new Set());
+  const [assigneeFilter, setAssigneeFilter] = useState<Set<string>>(new Set());
+  const [openFilterCol, setOpenFilterCol] = useState<string | null>(null);
 
   const {
     data: worktrees,
@@ -162,73 +156,94 @@ export function RepoDetailPage() {
     }
   }
 
-  // Filter tickets — supports structured filters like label:bug assignee:lauren
-  // or plain text search across all fields. Only runs when user clicks Search.
+  // Unique values for column filter dropdowns
+  const uniqueStates = useMemo(() => {
+    if (!tickets) return [];
+    return [...new Set(tickets.map((t) => t.state))].sort();
+  }, [tickets]);
+
+  const uniqueLabels = useMemo(() => {
+    if (!tickets) return [];
+    const all = new Set<string>();
+    for (const t of tickets) {
+      if (t.labels) t.labels.split(",").forEach((l) => { const trimmed = l.trim(); if (trimmed) all.add(trimmed); });
+    }
+    return [...all].sort();
+  }, [tickets]);
+
+  const uniqueAssignees = useMemo(() => {
+    if (!tickets) return [];
+    return [...new Set(tickets.map((t) => t.assignee).filter(Boolean) as string[])].sort();
+  }, [tickets]);
+
+  // Filter + sort tickets
   const filteredTickets = useMemo(() => {
     if (!tickets) return [];
-    const raw = ticketFilter.trim();
-    if (!raw) return tickets;
+    let result = tickets;
 
-    // Tokenize: split on spaces, but keep quoted values together
-    const tokens: string[] = [];
-    let current = "";
-    let inQuotes = false;
-    for (const ch of raw) {
-      if (ch === '"') { inQuotes = !inQuotes; current += ch; }
-      else if (ch === " " && !inQuotes) {
-        if (current) tokens.push(current);
-        current = "";
-      } else { current += ch; }
+    // Text search
+    const q = ticketSearch.toLowerCase().trim();
+    if (q) {
+      result = result.filter((t) =>
+        t.title.toLowerCase().includes(q) ||
+        t.source_id.toLowerCase().includes(q) ||
+        (t.labels && t.labels.toLowerCase().includes(q)) ||
+        (t.assignee && t.assignee.toLowerCase().includes(q))
+      );
     }
-    if (current) tokens.push(current);
 
-    const validFields = new Set(["title", "label", "state", "assignee", "priority", "source", "#"]);
-    const filters: { field: string; value: string }[] = [];
-    const freeTokens: string[] = [];
+    // Column filters
+    if (stateFilter.size > 0) {
+      result = result.filter((t) => stateFilter.has(t.state));
+    }
+    if (labelFilter.size > 0) {
+      result = result.filter((t) => {
+        if (!t.labels) return false;
+        const tLabels = t.labels.split(",").map((l) => l.trim());
+        return tLabels.some((l) => labelFilter.has(l));
+      });
+    }
+    if (assigneeFilter.size > 0) {
+      result = result.filter((t) => t.assignee && assigneeFilter.has(t.assignee));
+    }
 
-    for (const token of tokens) {
-      const colonIdx = token.indexOf(":");
-      if (colonIdx > 0) {
-        const field = token.slice(0, colonIdx).toLowerCase();
-        let value = token.slice(colonIdx + 1);
-        // Strip surrounding quotes
-        if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
-        if (validFields.has(field) && value) {
-          filters.push({ field, value: value.toLowerCase() });
-          continue;
+    // Sort
+    if (sortCol) {
+      result = [...result].sort((a, b) => {
+        let va = "", vb = "";
+        switch (sortCol) {
+          case "#": va = a.source_id; vb = b.source_id; break;
+          case "title": va = a.title; vb = b.title; break;
+          case "state": va = a.state; vb = b.state; break;
+          case "labels": va = a.labels ?? ""; vb = b.labels ?? ""; break;
+          case "assignee": va = a.assignee ?? ""; vb = b.assignee ?? ""; break;
         }
-      }
-      freeTokens.push(token.toLowerCase());
+        const cmp = va.localeCompare(vb);
+        return sortDir === "asc" ? cmp : -cmp;
+      });
     }
-    const freeText = freeTokens.join(" ");
 
-    const getField = (ticket: Ticket, field: string): string => {
-      switch (field) {
-        case "title": return ticket.title;
-        case "label": return ticket.labels ?? "";
-        case "state": return ticket.state;
-        case "assignee": return ticket.assignee ?? "";
-        case "#": return ticket.source_id;
-        case "priority": return ticket.priority ?? "";
-        case "source": return ticket.source_type;
-        default: return "";
-      }
-    };
+    return result;
+  }, [tickets, ticketSearch, stateFilter, labelFilter, assigneeFilter, sortCol, sortDir]);
 
-    return tickets.filter((t) => {
-      // All structured filters must match
-      for (const f of filters) {
-        if (!getField(t, f.field).toLowerCase().includes(f.value)) return false;
-      }
-      // Free text matches across all fields
-      if (freeText) {
-        const all = [t.title, t.source_id, t.labels, t.assignee ?? "", t.state, t.priority ?? ""]
-          .join(" ").toLowerCase();
-        return all.includes(freeText);
-      }
-      return true;
+  const toggleSort = useCallback((col: string) => {
+    if (sortCol === col) {
+      setSortDir((d) => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortCol(col);
+      setSortDir("asc");
+    }
+  }, [sortCol]);
+
+  const toggleFilterValue = useCallback((setter: React.Dispatch<React.SetStateAction<Set<string>>>, value: string) => {
+    setter((prev) => {
+      const next = new Set(prev);
+      if (next.has(value)) next.delete(value); else next.add(value);
+      return next;
     });
-  }, [tickets, ticketFilter]);
+  }, []);
+
+  const activeFilterCount = stateFilter.size + labelFilter.size + assigneeFilter.size + (ticketSearch ? 1 : 0);
 
   const wtCount = worktrees?.length ?? 0;
   const { selectedIndex, moveDown, moveUp, reset } = useListNav(wtCount);
@@ -448,7 +463,7 @@ export function RepoDetailPage() {
       <section>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
-            Tickets {tickets ? `(${filteredTickets.length}${ticketFilter ? ` of ${tickets.length}` : ""})` : ""}
+            Tickets {tickets ? `(${filteredTickets.length}${activeFilterCount > 0 ? ` of ${tickets.length}` : ""})` : ""}
           </h3>
           <div className="flex items-center gap-2">
             {syncResult && (
@@ -474,87 +489,24 @@ export function RepoDetailPage() {
           </div>
         </div>
 
-        {/* Ticket filter bar */}
+        {/* Search bar */}
         {tickets && tickets.length > 0 && (
           <div className="mb-2 flex items-center gap-2">
-            <form
-              className="relative flex-1 flex items-center gap-1.5"
-              onSubmit={(e) => { e.preventDefault(); applyFilter(); }}
-            >
-              <input
-                ref={filterInputRef}
-                type="text"
-                value={ticketFilterInput}
-                onChange={(e) => setTicketFilterInput(e.target.value)}
-                placeholder="Filter tickets..."
-                className="flex-1 px-3 py-1.5 text-sm rounded-md border border-gray-200 bg-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              />
+            <input
+              type="text"
+              value={ticketSearch}
+              onChange={(e) => setTicketSearch(e.target.value)}
+              placeholder="Search tickets..."
+              className="flex-1 px-3 py-1.5 text-sm rounded-md border border-gray-200 bg-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+            {activeFilterCount > 0 && (
               <button
-                type="submit"
-                className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-100"
+                onClick={() => { setTicketSearch(""); setStateFilter(new Set()); setLabelFilter(new Set()); setAssigneeFilter(new Set()); }}
+                className="px-2 py-1.5 text-xs rounded-md text-gray-400 hover:text-gray-600"
               >
-                Search
+                Clear all filters
               </button>
-              {ticketFilter && (
-                <button
-                  type="button"
-                  onClick={clearFilter}
-                  className="px-2 py-1.5 text-sm rounded-md text-gray-400 hover:text-gray-600"
-                >
-                  Clear
-                </button>
-              )}
-            </form>
-            <div className="relative">
-              <button
-                onClick={() => setFilterHelpOpen((v) => !v)}
-                className={`w-6 h-6 flex items-center justify-center rounded-full text-xs ${
-                  filterHelpOpen
-                    ? "bg-indigo-100 text-indigo-600"
-                    : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-                }`}
-                aria-label="Filter help"
-              >
-                ?
-              </button>
-              {filterHelpOpen && (
-                <div className="absolute right-0 top-8 w-72 p-3 rounded-lg border border-gray-200 bg-white shadow-lg text-xs text-gray-600 z-20 space-y-2">
-                  <p className="font-medium text-gray-800">Filter by column</p>
-                  <p>Click a field to add it to the search, or type freely to search all fields.</p>
-                  <div className="space-y-1">
-                    {[
-                      { key: "title:", desc: "Ticket title", example: "title:\"feature request\"" },
-                      { key: "#:", desc: "Ticket number", example: "#:1234" },
-                      { key: "label:", desc: "Label name", example: "label:bug" },
-                      { key: "state:", desc: "open or closed", example: "state:open" },
-                      { key: "assignee:", desc: "Assigned user", example: "assignee:lauren" },
-                      { key: "priority:", desc: "Priority level", example: "priority:high" },
-                      { key: "source:", desc: "Source type", example: "source:github" },
-                    ].map(({ key, desc, example }) => (
-                      <button
-                        key={key}
-                        onClick={() => {
-                          const prefix = ticketFilterInput && !ticketFilterInput.endsWith(" ") ? " " : "";
-                          setTicketFilterInput((v) => v + prefix + key);
-                          setFilterHelpOpen(false);
-                          requestAnimationFrame(() => filterInputRef.current?.focus());
-                        }}
-                        className="w-full text-left flex items-center justify-between gap-2 px-2 py-1 rounded hover:bg-gray-100 transition-colors"
-                      >
-                        <span>
-                          <span className="font-mono text-indigo-500">{key}</span>
-                          <span className="text-gray-400 ml-1">{desc}</span>
-                        </span>
-                        <span className="font-mono text-[10px] text-gray-300">{example}</span>
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-gray-400 pt-1 border-t border-gray-100">
-                    Combine: <span className="font-mono">label:bug assignee:lauren</span>
-                  </p>
-                </div>
-              )}
-            </div>
+            )}
           </div>
         )}
 
@@ -569,11 +521,100 @@ export function RepoDetailPage() {
             <table className="w-full text-sm min-w-[480px]">
               <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase sticky top-0 z-10">
                 <tr>
-                  <th className="px-3 py-1.5">#</th>
-                  <th className="px-3 py-1.5">Title</th>
-                  <th className="px-3 py-1.5">State</th>
-                  <th className="px-3 py-1.5">Labels</th>
-                  <th className="px-3 py-1.5">Assignee</th>
+                  <th className="px-3 py-1.5">
+                    <button onClick={() => toggleSort("#")} className="hover:text-gray-800 flex items-center gap-1">
+                      # {sortCol === "#" && <span>{sortDir === "asc" ? "\u25B2" : "\u25BC"}</span>}
+                    </button>
+                  </th>
+                  <th className="px-3 py-1.5">
+                    <button onClick={() => toggleSort("title")} className="hover:text-gray-800 flex items-center gap-1">
+                      Title {sortCol === "title" && <span>{sortDir === "asc" ? "\u25B2" : "\u25BC"}</span>}
+                    </button>
+                  </th>
+                  <th className="px-3 py-1.5">
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => toggleSort("state")} className="hover:text-gray-800 flex items-center gap-1">
+                        State {sortCol === "state" && <span>{sortDir === "asc" ? "\u25B2" : "\u25BC"}</span>}
+                      </button>
+                      <div className="relative">
+                        <button
+                          onClick={() => setOpenFilterCol(openFilterCol === "state" ? null : "state")}
+                          className={`text-[10px] px-1 rounded ${stateFilter.size > 0 ? "text-indigo-500" : "text-gray-400 hover:text-gray-600"}`}
+                        >
+                          {stateFilter.size > 0 ? `(${stateFilter.size})` : "\u25BE"}
+                        </button>
+                        {openFilterCol === "state" && (
+                          <div className="absolute left-0 top-6 w-36 p-2 rounded-lg border border-gray-200 bg-white shadow-lg z-30 space-y-1">
+                            {uniqueStates.map((v) => (
+                              <label key={v} className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer hover:bg-gray-50 px-1 py-0.5 rounded">
+                                <input type="checkbox" checked={stateFilter.has(v)} onChange={() => toggleFilterValue(setStateFilter, v)} className="rounded" />
+                                {v}
+                              </label>
+                            ))}
+                            {stateFilter.size > 0 && (
+                              <button onClick={() => setStateFilter(new Set())} className="text-[10px] text-gray-400 hover:text-gray-600 w-full text-left px-1">Clear</button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </th>
+                  <th className="px-3 py-1.5">
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => toggleSort("labels")} className="hover:text-gray-800 flex items-center gap-1">
+                        Labels {sortCol === "labels" && <span>{sortDir === "asc" ? "\u25B2" : "\u25BC"}</span>}
+                      </button>
+                      <div className="relative">
+                        <button
+                          onClick={() => setOpenFilterCol(openFilterCol === "labels" ? null : "labels")}
+                          className={`text-[10px] px-1 rounded ${labelFilter.size > 0 ? "text-indigo-500" : "text-gray-400 hover:text-gray-600"}`}
+                        >
+                          {labelFilter.size > 0 ? `(${labelFilter.size})` : "\u25BE"}
+                        </button>
+                        {openFilterCol === "labels" && (
+                          <div className="absolute left-0 top-6 w-44 max-h-48 overflow-y-auto p-2 rounded-lg border border-gray-200 bg-white shadow-lg z-30 space-y-1">
+                            {uniqueLabels.map((v) => (
+                              <label key={v} className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer hover:bg-gray-50 px-1 py-0.5 rounded">
+                                <input type="checkbox" checked={labelFilter.has(v)} onChange={() => toggleFilterValue(setLabelFilter, v)} className="rounded" />
+                                {v}
+                              </label>
+                            ))}
+                            {labelFilter.size > 0 && (
+                              <button onClick={() => setLabelFilter(new Set())} className="text-[10px] text-gray-400 hover:text-gray-600 w-full text-left px-1">Clear</button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </th>
+                  <th className="px-3 py-1.5">
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => toggleSort("assignee")} className="hover:text-gray-800 flex items-center gap-1">
+                        Assignee {sortCol === "assignee" && <span>{sortDir === "asc" ? "\u25B2" : "\u25BC"}</span>}
+                      </button>
+                      <div className="relative">
+                        <button
+                          onClick={() => setOpenFilterCol(openFilterCol === "assignee" ? null : "assignee")}
+                          className={`text-[10px] px-1 rounded ${assigneeFilter.size > 0 ? "text-indigo-500" : "text-gray-400 hover:text-gray-600"}`}
+                        >
+                          {assigneeFilter.size > 0 ? `(${assigneeFilter.size})` : "\u25BE"}
+                        </button>
+                        {openFilterCol === "assignee" && (
+                          <div className="absolute left-0 top-6 w-40 max-h-48 overflow-y-auto p-2 rounded-lg border border-gray-200 bg-white shadow-lg z-30 space-y-1">
+                            {uniqueAssignees.map((v) => (
+                              <label key={v} className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer hover:bg-gray-50 px-1 py-0.5 rounded">
+                                <input type="checkbox" checked={assigneeFilter.has(v)} onChange={() => toggleFilterValue(setAssigneeFilter, v)} className="rounded" />
+                                {v}
+                              </label>
+                            ))}
+                            {assigneeFilter.size > 0 && (
+                              <button onClick={() => setAssigneeFilter(new Set())} className="text-[10px] text-gray-400 hover:text-gray-600 w-full text-left px-1">Clear</button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </th>
                   <th className="px-3 py-1.5">Agent</th>
                 </tr>
               </thead>
