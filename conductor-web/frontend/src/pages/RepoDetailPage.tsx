@@ -169,55 +169,62 @@ export function RepoDetailPage() {
     const raw = ticketFilter.trim();
     if (!raw) return tickets;
 
-    // Parse structured filters: field:value or field:"value with spaces"
-    const fields = ["title", "label", "state", "assignee", "priority", "source", "#"];
-    const filters: { field: string; value: string }[] = [];
-    let remaining = raw;
-
-    for (const field of fields) {
-      // Match field:"quoted value" or field:unquoted
-      const quotedRe = new RegExp(`${field.replace("#", "\\#")}:"([^"]+)"`, "gi");
-      const unquotedRe = new RegExp(`${field.replace("#", "\\#")}:(\\S+)`, "gi");
-
-      let m;
-      while ((m = quotedRe.exec(raw)) !== null) {
-        filters.push({ field, value: m[1].toLowerCase() });
-        remaining = remaining.replace(m[0], "");
-      }
-      while ((m = unquotedRe.exec(raw)) !== null) {
-        // Skip if this was already matched as a quoted filter
-        if (!remaining.includes(m[0])) continue;
-        filters.push({ field, value: m[1].toLowerCase() });
-        remaining = remaining.replace(m[0], "");
-      }
+    // Tokenize: split on spaces, but keep quoted values together
+    const tokens: string[] = [];
+    let current = "";
+    let inQuotes = false;
+    for (const ch of raw) {
+      if (ch === '"') { inQuotes = !inQuotes; current += ch; }
+      else if (ch === " " && !inQuotes) {
+        if (current) tokens.push(current);
+        current = "";
+      } else { current += ch; }
     }
-    const freeText = remaining.trim().toLowerCase();
+    if (current) tokens.push(current);
 
-    const fieldMatch = (field: string, value: string, ticket: Ticket): boolean => {
+    const validFields = new Set(["title", "label", "state", "assignee", "priority", "source", "#"]);
+    const filters: { field: string; value: string }[] = [];
+    const freeTokens: string[] = [];
+
+    for (const token of tokens) {
+      const colonIdx = token.indexOf(":");
+      if (colonIdx > 0) {
+        const field = token.slice(0, colonIdx).toLowerCase();
+        let value = token.slice(colonIdx + 1);
+        // Strip surrounding quotes
+        if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
+        if (validFields.has(field) && value) {
+          filters.push({ field, value: value.toLowerCase() });
+          continue;
+        }
+      }
+      freeTokens.push(token.toLowerCase());
+    }
+    const freeText = freeTokens.join(" ");
+
+    const getField = (ticket: Ticket, field: string): string => {
       switch (field) {
-        case "title": return ticket.title.toLowerCase().includes(value);
-        case "label": return !!ticket.labels && ticket.labels.toLowerCase().includes(value);
-        case "state": return ticket.state.toLowerCase().includes(value);
-        case "assignee": return !!ticket.assignee && ticket.assignee.toLowerCase().includes(value);
-        case "#": return ticket.source_id.toLowerCase().includes(value);
-        case "priority": return !!ticket.priority && ticket.priority.toLowerCase().includes(value);
-        case "source": return ticket.source_type.toLowerCase().includes(value);
-        default: return true;
+        case "title": return ticket.title;
+        case "label": return ticket.labels ?? "";
+        case "state": return ticket.state;
+        case "assignee": return ticket.assignee ?? "";
+        case "#": return ticket.source_id;
+        case "priority": return ticket.priority ?? "";
+        case "source": return ticket.source_type;
+        default: return "";
       }
     };
 
     return tickets.filter((t) => {
+      // All structured filters must match
       for (const f of filters) {
-        if (!fieldMatch(f.field, f.value, t)) return false;
+        if (!getField(t, f.field).toLowerCase().includes(f.value)) return false;
       }
+      // Free text matches across all fields
       if (freeText) {
-        return (
-          t.title.toLowerCase().includes(freeText) ||
-          t.source_id.toLowerCase().includes(freeText) ||
-          (t.labels && t.labels.toLowerCase().includes(freeText)) ||
-          (t.assignee && t.assignee.toLowerCase().includes(freeText)) ||
-          t.state.toLowerCase().includes(freeText)
-        );
+        const all = [t.title, t.source_id, t.labels, t.assignee ?? "", t.state, t.priority ?? ""]
+          .join(" ").toLowerCase();
+        return all.includes(freeText);
       }
       return true;
     });
