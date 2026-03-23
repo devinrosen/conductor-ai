@@ -150,18 +150,57 @@ export function RepoDetailPage() {
     }
   }
 
-  // Filter tickets by search text
+  // Filter tickets — supports structured filters like label:bug assignee:lauren
+  // or plain text search across all fields.
   const filteredTickets = useMemo(() => {
     if (!tickets) return [];
-    if (!ticketFilter.trim()) return tickets;
-    const q = ticketFilter.toLowerCase();
-    return tickets.filter(
-      (t) =>
-        t.title.toLowerCase().includes(q) ||
-        t.source_id.toLowerCase().includes(q) ||
-        (t.labels && t.labels.toLowerCase().includes(q)) ||
-        (t.assignee && t.assignee.toLowerCase().includes(q)),
-    );
+    const raw = ticketFilter.trim();
+    if (!raw) return tickets;
+
+    // Parse structured filters: field:value or field:"value with spaces"
+    const filters: { field: string; value: string }[] = [];
+    let freeText = raw;
+
+    const filterRegex = /(title|label|state|assignee|#):(?:"([^"]+)"|(\S+))/gi;
+    let match;
+    while ((match = filterRegex.exec(raw)) !== null) {
+      filters.push({ field: match[1].toLowerCase(), value: (match[2] ?? match[3]).toLowerCase() });
+      freeText = freeText.replace(match[0], "");
+    }
+    freeText = freeText.trim().toLowerCase();
+
+    return tickets.filter((t) => {
+      // Structured filters — all must match
+      for (const f of filters) {
+        switch (f.field) {
+          case "title":
+            if (!t.title.toLowerCase().includes(f.value)) return false;
+            break;
+          case "label":
+            if (!t.labels || !t.labels.toLowerCase().includes(f.value)) return false;
+            break;
+          case "state":
+            if (!t.state.toLowerCase().includes(f.value)) return false;
+            break;
+          case "assignee":
+            if (!t.assignee || !t.assignee.toLowerCase().includes(f.value)) return false;
+            break;
+          case "#":
+            if (!t.source_id.toLowerCase().includes(f.value)) return false;
+            break;
+        }
+      }
+      // Free text — match across all fields
+      if (freeText) {
+        return (
+          t.title.toLowerCase().includes(freeText) ||
+          t.source_id.toLowerCase().includes(freeText) ||
+          (t.labels && t.labels.toLowerCase().includes(freeText)) ||
+          (t.assignee && t.assignee.toLowerCase().includes(freeText))
+        );
+      }
+      return true;
+    });
   }, [tickets, ticketFilter]);
 
   const wtCount = worktrees?.length ?? 0;
@@ -410,14 +449,36 @@ export function RepoDetailPage() {
 
         {/* Ticket filter bar */}
         {tickets && tickets.length > 0 && (
-          <div className="mb-2">
-            <input
-              type="text"
-              value={ticketFilter}
-              onChange={(e) => setTicketFilter(e.target.value)}
-              placeholder="Filter by title, number, label, or assignee\u2026"
-              className="w-full px-3 py-1.5 text-sm rounded-md border border-gray-200 bg-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
+          <div className="mb-2 flex items-center gap-2">
+            <div className="relative flex-1">
+              <input
+                type="text"
+                value={ticketFilter}
+                onChange={(e) => setTicketFilter(e.target.value)}
+                placeholder="Filter tickets\u2026"
+                className="w-full px-3 py-1.5 text-sm rounded-md border border-gray-200 bg-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+            <div className="relative group">
+              <button
+                className="w-6 h-6 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 text-xs"
+                aria-label="Filter help"
+              >
+                ?
+              </button>
+              <div className="absolute right-0 top-8 w-64 p-3 rounded-lg border border-gray-200 bg-white shadow-lg text-xs text-gray-600 hidden group-hover:block z-20 space-y-1.5">
+                <p className="font-medium text-gray-800">Filter syntax</p>
+                <p>Type freely to search all fields, or use column filters:</p>
+                <div className="font-mono text-[11px] space-y-0.5 text-gray-500">
+                  <p><span className="text-indigo-500">label:</span>bug</p>
+                  <p><span className="text-indigo-500">assignee:</span>lauren</p>
+                  <p><span className="text-indigo-500">state:</span>open</p>
+                  <p><span className="text-indigo-500">title:</span>&quot;feature request&quot;</p>
+                  <p><span className="text-indigo-500">#:</span>1234</p>
+                </div>
+                <p>Combine filters: <span className="font-mono text-[11px]">label:bug assignee:lauren</span></p>
+              </div>
+            </div>
           </div>
         )}
 
