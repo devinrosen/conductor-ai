@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, Link, useNavigate } from "react-router";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
+import { TransitBreadcrumb } from "../components/shared/TransitBreadcrumb";
 import type { AgentRun, AgentEvent, AgentCreatedIssue, Ticket } from "../api/types";
 import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
@@ -313,14 +314,11 @@ export function WorktreeDetailPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <Link
-          to={`/repos/${repoId}`}
-          className="text-sm text-indigo-600 hover:underline"
-        >
-          Back to repo
-        </Link>
-      </div>
+      <TransitBreadcrumb stops={[
+        { label: "Home", href: "/" },
+        { label: "Repo", href: `/repos/${repoId}` },
+        { label: worktree.branch, current: true },
+      ]} />
 
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>

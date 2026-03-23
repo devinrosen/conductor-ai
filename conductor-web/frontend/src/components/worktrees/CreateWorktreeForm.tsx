@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../../api/client";
+import { TrackSwitchIcon } from "../shared/RailwayIllustrations";
 
 export function CreateWorktreeForm({
   repoId,
@@ -48,7 +49,7 @@ export function CreateWorktreeForm({
         onClick={() => setOpen(true)}
         className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
       >
-        Create Worktree
+        <TrackSwitchIcon size={16} /> Create Worktree
       </button>
     );
   }

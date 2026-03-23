@@ -87,6 +87,41 @@
   100% { transform: translateX(100%); }
 }
 
+/* ── Mind the Gap hazard stripe ── */
+.hazard-stripe {
+  background: repeating-linear-gradient(
+    -45deg,
+    #FF9500 0px, #FF9500 4px,
+    #1a1a1a 4px, #1a1a1a 8px
+  );
+  opacity: 0.3;
+}
+
+/* ── Ticket-shaped card styling ── */
+.ticket-row {
+  position: relative;
+}
+.ticket-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 12px;
+  background: var(--color-gray-50);
+  border-radius: 0 6px 6px 0;
+}
+
+/* ── Destructive action border ── */
+.danger-border {
+  border-image: repeating-linear-gradient(
+    -45deg,
+    #D73020 0px, #D73020 3px,
+    transparent 3px, transparent 6px
+  ) 4;
+}
+
 /* ── Focus ring ── */
 *:focus-visible { outline-color: #2B5EA7; }
 
@@ -99,6 +134,17 @@
 /* ═══════════════════════════════════════════════════════════════════════
  * Per-Theme Surface Textures & Ornaments
  * ═══════════════════════════════════════════════════════════════════════ */
+
+/* Conductor Classic — brass gradient header stripe */
+[data-theme="conductor-classic"]::before {
+  content: '';
+  display: block;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(to right, #8B6914, #CD853F, #EBC47F, #CD853F, #8B6914);
+  z-index: 9999;
+}
 
 /* London Underground — glazed ceramic tile grid */
 [data-theme="london-underground"] .bg-white,
@@ -155,6 +201,21 @@
   z-index: 9999;
 }
 
+/* Platform 9¾ — burgundy header stripe with gold sparkle */
+[data-theme="platform-9-three-quarters"]::before {
+  content: '';
+  display: block;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: #7C0A02;
+  z-index: 9999;
+  background-image:
+    radial-gradient(circle at 20%, #F5D98E 0%, transparent 2%),
+    radial-gradient(circle at 50%, #F5D98E 0%, transparent 2%),
+    radial-gradient(circle at 80%, #F5D98E 0%, transparent 2%);
+}
+
 /* Platform 9¾ — parchment vignette on cards */
 [data-theme="platform-9-three-quarters"] .rounded-lg {
   box-shadow: inset 0 0 30px rgba(0,0,0,0.15);
@@ -180,6 +241,21 @@
 @keyframes twinkle {
   0% { opacity: 0.4; }
   100% { opacity: 1; }
+}
+
+/* Orient Express — gold header stripe with sunburst center */
+[data-theme="orient-express"]::before {
+  content: '';
+  display: block;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(to right,
+    transparent 0%, #D4A843 20%, #F0D68A 48%,
+    #FFFFFF 50%,
+    #F0D68A 52%, #D4A843 80%, transparent 100%
+  );
+  z-index: 9999;
 }
 
 /* Orient Express — wood marquetry grain */
@@ -261,6 +337,34 @@
 @keyframes drift {
   0% { background-position: 0% 0%; }
   100% { background-position: -100% 0%; }
+}
+
+/* Pullman Class — double brass header stripe */
+[data-theme="pullman-class"]::before {
+  content: '';
+  display: block;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 5px;
+  background:
+    linear-gradient(to bottom,
+      #CD853F 0px, #CD853F 1px,
+      transparent 1px, transparent 3px,
+      #CD853F 3px, #CD853F 4px,
+      transparent 4px
+    );
+  z-index: 9999;
+}
+
+/* Trans-Siberian — subtle dark green header line */
+[data-theme="trans-siberian"]::before {
+  content: '';
+  display: block;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: #263828;
+  z-index: 9999;
 }
 
 /* Pullman Class — mahogany grain + brass highlights */
