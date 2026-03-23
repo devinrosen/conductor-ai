@@ -10,6 +10,7 @@ import { StatusBadge } from "../components/shared/StatusBadge";
 import { SignalLight } from "../components/shared/SignalLight";
 import { SplitFlap } from "../components/shared/SplitFlap";
 import { TrackDivider } from "../components/shared/TrackDivider";
+import { StationHeader } from "../components/shared/StationHeader";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { WelcomeAboard } from "../components/shared/WelcomeAboard";
@@ -182,9 +183,7 @@ export function ActivityPage() {
       {/* Attention Required — pending feedback */}
       {pendingFeedback.length > 0 && (
         <section className="shrink-0">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-amber-500 mb-1.5">
-            Attention Required
-          </h3>
+          <StationHeader>Attention Required</StationHeader>
           <div className="space-y-2">
             {pendingFeedback.map(({ feedback, ctx }) => (
               <div key={feedback.id} className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
@@ -217,9 +216,7 @@ export function ActivityPage() {
       <div className="flex-1 flex flex-col gap-3 min-h-0 overflow-hidden">
         {/* Active Worktrees */}
         <section className="flex flex-col flex-1 min-h-0">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">
-            Active Worktrees ({activeWorktrees.length})
-          </h3>
+          <StationHeader count={activeWorktrees.length}>Active Worktrees</StationHeader>
           {activeWorktrees.length === 0 ? (
             <div className="text-center py-8 text-gray-400 text-sm">
               No platforms active. Create a worktree from a repo to lay some track.
@@ -294,9 +291,7 @@ export function ActivityPage() {
 
         {/* Repos Grid */}
         <section className="shrink-0">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5">
-            Repos ({repos.length})
-          </h3>
+          <StationHeader count={repos.length}>Stations</StationHeader>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {repos.map((repo) => (
               <RepoCard key={repo.id} repo={repo} worktreeCount={worktreeCounts[repo.id] ?? 0} />

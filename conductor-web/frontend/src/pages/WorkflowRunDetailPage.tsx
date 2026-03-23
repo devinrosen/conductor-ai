@@ -6,6 +6,7 @@ import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { TrainProgress } from "../components/shared/TrainProgress";
+import { TransitBreadcrumb } from "../components/shared/TransitBreadcrumb";
 
 export function WorkflowRunDetailPage() {
   const { repoId, worktreeId, runId } = useParams<{
@@ -126,14 +127,12 @@ export function WorkflowRunDetailPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <Link
-          to={`/repos/${repoId}/worktrees/${worktreeId}`}
-          className="text-sm text-indigo-600 hover:underline"
-        >
-          ← Back to worktree
-        </Link>
-      </div>
+      <TransitBreadcrumb stops={[
+        { label: "Home", href: "/" },
+        { label: "Repo", href: `/repos/${repoId}` },
+        { label: "Worktree", href: `/repos/${repoId}/worktrees/${worktreeId}` },
+        { label: run.workflow_name, current: true },
+      ]} />
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">

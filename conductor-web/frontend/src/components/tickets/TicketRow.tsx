@@ -17,7 +17,7 @@ export function TicketRow({ ticket, agentTotals, repoSlug, onClick, selected, in
   const labels = parseLabels(ticket.labels);
   return (
     <tr
-      className={`cursor-pointer hover:bg-gray-50 ${selected ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""}`}
+      className={`cursor-pointer hover:bg-gray-50 ticket-row ${selected ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""}`}
       onClick={() => onClick(ticket)}
       data-list-index={index}
     >
