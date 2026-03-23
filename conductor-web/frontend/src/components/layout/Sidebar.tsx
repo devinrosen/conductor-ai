@@ -58,7 +58,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
       <nav className="flex-1 overflow-auto p-2 space-y-0.5">
         <NavLink to="/" end className={linkClass}>
-          Activity <ShortcutHint keys="g d" />
+          Home <ShortcutHint keys="g d" />
         </NavLink>
         <NavLink to="/repos" className={linkClass}>
           Repos
