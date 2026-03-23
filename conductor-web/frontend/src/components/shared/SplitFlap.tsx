@@ -87,7 +87,8 @@ export function SplitFlap({ text, length, className = "" }: SplitFlapProps) {
 
   return (
     <span
-      className={`inline-flex bg-gray-900 text-yellow-400 rounded px-1.5 py-0.5 font-mono text-xs tracking-widest ${className}`}
+      className={`inline-flex rounded px-1.5 py-0.5 font-mono text-xs tracking-widest ${className}`}
+      style={{ backgroundColor: "#0a0e14", color: "#e8b832" }}
     >
       {padded.split("").map((char, i) => (
         <FlapChar key={i} target={char} delay={i * STAGGER} />
