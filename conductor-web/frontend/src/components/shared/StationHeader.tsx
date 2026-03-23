@@ -41,9 +41,7 @@ const swissLetters: Record<string, string> = {
   "recent runs": "E",
 };
 
-function getThemeId(): string {
-  return document.documentElement.getAttribute("data-theme") ?? "conductor-classic";
-}
+import { useThemeId } from "../../themes/useTheme";
 
 export function StationHeader({
   children,
@@ -52,7 +50,7 @@ export function StationHeader({
   children: React.ReactNode;
   count?: number;
 }) {
-  const themeId = getThemeId();
+  const themeId = useThemeId();
   const deco = themeDecoration[themeId] ?? {};
   const label = typeof children === "string" ? children.toLowerCase() : "";
   const swissLetter = themeId === "swiss-federal" ? swissLetters[label] : null;
