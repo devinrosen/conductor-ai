@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { Link, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { api } from "../api/client";
 import type { Worktree, AgentRun, FeedbackRequest } from "../api/types";
@@ -7,6 +7,9 @@ import { RepoCard } from "../components/repos/RepoCard";
 import { RegisterRepoForm } from "../components/repos/RegisterRepoForm";
 import { GitHubDiscoverModal } from "../components/repos/GitHubDiscoverModal";
 import { StatusBadge } from "../components/shared/StatusBadge";
+import { SignalLight } from "../components/shared/SignalLight";
+import { SplitFlap } from "../components/shared/SplitFlap";
+import { TrackDivider } from "../components/shared/TrackDivider";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { WelcomeAboard } from "../components/shared/WelcomeAboard";
@@ -152,20 +155,17 @@ export function ActivityPage() {
 
   // Summary counts
   const runningAgents = Object.values(latestRuns).filter((r) => r.status === "running").length;
-  const waitingFeedback = pendingFeedback.length;
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden gap-3">
-      {/* Header + summary bar */}
+      {/* Header + departure board summary */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <h2 className="text-lg font-bold text-gray-900">Home</h2>
-          <div className="flex items-center gap-3 text-xs text-gray-500">
-            <Link to="/repos" className="hover:text-indigo-600">{repos.length} repo{repos.length !== 1 ? "s" : ""}</Link>
-            <span>{activeWorktrees.length} active worktree{activeWorktrees.length !== 1 ? "s" : ""}</span>
-            {runningAgents > 0 && <span className="text-yellow-600">{runningAgents} agent{runningAgents !== 1 ? "s" : ""} running</span>}
-            {waitingFeedback > 0 && <span className="text-amber-600">{waitingFeedback} pending feedback</span>}
-          </div>
+          <SplitFlap
+            text={`${repos.length} REPOS  ${activeWorktrees.length} TRACKS  ${runningAgents} AGENTS`}
+            length={32}
+          />
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => setDiscoverOpen(true)} className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-600 hover:bg-gray-100">
@@ -226,9 +226,10 @@ export function ActivityPage() {
             </div>
           ) : (
             <div className="rounded-lg border border-gray-200 bg-white overflow-y-auto overflow-x-auto flex-1 min-h-0">
-              <table className="w-full text-sm min-w-[500px]">
+              <table className="w-full text-sm min-w-[540px]">
                 <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase sticky top-0 z-10">
                   <tr>
+                    <th className="px-2 py-1.5 w-8"></th>
                     <th className="px-3 py-1.5">Branch</th>
                     <th className="px-3 py-1.5">Repo</th>
                     <th className="px-3 py-1.5">Status</th>
@@ -239,13 +240,24 @@ export function ActivityPage() {
                 <tbody className="divide-y divide-gray-100">
                   {activeWorktrees.map((wt, index) => {
                     const run = latestRuns[wt.id];
+                    const overallStatus = run?.status === "running" ? "running"
+                      : run?.status === "waiting_for_feedback" ? "waiting"
+                      : run?.status === "failed" ? "failed"
+                      : wt.status;
                     return (
                       <tr
                         key={wt.id}
                         data-list-index={index}
-                        className={`cursor-pointer hover:bg-gray-50 ${selectedIndex === index ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""}`}
+                        className={`cursor-pointer transition-colors hover:bg-gray-50 border-l-2 ${
+                          selectedIndex === index
+                            ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200 border-l-indigo-500"
+                            : "border-l-transparent hover:border-l-indigo-300"
+                        }`}
                         onClick={() => navigate(`/repos/${wt.repoId}/worktrees/${wt.id}`)}
                       >
+                        <td className="px-2 py-1.5">
+                          <SignalLight status={overallStatus} size={18} />
+                        </td>
                         <td className="px-3 py-1.5">
                           <span className="text-indigo-600 font-medium">{wt.branch}</span>
                         </td>
@@ -277,6 +289,8 @@ export function ActivityPage() {
             </div>
           )}
         </section>
+
+        <TrackDivider />
 
         {/* Repos Grid */}
         <section className="shrink-0">
