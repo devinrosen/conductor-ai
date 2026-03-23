@@ -600,7 +600,7 @@ export function RepoDetailPage() {
                           {assigneeFilter.size > 0 ? `(${assigneeFilter.size})` : "\u25BE"}
                         </button>
                         {openFilterCol === "assignee" && (
-                          <div className="absolute left-0 top-6 w-40 max-h-48 overflow-y-auto p-2 rounded-lg border border-gray-200 bg-white shadow-lg z-30 space-y-1">
+                          <div className="absolute right-0 top-6 w-40 max-h-48 overflow-y-auto p-2 rounded-lg border border-gray-200 bg-white shadow-lg z-30 space-y-1">
                             {uniqueAssignees.map((v) => (
                               <label key={v} className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer hover:bg-gray-50 px-1 py-0.5 rounded">
                                 <input type="checkbox" checked={assigneeFilter.has(v)} onChange={() => toggleFilterValue(setAssigneeFilter, v)} className="rounded" />
