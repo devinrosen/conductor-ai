@@ -1,7 +1,29 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, createContext, useContext } from "react";
 import { defaultTheme, getThemeById, type Theme } from "./themes";
 
 const STORAGE_KEY = "conductor-theme";
+
+// ── React context for theme ID ──
+// Components that need to re-render on theme change use useThemeId().
+const ThemeIdContext = createContext<string>(defaultTheme.id);
+let globalSetThemeId: ((id: string) => void) | null = null;
+
+export function ThemeIdProvider({ children }: { children: React.ReactNode }) {
+  const [themeId, setThemeId] = useState(() => loadSavedTheme().id);
+  globalSetThemeId = setThemeId;
+  return (
+    <ThemeIdContext.Provider value={themeId}>
+      {children}
+    </ThemeIdContext.Provider>
+  );
+}
+
+/** Get the current theme ID reactively — re-renders on theme change. */
+export function useThemeId(): string {
+  return useContext(ThemeIdContext);
+}
+
+// ── Apply theme to DOM ──
 
 function applyTheme(theme: Theme) {
   const root = document.documentElement;
@@ -10,7 +32,6 @@ function applyTheme(theme: Theme) {
   const { palette, typography, surfaces, spacing, motion } = theme;
   const s = root.style;
 
-  // ── Palette ──
   s.setProperty("--color-gray-50", palette.gray50);
   s.setProperty("--color-gray-100", palette.gray100);
   s.setProperty("--color-gray-200", palette.gray200);
@@ -37,8 +58,6 @@ function applyTheme(theme: Theme) {
   s.setProperty("--color-red-500", palette.statusStop);
   s.setProperty("--color-red-600", palette.statusStop);
   s.setProperty("--color-red-700", palette.statusStop);
-
-  // ── Typography ──
   s.setProperty("--cd-heading-family", typography.headingFamily);
   s.setProperty("--cd-heading-weight", typography.headingWeight);
   s.setProperty("--cd-heading-letter-spacing", typography.headingLetterSpacing);
@@ -49,23 +68,16 @@ function applyTheme(theme: Theme) {
   s.setProperty("--cd-code-family", typography.codeFamily);
   s.setProperty("--font-sans", typography.bodyFamily);
   s.setProperty("--font-mono", typography.codeFamily);
-
-  // ── Surfaces ──
   s.setProperty("--cd-radius-card", surfaces.borderRadiusCard);
   s.setProperty("--cd-radius-button", surfaces.borderRadiusButton);
   s.setProperty("--cd-radius-badge", surfaces.borderRadiusBadge);
   s.setProperty("--cd-border-style", surfaces.borderStyle);
-
-  // ── Spacing ──
   s.setProperty("--cd-card-padding", spacing.cardPadding);
   s.setProperty("--cd-item-gap", spacing.itemGap);
   s.setProperty("--cd-section-gap", spacing.sectionGap);
-
-  // ── Motion ──
   s.setProperty("--cd-transition-duration", motion.transitionDuration);
   s.setProperty("--cd-transition-easing", motion.transitionEasing);
 
-  // ── Body ──
   s.backgroundColor = palette.gray50;
   s.color = palette.gray800;
   s.fontFamily = typography.bodyFamily;
@@ -100,6 +112,8 @@ export function useTheme() {
 
   const setTheme = useCallback((t: Theme) => {
     setThemeState(t);
+    // Update the context so all useThemeId() consumers re-render
+    globalSetThemeId?.(t.id);
     try {
       localStorage.setItem(STORAGE_KEY, t.id);
     } catch {

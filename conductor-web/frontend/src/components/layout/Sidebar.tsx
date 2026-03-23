@@ -3,6 +3,7 @@ import { useRepos } from "./AppShell";
 import { NotificationBell } from "../notifications/NotificationBell";
 import { StationClock } from "../shared/StationClock";
 import { ThemeLogo } from "../shared/ThemeLogo";
+import { useThemeId } from "../../themes/useTheme";
 
 // Per-theme repo indicator colors (cycling palette)
 const indicatorColors = [
@@ -11,7 +12,7 @@ const indicatorColors = [
 ];
 
 function RepoIndicator({ index }: { index: number }) {
-  const theme = document.documentElement.getAttribute("data-theme") ?? "conductor-classic";
+  const theme = useThemeId();
   const color = indicatorColors[index % indicatorColors.length];
   const s = 7;
 

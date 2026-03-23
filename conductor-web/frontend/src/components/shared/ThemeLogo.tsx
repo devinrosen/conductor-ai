@@ -5,12 +5,10 @@
  * the core Conductor "C" + signal concept.
  */
 
-function getThemeId(): string {
-  return document.documentElement.getAttribute("data-theme") ?? "conductor-classic";
-}
+import { useThemeId } from "../../themes/useTheme";
 
 export function ThemeLogo({ size = 28 }: { size?: number }) {
-  const theme = getThemeId();
+  const theme = useThemeId();
 
   switch (theme) {
     case "london-underground":

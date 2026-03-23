@@ -1,4 +1,5 @@
 import { createBrowserRouter, RouterProvider } from "react-router";
+import { ThemeIdProvider } from "./themes/useTheme";
 import { AppShell } from "./components/layout/AppShell";
 import { ActivityPage } from "./pages/ActivityPage";
 import { ReposPage } from "./pages/ReposPage";
@@ -34,5 +35,9 @@ const router = createBrowserRouter([
 ]);
 
 export default function App() {
-  return <RouterProvider router={router} />;
+  return (
+    <ThemeIdProvider>
+      <RouterProvider router={router} />
+    </ThemeIdProvider>
+  );
 }
