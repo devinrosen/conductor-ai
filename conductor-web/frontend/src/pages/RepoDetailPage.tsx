@@ -391,7 +391,8 @@ export function RepoDetailPage() {
           />
 
           {/* Danger Zone */}
-          <div className="pt-3 border-t border-gray-200">
+          <div className="pt-3">
+            <div className="hazard-stripe h-px mb-3" />
             <h4 className="text-xs font-semibold uppercase tracking-wider text-red-400 mb-2">
               Danger Zone
             </h4>

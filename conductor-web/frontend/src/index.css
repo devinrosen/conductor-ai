@@ -97,22 +97,6 @@
   opacity: 0.3;
 }
 
-/* ── Ticket-shaped card styling ── */
-.ticket-row {
-  position: relative;
-}
-.ticket-row::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 6px;
-  height: 12px;
-  background: var(--color-gray-50);
-  border-radius: 0 6px 6px 0;
-}
-
 /* ── Destructive action border ── */
 .danger-border {
   border-image: repeating-linear-gradient(

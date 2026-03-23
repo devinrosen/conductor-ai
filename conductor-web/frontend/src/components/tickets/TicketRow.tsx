@@ -17,7 +17,7 @@ export function TicketRow({ ticket, agentTotals, repoSlug, onClick, selected, in
   const labels = parseLabels(ticket.labels);
   return (
     <tr
-      className={`cursor-pointer hover:bg-gray-50 ticket-row ${selected ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""}`}
+      className={`cursor-pointer hover:bg-gray-50 ${selected ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""}`}
       onClick={() => onClick(ticket)}
       data-list-index={index}
     >
@@ -28,8 +28,12 @@ export function TicketRow({ ticket, agentTotals, repoSlug, onClick, selected, in
           </span>
         </td>
       )}
-      <td className="px-3 py-1.5">
-        <span className="text-indigo-600">{ticket.source_id}</span>
+      <td className="pl-1 pr-3 py-1.5">
+        <div className="flex items-center gap-1.5">
+          {/* Ticket notch */}
+          <div className="w-1 h-3 rounded-r-full shrink-0" style={{ backgroundColor: "var(--color-gray-300)" }} />
+          <span className="text-indigo-600">{ticket.source_id}</span>
+        </div>
       </td>
       <td className="px-3 py-1.5 text-gray-900">{ticket.title}</td>
       <td className="px-3 py-1.5">
