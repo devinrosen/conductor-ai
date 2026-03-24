@@ -20,6 +20,7 @@ import type {
   DiscoverableRepo,
   GlobalConfig,
   KnownModel,
+  WorkflowDef,
   WorkflowDefSummary,
   WorkflowRun,
   WorkflowRunStep,
@@ -134,6 +135,8 @@ export const api = {
     }),
   getAgentEvents: (worktreeId: string) =>
     request<AgentEvent[]>(`/worktrees/${worktreeId}/agent/events`),
+  getRunEvents: (worktreeId: string, runId: string) =>
+    request<AgentEvent[]>(`/worktrees/${worktreeId}/agent/runs/${runId}/events`),
   getAgentPrompt: (worktreeId: string) =>
     request<AgentPromptInfo>(`/worktrees/${worktreeId}/agent/prompt`),
   listChildRuns: (worktreeId: string, runId: string) =>
@@ -218,6 +221,8 @@ export const api = {
   // Workflows
   listWorkflowDefs: (worktreeId: string) =>
     request<WorkflowDefSummary[]>(`/worktrees/${worktreeId}/workflows/defs`),
+  getWorkflowDef: (worktreeId: string, name: string) =>
+    request<WorkflowDef>(`/worktrees/${worktreeId}/workflows/defs/${encodeURIComponent(name)}`),
   runWorkflow: (worktreeId: string, data: RunWorkflowRequest) =>
     request<{ status: string; worktree_id: string }>(`/worktrees/${worktreeId}/workflows/run`, {
       method: "POST",

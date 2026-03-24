@@ -236,7 +236,54 @@ export interface WorkflowRunStep {
   gate_prompt: string | null;
   gate_approved_by: string | null;
   gate_feedback: string | null;
+  context_out: string | null;
 }
+
+// Workflow Definition AST types (matches Rust WorkflowDef serialization)
+
+export interface WorkflowInputDecl {
+  name: string;
+  required: boolean;
+  default: string | null;
+  description: string | null;
+  input_type: "string" | "boolean";
+}
+
+export interface WorkflowDef {
+  name: string;
+  description: string;
+  trigger: "manual" | "pr" | "scheduled";
+  targets: string[];
+  inputs: WorkflowInputDecl[];
+  body: WorkflowNode[];
+  always: WorkflowNode[];
+  source_path: string;
+}
+
+export interface AgentRef {
+  kind: "name" | "path";
+  value: string;
+}
+
+export interface Condition {
+  kind: "step_marker" | "bool_input";
+  step?: string;
+  marker?: string;
+  input?: string;
+}
+
+export type WorkflowNode =
+  | { type: "call"; agent: AgentRef; retries: number; on_fail: AgentRef | null; output: string | null; with: string[]; bot_name: string | null }
+  | { type: "call_workflow"; workflow: string; inputs: Record<string, string>; retries: number; on_fail: AgentRef | null; bot_name: string | null }
+  | { type: "if"; condition: Condition; body: WorkflowNode[] }
+  | { type: "unless"; condition: Condition; body: WorkflowNode[] }
+  | { type: "while"; step: string; marker: string; max_iterations: number; stuck_after: number | null; on_max_iter: "fail" | "continue"; body: WorkflowNode[] }
+  | { type: "do_while"; step: string; marker: string; max_iterations: number; stuck_after: number | null; on_max_iter: "fail" | "continue"; body: WorkflowNode[] }
+  | { type: "do"; output: string | null; with: string[]; body: WorkflowNode[] }
+  | { type: "parallel"; fail_fast: boolean; min_success: number | null; calls: AgentRef[]; output: string | null }
+  | { type: "gate"; name: string; gate_type: string; prompt: string | null; min_approvals: number; timeout_secs: number; on_timeout: "fail" | "continue" }
+  | { type: "always"; body: WorkflowNode[] }
+  | { type: "script"; name: string; run: string; timeout: number | null; retries: number };
 
 export interface RunWorkflowRequest {
   name: string;

@@ -160,6 +160,33 @@ pub async fn list_workflow_defs(
     Ok(Json(summaries))
 }
 
+/// GET /api/worktrees/{id}/workflows/defs/{name}
+pub async fn get_workflow_def(
+    State(state): State<AppState>,
+    Path((worktree_id, def_name)): Path<(String, String)>,
+) -> Result<Json<WorkflowDef>, ApiError> {
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+    let wt_mgr = WorktreeManager::new(&db, &config);
+    let wt = wt_mgr.get_by_id(&worktree_id)?;
+    let repo = RepoManager::new(&db, &config).get_by_id(&wt.repo_id)?;
+
+    let (defs, _warnings) =
+        WorkflowManager::list_defs(&wt.path, &repo.local_path).unwrap_or_default();
+
+    let def = defs
+        .into_iter()
+        .find(|d| d.name == def_name)
+        .ok_or_else(|| {
+            ApiError::from(ConductorError::Workflow(format!(
+                "Workflow definition '{}' not found",
+                def_name
+            )))
+        })?;
+
+    Ok(Json(def))
+}
+
 /// POST /api/worktrees/{id}/workflows/run
 pub async fn run_workflow(
     State(state): State<AppState>,

@@ -123,6 +123,10 @@ pub fn api_router() -> Router<AppState> {
             get(workflows::list_workflow_defs),
         )
         .route(
+            "/api/worktrees/{id}/workflows/defs/{name}",
+            get(workflows::get_workflow_def),
+        )
+        .route(
             "/api/worktrees/{id}/workflows/run",
             post(workflows::run_workflow),
         )

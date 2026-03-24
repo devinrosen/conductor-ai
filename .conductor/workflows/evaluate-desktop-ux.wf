@@ -6,7 +6,6 @@ workflow evaluate-desktop-ux {
   }
 
   parallel {
-    output    = "evaluation-findings"
     fail_fast = false
 
     call eval-ux-layout      { retries = 1 }
@@ -15,13 +14,6 @@ workflow evaluate-desktop-ux {
   }
 
   call eval-ux-synthesizer {
-    output  = "ux-evaluation-report"
     retries = 1
-  }
-
-  gate quality_gate {
-    source    = "eval-ux-synthesizer"
-    threshold = 70
-    on_fail   = pause
   }
 }

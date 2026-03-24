@@ -7,6 +7,8 @@ import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { TrainProgress } from "../components/shared/TrainProgress";
 import { TransitBreadcrumb } from "../components/shared/TransitBreadcrumb";
+import { formatDuration, liveElapsedMs } from "../utils/agentStats";
+import { StepDetailPanel } from "../components/workflows/StepDetailPanel";
 
 export function WorkflowRunDetailPage() {
   const { repoId, worktreeId, runId } = useParams<{
@@ -24,6 +26,8 @@ export function WorkflowRunDetailPage() {
   const [gateSubmitting, setGateSubmitting] = useState(false);
   const [gateError, setGateError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     if (!runId) return;
@@ -144,6 +148,12 @@ export function WorkflowRunDetailPage() {
               dry-run
             </span>
           )}
+          <Link
+            to={`/repos/${repoId}/worktrees/${worktreeId}/workflows/defs/${encodeURIComponent(run.workflow_name)}`}
+            className="text-xs text-indigo-500 hover:text-indigo-700 hover:underline"
+          >
+            View Definition
+          </Link>
         </div>
         {isActive && (
           <button
@@ -161,6 +171,12 @@ export function WorkflowRunDetailPage() {
         {run.ended_at && (
           <> · Ended <TimeAgo date={run.ended_at} /></>
         )}
+        {(() => {
+          const ms = run.ended_at
+            ? new Date(run.ended_at).getTime() - new Date(run.started_at).getTime()
+            : isActive ? liveElapsedMs(run.started_at) : null;
+          return ms != null ? <> · <span className="font-mono tabular-nums">{formatDuration(ms)}</span></> : null;
+        })()}
       </div>
 
       {/* Train progress overview */}
@@ -170,8 +186,9 @@ export function WorkflowRunDetailPage() {
         />
       )}
 
-      {/* Steps */}
-      <section>
+      {/* Steps + Detail panel split */}
+      <div className={`flex gap-4 ${selectedStepId ? "flex-col lg:flex-row" : ""}`}>
+      <section className={selectedStepId ? "lg:w-1/2 lg:min-w-0" : "w-full"}>
         <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
           Steps
         </h3>
@@ -180,8 +197,21 @@ export function WorkflowRunDetailPage() {
         ) : (
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
             <div className="divide-y divide-gray-100">
-              {steps.map((step) => (
-                <div key={step.id} className="px-4 py-3">
+              {steps.map((step) => {
+                const hasDetail = !!(step.result_text || step.markers_out || step.context_out || step.gate_feedback);
+                const isExpanded = expandedSteps.has(step.id);
+                const showResultAlways = step.status === "failed" && step.result_text;
+                const parsedMarkers: string[] = (() => {
+                  if (!step.markers_out) return [];
+                  try { return JSON.parse(step.markers_out); } catch { return []; }
+                })();
+
+                return (
+                <div
+                  key={step.id}
+                  className={`px-4 py-3 cursor-pointer transition-colors ${selectedStepId === step.id ? "bg-indigo-50" : "hover:bg-gray-50"}`}
+                  onClick={() => setSelectedStepId(selectedStepId === step.id ? null : step.id)}
+                >
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                     <div className="flex items-center gap-3 flex-wrap">
                       <span className="text-gray-400 text-xs font-mono w-6 text-right shrink-0">
@@ -206,16 +236,39 @@ export function WorkflowRunDetailPage() {
                           {step.retry_count} retr{step.retry_count === 1 ? "y" : "ies"}
                         </span>
                       )}
+                      {parsedMarkers.map((m) => (
+                        <span key={m} className="text-[10px] px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded-full font-medium">
+                          {m}
+                        </span>
+                      ))}
+                      {hasDetail && !showResultAlways && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setExpandedSteps((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(step.id)) next.delete(step.id); else next.add(step.id);
+                            return next;
+                          }); }}
+                          className="text-gray-400 hover:text-gray-600 text-xs"
+                          title={isExpanded ? "Collapse" : "Expand details"}
+                        >
+                          {isExpanded ? "▾" : "▸"}
+                        </button>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 ml-9 sm:ml-0">
                       {step.started_at && (
-                        <span className="text-xs text-gray-400">
-                          <TimeAgo date={step.started_at} />
+                        <span className="text-xs text-gray-400 font-mono tabular-nums">
+                          {(() => {
+                            const ms = step.ended_at
+                              ? new Date(step.ended_at).getTime() - new Date(step.started_at).getTime()
+                              : (step.status === "running" || step.status === "waiting") ? liveElapsedMs(step.started_at) : null;
+                            return ms != null ? formatDuration(ms) : null;
+                          })()}
                         </span>
                       )}
                       {step.gate_type && step.status === "waiting" && (
                         <button
-                          onClick={() => openGateModal(step)}
+                          onClick={(e) => { e.stopPropagation(); openGateModal(step); }}
                           className="px-3 py-1.5 text-xs rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
                         >
                           Review Gate
@@ -223,26 +276,76 @@ export function WorkflowRunDetailPage() {
                       )}
                     </div>
                   </div>
+
+                  {/* Failed step result — always visible */}
+                  {showResultAlways && (
+                    <div className="ml-9 mt-2 px-3 py-2 text-xs bg-red-50 border border-red-200 rounded-md text-red-700 whitespace-pre-wrap font-mono">
+                      {step.result_text}
+                    </div>
+                  )}
+
+                  {/* Gate feedback — always visible */}
+                  {step.gate_feedback && (
+                    <div className="ml-9 mt-2 px-3 py-2 text-xs bg-amber-50 border border-amber-200 rounded-md text-amber-700">
+                      <span className="font-medium">Gate feedback:</span> {step.gate_feedback}
+                    </div>
+                  )}
+
+                  {/* Expandable detail for non-failed steps */}
+                  {isExpanded && !showResultAlways && (
+                    <div className="ml-9 mt-2 space-y-2">
+                      {step.result_text && (
+                        <div className="px-3 py-2 text-xs bg-gray-50 border border-gray-200 rounded-md text-gray-700 whitespace-pre-wrap font-mono">
+                          {step.result_text}
+                        </div>
+                      )}
+                      {step.context_out && (
+                        <details className="text-xs">
+                          <summary className="text-gray-500 cursor-pointer hover:text-gray-700 select-none">Context output</summary>
+                          <pre className="mt-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-md text-gray-600 overflow-x-auto whitespace-pre-wrap">
+                            {step.context_out}
+                          </pre>
+                        </details>
+                      )}
+                    </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Result summary */}
+        {run.result_summary && (
+          <div className="mt-4">
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
+              Result
+            </h3>
+            <div className="rounded-lg border border-gray-200 bg-white p-4">
+              <p className="text-sm text-gray-700 whitespace-pre-wrap">
+                {run.result_summary}
+              </p>
             </div>
           </div>
         )}
       </section>
 
-      {/* Result summary */}
-      {run.result_summary && (
-        <section>
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
-            Result
-          </h3>
-          <div className="rounded-lg border border-gray-200 bg-white p-4">
-            <p className="text-sm text-gray-700 whitespace-pre-wrap">
-              {run.result_summary}
-            </p>
+      {/* Step detail panel */}
+      {selectedStepId && (() => {
+        const step = steps.find((s) => s.id === selectedStepId);
+        if (!step || !worktreeId) return null;
+        return (
+          <div className="lg:w-1/2 lg:min-w-0 rounded-lg border border-gray-200 overflow-hidden">
+            <StepDetailPanel
+              step={step}
+              worktreeId={worktreeId}
+              onClose={() => setSelectedStepId(null)}
+            />
           </div>
-        </section>
-      )}
+        );
+      })()}
+      </div>
 
       {/* Gate Modal */}
       {gateModalOpen && gateStep && (

@@ -8,6 +8,8 @@ import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
 import { RunWorkflowModal } from "../components/workflows/RunWorkflowModal";
+import { WorkflowRunTree } from "../components/workflows/WorkflowRunTree";
+import { formatDuration, liveElapsedMs } from "../utils/agentStats";
 
 interface WorktreeContext {
   repoId: string;
@@ -32,6 +34,7 @@ export function WorkflowsPage() {
   const [searchText, setSearchText] = useState("");
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [viewMode, setViewMode] = useState<"tree" | "table">("tree");
 
   // Picker state
   const [pickerStep, setPickerStep] = useState<PickerStep | null>(null);
@@ -107,11 +110,17 @@ export function WorkflowsPage() {
       result = result.filter((r) =>
         r.run.workflow_name.toLowerCase().includes(q) ||
         r.ctx.repoSlug.toLowerCase().includes(q) ||
-        r.ctx.branch.toLowerCase().includes(q)
+        r.ctx.branch.toLowerCase().includes(q) ||
+        (r.run.target_label?.toLowerCase().includes(q) ?? false)
       );
     }
     if (sortCol) {
       result = [...result].sort((a, b) => {
+        if (sortCol === "duration") {
+          const da = runDurationMs(a.run) ?? -1;
+          const db = runDurationMs(b.run) ?? -1;
+          return sortDir === "asc" ? da - db : db - da;
+        }
         let va = "", vb = "";
         switch (sortCol) {
           case "workflow": va = a.run.workflow_name; vb = b.run.workflow_name; break;
@@ -125,6 +134,23 @@ export function WorkflowsPage() {
     }
     return result;
   }, [runs, statusFilter, nameFilter, searchText, sortCol, sortDir]);
+
+  const runDurationMs = useCallback((run: WorkflowRun): number | null => {
+    if (run.ended_at) return new Date(run.ended_at).getTime() - new Date(run.started_at).getTime();
+    if (run.status === "running" || run.status === "waiting") return liveElapsedMs(run.started_at);
+    return null;
+  }, []);
+
+  // Build ctxMap for tree view from the runs data
+  const treeCtxMap = useMemo(() => {
+    const m = new Map<string, { repoId: string; worktreeId: string; repoSlug: string; branch: string }>();
+    for (const { run, ctx } of runs) {
+      if (run.worktree_id && !m.has(run.worktree_id)) {
+        m.set(run.worktree_id, { repoId: ctx.repoId, worktreeId: ctx.worktreeId, repoSlug: ctx.repoSlug, branch: ctx.branch });
+      }
+    }
+    return m;
+  }, [runs]);
 
   const activeFilterCount = statusFilter.size + (nameFilter ? 1 : 0) + (searchText ? 1 : 0);
 
@@ -212,12 +238,28 @@ export function WorkflowsPage() {
             ))}
           </div>
         </div>
-        <button
-          onClick={() => setPickerStep("repo")}
-          className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-500"
-        >
-          Start Workflow
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-md border border-gray-200 overflow-hidden text-xs">
+            <button
+              onClick={() => setViewMode("tree")}
+              className={`px-2.5 py-1 ${viewMode === "tree" ? "bg-gray-100 text-gray-800 font-medium" : "text-gray-500 hover:bg-gray-50"}`}
+            >
+              Tree
+            </button>
+            <button
+              onClick={() => setViewMode("table")}
+              className={`px-2.5 py-1 border-l border-gray-200 ${viewMode === "table" ? "bg-gray-100 text-gray-800 font-medium" : "text-gray-500 hover:bg-gray-50"}`}
+            >
+              Table
+            </button>
+          </div>
+          <button
+            onClick={() => setPickerStep("repo")}
+            className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-500"
+          >
+            Start Workflow
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -318,12 +360,21 @@ export function WorkflowsPage() {
         )}
       </div>
 
-      {/* Run history table */}
+      {/* Run history */}
       <div className="flex-1 min-h-0 overflow-hidden">
         {runs.length === 0 ? (
           <EmptyState message="No timetable set. Run a workflow to see activity here." />
         ) : filteredRuns.length === 0 ? (
           <EmptyState message="No runs match your filter." />
+        ) : viewMode === "tree" ? (
+          <div className="overflow-y-auto h-full">
+            <WorkflowRunTree
+              runs={filteredRuns.map((r) => r.run)}
+              repos={repos}
+              ctxMap={treeCtxMap}
+              onCancel={handleCancelWorkflow}
+            />
+          </div>
         ) : (
           <div className="rounded-lg border border-gray-200 bg-white overflow-y-auto overflow-x-auto h-full">
             <table className="w-full text-sm min-w-[600px]">
@@ -347,6 +398,11 @@ export function WorkflowsPage() {
                   <th className="px-3 py-1.5">
                     <button onClick={() => toggleSort("started")} className="hover:text-gray-800 flex items-center gap-1">
                       Started {sortArrow("started") && <span>{sortArrow("started")}</span>}
+                    </button>
+                  </th>
+                  <th className="px-3 py-1.5">
+                    <button onClick={() => toggleSort("duration")} className="hover:text-gray-800 flex items-center gap-1">
+                      Duration {sortArrow("duration") && <span>{sortArrow("duration")}</span>}
                     </button>
                   </th>
                   <th className="px-3 py-1.5">Actions</th>
@@ -377,6 +433,12 @@ export function WorkflowsPage() {
                     </td>
                     <td className="px-3 py-1.5 text-xs text-gray-400">
                       <TimeAgo date={run.started_at} />
+                    </td>
+                    <td className="px-3 py-1.5 text-xs text-gray-500 font-mono tabular-nums">
+                      {(() => {
+                        const ms = runDurationMs(run);
+                        return ms != null ? formatDuration(ms) : "\u2014";
+                      })()}
                     </td>
                     <td className="px-3 py-1.5">
                       {(run.status === "running" || run.status === "waiting") && (
