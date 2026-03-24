@@ -67,6 +67,10 @@ export async function getApiOrigin(): Promise<string> {
     }
     return "";
   })();
+  // Clear cache on rejection so subsequent callers can retry the IPC call.
+  originPromise.catch(() => {
+    originPromise = null;
+  });
   return originPromise;
 }
 
