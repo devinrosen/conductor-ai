@@ -1,5 +1,45 @@
 use thiserror::Error;
 
+/// Structured data from a failed subprocess invocation.
+///
+/// Preserves the command string, exit code, and captured output so callers can
+/// programmatically classify failures (transient vs permanent, auth vs network, etc.)
+/// instead of parsing opaque error messages.
+///
+/// Part of: semantic-exit-code-convention@1.0.0, bounded-retry-with-escalation@1.0.0
+#[derive(Debug, Clone)]
+pub struct SubprocessFailure {
+    pub command: String,
+    pub exit_code: Option<i32>,
+    pub stderr: String,
+    pub stdout: String,
+}
+
+impl SubprocessFailure {
+    /// Convenience constructor for call sites that only have a pre-formatted message
+    /// (e.g. spawn failures where no Output is available).
+    pub fn from_message(command: &str, message: String) -> Self {
+        Self {
+            command: command.to_string(),
+            exit_code: None,
+            stderr: message,
+            stdout: String::new(),
+        }
+    }
+}
+
+impl std::fmt::Display for SubprocessFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.stderr.is_empty() {
+            write!(f, "{} failed: {}", self.command, self.stderr)
+        } else if let Some(code) = self.exit_code {
+            write!(f, "{} exited with code {}", self.command, code)
+        } else {
+            write!(f, "{} failed", self.command)
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ConductorError {
     #[error("database error: {0}")]
@@ -18,10 +58,10 @@ pub enum ConductorError {
     WorktreeAlreadyExists { slug: String },
 
     #[error("git error: {0}")]
-    Git(String),
+    Git(SubprocessFailure),
 
     #[error("gh cli error: {0}")]
-    GhCli(String),
+    GhCli(SubprocessFailure),
 
     #[error("config error: {0}")]
     Config(String),
@@ -70,6 +110,48 @@ pub enum ConductorError {
 
     #[error("feature already exists: {name}")]
     FeatureAlreadyExists { name: String },
+}
+
+impl ConductorError {
+    /// Semantic exit code for this error.
+    ///
+    /// Ranges:
+    ///   0      = success
+    ///   1      = unspecified / anyhow fallthrough
+    ///   10-19  = infrastructure (DB, I/O)
+    ///   20-29  = user input / entity-not-found errors
+    ///   30-39  = subprocess / external tool failures
+    ///   40-49  = configuration errors
+    ///   50-59  = agent subsystem
+    ///   60-69  = workflow subsystem
+    ///
+    /// Part of: semantic-exit-code-convention@1.0.0
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::Database(_) => 10,
+            Self::Io(_) => 11,
+            Self::RepoNotFound { .. } => 20,
+            Self::RepoAlreadyExists { .. } => 21,
+            Self::WorktreeNotFound { .. } => 22,
+            Self::WorktreeAlreadyExists { .. } => 23,
+            Self::IssueSourceAlreadyExists { .. } => 24,
+            Self::TicketNotFound { .. } => 25,
+            Self::TicketAlreadyLinked => 26,
+            Self::InvalidInput(_) => 27,
+            Self::FeatureNotFound { .. } => 28,
+            Self::FeatureAlreadyExists { .. } => 29,
+            Self::Git(_) => 30,
+            Self::GhCli(_) => 31,
+            Self::TicketSync(_) => 32,
+            Self::Config(_) => 40,
+            Self::AgentConfig(_) => 41,
+            Self::Schema(_) => 42,
+            Self::Agent(_) => 50,
+            Self::FeedbackNotPending { .. } => 51,
+            Self::Workflow(_) => 60,
+            Self::WorkflowRunAlreadyActive { .. } => 61,
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, ConductorError>;

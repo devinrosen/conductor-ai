@@ -53,6 +53,18 @@ impl WorkflowRunStatus {
     pub fn active_strings() -> Vec<String> {
         Self::ACTIVE.iter().map(|s| s.to_string()).collect()
     }
+
+    /// Whether this status is terminal (no further transitions expected).
+    /// Part of: fsm-state-specification-template@1.0.0
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+
+    /// Whether this status is active (run is in progress or waiting).
+    /// Part of: fsm-state-specification-template@1.0.0
+    pub fn is_active(&self) -> bool {
+        matches!(self, Self::Pending | Self::Running | Self::Waiting)
+    }
 }
 
 crate::impl_sql_enum!(WorkflowRunStatus);
@@ -100,6 +112,17 @@ impl WorkflowStepStatus {
     }
 }
 
+impl WorkflowStepStatus {
+    /// Whether this status is terminal (no further transitions expected).
+    /// Part of: fsm-state-specification-template@1.0.0
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Skipped | Self::TimedOut
+        )
+    }
+}
+
 impl std::str::FromStr for WorkflowStepStatus {
     type Err = String;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
@@ -117,3 +140,57 @@ impl std::str::FromStr for WorkflowStepStatus {
 }
 
 crate::impl_sql_enum!(WorkflowStepStatus);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_terminal_states() {
+        assert!(WorkflowRunStatus::Completed.is_terminal());
+        assert!(WorkflowRunStatus::Failed.is_terminal());
+        assert!(WorkflowRunStatus::Cancelled.is_terminal());
+        assert!(!WorkflowRunStatus::Pending.is_terminal());
+        assert!(!WorkflowRunStatus::Running.is_terminal());
+        assert!(!WorkflowRunStatus::Waiting.is_terminal());
+    }
+
+    #[test]
+    fn run_active_states() {
+        assert!(WorkflowRunStatus::Pending.is_active());
+        assert!(WorkflowRunStatus::Running.is_active());
+        assert!(WorkflowRunStatus::Waiting.is_active());
+        assert!(!WorkflowRunStatus::Completed.is_active());
+        assert!(!WorkflowRunStatus::Failed.is_active());
+        assert!(!WorkflowRunStatus::Cancelled.is_active());
+    }
+
+    #[test]
+    fn step_terminal_states() {
+        assert!(WorkflowStepStatus::Completed.is_terminal());
+        assert!(WorkflowStepStatus::Failed.is_terminal());
+        assert!(WorkflowStepStatus::Skipped.is_terminal());
+        assert!(WorkflowStepStatus::TimedOut.is_terminal());
+        assert!(!WorkflowStepStatus::Pending.is_terminal());
+        assert!(!WorkflowStepStatus::Running.is_terminal());
+        assert!(!WorkflowStepStatus::Waiting.is_terminal());
+    }
+
+    #[test]
+    fn run_terminal_and_active_are_mutually_exclusive() {
+        let all = [
+            WorkflowRunStatus::Pending,
+            WorkflowRunStatus::Running,
+            WorkflowRunStatus::Completed,
+            WorkflowRunStatus::Failed,
+            WorkflowRunStatus::Cancelled,
+            WorkflowRunStatus::Waiting,
+        ];
+        for s in all {
+            assert!(
+                s.is_terminal() != s.is_active(),
+                "{s} should be exactly one of terminal or active"
+            );
+        }
+    }
+}

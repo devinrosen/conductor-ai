@@ -28,4 +28,5 @@ test-helpers = []
 test-notifications = []
 
 [dev-dependencies]
+regex-lite = "0.1"
 tracing-test = "0.2"

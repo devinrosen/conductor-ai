@@ -5,7 +5,11 @@
 //! adding workflow-level tracking in `workflow_runs` / `workflow_run_steps`.
 
 mod batch_validate;
+pub mod checkpoint;
+pub mod commit_gate;
+pub mod composition;
 pub(crate) mod constants;
+pub mod deliberation;
 pub(crate) mod engine;
 pub(crate) mod executors;
 pub(crate) mod helpers;
@@ -13,6 +17,7 @@ pub(crate) mod manager;
 pub(crate) mod output;
 pub(crate) mod prompt_builder;
 pub(crate) mod status;
+pub(crate) mod transitions;
 pub(crate) mod types;
 
 // Re-export DSL types so consumers go through `workflow::` instead of `workflow_dsl::` directly.

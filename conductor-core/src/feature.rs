@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::db::query_collect;
-use crate::error::{ConductorError, Result};
+use crate::error::{ConductorError, Result, SubprocessFailure};
 use crate::git::{check_output, git_in};
 use crate::repo::RepoManager;
 use crate::tickets::TicketSyncer;
@@ -480,11 +480,21 @@ impl<'a> FeatureManager<'a> {
             .args(&args)
             .current_dir(&repo.local_path)
             .output()
-            .map_err(|e| ConductorError::GhCli(format!("failed to run `gh`: {e}")))?;
+            .map_err(|e| {
+                ConductorError::GhCli(SubprocessFailure::from_message(
+                    "gh pr create",
+                    format!("failed to run `gh`: {e}"),
+                ))
+            })?;
         if !output.status.success() {
-            return Err(ConductorError::GhCli(
-                String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            ));
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            return Err(ConductorError::GhCli(SubprocessFailure {
+                command: "gh pr create".to_string(),
+                exit_code: output.status.code(),
+                stderr,
+                stdout,
+            }));
         }
         let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(url)
