@@ -47,6 +47,8 @@ type Subscriber = {
 /** Shared singleton state — one EventSource for all hook instances. */
 let sharedSource: EventSource | null = null;
 let connecting = false;
+/** Generation counter — incremented on each close so stale `.then()` callbacks are discarded. */
+let connectGeneration = 0;
 let subscribers: Set<Subscriber> = new Set();
 let boundListeners: [string, EventListener][] = [];
 
@@ -96,14 +98,24 @@ function openSharedSource() {
 
   // Guard against concurrent callers all entering before the async origin resolves.
   connecting = true;
-  getApiOrigin().then((origin) => {
-    connecting = false;
-    connectSource(origin);
-  });
+  const gen = connectGeneration;
+  getApiOrigin()
+    .then((origin) => {
+      connecting = false;
+      // If closeSharedSource() was called while we were awaiting, this callback
+      // is stale — a new openSharedSource() may already be in flight.
+      if (gen !== connectGeneration) return;
+      connectSource(origin);
+    })
+    .catch((e) => {
+      connecting = false;
+      console.error("[conductor] Failed to resolve API origin for SSE:", e);
+    });
 }
 
 function closeSharedSource() {
   connecting = false;
+  connectGeneration++;
   if (!sharedSource) return;
   for (const [type, listener] of boundListeners) {
     sharedSource.removeEventListener(type, listener);

@@ -754,7 +754,6 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tokio",
- "tower-http",
  "tracing",
  "tracing-subscriber",
 ]

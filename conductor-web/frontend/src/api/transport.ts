@@ -47,29 +47,9 @@ export async function invokeCommand<T>(
   return cachedInvoke<T>(command, args);
 }
 
-// Cached base URL for the API — resolved once, reused for all requests.
-let cachedBaseUrl: string | null = null;
-
-/**
- * Returns the base URL for API requests.
- *
- * - Web mode: `/api` (relative, same origin)
- * - Desktop mode: `http://127.0.0.1:{port}/api` (embedded server)
- */
-export async function getApiBaseUrl(): Promise<string> {
-  if (cachedBaseUrl !== null) return cachedBaseUrl;
-
-  if (isDesktop()) {
-    const port = await invokeCommand<number>("get_api_port");
-    cachedBaseUrl = `http://127.0.0.1:${port}/api`;
-  } else {
-    cachedBaseUrl = "/api";
-  }
-  return cachedBaseUrl;
-}
-
-// Cached origin for SSE connections — resolved once, reused to avoid redundant IPC calls.
-let cachedOrigin: string | null = null;
+// In-flight promise for origin resolution — shared by all concurrent callers
+// so only one IPC round-trip fires even when multiple components mount at once.
+let originPromise: Promise<string> | null = null;
 
 /**
  * Returns the base origin for non-API connections (e.g. EventSource).
@@ -78,13 +58,26 @@ let cachedOrigin: string | null = null;
  * - Desktop mode: `http://127.0.0.1:{port}`
  */
 export async function getApiOrigin(): Promise<string> {
-  if (cachedOrigin !== null) return cachedOrigin;
+  if (originPromise) return originPromise;
 
-  if (isDesktop()) {
-    const port = await invokeCommand<number>("get_api_port");
-    cachedOrigin = `http://127.0.0.1:${port}`;
-  } else {
-    cachedOrigin = "";
-  }
-  return cachedOrigin;
+  originPromise = (async () => {
+    if (isDesktop()) {
+      const port = await invokeCommand<number>("get_api_port");
+      return `http://127.0.0.1:${port}`;
+    }
+    return "";
+  })();
+  return originPromise;
+}
+
+/**
+ * Returns the base URL for API requests.
+ *
+ * Delegates to `getApiOrigin()` so there is only one IPC call and one cache.
+ *
+ * - Web mode: `/api` (relative, same origin)
+ * - Desktop mode: `http://127.0.0.1:{port}/api` (embedded server)
+ */
+export async function getApiBaseUrl(): Promise<string> {
+  return `${await getApiOrigin()}/api`;
 }
