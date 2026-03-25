@@ -708,6 +708,7 @@ dependencies = [
  "clap",
  "conductor-core",
  "dirs",
+ "libc",
  "predicates",
  "rmcp",
  "rusqlite",

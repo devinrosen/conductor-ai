@@ -22,6 +22,8 @@ use conductor_core::workflow::{WorkflowExecConfig, WorkflowManager};
 use conductor_core::workflow_config;
 use conductor_core::worktree::WorktreeManager;
 
+#[cfg(unix)]
+mod background;
 mod mcp;
 mod statusline;
 
@@ -235,6 +237,9 @@ enum WorkflowCommands {
         /// template variables. Auto-detected from the ticket when omitted.
         #[arg(long)]
         feature: Option<String>,
+        /// Run the workflow in the background: print the run ID and exit immediately
+        #[arg(long)]
+        background: bool,
     },
     /// Show details of a workflow run
     #[command(name = "run-show", alias = "show")]
@@ -1524,6 +1529,7 @@ fn main() -> Result<()> {
                 step_timeout_secs,
                 inputs,
                 feature,
+                background,
             } => {
                 // Parse input key=value pairs (shared by both paths)
                 let mut input_map = std::collections::HashMap::new();
@@ -1771,12 +1777,44 @@ fn main() -> Result<()> {
                     )?;
 
                     let node_count = workflow.total_nodes();
+                    let wt_label = format!("{repo_slug}/{worktree_slug}");
+
+                    #[cfg(unix)]
+                    if background {
+                        let params = conductor_core::workflow::WorkflowExecStandalone {
+                            config: config.clone(),
+                            workflow,
+                            worktree_id: Some(wt.id.clone()),
+                            working_dir: wt.path.clone(),
+                            repo_path: r.local_path.clone(),
+                            ticket_id: wt.ticket_id.clone(),
+                            repo_id: None,
+                            model,
+                            exec_config,
+                            inputs: input_map,
+                            target_label: Some(wt_label),
+                            feature_id,
+                            run_id_notify: None,
+                            triggered_by_hook: false,
+                            conductor_bin_dir:
+                                conductor_core::workflow::resolve_conductor_bin_dir(),
+                        };
+                        let run_id = background::fork_and_run_workflow(params)?;
+                        println!("{}", run_id);
+                        return Ok(());
+                    }
+                    #[cfg(not(unix))]
+                    if background {
+                        anyhow::bail!(
+                            "--background is only supported on Unix systems"
+                        );
+                    }
+
                     println!(
                         "Running workflow '{}' ({} nodes) on {}/{}...",
                         workflow.name, node_count, repo_slug, worktree_slug
                     );
 
-                    let wt_label = format!("{repo_slug}/{worktree_slug}");
                     match conductor_core::workflow::execute_workflow(
                         &conductor_core::workflow::WorkflowExecInput {
                             conn: &conn,
