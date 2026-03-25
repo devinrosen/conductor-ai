@@ -37,6 +37,15 @@ async fn main() -> Result<()> {
             Ok(_) => {}
             Err(e) => tracing::warn!("reap_stale_worktrees failed on startup: {e}"),
         }
+        if config.general.auto_cleanup_merged_branches {
+            match wt_mgr.cleanup_merged_worktrees(None) {
+                Ok(n) if n > 0 => {
+                    tracing::info!("Auto-cleaned {n} merged worktree(s) on startup")
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("cleanup_merged_worktrees failed on startup: {e}"),
+            }
+        }
     }
 
     // Reap orphaned workflow runs on startup.
@@ -90,6 +99,11 @@ async fn main() -> Result<()> {
                 let cfg = cfg.blocking_read();
                 let wt_mgr = conductor_core::worktree::WorktreeManager::new(&conn, &cfg);
                 wt_mgr.reap_stale_worktrees()?;
+                if cfg.general.auto_cleanup_merged_branches {
+                    if let Err(e) = wt_mgr.cleanup_merged_worktrees(None) {
+                        tracing::warn!("cleanup_merged_worktrees failed: {e}");
+                    }
+                }
                 let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
                 wf_mgr.reap_orphaned_workflow_runs()?;
 

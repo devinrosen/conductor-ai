@@ -132,6 +132,10 @@ pub struct GeneralConfig {
     /// or the stem of a file in `~/.conductor/themes/`. Omit to use the default conductor theme.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// Automatically detect merged PRs and clean up worktrees (delete local/remote branch,
+    /// remove worktree directory, auto-close orphaned features). Defaults to true.
+    #[serde(default = "default_true")]
+    pub auto_cleanup_merged_branches: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,6 +181,7 @@ impl Default for GeneralConfig {
             model: None,
             inject_startup_context: true,
             theme: None,
+            auto_cleanup_merged_branches: true,
         }
     }
 }
@@ -529,6 +534,24 @@ mod tests {
     fn test_inject_startup_context_default_true() {
         let config: Config = toml::from_str("").unwrap();
         assert!(config.general.inject_startup_context);
+    }
+
+    #[test]
+    fn test_auto_cleanup_merged_branches_default_true() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.general.auto_cleanup_merged_branches);
+    }
+
+    #[test]
+    fn test_auto_cleanup_merged_branches_opt_out() {
+        let config: Config = toml::from_str(
+            r#"
+            [general]
+            auto_cleanup_merged_branches = false
+        "#,
+        )
+        .unwrap();
+        assert!(!config.general.auto_cleanup_merged_branches);
     }
 
     #[test]

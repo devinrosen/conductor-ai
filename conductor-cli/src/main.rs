@@ -470,6 +470,11 @@ enum WorktreeCommands {
         /// Model alias or full ID (e.g. "sonnet", "claude-opus-4-6"). Omit to clear.
         model: Option<String>,
     },
+    /// Detect merged PRs and clean up their worktrees (branch + directory)
+    Cleanup {
+        /// Repo slug (cleans all repos if omitted)
+        repo: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -957,6 +962,15 @@ fn main() -> Result<()> {
                         None => {
                             println!("Cleared model override for {name} (will use global default)")
                         }
+                    }
+                }
+                WorktreeCommands::Cleanup { repo } => {
+                    let mgr = WorktreeManager::new(&conn, &config);
+                    let count = mgr.cleanup_merged_worktrees(repo.as_deref())?;
+                    if count == 0 {
+                        println!("No merged worktrees found to clean up.");
+                    } else {
+                        println!("Cleaned up {count} merged worktree(s).");
                     }
                 }
             }

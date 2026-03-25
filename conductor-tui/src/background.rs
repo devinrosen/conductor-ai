@@ -293,6 +293,13 @@ pub fn poll_data() -> Option<PollResult> {
             LAST_REAP.store(now, Ordering::Relaxed);
             let _ = agent_mgr.reap_orphaned_runs();
             let _ = wt_mgr.reap_stale_worktrees();
+            if config.general.auto_cleanup_merged_branches {
+                match wt_mgr.cleanup_merged_worktrees(None) {
+                    Ok(n) if n > 0 => tracing::info!("Auto-cleaned {n} merged worktree(s)"),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("cleanup_merged_worktrees failed: {e}"),
+                }
+            }
             let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
             match wf_mgr.recover_stuck_steps() {
                 Ok(n) if n > 0 => tracing::debug!("Recovered {n} stuck workflow step(s)"),
