@@ -13,8 +13,6 @@ import type {
   AgentPromptInfo,
   RunTreeTotals,
   AgentCreatedIssue,
-  PushResult,
-  CreatePrResult,
   IssueSource,
   CreateIssueSourceRequest,
   DiscoverableRepo,
@@ -70,13 +68,6 @@ export const api = {
     }),
   deleteWorktree: (id: string) =>
     request<Worktree>(`/worktrees/${id}`, { method: "DELETE" }),
-  pushWorktree: (id: string) =>
-    request<PushResult>(`/worktrees/${id}/push`, { method: "POST" }),
-  createPr: (id: string, draft = false) =>
-    request<CreatePrResult>(`/worktrees/${id}/pr`, {
-      method: "POST",
-      body: JSON.stringify({ draft }),
-    }),
   linkTicket: (id: string, ticketId: string) =>
     request<Worktree>(`/worktrees/${id}/link-ticket`, {
       method: "POST",
