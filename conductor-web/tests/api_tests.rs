@@ -1,6 +1,11 @@
 use std::sync::Arc;
 
+use conductor_core::agent::AgentManager;
 use conductor_core::config::Config;
+use conductor_core::notification_manager::{
+    CreateNotification, NotificationManager, NotificationSeverity,
+};
+use conductor_core::repo::RepoManager;
 use rusqlite::Connection;
 use tokio::sync::{Mutex, RwLock};
 
@@ -681,4 +686,598 @@ async fn test_sse_endpoint_returns_event_stream() {
         .to_str()
         .unwrap()
         .contains("text/event-stream"));
+}
+
+// ── Seed helpers ──────────────────────────────────────────────────────
+
+fn seed_repo_and_worktree(conn: &Connection) {
+    conn.execute(
+        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+         VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+         VALUES ('w1', 'r1', 'feat-test', 'feat/test', '/tmp/ws/feat-test', 'active', '2024-01-01T00:00:00Z')",
+        [],
+    ).unwrap();
+}
+
+fn seed_agent_run(conn: &Connection) {
+    seed_repo_and_worktree(conn);
+    let mgr = AgentManager::new(conn);
+    mgr.create_run(Some("w1"), "test prompt", None, None)
+        .unwrap();
+}
+
+fn seed_repo_agent_run(conn: &Connection) {
+    let config = Config::default();
+    let repo_mgr = RepoManager::new(conn, &config);
+    let repo = repo_mgr
+        .register(
+            "test-repo",
+            "/tmp/repo",
+            "https://github.com/test/repo.git",
+            None,
+        )
+        .unwrap();
+    let mgr = AgentManager::new(conn);
+    mgr.create_repo_run(&repo.id, "repo prompt", None, None)
+        .unwrap();
+}
+
+fn seed_notification(conn: &Connection) {
+    let mgr = NotificationManager::new(conn);
+    mgr.create_notification(&CreateNotification {
+        kind: "test",
+        title: "Test notification",
+        body: "This is a test",
+        severity: NotificationSeverity::Info,
+        entity_id: None,
+        entity_type: None,
+    })
+    .unwrap();
+}
+
+// ── Agent read/query route tests ──────────────────────────────────────
+
+#[tokio::test]
+async fn test_list_agent_runs_empty() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let resp = reqwest::get(format!("{base}/api/worktrees/w1/agent-runs"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(body.is_empty());
+}
+
+/// Fetch the first agent run ID for worktree w1 from the API.
+async fn fetch_run_id(base: &str) -> String {
+    let runs: Vec<serde_json::Value> = reqwest::get(format!("{base}/api/worktrees/w1/agent-runs"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    runs[0]["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn test_list_agent_runs_with_data() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    let resp = reqwest::get(format!("{base}/api/worktrees/w1/agent-runs"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 1);
+}
+
+#[tokio::test]
+async fn test_latest_run_none() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let resp = reqwest::get(format!("{base}/api/worktrees/w1/agent/latest"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body.is_null());
+}
+
+#[tokio::test]
+async fn test_latest_run_with_data() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    let resp = reqwest::get(format!("{base}/api/worktrees/w1/agent/latest"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body.is_object());
+    assert!(body["id"].is_string());
+}
+
+#[tokio::test]
+async fn test_latest_runs_by_worktree() {
+    let base = spawn_test_server().await;
+    let resp = reqwest::get(format!("{base}/api/agent/latest-runs"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body.is_object());
+    assert_eq!(body.as_object().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn test_latest_runs_by_worktree_for_repo() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    let resp = reqwest::get(format!("{base}/api/repos/r1/agent/latest-runs"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body.is_object());
+    assert_eq!(body.as_object().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn test_ticket_totals_empty() {
+    let base = spawn_test_server().await;
+    let resp = reqwest::get(format!("{base}/api/agent/ticket-totals"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body.is_object());
+    assert_eq!(body.as_object().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn test_ticket_totals_for_repo() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let resp = reqwest::get(format!("{base}/api/repos/r1/agent/ticket-totals"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body.is_object());
+}
+
+#[tokio::test]
+async fn test_get_agent_prompt_no_ticket() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let resp = reqwest::get(format!("{base}/api/worktrees/w1/agent/prompt"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["prompt"], "");
+}
+
+#[tokio::test]
+async fn test_get_events_empty() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let resp = reqwest::get(format!("{base}/api/worktrees/w1/agent/events"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn test_get_run_events_empty() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    let run_id = fetch_run_id(&base).await;
+    let resp = reqwest::get(format!(
+        "{base}/api/worktrees/w1/agent/runs/{run_id}/events"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn test_list_child_runs_empty() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    let run_id = fetch_run_id(&base).await;
+    let resp = reqwest::get(format!(
+        "{base}/api/worktrees/w1/agent/runs/{run_id}/children"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn test_get_run_tree() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    let run_id = fetch_run_id(&base).await;
+    let resp = reqwest::get(format!("{base}/api/worktrees/w1/agent/runs/{run_id}/tree"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 1); // root run only
+}
+
+#[tokio::test]
+async fn test_get_run_tree_totals() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    let run_id = fetch_run_id(&base).await;
+    let resp = reqwest::get(format!(
+        "{base}/api/worktrees/w1/agent/runs/{run_id}/tree-totals"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body.is_object());
+}
+
+#[tokio::test]
+async fn test_list_created_issues_empty() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let resp = reqwest::get(format!("{base}/api/worktrees/w1/agent/created-issues"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn test_list_repo_agent_runs_empty() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let resp = reqwest::get(format!("{base}/api/repos/r1/agent/runs"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn test_list_repo_agent_runs_with_data() {
+    let base = spawn_test_server_with_setup(seed_repo_agent_run).await;
+    // Get repo id
+    let repos: Vec<serde_json::Value> = reqwest::get(format!("{base}/api/repos"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let repo_id = repos[0]["id"].as_str().unwrap();
+    let resp = reqwest::get(format!("{base}/api/repos/{repo_id}/agent/runs"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 1);
+}
+
+// ── Agent error/IDOR tests ───────────────────────────────────────────
+
+#[tokio::test]
+async fn test_stop_repo_agent_nonexistent_run() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base}/api/repos/r1/agent/bad-id/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_repo_agent_events_nonexistent_run() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let resp = reqwest::get(format!("{base}/api/repos/r1/agent/bad-id/events"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+// ── Agent feedback route tests ───────────────────────────────────────
+
+#[tokio::test]
+async fn test_get_pending_feedback_none() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let resp = reqwest::get(format!("{base}/api/worktrees/w1/agent/feedback"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body.is_null());
+}
+
+#[tokio::test]
+async fn test_submit_feedback_nonexistent() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{base}/api/worktrees/w1/agent/feedback/bad-id/respond"
+        ))
+        .json(&serde_json::json!({ "response": "test" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_dismiss_feedback_nonexistent() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{base}/api/worktrees/w1/agent/feedback/bad-id/dismiss"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_list_run_feedback_empty() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    // Get the run id
+    let runs: Vec<serde_json::Value> = reqwest::get(format!("{base}/api/worktrees/w1/agent/runs"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let run_id = runs[0]["id"].as_str().unwrap();
+    let resp = reqwest::get(format!(
+        "{base}/api/worktrees/w1/agent/runs/{run_id}/feedback"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(body.is_empty());
+}
+
+// ── Notification route tests ─────────────────────────────────────────
+
+#[tokio::test]
+async fn test_list_notifications_empty() {
+    let base = spawn_test_server().await;
+    let resp = reqwest::get(format!("{base}/api/notifications"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn test_list_notifications_with_data() {
+    let base = spawn_test_server_with_setup(seed_notification).await;
+    let resp = reqwest::get(format!("{base}/api/notifications"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0]["title"], "Test notification");
+}
+
+#[tokio::test]
+async fn test_list_notifications_unread_only() {
+    let base = spawn_test_server_with_setup(|conn| {
+        let mgr = NotificationManager::new(conn);
+        // Create two notifications
+        let id1 = mgr
+            .create_notification(&CreateNotification {
+                kind: "test",
+                title: "Read one",
+                body: "body",
+                severity: NotificationSeverity::Info,
+                entity_id: None,
+                entity_type: None,
+            })
+            .unwrap();
+        mgr.create_notification(&CreateNotification {
+            kind: "test",
+            title: "Unread one",
+            body: "body",
+            severity: NotificationSeverity::Warning,
+            entity_id: None,
+            entity_type: None,
+        })
+        .unwrap();
+        // Mark first as read
+        mgr.mark_read(&id1).unwrap();
+    })
+    .await;
+    let resp = reqwest::get(format!("{base}/api/notifications?unread_only=true"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0]["title"], "Unread one");
+}
+
+#[tokio::test]
+async fn test_unread_count_zero() {
+    let base = spawn_test_server().await;
+    let resp = reqwest::get(format!("{base}/api/notifications/unread-count"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["count"], 0);
+}
+
+#[tokio::test]
+async fn test_unread_count_with_data() {
+    let base = spawn_test_server_with_setup(|conn| {
+        seed_notification(conn);
+        seed_notification(conn);
+    })
+    .await;
+    let resp = reqwest::get(format!("{base}/api/notifications/unread-count"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["count"], 2);
+}
+
+#[tokio::test]
+async fn test_mark_read() {
+    let base = spawn_test_server_with_setup(seed_notification).await;
+    // Fetch the notification ID from the list endpoint
+    let notifs: Vec<serde_json::Value> = reqwest::get(format!("{base}/api/notifications"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let notif_id = notifs[0]["id"].as_str().unwrap();
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base}/api/notifications/{notif_id}/read"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204);
+}
+
+#[tokio::test]
+async fn test_mark_read_nonexistent_404() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base}/api/notifications/bad-id/read"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn test_mark_all_read() {
+    let base = spawn_test_server_with_setup(|conn| {
+        seed_notification(conn);
+        seed_notification(conn);
+    })
+    .await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base}/api/notifications/read-all"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204);
+
+    // Verify count is now 0
+    let resp = reqwest::get(format!("{base}/api/notifications/unread-count"))
+        .await
+        .unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["count"], 0);
+}
+
+// ── Model config route tests ─────────────────────────────────────────
+
+#[tokio::test]
+async fn test_get_global_model_default() {
+    let base = spawn_test_server().await;
+    let resp = reqwest::get(format!("{base}/api/config/model"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["model"].is_null());
+}
+
+#[tokio::test]
+async fn test_list_known_models() {
+    let base = spawn_test_server().await;
+    let resp = reqwest::get(format!("{base}/api/config/known-models"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(!body.is_empty());
+    // Each model should have id and alias fields
+    assert!(body[0]["id"].is_string());
+    assert!(body[0]["alias"].is_string());
+}
+
+#[tokio::test]
+async fn test_suggest_model() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base}/api/config/suggest-model"))
+        .json(&serde_json::json!({ "prompt": "fix a bug" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["suggested"].is_string());
+}
+
+#[tokio::test]
+async fn test_patch_global_model_set_and_clear() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    // Set a model
+    let resp = client
+        .patch(format!("{base}/api/config/model"))
+        .json(&serde_json::json!({ "model": "claude-sonnet-4-20250514" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["model"], "claude-sonnet-4-20250514");
+
+    // Clear the model by sending null
+    let resp = client
+        .patch(format!("{base}/api/config/model"))
+        .json(&serde_json::json!({ "model": null }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["model"].is_null());
+}
+
+// ── Feature route tests ──────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_list_features_empty() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let resp = reqwest::get(format!("{base}/api/repos/test-repo/features"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["features"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_list_features_nonexistent_repo() {
+    let base = spawn_test_server().await;
+    let resp = reqwest::get(format!("{base}/api/repos/bad/features"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
 }
