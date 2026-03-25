@@ -1725,56 +1725,34 @@ impl App {
         };
 
         // Resolve optional worktree context
-        let (wt_slug, wt_path) = if let Some(ref wt_id) = self.state.selected_worktree_id {
-            match self.resolve_worktree_paths(wt_id) {
-                Some((path, _)) => {
-                    let slug = self
-                        .state
-                        .data
-                        .worktrees
-                        .iter()
-                        .find(|w| w.id == *wt_id)
-                        .map(|w| w.slug.clone());
-                    (slug, Some(path))
-                }
-                None => (None, None),
-            }
-        } else {
-            (None, None)
-        };
+        let wt_path = self
+            .state
+            .selected_worktree_id
+            .as_ref()
+            .and_then(|wt_id| self.resolve_worktree_paths(wt_id))
+            .map(|(path, _)| path);
 
         self.state.modal = Modal::TemplatePicker {
             items: templates,
             selected: 0,
             repo_slug,
             repo_path,
-            worktree_slug: wt_slug,
             worktree_path: wt_path,
         };
     }
 
-    /// Confirm the selected template and build the instantiation prompt.
+    /// Confirm the selected template and build the instantiation prompt off-thread.
     pub(super) fn handle_template_picker_confirm(&mut self) {
-        use conductor_core::workflow::WorkflowManager;
-        use conductor_core::workflow_template::build_instantiation_prompt;
-
-        let (template, repo_slug, repo_path, wt_slug, wt_path) = if let Modal::TemplatePicker {
+        let (template, repo_path, wt_path) = if let Modal::TemplatePicker {
             ref items,
             selected,
-            ref repo_slug,
             ref repo_path,
-            ref worktree_slug,
             ref worktree_path,
+            ..
         } = self.state.modal
         {
             if let Some(tmpl) = items.get(selected) {
-                (
-                    tmpl.clone(),
-                    repo_slug.clone(),
-                    repo_path.clone(),
-                    worktree_slug.clone(),
-                    worktree_path.clone(),
-                )
+                (tmpl.clone(), repo_path.clone(), worktree_path.clone())
             } else {
                 return;
             }
@@ -1782,26 +1760,32 @@ impl App {
             return;
         };
 
-        let working_dir = wt_path.as_deref().unwrap_or(&repo_path);
+        let Some(ref bg_tx) = self.bg_tx else {
+            return;
+        };
+        let tx = bg_tx.clone();
 
-        // Gather existing workflows
-        let (existing_defs, _) =
-            WorkflowManager::list_defs(working_dir, &repo_path).unwrap_or_default();
-        let existing_names: Vec<String> = existing_defs.iter().map(|d| d.name.clone()).collect();
+        self.state.modal = Modal::Progress {
+            message: "Building template prompt…".into(),
+        };
 
-        let prompt_result = build_instantiation_prompt(&template, working_dir, &existing_names);
+        let working_dir = wt_path.unwrap_or_else(|| repo_path.clone());
+        let repo_path_owned = repo_path;
+        std::thread::spawn(move || {
+            use conductor_core::workflow_template::{
+                build_instantiation_prompt, collect_existing_workflow_names,
+            };
 
-        self.state.modal = Modal::None;
-        self.state.status_message = Some(format!(
-            "Template '{}' v{} ready — prompt prepared ({} chars), output: .conductor/workflows/{}",
-            template.metadata.name,
-            template.metadata.version,
-            prompt_result.prompt.len(),
-            prompt_result.suggested_filename,
-        ));
+            let existing_names = collect_existing_workflow_names(&working_dir, &repo_path_owned);
+            let prompt_result =
+                build_instantiation_prompt(&template, &working_dir, &existing_names);
 
-        // Stash for potential use by other systems
-        let _ = (&repo_slug, &wt_slug);
+            let _ = tx.send(Action::TemplateInstantiateReady {
+                template_name: format!("{} v{}", template.metadata.name, template.metadata.version),
+                suggested_filename: prompt_result.suggested_filename,
+                prompt: prompt_result.prompt,
+            });
+        });
     }
 
     /// Helper: get the repo slug and local path for the selected repo.

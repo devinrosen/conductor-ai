@@ -398,7 +398,7 @@ impl App {
                 };
             }
             Action::SelectBranch(index) => self.handle_branch_pick(index),
-            Action::SelectWorkflowItem(index) => {
+            Action::SelectListItem(index) => {
                 if let Modal::WorkflowPicker {
                     ref mut selected, ..
                 } = self.state.modal
@@ -751,8 +751,16 @@ impl App {
             // Workflow actions
             Action::PickWorkflow => self.handle_pick_workflow(),
             Action::PickTemplate => self.handle_pick_template(),
-            Action::TemplateInstantiateReady { .. } => {
-                // Future: could open an agent session with the prompt
+            Action::TemplateInstantiateReady {
+                template_name,
+                prompt,
+                suggested_filename,
+            } => {
+                self.state.modal = Modal::None;
+                self.state.status_message = Some(format!(
+                    "Template '{template_name}' ready — prompt prepared ({} chars), output: .conductor/workflows/{suggested_filename}",
+                    prompt.len(),
+                ));
             }
             Action::RunWorkflow => self.handle_run_workflow(),
             Action::RunPrWorkflow => self.handle_run_pr_workflow(),

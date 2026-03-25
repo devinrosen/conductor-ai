@@ -642,31 +642,12 @@ pub async fn reject_gate(
 
 // ── Template endpoints ────────────────────────────────────────────────
 
-#[derive(Serialize)]
-pub struct TemplateSummary {
-    pub name: String,
-    pub description: String,
-    pub version: String,
-    pub target_types: Vec<String>,
-    pub hints: Vec<String>,
-}
-
 /// GET /api/templates — list all embedded workflow templates.
-pub async fn list_templates() -> Json<Vec<TemplateSummary>> {
+pub async fn list_templates() -> Json<Vec<conductor_core::workflow_template::TemplateFrontmatter>> {
     use conductor_core::workflow_template::list_embedded_templates;
 
     let templates = list_embedded_templates();
-    let summaries: Vec<TemplateSummary> = templates
-        .into_iter()
-        .map(|t| TemplateSummary {
-            name: t.metadata.name,
-            description: t.metadata.description,
-            version: t.metadata.version,
-            target_types: t.metadata.target_types,
-            hints: t.metadata.hints,
-        })
-        .collect();
-    Json(summaries)
+    Json(templates.into_iter().map(|t| t.metadata).collect())
 }
 
 #[derive(Deserialize)]
@@ -689,7 +670,9 @@ pub async fn instantiate_template(
     State(state): State<AppState>,
     Json(req): Json<InstantiateTemplateRequest>,
 ) -> Result<Json<InstantiateTemplateResponse>, ApiError> {
-    use conductor_core::workflow_template::{build_instantiation_prompt, get_embedded_template};
+    use conductor_core::workflow_template::{
+        build_instantiation_prompt, collect_existing_workflow_names, get_embedded_template,
+    };
 
     let tmpl = get_embedded_template(&req.template).ok_or_else(|| {
         ApiError(ConductorError::InvalidInput(format!(
@@ -710,9 +693,7 @@ pub async fn instantiate_template(
         repo.local_path.clone()
     };
 
-    let (existing_defs, _) =
-        WorkflowManager::list_defs(&working_dir, &repo.local_path).unwrap_or_default();
-    let existing_names: Vec<String> = existing_defs.iter().map(|d| d.name.clone()).collect();
+    let existing_names = collect_existing_workflow_names(&working_dir, &repo.local_path);
 
     let prompt_result = build_instantiation_prompt(&tmpl, &working_dir, &existing_names);
 
@@ -1190,6 +1171,80 @@ mod tests {
         assert_eq!(
             count, 1,
             "handler must invoke execute_workflow — no workflow_runs row found for 'noop'"
+        );
+    }
+
+    // ── Template endpoint tests ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_templates_returns_200() {
+        let (status, body) = get_response("/api/templates", empty_state()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.is_array(), "expected array; got: {body}");
+    }
+
+    #[tokio::test]
+    async fn instantiate_template_unknown_returns_error() {
+        let state = empty_state();
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/templates/instantiate")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "template": "nonexistent-xyz",
+                            "repo": "my-repo"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        assert!(
+            status.is_client_error() || status.is_server_error(),
+            "expected error status; got: {status}"
+        );
+    }
+
+    #[tokio::test]
+    async fn instantiate_template_unknown_repo_returns_error() {
+        use conductor_core::workflow_template::list_embedded_templates;
+
+        let templates = list_embedded_templates();
+        if templates.is_empty() {
+            // No embedded templates to test with — skip.
+            return;
+        }
+        let template_name = &templates[0].metadata.name;
+
+        let state = empty_state();
+        let app = api_router().with_state(state);
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/templates/instantiate")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "template": template_name,
+                            "repo": "ghost-repo"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        assert!(
+            status.is_client_error() || status.is_server_error(),
+            "expected error for unknown repo; got: {status}"
         );
     }
 }

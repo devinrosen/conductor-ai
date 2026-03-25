@@ -2264,7 +2264,8 @@ fn main() -> Result<()> {
                 worktree,
             } => {
                 use conductor_core::workflow_template::{
-                    build_instantiation_prompt, get_embedded_template,
+                    build_instantiation_prompt, collect_existing_workflow_names,
+                    get_embedded_template,
                 };
 
                 let tmpl = get_embedded_template(&template).ok_or_else(|| {
@@ -2282,11 +2283,7 @@ fn main() -> Result<()> {
                     (r.local_path.clone(), None)
                 };
 
-                // Gather existing workflow names for context
-                let (existing_defs, _) =
-                    WorkflowManager::list_defs(&working_dir, &r.local_path).unwrap_or_default();
-                let existing_names: Vec<String> =
-                    existing_defs.iter().map(|d| d.name.clone()).collect();
+                let existing_names = collect_existing_workflow_names(&working_dir, &r.local_path);
 
                 let prompt_result =
                     build_instantiation_prompt(&tmpl, &working_dir, &existing_names);
@@ -2319,6 +2316,7 @@ fn main() -> Result<()> {
             } => {
                 use conductor_core::workflow_template::{
                     build_upgrade_prompt, extract_template_version, get_embedded_template,
+                    template_slug,
                 };
 
                 let tmpl = get_embedded_template(&template)
@@ -2335,7 +2333,7 @@ fn main() -> Result<()> {
                     r.local_path.clone()
                 };
 
-                let suggested_name = tmpl.metadata.name.replace(' ', "-").to_lowercase();
+                let suggested_name = template_slug(&tmpl.metadata.name);
                 let wf_path = std::path::Path::new(&working_dir)
                     .join(".conductor")
                     .join("workflows")

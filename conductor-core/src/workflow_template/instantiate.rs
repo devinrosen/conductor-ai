@@ -1,4 +1,25 @@
+use crate::workflow::WorkflowManager;
+
 use super::types::WorkflowTemplate;
+
+/// Normalize a template name into a filesystem-safe slug.
+pub fn template_slug(name: &str) -> String {
+    name.replace(' ', "-").to_lowercase()
+}
+
+/// Collect existing workflow definition names for a given working directory.
+///
+/// Errors from `WorkflowManager::list_defs` are logged as warnings and treated
+/// as an empty list so callers always get a usable result.
+pub fn collect_existing_workflow_names(working_dir: &str, repo_path: &str) -> Vec<String> {
+    match WorkflowManager::list_defs(working_dir, repo_path) {
+        Ok((defs, _)) => defs.into_iter().map(|d| d.name).collect(),
+        Err(e) => {
+            tracing::warn!("Failed to list workflow definitions: {e}");
+            Vec::new()
+        }
+    }
+}
 
 /// Result of building an instantiation prompt for the agent.
 pub struct InstantiationPrompt {
@@ -48,7 +69,7 @@ pub fn build_instantiation_prompt(
 
     let version_comment = format!("# Generated from template: {} v{}", meta.name, meta.version);
 
-    let suggested_name = meta.name.replace(' ', "-").to_lowercase();
+    let suggested_name = template_slug(&meta.name);
 
     let prompt = format!(
         r#"You are a workflow scaffolding agent for Conductor, a multi-repo orchestration tool.
@@ -115,7 +136,7 @@ pub fn build_upgrade_prompt(
     _repo_path: &str,
 ) -> InstantiationPrompt {
     let meta = &template.metadata;
-    let suggested_name = meta.name.replace(' ', "-").to_lowercase();
+    let suggested_name = template_slug(&meta.name);
 
     let version_info = match current_version {
         Some(v) => format!("Current workflow was generated from template v{v}."),
@@ -182,21 +203,21 @@ Write the upgraded workflow file to: `.conductor/workflows/{suggested_name}.wf`
 
 /// Extract the template version from a generated `.wf` file's version comment.
 ///
-/// Looks for: `# Generated from template: <name> v<version>`
+/// The version comment MUST be the first non-empty line. Looks for:
+/// `# Generated from template: <name> v<version>`
 pub fn extract_template_version(wf_content: &str) -> Option<(&str, &str)> {
-    for line in wf_content.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("# Generated from template: ") {
-            if let Some(v_pos) = rest.rfind(" v") {
-                let name = &rest[..v_pos];
-                let version = &rest[v_pos + 2..];
-                if !name.is_empty() && !version.is_empty() {
-                    return Some((name, version));
-                }
-            }
-        }
+    // Only inspect the first non-empty line per the documented invariant.
+    let first_line = wf_content.lines().find(|l| !l.trim().is_empty())?;
+    let trimmed = first_line.trim();
+    let rest = trimmed.strip_prefix("# Generated from template: ")?;
+    let v_pos = rest.rfind(" v")?;
+    let name = &rest[..v_pos];
+    let version = &rest[v_pos + 2..];
+    if !name.is_empty() && !version.is_empty() {
+        Some((name, version))
+    } else {
+        None
     }
-    None
 }
 
 #[cfg(test)]
@@ -264,6 +285,14 @@ mod tests {
     #[test]
     fn test_extract_template_version_no_match() {
         let content = "# Some other comment\nworkflow x {}";
+        assert!(extract_template_version(content).is_none());
+    }
+
+    #[test]
+    fn test_extract_template_version_not_first_line() {
+        // Version comment on line 3 must NOT match — invariant says first line only.
+        let content =
+            "workflow create_issue {\n}\n# Generated from template: create-issue v1.0.0\n";
         assert!(extract_template_version(content).is_none());
     }
 }

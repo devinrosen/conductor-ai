@@ -860,7 +860,6 @@ pub enum Modal {
         selected: usize,
         repo_slug: String,
         repo_path: String,
-        worktree_slug: Option<String>,
         worktree_path: Option<String>,
     },
     /// Non-dismissable progress indicator shown while a background operation runs.

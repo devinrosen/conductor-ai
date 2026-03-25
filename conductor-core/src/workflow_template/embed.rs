@@ -35,8 +35,15 @@ pub fn list_embedded_templates() -> Vec<WorkflowTemplate> {
     templates
 }
 
-/// Get a single embedded template by name.
+/// Get a single embedded template by name (O(1) asset lookup).
 pub fn get_embedded_template(name: &str) -> Option<WorkflowTemplate> {
+    // Try direct filename lookup first for O(1) fetch.
+    let filename = format!("{name}.wft");
+    if let Some(data) = <TemplateAssets as Embed>::get(&filename) {
+        let content = std::str::from_utf8(data.data.as_ref()).ok()?;
+        return parse_wft(content, &filename).ok();
+    }
+    // Fallback: scan all templates in case the filename doesn't match the name field.
     list_embedded_templates()
         .into_iter()
         .find(|t| t.metadata.name == name)
