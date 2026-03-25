@@ -1,10 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { Ticket, TicketDetail } from "../../api/types";
 import { api } from "../../api/client";
 import { useApi } from "../../hooks/useApi";
 import { StatusBadge } from "../shared/StatusBadge";
 import { parseLabels, labelTextColor } from "../../utils/ticketUtils";
 import { formatDuration, formatTokens } from "../../utils/agentStats";
+import { deriveWorktreeSlug } from "../../utils/worktreeUtils";
 
 interface TicketDetailModalProps {
   ticket: Ticket;
@@ -16,6 +17,7 @@ export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDeta
   const {
     data: detail,
     loading,
+    refetch,
   } = useApi<TicketDetail>(
     () => api.getTicketDetail(ticket.id),
     [ticket.id],
@@ -29,9 +31,40 @@ export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDeta
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [wtName, setWtName] = useState(() =>
+    deriveWorktreeSlug(ticket.source_id, ticket.title),
+  );
+  const [wtFromBranch, setWtFromBranch] = useState("");
+  const [wtError, setWtError] = useState<string | null>(null);
+  const [wtSubmitting, setWtSubmitting] = useState(false);
+
   const labels = parseLabels(ticket.labels);
   const totals = detail?.agent_totals;
   const worktrees = detail?.worktrees ?? [];
+
+  async function handleCreateWorktree(e: React.FormEvent) {
+    e.preventDefault();
+    setWtError(null);
+    setWtSubmitting(true);
+    try {
+      await api.createWorktree(ticket.repo_id, {
+        name: wtName,
+        from_branch: wtFromBranch || undefined,
+        ticket_id: ticket.id,
+      });
+      setShowCreateForm(false);
+      setWtName(deriveWorktreeSlug(ticket.source_id, ticket.title));
+      setWtFromBranch("");
+      refetch();
+    } catch (err) {
+      setWtError(
+        err instanceof Error ? err.message : "Failed to create worktree",
+      );
+    } finally {
+      setWtSubmitting(false);
+    }
+  }
 
   return (
     <div
@@ -158,9 +191,19 @@ export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDeta
 
           {/* Linked Worktrees */}
           <div>
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">
-              Linked Worktrees
-            </h4>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                Linked Worktrees
+              </h4>
+              {ticket.repo_id && !showCreateForm && (
+                <button
+                  onClick={() => setShowCreateForm(true)}
+                  className="px-2 py-1 text-xs rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
+                >
+                  Create Worktree
+                </button>
+              )}
+            </div>
             {loading ? (
               <p className="text-sm text-gray-400">Loading...</p>
             ) : worktrees.length > 0 ? (
@@ -187,6 +230,48 @@ export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDeta
               </ul>
             ) : (
               <p className="text-sm text-gray-400">No linked worktrees</p>
+            )}
+
+            {showCreateForm && (
+              <form onSubmit={handleCreateWorktree} className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Name</label>
+                  <input
+                    type="text"
+                    value={wtName}
+                    onChange={(e) => setWtName(e.target.value)}
+                    required
+                    className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">From Branch (optional)</label>
+                  <input
+                    type="text"
+                    value={wtFromBranch}
+                    onChange={(e) => setWtFromBranch(e.target.value)}
+                    placeholder="main"
+                    className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                {wtError && <p className="text-sm text-red-600">{wtError}</p>}
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    disabled={wtSubmitting}
+                    className="px-3 py-1.5 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {wtSubmitting ? "Creating..." : "Create"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowCreateForm(false); setWtError(null); }}
+                    className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
             )}
           </div>
         </div>

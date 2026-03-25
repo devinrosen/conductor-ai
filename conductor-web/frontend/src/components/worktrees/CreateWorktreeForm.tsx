@@ -6,11 +6,13 @@ export function CreateWorktreeForm({
   onCreated,
   open: controlledOpen,
   onOpenChange,
+  ticketId,
 }: {
   repoId: string;
   onCreated: () => void;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  ticketId?: string;
 }) {
   const [internalOpen, setInternalOpen] = useState(false);
   const open = controlledOpen ?? internalOpen;
@@ -28,6 +30,7 @@ export function CreateWorktreeForm({
       await api.createWorktree(repoId, {
         name,
         from_branch: fromBranch || undefined,
+        ticket_id: ticketId,
       });
       setName("");
       setFromBranch("");
