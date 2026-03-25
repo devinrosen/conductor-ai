@@ -9,7 +9,8 @@ use ratatui::Frame;
 use conductor_core::workflow::InputType;
 use conductor_core::workflow::WorkflowNode;
 use conductor_core::workflow::{
-    WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowStepStatus,
+    WorkflowDef, WorkflowRun, WorkflowRunStatus, WorkflowRunStep, WorkflowSource,
+    WorkflowStepStatus,
 };
 
 use super::common::{gate_type_icon, truncate};
@@ -204,6 +205,12 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                 ),
                 Span::styled(badge_text, Style::default().fg(badge_color)),
             ];
+            if def.source == WorkflowSource::BuiltIn {
+                spans.push(Span::styled(
+                    "  [built-in]",
+                    Style::default().fg(state.theme.label_accent),
+                ));
+            }
             if !def.targets.is_empty() {
                 let badge = format!("  [{}]", def.targets.join(", "));
                 spans.push(Span::styled(
@@ -283,6 +290,12 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                     ),
                     Span::styled(badge_text, Style::default().fg(badge_color)),
                 ];
+                if def.source == WorkflowSource::BuiltIn {
+                    spans.push(Span::styled(
+                        "  [built-in]",
+                        Style::default().fg(state.theme.label_accent),
+                    ));
+                }
                 if !def.targets.is_empty() {
                     let badge = format!("  [{}]", def.targets.join(", "));
                     spans.push(Span::styled(
@@ -2003,6 +2016,7 @@ mod tests {
             body,
             always: vec![],
             source_path: format!("{name}.wf"),
+            source: conductor_core::workflow::WorkflowSource::Repo,
         }
     }
 

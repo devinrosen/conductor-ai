@@ -9,7 +9,7 @@ use super::types::{
     AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode,
     GateType, IfNode, InputDecl, InputType, OnFailAction, OnMaxIter, OnTimeout, ParallelNode,
     QualityGateConfig, ScriptNode, UnlessNode, WhileNode, WorkflowDef, WorkflowNode,
-    WorkflowTrigger,
+    WorkflowSource, WorkflowTrigger,
 };
 
 // ---------------------------------------------------------------------------
@@ -370,6 +370,7 @@ impl Parser {
             body,
             always,
             source_path: String::new(),
+            source: WorkflowSource::Repo,
         })
     }
 

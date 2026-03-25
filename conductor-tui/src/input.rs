@@ -638,6 +638,7 @@ mod tests {
                     body: vec![],
                     always: vec![],
                     source_path: String::new(),
+                    source: conductor_core::workflow::WorkflowSource::Repo,
                 },
             ));
         }

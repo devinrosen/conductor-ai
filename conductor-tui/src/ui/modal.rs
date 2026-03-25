@@ -767,6 +767,12 @@ pub fn render_workflow_picker(
             Span::styled(format!("  {prefix}{num}"), style),
             Span::styled(name, style),
         ];
+        if item.is_builtin() {
+            row.push(Span::styled(
+                " [built-in]",
+                Style::default().fg(theme.label_accent),
+            ));
+        }
         if !description.is_empty() {
             row.push(Span::styled(
                 format!("  — {description}"),

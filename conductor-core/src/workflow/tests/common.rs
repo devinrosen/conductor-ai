@@ -172,6 +172,7 @@ pub(super) fn make_empty_workflow() -> WorkflowDef {
         body: vec![],
         always: vec![],
         source_path: "test.wf".into(),
+        source: WorkflowSource::Repo,
     }
 }
 
@@ -307,6 +308,7 @@ pub(super) fn make_workflow_def_with_inputs(
         body: vec![],
         always: vec![],
         source_path: String::new(),
+        source: crate::workflow_dsl::WorkflowSource::Repo,
     }
 }
 

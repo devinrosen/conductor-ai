@@ -1,5 +1,6 @@
 use std::fs;
 
+use crate::builtin_workflows;
 use crate::error::{ConductorError, Result};
 use crate::text_util::{resolve_conductor_subdir, resolve_conductor_subdir_for_file};
 
@@ -19,40 +20,52 @@ pub fn load_workflow_defs(
     worktree_path: &str,
     repo_path: &str,
 ) -> Result<(Vec<WorkflowDef>, Vec<WorkflowWarning>)> {
-    let workflows_dir = match resolve_conductor_subdir(worktree_path, repo_path, "workflows") {
-        Some(dir) => dir,
-        None => return Ok((Vec::new(), Vec::new())),
-    };
-
-    let mut entries: Vec<_> = filter_wf_dir_entries(
-        fs::read_dir(&workflows_dir).map_err(|e| {
-            ConductorError::Workflow(format!("Failed to read {}: {e}", workflows_dir.display()))
-        })?,
-        &workflows_dir,
-    );
-
-    entries.sort_by_key(|e| e.file_name());
-
     let mut defs = Vec::new();
     let mut warnings = Vec::new();
-    for entry in entries {
-        let path = entry.path();
-        match parse_workflow_file(&path) {
-            Ok(def) => defs.push(def),
-            Err(e) => {
-                let file = path
-                    .file_name()
-                    .unwrap_or(path.as_os_str())
-                    .to_string_lossy()
-                    .into_owned();
-                tracing::warn!("Failed to parse {file}: {e}");
-                warnings.push(WorkflowWarning {
-                    file,
-                    message: e.to_string(),
-                });
+
+    // 1. Load repo-level workflows from .conductor/workflows/*.wf
+    if let Some(workflows_dir) = resolve_conductor_subdir(worktree_path, repo_path, "workflows") {
+        let mut entries: Vec<_> = filter_wf_dir_entries(
+            fs::read_dir(&workflows_dir).map_err(|e| {
+                ConductorError::Workflow(format!("Failed to read {}: {e}", workflows_dir.display()))
+            })?,
+            &workflows_dir,
+        );
+
+        entries.sort_by_key(|e| e.file_name());
+
+        for entry in entries {
+            let path = entry.path();
+            match parse_workflow_file(&path) {
+                Ok(def) => defs.push(def),
+                Err(e) => {
+                    let file = path
+                        .file_name()
+                        .unwrap_or(path.as_os_str())
+                        .to_string_lossy()
+                        .into_owned();
+                    tracing::warn!("Failed to parse {file}: {e}");
+                    warnings.push(WorkflowWarning {
+                        file,
+                        message: e.to_string(),
+                    });
+                }
             }
         }
     }
+
+    // 2. Append built-in workflows, skipping any whose name collides with a repo def.
+    let (builtin_defs, builtin_warnings) = builtin_workflows::load_builtin_defs();
+    warnings.extend(builtin_warnings);
+
+    let repo_names: std::collections::HashSet<String> =
+        defs.iter().map(|d| d.name.clone()).collect();
+    for def in builtin_defs {
+        if !repo_names.contains(&def.name) {
+            defs.push(def);
+        }
+    }
+
     Ok((defs, warnings))
 }
 
@@ -100,6 +113,9 @@ pub fn validate_workflow_name(name: &str) -> Result<()> {
 }
 
 /// Load a single workflow definition by name.
+///
+/// Checks the repo `.conductor/workflows/` directory first, then falls back to
+/// built-in workflows embedded in the binary.
 pub fn load_workflow_by_name(
     worktree_path: &str,
     repo_path: &str,
@@ -107,16 +123,20 @@ pub fn load_workflow_by_name(
 ) -> Result<WorkflowDef> {
     validate_workflow_name(name)?;
 
+    // Try repo-level first.
     let filename = format!("{name}.wf");
-    let workflows_dir =
+    if let Some(workflows_dir) =
         resolve_conductor_subdir_for_file(worktree_path, repo_path, "workflows", &filename)
-            .ok_or_else(|| {
-                ConductorError::Workflow(format!(
-                    "Workflow '{name}' not found in .conductor/workflows/"
-                ))
-            })?;
+    {
+        return parse_workflow_file(&workflows_dir.join(&filename));
+    }
 
-    parse_workflow_file(&workflows_dir.join(&filename))
+    // Fall back to built-in.
+    builtin_workflows::load_builtin_by_name(name).ok_or_else(|| {
+        ConductorError::Workflow(format!(
+            "Workflow '{name}' not found in .conductor/workflows/ or built-in workflows"
+        ))
+    })
 }
 
 /// Maximum allowed workflow nesting depth.
@@ -195,5 +215,30 @@ mod tests {
         assert!(validate_workflow_name("my-workflow").is_ok());
         assert!(validate_workflow_name("build_release").is_ok());
         assert!(validate_workflow_name("ci-2024").is_ok());
+    }
+
+    #[test]
+    fn test_load_workflow_defs_includes_builtins() {
+        // Non-existent paths → no repo defs, only built-ins.
+        let (defs, _) = load_workflow_defs("/nonexistent", "/nonexistent").unwrap();
+        assert!(
+            defs.iter()
+                .any(|d| d.source == super::super::types::WorkflowSource::BuiltIn),
+            "expected at least one built-in workflow"
+        );
+    }
+
+    #[test]
+    fn test_load_workflow_by_name_falls_back_to_builtin() {
+        // "hello" is a built-in — should succeed even with no repo dir.
+        let def = load_workflow_by_name("/nonexistent", "/nonexistent", "hello").unwrap();
+        assert_eq!(def.name, "hello");
+        assert_eq!(def.source, super::super::types::WorkflowSource::BuiltIn);
+    }
+
+    #[test]
+    fn test_load_workflow_by_name_not_found_anywhere() {
+        let result = load_workflow_by_name("/nonexistent", "/nonexistent", "no-such-workflow");
+        assert!(result.is_err());
     }
 }

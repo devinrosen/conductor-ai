@@ -2758,6 +2758,7 @@ mod tests {
             body: vec![],
             always: vec![],
             source_path: "test.wf".to_string(),
+            source: crate::workflow_dsl::WorkflowSource::Repo,
         }
     }
 

@@ -674,6 +674,15 @@ impl WorkflowPickerItem {
             WorkflowPickerItem::Skip => "Dismiss and do nothing",
         }
     }
+
+    pub fn is_builtin(&self) -> bool {
+        match self {
+            WorkflowPickerItem::Workflow(def) => {
+                def.source == conductor_core::workflow::WorkflowSource::BuiltIn
+            }
+            _ => false,
+        }
+    }
 }
 
 /// One selectable row in the branch picker modal.

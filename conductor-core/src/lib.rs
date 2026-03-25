@@ -29,6 +29,7 @@ pub(crate) use impl_sql_enum;
 pub mod agent;
 pub mod agent_config;
 pub mod agent_runtime;
+pub mod builtin_workflows;
 pub mod config;
 pub mod db;
 pub mod error;

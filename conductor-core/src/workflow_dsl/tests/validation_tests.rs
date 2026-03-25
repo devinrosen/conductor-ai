@@ -22,6 +22,7 @@ fn make_script_def(run: &str) -> WorkflowDef {
         })],
         always: vec![],
         source_path: "test.wf".to_string(),
+        source: WorkflowSource::Repo,
     }
 }
 
@@ -43,6 +44,7 @@ fn make_always_script_def(run: &str) -> WorkflowDef {
             bot_name: None,
         })],
         source_path: "test.wf".to_string(),
+        source: WorkflowSource::Repo,
     }
 }
 
@@ -519,6 +521,7 @@ fn test_validate_script_steps_nested_in_if_block() {
         })],
         always: vec![],
         source_path: "test.wf".to_string(),
+        source: WorkflowSource::Repo,
     };
     let errors = validate_script_steps(&def, &|_| Err("not found".to_string()));
     assert_eq!(errors.len(), 1, "nested script error should be propagated");
@@ -923,6 +926,7 @@ workflow parent {
                 })],
                 always: vec![],
                 source_path: "child.wf".to_string(),
+                source: WorkflowSource::Repo,
             })
         } else {
             Err(format!("unknown: {name}"))

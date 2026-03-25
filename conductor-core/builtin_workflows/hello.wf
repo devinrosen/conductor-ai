@@ -1,0 +1,9 @@
+workflow hello {
+    meta {
+        description = "A minimal built-in workflow for testing the infrastructure"
+        trigger = manual
+        targets = ["worktree"]
+    }
+
+    call plan
+}

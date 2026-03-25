@@ -1474,9 +1474,15 @@ fn main() -> Result<()> {
                 if !wf_defs.is_empty() {
                     for def in &wf_defs {
                         let node_count = def.total_nodes();
+                        let builtin_tag =
+                            if def.source == conductor_core::workflow::WorkflowSource::BuiltIn {
+                                " [built-in]"
+                            } else {
+                                ""
+                            };
                         println!(
-                            "  {:<20} {:<40} [{}, {} nodes]",
-                            def.name, def.description, def.trigger, node_count
+                            "  {:<20} {:<40} [{}, {} nodes]{}",
+                            def.name, def.description, def.trigger, node_count, builtin_tag
                         );
                     }
                 } else {

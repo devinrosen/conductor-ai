@@ -302,8 +302,8 @@ fn test_load_from_file() {
 
     let (defs, warnings) =
         load_workflow_defs(tmp.path().to_str().unwrap(), "/nonexistent").unwrap();
-    assert_eq!(defs.len(), 1);
-    assert_eq!(defs[0].name, "simple");
+    // At least the repo workflow, plus any built-ins
+    assert!(defs.iter().any(|d| d.name == "simple"));
     assert!(warnings.is_empty());
 }
 
@@ -328,13 +328,15 @@ fn test_load_partial_failure_returns_successes_and_warnings() {
     let (defs, warnings) =
         load_workflow_defs(tmp.path().to_str().unwrap(), "/nonexistent").unwrap();
     // The good workflow is returned despite the bad one failing
-    assert_eq!(defs.len(), 1);
-    assert_eq!(defs[0].name, "good");
-    // One warning for the bad file
-    assert_eq!(warnings.len(), 1);
-    // Warning carries the filename in the structured `file` field
-    assert_eq!(warnings[0].file, "bad.wf");
-    assert!(!warnings[0].message.is_empty());
+    assert!(defs.iter().any(|d| d.name == "good"));
+    // At least one warning for the bad file
+    assert!(warnings.iter().any(|w| w.file == "bad.wf"));
+    assert!(!warnings
+        .iter()
+        .find(|w| w.file == "bad.wf")
+        .unwrap()
+        .message
+        .is_empty());
 }
 
 #[test]
@@ -2242,16 +2244,16 @@ fn test_load_workflow_defs_skips_unreadable_file() {
     fs::set_permissions(&bad_path, fs::Permissions::from_mode(0o644)).unwrap();
 
     let (defs, warnings) = result.unwrap();
-    // The readable workflow is returned.
-    assert_eq!(defs.len(), 1, "expected exactly one parseable workflow");
-    assert_eq!(defs[0].name, "good");
-    // The unreadable file produces a warning (file-read error path), not a panic.
-    assert_eq!(
-        warnings.len(),
-        1,
-        "expected one warning for the unreadable file"
+    // The readable workflow is returned (plus any built-ins).
+    assert!(
+        defs.iter().any(|d| d.name == "good"),
+        "expected 'good' workflow to be parseable"
     );
-    assert_eq!(warnings[0].file, "unreadable.wf");
+    // The unreadable file produces a warning (file-read error path), not a panic.
+    assert!(
+        warnings.iter().any(|w| w.file == "unreadable.wf"),
+        "expected a warning for the unreadable file"
+    );
 }
 
 /// Directly tests the DirEntry iterator-error path in `filter_wf_dir_entries` (api.rs lines 31–39).

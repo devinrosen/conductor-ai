@@ -91,7 +91,8 @@ fn workflow_validate_requires_name_or_all() {
 }
 
 #[test]
-fn workflow_validate_all_no_workflows_found() {
+fn workflow_validate_all_no_repo_workflows_still_finds_builtins() {
+    // Even with no .conductor/workflows/ dir, built-in workflows are discovered.
     let dir = tempfile::tempdir().unwrap();
     conductor_cmd(dir.path())
         .args([
@@ -102,8 +103,9 @@ fn workflow_validate_all_no_workflows_found() {
             dir.path().to_str().unwrap(),
         ])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("No workflow files found"));
+        // Built-in `hello` is found but may fail agent resolution, so exit code is 1.
+        .failure()
+        .stdout(predicate::str::contains("hello"));
 }
 
 /// Create a temp dir with a valid `hello` workflow + script fixture.

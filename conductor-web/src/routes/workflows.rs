@@ -101,16 +101,22 @@ pub struct WorkflowDefSummary {
     pub trigger: String,
     pub inputs: Vec<InputDeclSummary>,
     pub node_count: usize,
+    pub source: String,
 }
 
 impl From<&WorkflowDef> for WorkflowDefSummary {
     fn from(def: &WorkflowDef) -> Self {
+        let source = match def.source {
+            conductor_core::workflow::WorkflowSource::BuiltIn => "built_in",
+            conductor_core::workflow::WorkflowSource::Repo => "repo",
+        };
         Self {
             name: def.name.clone(),
             description: def.description.clone(),
             trigger: def.trigger.to_string(),
             inputs: def.inputs.iter().map(InputDeclSummary::from).collect(),
             node_count: def.body.len(),
+            source: source.to_string(),
         }
     }
 }

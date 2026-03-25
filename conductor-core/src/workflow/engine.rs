@@ -1489,7 +1489,7 @@ pub(super) fn check_max_iterations(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow_dsl::{InputDecl, InputType, WorkflowDef, WorkflowTrigger};
+    use crate::workflow_dsl::{InputDecl, InputType, WorkflowDef, WorkflowSource, WorkflowTrigger};
 
     fn make_bool_workflow(
         name: &str,
@@ -1512,6 +1512,7 @@ mod tests {
             body: vec![],
             always: vec![],
             source_path: String::new(),
+            source: WorkflowSource::Repo,
         }
     }
 

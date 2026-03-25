@@ -7,6 +7,15 @@ use serde::{Deserialize, Serialize};
 // AST types
 // ---------------------------------------------------------------------------
 
+/// Whether a workflow was loaded from a repo `.conductor/workflows/` directory
+/// or embedded in the conductor binary as a built-in.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorkflowSource {
+    BuiltIn,
+    #[default]
+    Repo,
+}
+
 /// A complete workflow definition parsed from a `.wf` file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowDef {
@@ -19,6 +28,8 @@ pub struct WorkflowDef {
     pub body: Vec<WorkflowNode>,
     pub always: Vec<WorkflowNode>,
     pub source_path: String,
+    #[serde(default)]
+    pub source: WorkflowSource,
 }
 
 impl WorkflowDef {

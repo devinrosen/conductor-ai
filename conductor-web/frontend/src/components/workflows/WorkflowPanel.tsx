@@ -69,7 +69,14 @@ export function WorkflowPanel({ repoId, worktreeId, ticketId }: WorkflowPanelPro
                 className="bg-gray-800 rounded-lg p-4 border border-gray-700"
               >
                 <div className="flex items-center justify-between mb-2">
-                  <h4 className="font-medium text-gray-200">{def.name}</h4>
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-medium text-gray-200">{def.name}</h4>
+                    {def.source === "built_in" && (
+                      <span className="text-xs px-1.5 py-0.5 bg-cyan-900/50 text-cyan-400 rounded">
+                        built-in
+                      </span>
+                    )}
+                  </div>
                   <span className="text-xs px-2 py-0.5 bg-gray-700 rounded text-gray-400">
                     {def.trigger}
                   </span>

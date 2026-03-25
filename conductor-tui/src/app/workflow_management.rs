@@ -1827,6 +1827,7 @@ mod tests {
             body: vec![],
             always: vec![],
             source_path: "test.wf".into(),
+            source: conductor_core::workflow::WorkflowSource::Repo,
         };
 
         let mut prefill = std::collections::HashMap::new();
