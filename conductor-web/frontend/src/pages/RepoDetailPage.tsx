@@ -64,6 +64,7 @@ export function RepoDetailPage() {
   const [repoAgentPrompt, setRepoAgentPrompt] = useState("");
   const [showAgentPrompt, setShowAgentPrompt] = useState(false);
   const [startingRepoAgent, setStartingRepoAgent] = useState(false);
+  const [newRepoAgentSession, setNewRepoAgentSession] = useState(false);
 
   const activeRepoAgent: AgentRun | undefined = repoAgentRuns?.find(
     (r) => r.status === "running" || r.status === "waiting_for_feedback",
@@ -73,9 +74,10 @@ export function RepoDetailPage() {
     if (!repoAgentPrompt.trim()) return;
     setStartingRepoAgent(true);
     try {
-      await api.startRepoAgent(repoId!, repoAgentPrompt.trim());
+      await api.startRepoAgent(repoId!, repoAgentPrompt.trim(), newRepoAgentSession);
       setRepoAgentPrompt("");
       setShowAgentPrompt(false);
+      setNewRepoAgentSession(false);
       refetchRepoAgentRuns();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to start agent");
@@ -396,10 +398,21 @@ export function RepoDetailPage() {
                   }
                 }}
               />
+              {repoAgentRuns?.some((r) => r.claude_session_id) && (
+                <label className="flex items-center gap-2 mt-2 text-sm text-gray-600">
+                  <input
+                    type="checkbox"
+                    checked={newRepoAgentSession}
+                    onChange={(e) => setNewRepoAgentSession(e.target.checked)}
+                    className="rounded border-gray-300"
+                  />
+                  New session (ignore prior context)
+                </label>
+              )}
             </div>
             <div className="px-6 py-3 border-t flex justify-end gap-2">
               <button
-                onClick={() => { setShowAgentPrompt(false); setRepoAgentPrompt(""); }}
+                onClick={() => { setShowAgentPrompt(false); setRepoAgentPrompt(""); setNewRepoAgentSession(false); }}
                 className="px-4 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
               >
                 Cancel

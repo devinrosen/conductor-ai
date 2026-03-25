@@ -642,19 +642,34 @@ impl App {
             return;
         };
 
+        // Look up the latest repo-scoped run for session resume
+        let resume_session_id = self
+            .state
+            .data
+            .latest_repo_agent_runs
+            .get(&repo.id)
+            .and_then(|run| run.claude_session_id.clone());
+
+        let title = if resume_session_id.is_some() {
+            "Repo Agent (Resume)".to_string()
+        } else {
+            "Repo Agent (read-only)".to_string()
+        };
+
         let lines = vec![String::new()];
         let mut textarea = tui_textarea::TextArea::new(lines);
         textarea.set_cursor_line_style(ratatui::style::Style::default());
         textarea.set_placeholder_text("Ask the repo agent a question (read-only)...");
 
         self.state.modal = Modal::AgentPrompt {
-            title: "Repo Agent (read-only)".to_string(),
+            title,
             prompt: "Enter prompt for Claude:".to_string(),
             textarea: Box::new(textarea),
             on_submit: InputAction::RepoAgentPrompt {
                 repo_id: repo.id.clone(),
                 repo_path: repo.local_path.clone(),
                 repo_slug: repo.slug.clone(),
+                resume_session_id,
             },
         };
     }
@@ -665,6 +680,7 @@ impl App {
         repo_id: String,
         repo_path: String,
         repo_slug: String,
+        resume_session_id: Option<String>,
     ) {
         let Some(ref tx) = self.bg_tx else { return };
         let tx = tx.clone();
@@ -694,7 +710,7 @@ impl App {
                     &run.id,
                     &repo_path,
                     &prompt,
-                    None,
+                    resume_session_id.as_deref(),
                     None,
                     None,
                     Some(&plan_mode),

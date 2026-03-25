@@ -708,6 +708,9 @@ fn cancel_agent_run(mgr: &AgentManager, run: &AgentRun) -> Result<(), ApiError> 
 #[derive(Deserialize)]
 pub struct StartRepoAgentRequest {
     pub prompt: String,
+    /// When true, ignore any prior session and start fresh.
+    #[serde(default)]
+    pub new_session: bool,
 }
 
 /// Start a read-only agent scoped to a repo. Uses `--permission-mode plan`.
@@ -729,6 +732,15 @@ pub async fn start_repo_agent(
 
     let agent_mgr = AgentManager::new(&db);
 
+    // Auto-resume: look up the latest repo-scoped session unless new_session is requested
+    let resume_session_id = if body.new_session {
+        None
+    } else {
+        agent_mgr
+            .latest_repo_scoped(&repo_id)?
+            .and_then(|run| run.claude_session_id)
+    };
+
     // Tmux window name: repo-<slug>-<short_id>
     let run_id = conductor_core::new_id();
     let window_name = conductor_core::agent_runtime::repo_agent_window_name(&repo.slug, &run_id);
@@ -742,7 +754,7 @@ pub async fn start_repo_agent(
         &run.id,
         &repo.local_path,
         &body.prompt,
-        None,
+        resume_session_id.as_deref(),
         model.as_deref(),
         None,
         Some(&plan_mode),

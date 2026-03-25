@@ -105,10 +105,10 @@ export const api = {
     request<Record<string, TicketAgentTotals>>(`/repos/${repoId}/agent/ticket-totals`),
 
   // Repo-scoped agents (read-only)
-  startRepoAgent: (repoId: string, prompt: string) =>
+  startRepoAgent: (repoId: string, prompt: string, newSession?: boolean) =>
     request<AgentRun>(`/repos/${repoId}/agent/start`, {
       method: "POST",
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt, new_session: newSession ?? false }),
     }),
   listRepoAgentRuns: (repoId: string) =>
     request<AgentRun[]>(`/repos/${repoId}/agent/runs`),
