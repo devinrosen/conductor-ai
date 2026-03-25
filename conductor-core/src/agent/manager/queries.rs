@@ -93,6 +93,34 @@ impl<'a> AgentManager<'a> {
         Ok(runs)
     }
 
+    /// List repo-scoped agent runs (where `repo_id = ? AND worktree_id IS NULL`), newest first.
+    pub fn list_repo_scoped(&self, repo_id: &str) -> Result<Vec<AgentRun>> {
+        let mut runs = query_collect(
+            self.conn,
+            &format!(
+                "{AGENT_RUN_SELECT} WHERE repo_id = ?1 AND worktree_id IS NULL \
+                 ORDER BY started_at DESC"
+            ),
+            params![repo_id],
+            row_to_agent_run,
+        )?;
+        self.populate_plans(&mut runs)?;
+        Ok(runs)
+    }
+
+    /// Returns the latest repo-scoped agent run for a repo, or `None`.
+    pub fn latest_repo_scoped(&self, repo_id: &str) -> Result<Option<AgentRun>> {
+        let result = self.conn.query_row(
+            &format!(
+                "{AGENT_RUN_SELECT} WHERE repo_id = ?1 AND worktree_id IS NULL \
+                 ORDER BY started_at DESC LIMIT 1"
+            ),
+            params![repo_id],
+            row_to_agent_run,
+        );
+        self.load_optional_run(result)
+    }
+
     /// Returns true if the worktree has any prior agent runs.
     pub fn has_runs_for_worktree(&self, worktree_id: &str) -> Result<bool> {
         let count: i64 = self.conn.query_row(

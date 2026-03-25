@@ -15,7 +15,18 @@ impl<'a> AgentManager<'a> {
         tmux_window: Option<&str>,
         model: Option<&str>,
     ) -> Result<AgentRun> {
-        self.create_run_with_parent(worktree_id, prompt, tmux_window, model, None, None)
+        self.create_run_with_parent(worktree_id, None, prompt, tmux_window, model, None, None)
+    }
+
+    /// Create a run scoped to a repo (no worktree). Used for read-only repo agents.
+    pub fn create_repo_run(
+        &self,
+        repo_id: &str,
+        prompt: &str,
+        tmux_window: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<AgentRun> {
+        self.create_run_with_parent(None, Some(repo_id), prompt, tmux_window, model, None, None)
     }
 
     pub fn create_child_run(
@@ -29,6 +40,7 @@ impl<'a> AgentManager<'a> {
     ) -> Result<AgentRun> {
         self.create_run_with_parent(
             worktree_id,
+            None,
             prompt,
             tmux_window,
             model,
@@ -37,9 +49,11 @@ impl<'a> AgentManager<'a> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn create_run_with_parent(
         &self,
         worktree_id: Option<&str>,
+        repo_id: Option<&str>,
         prompt: &str,
         tmux_window: Option<&str>,
         model: Option<&str>,
@@ -52,6 +66,7 @@ impl<'a> AgentManager<'a> {
         let run = AgentRun {
             id: id.clone(),
             worktree_id: worktree_id.map(String::from),
+            repo_id: repo_id.map(String::from),
             claude_session_id: None,
             prompt: prompt.to_string(),
             status: AgentRunStatus::Running,
@@ -74,11 +89,12 @@ impl<'a> AgentManager<'a> {
         };
 
         self.conn.execute(
-            "INSERT INTO agent_runs (id, worktree_id, prompt, status, started_at, tmux_window, model, parent_run_id, bot_name) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO agent_runs (id, worktree_id, repo_id, prompt, status, started_at, tmux_window, model, parent_run_id, bot_name) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 run.id,
                 run.worktree_id,
+                run.repo_id,
                 run.prompt,
                 run.status,
                 run.started_at,

@@ -703,3 +703,136 @@ fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {
         None => summary.to_string(),
     }
 }
+
+// ── Repo-scoped agent routes ────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct StartRepoAgentRequest {
+    pub prompt: String,
+}
+
+/// Start a read-only agent scoped to a repo. Uses `--permission-mode plan`.
+pub async fn start_repo_agent(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+    Json(body): Json<StartRepoAgentRequest>,
+) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+    let repo = RepoManager::new(&db, &config).get_by_id(&repo_id)?;
+
+    // Resolve model: per-repo config → global config
+    let model = repo
+        .model
+        .as_deref()
+        .or(config.general.model.as_deref())
+        .map(str::to_string);
+
+    let agent_mgr = AgentManager::new(&db);
+
+    // Tmux window name: repo-<slug>-<short_id>
+    let run_id = conductor_core::new_id();
+    let short_id = &run_id[..8.min(run_id.len())];
+    let window_name = format!("repo-{}-{short_id}", repo.slug);
+
+    let run =
+        agent_mgr.create_repo_run(&repo_id, &body.prompt, Some(&window_name), model.as_deref())?;
+
+    // Build args with plan permission mode (read-only)
+    let plan_mode = conductor_core::config::AgentPermissionMode::Plan;
+    let args = conductor_core::agent_runtime::build_agent_args_with_mode(
+        &run.id,
+        &repo.local_path,
+        &body.prompt,
+        None,
+        model.as_deref(),
+        None,
+        Some(&plan_mode),
+    )
+    .map_err(|e| {
+        let _ = agent_mgr.update_run_failed(&run.id, &e);
+        ConductorError::Agent(e)
+    })?;
+
+    match conductor_core::agent_runtime::spawn_tmux_window(&args, &window_name) {
+        Ok(()) => {
+            state.events.emit(ConductorEvent::RepoAgentStarted {
+                run_id: run.id.clone(),
+                repo_id: repo_id.clone(),
+            });
+            Ok((StatusCode::CREATED, Json(run)))
+        }
+        Err(e) => {
+            let _ = agent_mgr.update_run_failed(&run.id, &e);
+            Err(ConductorError::Agent(e).into())
+        }
+    }
+}
+
+/// List repo-scoped agent runs (newest first).
+pub async fn list_repo_agent_runs(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+) -> Result<Json<Vec<AgentRun>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+    let runs = mgr.list_repo_scoped(&repo_id)?;
+    Ok(Json(runs))
+}
+
+/// Stop a repo-scoped agent run by run_id.
+pub async fn stop_repo_agent(
+    State(state): State<AppState>,
+    Path((repo_id, run_id)): Path<(String, String)>,
+) -> Result<Json<AgentRun>, ApiError> {
+    let db = state.db.lock().await;
+    let agent_mgr = AgentManager::new(&db);
+
+    let run = agent_mgr
+        .get_run(&run_id)?
+        .ok_or_else(|| ConductorError::Agent("Agent run not found".to_string()))?;
+
+    if !run.is_active() {
+        return Err(ConductorError::Agent("Agent is not running".to_string()).into());
+    }
+
+    // Capture tmux scrollback before killing
+    if let Some(ref window) = run.tmux_window {
+        agent_mgr.capture_agent_log(&run.id, window);
+    }
+
+    // Kill tmux window
+    if let Some(ref window) = run.tmux_window {
+        let _ = Command::new("tmux")
+            .args(["kill-window", "-t", &format!(":{window}")])
+            .output();
+    }
+
+    agent_mgr.update_run_cancelled(&run.id)?;
+
+    let updated = agent_mgr.get_run(&run_id)?.unwrap_or(run);
+
+    state.events.emit(ConductorEvent::RepoAgentStopped {
+        run_id: updated.id.clone(),
+        repo_id,
+    });
+
+    Ok(Json(updated))
+}
+
+/// Get events for a repo-scoped agent run.
+pub async fn repo_agent_events(
+    State(state): State<AppState>,
+    Path((_repo_id, run_id)): Path<(String, String)>,
+) -> Result<Json<Vec<AgentEventResponse>>, ApiError> {
+    let db = state.db.lock().await;
+    let agent_mgr = AgentManager::new(&db);
+
+    let events: Vec<AgentEventResponse> = agent_mgr
+        .list_events_for_run(&run_id)?
+        .into_iter()
+        .map(AgentEventResponse::from)
+        .collect();
+
+    Ok(Json(events))
+}

@@ -1132,6 +1132,12 @@ pub enum InputAction {
     FeedbackResponse {
         feedback_id: String,
     },
+    /// Prompt for a repo-scoped read-only agent.
+    RepoAgentPrompt {
+        repo_id: String,
+        repo_path: String,
+        repo_slug: String,
+    },
     /// Second step: model picker for workflow runs.
     /// Carries the workflow target + inputs through the modal roundtrip.
     WorkflowModelOverride {

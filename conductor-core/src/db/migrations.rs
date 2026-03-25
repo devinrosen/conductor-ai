@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 50;
+pub const LATEST_SCHEMA_VERSION: u32 = 51;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -906,6 +906,17 @@ pub fn run(conn: &Connection) -> Result<()> {
             }
         }
         bump_version(conn, 50)?;
+    }
+
+    // Migration 051: add repo_id column to agent_runs for repo-scoped agents.
+    if version < 51 {
+        let has_repo_id: bool = conn
+            .prepare("SELECT repo_id FROM agent_runs LIMIT 0")
+            .is_ok();
+        if !has_repo_id {
+            conn.execute_batch(include_str!("migrations/051_agent_run_repo_id.sql"))?;
+        }
+        bump_version(conn, 51)?;
     }
 
     Ok(())

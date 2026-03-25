@@ -11,6 +11,8 @@ export type ConductorEventType =
   | "agent_started"
   | "agent_stopped"
   | "agent_event"
+  | "repo_agent_started"
+  | "repo_agent_stopped"
   | "feedback_requested"
   | "feedback_submitted"
   | "issue_sources_changed"
@@ -33,6 +35,8 @@ const ALL_EVENT_TYPES: ConductorEventType[] = [
   "agent_started",
   "agent_stopped",
   "agent_event",
+  "repo_agent_started",
+  "repo_agent_stopped",
   "feedback_requested",
   "feedback_submitted",
   "issue_sources_changed",

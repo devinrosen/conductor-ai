@@ -42,6 +42,7 @@ impl Default for PlanStep {
 pub struct AgentRun {
     pub id: String,
     pub worktree_id: Option<String>,
+    pub repo_id: Option<String>,
     pub claude_session_id: Option<String>,
     pub prompt: String,
     pub status: AgentRunStatus,

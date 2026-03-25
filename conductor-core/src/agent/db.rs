@@ -11,7 +11,7 @@ pub(super) const FEEDBACK_SELECT: &str =
 
 /// Shared SELECT column list for the `agent_runs` table (plain, unaliased form).
 pub(super) const AGENT_RUN_SELECT: &str =
-    "SELECT id, worktree_id, claude_session_id, prompt, status, result_text, \
+    "SELECT id, worktree_id, repo_id, claude_session_id, prompt, status, result_text, \
      cost_usd, num_turns, duration_ms, started_at, ended_at, tmux_window, log_file, \
      model, plan, parent_run_id, \
      input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
@@ -33,6 +33,8 @@ macro_rules! agent_run_cols {
             "id, ",
             $alias,
             "worktree_id, ",
+            $alias,
+            "repo_id, ",
             $alias,
             "claude_session_id, ",
             $alias,
@@ -79,6 +81,8 @@ macro_rules! agent_run_cols {
             "id, ",
             $alias,
             "worktree_id, ",
+            $alias,
+            "repo_id, ",
             $alias,
             "claude_session_id, ",
             $alias,
@@ -197,29 +201,30 @@ pub(super) fn row_to_agent_created_issue(
 
 pub(super) fn row_to_agent_run(row: &rusqlite::Row) -> rusqlite::Result<AgentRun> {
     // Plan is populated separately from agent_run_steps table by the caller.
-    // Column 14 (plan JSON) is still selected for SQL compatibility but ignored.
+    // Column 15 (plan JSON) is still selected for SQL compatibility but ignored.
     Ok(AgentRun {
         id: row.get(0)?,
         worktree_id: row.get(1)?,
-        claude_session_id: row.get(2)?,
-        prompt: row.get(3)?,
-        status: row.get(4)?,
-        result_text: row.get(5)?,
-        cost_usd: row.get(6)?,
-        num_turns: row.get(7)?,
-        duration_ms: row.get(8)?,
-        started_at: row.get(9)?,
-        ended_at: row.get(10)?,
-        tmux_window: row.get(11)?,
-        log_file: row.get(12)?,
-        model: row.get(13)?,
+        repo_id: row.get(2)?,
+        claude_session_id: row.get(3)?,
+        prompt: row.get(4)?,
+        status: row.get(5)?,
+        result_text: row.get(6)?,
+        cost_usd: row.get(7)?,
+        num_turns: row.get(8)?,
+        duration_ms: row.get(9)?,
+        started_at: row.get(10)?,
+        ended_at: row.get(11)?,
+        tmux_window: row.get(12)?,
+        log_file: row.get(13)?,
+        model: row.get(14)?,
         plan: None,
-        parent_run_id: row.get(15)?,
-        input_tokens: row.get(16)?,
-        output_tokens: row.get(17)?,
-        cache_read_input_tokens: row.get(18)?,
-        cache_creation_input_tokens: row.get(19)?,
-        bot_name: row.get(20)?,
+        parent_run_id: row.get(16)?,
+        input_tokens: row.get(17)?,
+        output_tokens: row.get(18)?,
+        cache_read_input_tokens: row.get(19)?,
+        cache_creation_input_tokens: row.get(20)?,
+        bot_name: row.get(21)?,
     })
 }
 

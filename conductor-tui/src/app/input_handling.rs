@@ -588,6 +588,16 @@ impl App {
                 };
                 self.do_dispatch_workflow(action.target, action.workflow_def, inputs, model);
             }
+            InputAction::RepoAgentPrompt {
+                repo_id,
+                repo_path,
+                repo_slug,
+            } => {
+                if value.is_empty() {
+                    return;
+                }
+                self.start_repo_agent_tmux(value, repo_id, repo_path, repo_slug);
+            }
             InputAction::OrchestratePrompt {
                 worktree_id,
                 worktree_path,

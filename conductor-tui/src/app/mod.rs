@@ -518,6 +518,7 @@ impl App {
 
             // Agent (tmux-based)
             Action::LaunchAgent => self.handle_launch_agent(),
+            Action::PromptRepoAgent => self.handle_prompt_repo_agent(),
             Action::OrchestrateAgent => self.handle_orchestrate_agent(),
             Action::StopAgent => self.handle_stop_agent(),
             Action::SubmitFeedback => self.handle_submit_feedback(),
@@ -1942,6 +1943,7 @@ workflow my-wf {
             conductor_core::agent::AgentRun {
                 id: "run1".into(),
                 worktree_id: Some("wt1".into()),
+                repo_id: None,
                 claude_session_id: None,
                 prompt: String::new(),
                 status: conductor_core::agent::AgentRunStatus::Running,

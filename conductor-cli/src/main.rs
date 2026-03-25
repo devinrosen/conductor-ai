@@ -133,6 +133,9 @@ enum AgentCommands {
         /// Named GitHub App bot identity to use (matches [github.apps.<name>] in config).
         #[arg(long)]
         bot_name: Option<String>,
+        /// Override the permission mode for this run (e.g. "plan" for read-only repo agents).
+        #[arg(long)]
+        permission_mode: Option<String>,
     },
     /// Orchestrate child agents: spawn a child run for each plan step
     Orchestrate {
@@ -905,7 +908,7 @@ fn main() -> Result<()> {
                                         model,
                                     )?;
                                     run_agent(
-                                        &conn, &run.id, &wt.path, &prompt, None, model, None,
+                                        &conn, &run.id, &wt.path, &prompt, None, model, None, None,
                                     )?;
                                 }
                                 Err(e) => {
@@ -1000,6 +1003,7 @@ fn main() -> Result<()> {
                     resume,
                     model,
                     bot_name,
+                    permission_mode,
                 } => {
                     let resolved_prompt = match (prompt, prompt_file) {
                         (Some(p), _) => p,
@@ -1007,6 +1011,10 @@ fn main() -> Result<()> {
                         (None, None) => {
                             anyhow::bail!("Either --prompt or --prompt-file is required")
                         }
+                    };
+                    let perm_mode = match permission_mode.as_deref() {
+                        Some("plan") => Some(conductor_core::config::AgentPermissionMode::Plan),
+                        _ => None,
                     };
                     run_agent(
                         &conn,
@@ -1016,6 +1024,7 @@ fn main() -> Result<()> {
                         resume.as_deref(),
                         model.as_deref(),
                         bot_name.as_deref(),
+                        perm_mode.as_ref(),
                     )?;
                 }
                 AgentCommands::Orchestrate {
@@ -2279,6 +2288,7 @@ fn generate_plan(
 ///
 /// Uses `--output-format json` (single JSON result) since the tmux terminal IS the display.
 /// Claude's interactive output goes directly to the terminal; we only parse the final JSON result.
+#[allow(clippy::too_many_arguments)]
 fn run_agent(
     conn: &rusqlite::Connection,
     run_id: &str,
@@ -2287,6 +2297,7 @@ fn run_agent(
     resume_session_id: Option<&str>,
     model: Option<&str>,
     bot_name: Option<&str>,
+    permission_mode_override: Option<&conductor_core::config::AgentPermissionMode>,
 ) -> Result<()> {
     let mgr = AgentManager::new(conn);
 
@@ -2437,11 +2448,16 @@ fn run_agent(
                 cmd.arg("--resume").arg(sid);
             }
         }
+        let effective_perm_mode =
+            permission_mode_override.unwrap_or(&config.general.agent_permission_mode);
         cmd.arg("--output-format")
             .arg("stream-json")
             .arg("--verbose")
-            .arg(config.general.agent_permission_mode.cli_flag())
-            .env(CONDUCTOR_RUN_ID_ENV, run_id)
+            .arg(effective_perm_mode.cli_flag());
+        if let Some(val) = effective_perm_mode.cli_flag_value() {
+            cmd.arg(val);
+        }
+        cmd.env(CONDUCTOR_RUN_ID_ENV, run_id)
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .current_dir(worktree_path);

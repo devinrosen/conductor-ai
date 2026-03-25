@@ -509,6 +509,7 @@ mod tests {
         let run = AgentRun {
             id: "test".to_string(),
             worktree_id: Some("w1".to_string()),
+            repo_id: None,
             claude_session_id: Some("sess-abc".to_string()),
             prompt: "Fix the bug".to_string(),
             status: AgentRunStatus::Failed,

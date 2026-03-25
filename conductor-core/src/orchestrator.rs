@@ -395,6 +395,7 @@ mod tests {
         AgentRun {
             id: "parent-1".to_string(),
             worktree_id: Some("w1".to_string()),
+            repo_id: None,
             claude_session_id: None,
             prompt: prompt.to_string(),
             status: AgentRunStatus::Running,

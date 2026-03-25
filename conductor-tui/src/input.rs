@@ -524,6 +524,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => {}
             }
         }
+        if let KeyCode::Char('a') = key.code {
+            return Action::PromptRepoAgent;
+        }
         if let KeyCode::Char('I') = key.code {
             return Action::ToggleAgentIssues;
         }
@@ -588,6 +591,7 @@ mod tests {
         AgentRun {
             id: "run-1".into(),
             worktree_id: Some(worktree_id.to_string()),
+            repo_id: None,
             claude_session_id: None,
             prompt: "do stuff".into(),
             status,

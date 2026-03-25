@@ -166,6 +166,7 @@ pub enum Action {
 
     // Agent triggers (tmux-based)
     LaunchAgent,
+    PromptRepoAgent,
     OrchestrateAgent,
     StopAgent,
     #[allow(dead_code)]

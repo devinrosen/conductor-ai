@@ -92,6 +92,23 @@ pub fn api_router() -> Router<AppState> {
             "/api/repos/{id}/agent/ticket-totals",
             get(agents::ticket_totals_for_repo),
         )
+        // Repo-scoped agents (read-only)
+        .route(
+            "/api/repos/{id}/agent/start",
+            post(agents::start_repo_agent),
+        )
+        .route(
+            "/api/repos/{id}/agent/runs",
+            get(agents::list_repo_agent_runs),
+        )
+        .route(
+            "/api/repos/{id}/agent/{run_id}/stop",
+            post(agents::stop_repo_agent),
+        )
+        .route(
+            "/api/repos/{id}/agent/{run_id}/events",
+            get(agents::repo_agent_events),
+        )
         // Agent orchestration
         .route("/api/worktrees/{id}/agent/runs", get(agents::list_runs))
         .route("/api/worktrees/{id}/agent/latest", get(agents::latest_run))

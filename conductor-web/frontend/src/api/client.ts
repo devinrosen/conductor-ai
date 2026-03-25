@@ -104,6 +104,21 @@ export const api = {
   ticketAgentTotalsForRepo: (repoId: string) =>
     request<Record<string, TicketAgentTotals>>(`/repos/${repoId}/agent/ticket-totals`),
 
+  // Repo-scoped agents (read-only)
+  startRepoAgent: (repoId: string, prompt: string) =>
+    request<AgentRun>(`/repos/${repoId}/agent/start`, {
+      method: "POST",
+      body: JSON.stringify({ prompt }),
+    }),
+  listRepoAgentRuns: (repoId: string) =>
+    request<AgentRun[]>(`/repos/${repoId}/agent/runs`),
+  stopRepoAgent: (repoId: string, runId: string) =>
+    request<AgentRun>(`/repos/${repoId}/agent/${runId}/stop`, {
+      method: "POST",
+    }),
+  getRepoAgentEvents: (repoId: string, runId: string) =>
+    request<AgentEvent[]>(`/repos/${repoId}/agent/${runId}/events`),
+
   // Agent orchestration
   listAgentRuns: (worktreeId: string) =>
     request<AgentRun[]>(`/worktrees/${worktreeId}/agent/runs`),

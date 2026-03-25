@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
-import type { Ticket } from "../api/types";
+import type { AgentRun, Ticket } from "../api/types";
 import { WorktreeRow } from "../components/worktrees/WorktreeRow";
 import { CreateWorktreeForm } from "../components/worktrees/CreateWorktreeForm";
 import { TicketRow } from "../components/tickets/TicketRow";
@@ -56,6 +56,43 @@ export function RepoDetailPage() {
     refetch: refetchSources,
   } = useApi(() => api.listIssueSources(repoId!), [repoId]);
 
+  const {
+    data: repoAgentRuns,
+    refetch: refetchRepoAgentRuns,
+  } = useApi(() => api.listRepoAgentRuns(repoId!), [repoId]);
+
+  const [repoAgentPrompt, setRepoAgentPrompt] = useState("");
+  const [showAgentPrompt, setShowAgentPrompt] = useState(false);
+  const [startingRepoAgent, setStartingRepoAgent] = useState(false);
+
+  const activeRepoAgent: AgentRun | undefined = repoAgentRuns?.find(
+    (r) => r.status === "running" || r.status === "waiting_for_feedback",
+  );
+
+  async function handleStartRepoAgent() {
+    if (!repoAgentPrompt.trim()) return;
+    setStartingRepoAgent(true);
+    try {
+      await api.startRepoAgent(repoId!, repoAgentPrompt.trim());
+      setRepoAgentPrompt("");
+      setShowAgentPrompt(false);
+      refetchRepoAgentRuns();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to start agent");
+    } finally {
+      setStartingRepoAgent(false);
+    }
+  }
+
+  async function handleStopRepoAgent(runId: string) {
+    try {
+      await api.stopRepoAgent(repoId!, runId);
+      refetchRepoAgentRuns();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to stop agent");
+    }
+  }
+
   const sseHandlers = useMemo(() => {
     const handleWorktreeChange = (ev: ConductorEventData) => {
       if (!ev.data || ev.data.repo_id === repoId) refetchWorktrees();
@@ -75,12 +112,18 @@ export function RepoDetailPage() {
       tickets_synced: handleTicketsChange,
       agent_started: handleAgentChange,
       agent_stopped: handleAgentChange,
+      repo_agent_started: (_ev: ConductorEventData) => {
+        refetchRepoAgentRuns();
+      },
+      repo_agent_stopped: (_ev: ConductorEventData) => {
+        refetchRepoAgentRuns();
+      },
       issue_sources_changed: (ev: ConductorEventData) => {
         if (!ev.data || ev.data.repo_id === repoId) refetchSources();
       },
     };
     return map;
-  }, [repoId, refetchWorktrees, refetchTickets, refetchRuns, refetchTotals, refetchSources]);
+  }, [repoId, refetchWorktrees, refetchTickets, refetchRuns, refetchTotals, refetchSources, refetchRepoAgentRuns]);
 
   useConductorEvents(sseHandlers);
 
@@ -260,6 +303,118 @@ export function RepoDetailPage() {
           </dd>
         </dl>
       </div>
+
+      {/* Repo Agent */}
+      <section>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+            Repo Agent
+            <span className="ml-2 text-xs font-normal normal-case text-gray-400">(read-only)</span>
+          </h3>
+          <div className="flex items-center gap-2">
+            {activeRepoAgent && (
+              <button
+                onClick={() => handleStopRepoAgent(activeRepoAgent.id)}
+                className="px-3 py-1.5 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
+              >
+                Stop Agent
+              </button>
+            )}
+            <button
+              onClick={() => setShowAgentPrompt(true)}
+              className="px-3 py-1.5 text-sm rounded-md border border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+            >
+              Ask Agent
+            </button>
+          </div>
+        </div>
+        {activeRepoAgent && (
+          <div className="mb-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+              <span className="font-medium text-green-800">Agent running</span>
+              <span className="text-green-600 truncate">{activeRepoAgent.prompt.slice(0, 100)}</span>
+            </div>
+          </div>
+        )}
+        {repoAgentRuns && repoAgentRuns.length > 0 && !activeRepoAgent && (
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
+                <tr>
+                  <th className="px-4 py-2">Prompt</th>
+                  <th className="px-4 py-2">Status</th>
+                  <th className="px-4 py-2">Cost</th>
+                  <th className="px-4 py-2">Started</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {repoAgentRuns.slice(0, 5).map((run) => (
+                  <tr key={run.id}>
+                    <td className="px-4 py-2 truncate max-w-xs">{run.prompt.slice(0, 80)}</td>
+                    <td className="px-4 py-2">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                        run.status === "completed" ? "bg-green-100 text-green-800" :
+                        run.status === "failed" ? "bg-red-100 text-red-800" :
+                        run.status === "cancelled" ? "bg-gray-100 text-gray-800" :
+                        "bg-yellow-100 text-yellow-800"
+                      }`}>
+                        {run.status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2 text-gray-500">{run.cost_usd != null ? `$${run.cost_usd.toFixed(2)}` : "-"}</td>
+                    <td className="px-4 py-2 text-gray-500">{new Date(run.started_at).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* Agent Prompt Modal */}
+      {showAgentPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4">
+            <div className="px-6 py-4 border-b">
+              <h3 className="text-lg font-semibold">Ask Repo Agent</h3>
+              <p className="text-sm text-gray-500 mt-1">
+                The agent runs in read-only mode and can explore code, answer questions, and triage issues.
+              </p>
+            </div>
+            <div className="px-6 py-4">
+              <textarea
+                value={repoAgentPrompt}
+                onChange={(e) => setRepoAgentPrompt(e.target.value)}
+                placeholder="What would you like the agent to investigate?"
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[100px] resize-y"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    handleStartRepoAgent();
+                  }
+                }}
+              />
+            </div>
+            <div className="px-6 py-3 border-t flex justify-end gap-2">
+              <button
+                onClick={() => { setShowAgentPrompt(false); setRepoAgentPrompt(""); }}
+                className="px-4 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleStartRepoAgent}
+                disabled={startingRepoAgent || !repoAgentPrompt.trim()}
+                className="px-4 py-2 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {startingRepoAgent ? "Starting..." : "Start Agent"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Issue Sources */}
       <IssueSourcesSection

@@ -85,7 +85,8 @@ export interface PlanStep {
 
 export interface AgentRun {
   id: string;
-  worktree_id: string;
+  worktree_id: string | null;
+  repo_id?: string | null;
   claude_session_id: string | null;
   prompt: string;
   status: "running" | "completed" | "failed" | "cancelled" | "waiting_for_feedback";
