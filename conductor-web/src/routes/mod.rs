@@ -86,6 +86,14 @@ pub fn api_router() -> Router<AppState> {
             get(agents::latest_runs_by_worktree),
         )
         .route("/api/agent/ticket-totals", get(agents::ticket_totals))
+        .route(
+            "/api/repos/{id}/agent/latest-runs",
+            get(agents::latest_runs_by_worktree_for_repo),
+        )
+        .route(
+            "/api/repos/{id}/agent/ticket-totals",
+            get(agents::ticket_totals_for_repo),
+        )
         // Agent orchestration
         .route("/api/worktrees/{id}/agent/runs", get(agents::list_runs))
         .route("/api/worktrees/{id}/agent/latest", get(agents::latest_run))

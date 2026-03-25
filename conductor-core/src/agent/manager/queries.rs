@@ -137,6 +137,38 @@ impl<'a> AgentManager<'a> {
         Ok(map)
     }
 
+    /// Returns the latest agent run for each worktree belonging to a specific repo,
+    /// keyed by worktree_id.
+    pub fn latest_runs_by_worktree_for_repo(
+        &self,
+        repo_id: &str,
+    ) -> Result<HashMap<String, AgentRun>> {
+        let mut runs = query_collect(
+            self.conn,
+            &format!(
+                "SELECT {AGENT_RUN_COLS_A} \
+                 FROM agent_runs a \
+                 INNER JOIN ( \
+                     SELECT ar.worktree_id, MAX(ar.started_at) AS max_started \
+                     FROM agent_runs ar \
+                     JOIN worktrees w ON ar.worktree_id = w.id \
+                     WHERE w.repo_id = ?1 \
+                     GROUP BY ar.worktree_id \
+                 ) latest ON a.worktree_id = latest.worktree_id AND a.started_at = latest.max_started"
+            ),
+            params![repo_id],
+            row_to_agent_run,
+        )?;
+        self.populate_plans(&mut runs)?;
+        let mut map = HashMap::new();
+        for run in runs {
+            if let Some(ref wt_id) = run.worktree_id {
+                map.insert(wt_id.clone(), run);
+            }
+        }
+        Ok(map)
+    }
+
     /// Returns the latest top-level agent run for a single worktree, or `None` if none exist.
     ///
     /// `parent_run_id IS NULL` filters to top-level runs — sub-agent child runs are excluded.
@@ -943,5 +975,47 @@ mod tests {
             any_latest.id, top_level_latest.id,
             "the two functions must diverge when newest run is a child"
         );
+    }
+
+    #[test]
+    fn test_latest_runs_by_worktree_for_repo() {
+        let conn = setup_db();
+        // setup_db seeds r1 with w1 and w2; insert a second repo with its own worktree.
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w3', 'r2', 'feat-other', 'feat/other', '/tmp/ws2/other', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        let mgr = AgentManager::new(&conn);
+
+        // Create runs across repos
+        let _r1_old = mgr
+            .create_run(Some("w1"), "Old r1 task", None, None)
+            .unwrap();
+        let r1_new = mgr
+            .create_run(Some("w1"), "New r1 task", None, None)
+            .unwrap();
+        let r1_w2 = mgr
+            .create_run(Some("w2"), "r1 w2 task", None, None)
+            .unwrap();
+        let _r2 = mgr.create_run(Some("w3"), "r2 task", None, None).unwrap();
+
+        // Repo r1 should only include w1 and w2
+        let map = mgr.latest_runs_by_worktree_for_repo("r1").unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get("w1").unwrap().id, r1_new.id);
+        assert_eq!(map.get("w2").unwrap().id, r1_w2.id);
+        assert!(!map.contains_key("w3"));
+
+        // Repo r2 should only include w3
+        let map_r2 = mgr.latest_runs_by_worktree_for_repo("r2").unwrap();
+        assert_eq!(map_r2.len(), 1);
+        assert!(map_r2.contains_key("w3"));
     }
 }

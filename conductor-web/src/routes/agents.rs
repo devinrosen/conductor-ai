@@ -49,6 +49,26 @@ pub async fn ticket_totals(
     Ok(Json(map))
 }
 
+pub async fn latest_runs_by_worktree_for_repo(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+) -> Result<Json<HashMap<String, AgentRun>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+    let map = mgr.latest_runs_by_worktree_for_repo(&repo_id)?;
+    Ok(Json(map))
+}
+
+pub async fn ticket_totals_for_repo(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+) -> Result<Json<HashMap<String, TicketAgentTotals>>, ApiError> {
+    let db = state.db.lock().await;
+    let mgr = AgentManager::new(&db);
+    let map = mgr.totals_by_ticket_for_repo(&repo_id)?;
+    Ok(Json(map))
+}
+
 // ── Agent orchestration ───────────────────────────────────────────────
 
 /// List all agent runs for a worktree (newest first).

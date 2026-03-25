@@ -50,6 +50,50 @@ impl<'a> AgentManager<'a> {
         Ok(map)
     }
 
+    /// Returns aggregated agent stats per ticket for a specific repo.
+    /// Only includes completed runs with recorded metrics.
+    pub fn totals_by_ticket_for_repo(
+        &self,
+        repo_id: &str,
+    ) -> Result<HashMap<String, TicketAgentTotals>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT w.ticket_id, \
+                    COUNT(*) AS total_runs, \
+                    COALESCE(SUM(a.cost_usd), 0.0) AS total_cost, \
+                    COALESCE(SUM(a.num_turns), 0) AS total_turns, \
+                    COALESCE(SUM(a.duration_ms), 0) AS total_duration_ms, \
+                    COALESCE(SUM(a.input_tokens), 0) AS total_input_tokens, \
+                    COALESCE(SUM(a.output_tokens), 0) AS total_output_tokens, \
+                    COALESCE(SUM(a.cache_read_input_tokens), 0) AS total_cache_read_tokens, \
+                    COALESCE(SUM(a.cache_creation_input_tokens), 0) AS total_cache_creation_tokens \
+             FROM agent_runs a \
+             JOIN worktrees w ON a.worktree_id = w.id \
+             WHERE w.ticket_id IS NOT NULL AND a.status = 'completed' AND w.repo_id = ?1 \
+             GROUP BY w.ticket_id",
+        )?;
+
+        let rows = stmt.query_map(params![repo_id], |row| {
+            Ok(TicketAgentTotals {
+                ticket_id: row.get(0)?,
+                total_runs: row.get(1)?,
+                total_cost: row.get(2)?,
+                total_turns: row.get(3)?,
+                total_duration_ms: row.get(4)?,
+                total_input_tokens: row.get(5)?,
+                total_output_tokens: row.get(6)?,
+                total_cache_read_tokens: row.get(7)?,
+                total_cache_creation_tokens: row.get(8)?,
+            })
+        })?;
+
+        let mut map = HashMap::new();
+        for totals in rows {
+            let totals = totals?;
+            map.insert(totals.ticket_id.clone(), totals);
+        }
+        Ok(map)
+    }
+
     /// Build a per-phase cost breakdown for all runs in a worktree.
     ///
     /// Top-level runs (no parent) are classified as either "Initial run" or
@@ -638,5 +682,85 @@ mod tests {
         let phases = mgr.worktree_cost_phases("w1").unwrap();
         assert_eq!(phases.len(), 1);
         assert!((phases[0].cost_usd - 0.015).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_totals_by_ticket_for_repo() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Insert a second repo with its own worktree and ticket
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+             VALUES ('w3', 'r2', 'feat-other', 'feat/other', '/tmp/ws2/other', 'active', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        // Create tickets for both repos
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES ('t1', 'r1', 'github', '42', 'R1 ticket', '', 'open', '', 'https://example.com', '2024-01-01T00:00:00Z', '{}')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO tickets (id, repo_id, source_type, source_id, title, body, state, labels, url, synced_at, raw_json) \
+             VALUES ('t2', 'r2', 'github', '99', 'R2 ticket', '', 'open', '', 'https://example.com', '2024-01-01T00:00:00Z', '{}')",
+            [],
+        ).unwrap();
+        conn.execute("UPDATE worktrees SET ticket_id = 't1' WHERE id = 'w1'", [])
+            .unwrap();
+        conn.execute("UPDATE worktrees SET ticket_id = 't2' WHERE id = 'w3'", [])
+            .unwrap();
+
+        // Create completed runs for both repos
+        let run1 = mgr.create_run(Some("w1"), "r1 task", None, None).unwrap();
+        mgr.update_run_completed(
+            &run1.id,
+            None,
+            None,
+            Some(0.10),
+            Some(5),
+            Some(30000),
+            Some(1000),
+            Some(500),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let run2 = mgr.create_run(Some("w3"), "r2 task", None, None).unwrap();
+        mgr.update_run_completed(
+            &run2.id,
+            None,
+            None,
+            Some(0.20),
+            Some(8),
+            Some(60000),
+            Some(2000),
+            Some(1000),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Repo r1 should only include t1
+        let r1_totals = mgr.totals_by_ticket_for_repo("r1").unwrap();
+        assert_eq!(r1_totals.len(), 1);
+        let t1 = r1_totals.get("t1").unwrap();
+        assert_eq!(t1.total_runs, 1);
+        assert!((t1.total_cost - 0.10).abs() < 0.001);
+        assert!(!r1_totals.contains_key("t2"));
+
+        // Repo r2 should only include t2
+        let r2_totals = mgr.totals_by_ticket_for_repo("r2").unwrap();
+        assert_eq!(r2_totals.len(), 1);
+        let t2 = r2_totals.get("t2").unwrap();
+        assert_eq!(t2.total_runs, 1);
+        assert!((t2.total_cost - 0.20).abs() < 0.001);
     }
 }

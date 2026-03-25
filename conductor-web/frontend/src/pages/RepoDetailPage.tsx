@@ -42,12 +42,12 @@ export function RepoDetailPage() {
   } = useApi(() => api.listTickets(repoId!, showClosedTickets), [repoId, showClosedTickets]);
 
   const { data: latestRuns, refetch: refetchRuns } = useApi(
-    () => api.latestRunsByWorktree(),
-    [],
+    () => api.latestRunsByWorktreeForRepo(repoId!),
+    [repoId],
   );
   const { data: ticketTotals, refetch: refetchTotals } = useApi(
-    () => api.ticketAgentTotals(),
-    [],
+    () => api.ticketAgentTotalsForRepo(repoId!),
+    [repoId],
   );
 
   const {

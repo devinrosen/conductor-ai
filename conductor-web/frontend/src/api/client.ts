@@ -108,6 +108,10 @@ export const api = {
     request<Record<string, AgentRun>>("/agent/latest-runs"),
   ticketAgentTotals: () =>
     request<Record<string, TicketAgentTotals>>("/agent/ticket-totals"),
+  latestRunsByWorktreeForRepo: (repoId: string) =>
+    request<Record<string, AgentRun>>(`/repos/${repoId}/agent/latest-runs`),
+  ticketAgentTotalsForRepo: (repoId: string) =>
+    request<Record<string, TicketAgentTotals>>(`/repos/${repoId}/agent/ticket-totals`),
 
   // Agent orchestration
   listAgentRuns: (worktreeId: string) =>
