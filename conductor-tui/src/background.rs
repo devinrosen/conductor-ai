@@ -397,7 +397,9 @@ pub fn poll_data() -> Option<PollResult> {
             LAST_REFRESH.store(now_secs, Ordering::Relaxed);
             let repos_for_refresh = repo_mgr.list().unwrap_or_default();
             for repo in &repos_for_refresh {
-                let _ = feat_mgr.refresh_last_commit_all(&repo.slug);
+                if let Err(e) = feat_mgr.refresh_last_commit_all(&repo.slug) {
+                    tracing::warn!("refresh_last_commit_all for {}: {e}", repo.slug);
+                }
             }
         }
     }

@@ -746,20 +746,7 @@ impl<'a> FeatureManager<'a> {
         let feature = self.get_by_id(feature_id)?;
         let repo = RepoManager::new(self.conn, self.config).get_by_id(&feature.repo_id)?;
 
-        let ts = match git_in(&repo.local_path)
-            .args(["log", "-1", "--format=%cI", "--", &feature.branch])
-            .output()
-        {
-            Ok(output) if output.status.success() => {
-                let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if s.is_empty() {
-                    None
-                } else {
-                    Some(s)
-                }
-            }
-            _ => None,
-        };
+        let ts = last_commit_timestamp(&repo.local_path, &feature.branch);
 
         self.conn.execute(
             "UPDATE features SET last_commit_at = ?1 WHERE id = ?2",
@@ -769,6 +756,7 @@ impl<'a> FeatureManager<'a> {
     }
 
     /// Batch-refresh `last_commit_at` for all active features of a repo.
+    /// Uses a single `git for-each-ref` call to avoid N+1 subprocess spawns.
     pub fn refresh_last_commit_all(&self, repo_slug: &str) -> Result<()> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
 
@@ -779,21 +767,15 @@ impl<'a> FeatureManager<'a> {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
 
+        if features.is_empty() {
+            return Ok(());
+        }
+
+        // Batch-fetch committer dates for all local branches in one subprocess.
+        let branch_timestamps = batch_branch_timestamps(&repo.local_path);
+
         for (id, branch) in &features {
-            let ts = match git_in(&repo.local_path)
-                .args(["log", "-1", "--format=%cI", "--", branch])
-                .output()
-            {
-                Ok(output) if output.status.success() => {
-                    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if s.is_empty() {
-                        None
-                    } else {
-                        Some(s)
-                    }
-                }
-                _ => None,
-            };
+            let ts = branch_timestamps.get(branch.as_str()).cloned();
 
             self.conn.execute(
                 "UPDATE features SET last_commit_at = ?1 WHERE id = ?2",
@@ -814,16 +796,18 @@ impl<'a> FeatureManager<'a> {
             return false;
         }
         let cutoff = Utc::now() - chrono::Duration::days(threshold_days as i64);
-        let cutoff_str = cutoff.to_rfc3339();
 
-        let commit_recent = feature
-            .last_commit_at
-            .as_ref()
-            .is_some_and(|ts| ts.as_str() >= cutoff_str.as_str());
+        let is_recent = |ts: &str| -> bool {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .map(|dt| dt.with_timezone(&Utc) >= cutoff)
+                .unwrap_or(false)
+        };
+
+        let commit_recent = feature.last_commit_at.as_deref().is_some_and(is_recent);
         let wt_recent = feature
             .last_worktree_activity
-            .as_ref()
-            .is_some_and(|ts| ts.as_str() >= cutoff_str.as_str());
+            .as_deref()
+            .is_some_and(is_recent);
 
         !commit_recent && !wt_recent
     }
@@ -913,11 +897,73 @@ impl<'a> FeatureManager<'a> {
         }
         Ok(())
     }
+
+    /// Return the feature ID for an active feature matching `repo_id` + `branch`,
+    /// or `None` if no such feature exists.
+    pub fn get_active_id_by_repo_and_branch(
+        &self,
+        repo_id: &str,
+        branch: &str,
+    ) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'active'",
+                params![repo_id, branch],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Free helpers
 // ---------------------------------------------------------------------------
+
+/// Run `git log -1 --format=%cI <branch>` and return the committer timestamp,
+/// or `None` if the branch is not reachable locally.
+fn last_commit_timestamp(repo_path: &str, branch: &str) -> Option<String> {
+    match git_in(repo_path)
+        .args(["log", "-1", "--format=%cI", branch])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Fetch committer dates for all local branches in a single subprocess call.
+/// Returns a map from short branch name to ISO 8601 timestamp.
+fn batch_branch_timestamps(repo_path: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let output = git_in(repo_path)
+        .args([
+            "for-each-ref",
+            "--format=%(refname:short) %(committerdate:iso-strict)",
+            "refs/heads/",
+        ])
+        .output();
+    if let Ok(out) = output {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                if let Some((branch, ts)) = line.split_once(' ') {
+                    if !ts.is_empty() {
+                        map.insert(branch.to_string(), ts.to_string());
+                    }
+                }
+            }
+        }
+    }
+    map
+}
 
 fn map_feature_row(row: &rusqlite::Row) -> rusqlite::Result<Feature> {
     Ok(Feature {

@@ -611,17 +611,13 @@ impl<'a> WorktreeManager<'a> {
         // If this worktree targets a feature branch, refresh its last_commit_at
         // cache so staleness detection stays up to date on the most common write path.
         if let Some(ref base_branch) = worktree.base_branch {
-            let feature_id: Option<String> = self
-                .conn
-                .query_row(
-                    "SELECT id FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'active'",
-                    rusqlite::params![worktree.repo_id, base_branch],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            if let Some(fid) = feature_id {
-                let feat_mgr = crate::feature::FeatureManager::new(self.conn, self.config);
-                let _ = feat_mgr.refresh_last_commit(&fid);
+            let feat_mgr = crate::feature::FeatureManager::new(self.conn, self.config);
+            if let Some(fid) =
+                feat_mgr.get_active_id_by_repo_and_branch(&worktree.repo_id, base_branch)?
+            {
+                if let Err(e) = feat_mgr.refresh_last_commit(&fid) {
+                    tracing::warn!("failed to refresh last_commit_at for feature {fid}: {e}");
+                }
             }
         }
 
