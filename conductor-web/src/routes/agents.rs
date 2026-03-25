@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::process::Command;
 
@@ -18,6 +19,37 @@ use conductor_core::worktree::WorktreeManager;
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
 use crate::state::AppState;
+
+/// Spawn a tmux window on a blocking thread and mark the agent run as failed
+/// if the spawn panics or returns an error.
+async fn spawn_tmux_blocking(
+    state: &AppState,
+    run_id: &str,
+    args: Vec<Cow<'static, str>>,
+    window: String,
+) -> Result<(), ApiError> {
+    let spawn_result = tokio::task::spawn_blocking(move || {
+        conductor_core::agent_runtime::spawn_tmux_window(&args, &window)
+    })
+    .await;
+
+    match spawn_result {
+        Err(join_err) => {
+            let msg = format!("spawn task panicked: {join_err}");
+            let db = state.db.lock().await;
+            let agent_mgr = AgentManager::new(&db);
+            let _ = agent_mgr.update_run_failed(run_id, &msg);
+            Err(ConductorError::Agent(msg).into())
+        }
+        Ok(Err(tmux_err)) => {
+            let db = state.db.lock().await;
+            let agent_mgr = AgentManager::new(&db);
+            let _ = agent_mgr.update_run_failed(run_id, &tmux_err);
+            Err(ConductorError::Agent(tmux_err).into())
+        }
+        Ok(Ok(())) => Ok(()),
+    }
+}
 
 // ── Agent stats (aggregates) ──────────────────────────────────────────
 
@@ -173,28 +205,13 @@ pub async fn start_agent(
     // DB and config locks are now dropped.
 
     // Spawn tmux off the async runtime thread to avoid blocking the executor.
-    let spawn_slug = wt_slug.clone();
-    let spawn_result = tokio::task::spawn_blocking(move || {
-        conductor_core::agent_runtime::spawn_tmux_window(&args, &spawn_slug)
-    })
-    .await
-    .map_err(|e| ConductorError::Agent(format!("spawn task panicked: {e}")))?;
+    spawn_tmux_blocking(&state, &run.id, args, wt_slug.clone()).await?;
 
-    match spawn_result {
-        Ok(()) => {
-            state.events.emit(ConductorEvent::AgentStarted {
-                run_id: run.id.clone(),
-                worktree_id: wt_id,
-            });
-            Ok((StatusCode::CREATED, Json(run)))
-        }
-        Err(e) => {
-            let db = state.db.lock().await;
-            let agent_mgr = AgentManager::new(&db);
-            let _ = agent_mgr.update_run_failed(&run.id, &e);
-            Err(ConductorError::Agent(e).into())
-        }
-    }
+    state.events.emit(ConductorEvent::AgentStarted {
+        run_id: run.id.clone(),
+        worktree_id: wt_id,
+    });
+    Ok((StatusCode::CREATED, Json(run)))
 }
 
 /// Stop a running agent: capture scrollback, kill tmux, mark cancelled.
@@ -552,28 +569,13 @@ pub async fn orchestrate_agent(
     // DB and config locks are now dropped.
 
     // Spawn tmux off the async runtime thread to avoid blocking the executor.
-    let spawn_slug = wt_slug.clone();
-    let spawn_result = tokio::task::spawn_blocking(move || {
-        conductor_core::agent_runtime::spawn_tmux_window(&args, &spawn_slug)
-    })
-    .await
-    .map_err(|e| ConductorError::Agent(format!("spawn task panicked: {e}")))?;
+    spawn_tmux_blocking(&state, &run.id, args, wt_slug.clone()).await?;
 
-    match spawn_result {
-        Ok(()) => {
-            state.events.emit(ConductorEvent::AgentStarted {
-                run_id: run.id.clone(),
-                worktree_id: wt_id,
-            });
-            Ok((StatusCode::CREATED, Json(run)))
-        }
-        Err(e) => {
-            let db = state.db.lock().await;
-            let agent_mgr = AgentManager::new(&db);
-            let _ = agent_mgr.update_run_failed(&run.id, &e);
-            Err(ConductorError::Agent(e).into())
-        }
-    }
+    state.events.emit(ConductorEvent::AgentStarted {
+        run_id: run.id.clone(),
+        worktree_id: wt_id,
+    });
+    Ok((StatusCode::CREATED, Json(run)))
 }
 
 // ── Feedback (human-in-the-loop) ──────────────────────────────────────
@@ -782,29 +784,14 @@ pub async fn restart_agent(
     // DB and config locks are now dropped.
 
     // Spawn tmux off the async runtime thread to avoid blocking the executor.
-    let spawn_window = window_name.clone();
-    let spawn_result = tokio::task::spawn_blocking(move || {
-        conductor_core::agent_runtime::spawn_tmux_window(&args, &spawn_window)
-    })
-    .await
-    .map_err(|e| ConductorError::Agent(format!("spawn task panicked: {e}")))?;
+    spawn_tmux_blocking(&state, &new_run.id, args, window_name.clone()).await?;
 
-    match spawn_result {
-        Ok(()) => {
-            state.events.emit(ConductorEvent::AgentRestarted {
-                run_id: new_run.id.clone(),
-                old_run_id: run_id,
-                worktree_id: worktree_id.clone(),
-            });
-            Ok((StatusCode::CREATED, Json(new_run)))
-        }
-        Err(e) => {
-            let db = state.db.lock().await;
-            let agent_mgr = AgentManager::new(&db);
-            let _ = agent_mgr.update_run_failed(&new_run.id, &e);
-            Err(ConductorError::Agent(e).into())
-        }
-    }
+    state.events.emit(ConductorEvent::AgentRestarted {
+        run_id: new_run.id.clone(),
+        old_run_id: run_id,
+        worktree_id: worktree_id.clone(),
+    });
+    Ok((StatusCode::CREATED, Json(new_run)))
 }
 
 /// Capture tmux log, kill tmux window, and mark run as cancelled.
@@ -892,28 +879,13 @@ pub async fn start_repo_agent(
     // DB and config locks are now dropped.
 
     // Spawn tmux off the async runtime thread to avoid blocking the executor.
-    let spawn_window = window_name.clone();
-    let spawn_result = tokio::task::spawn_blocking(move || {
-        conductor_core::agent_runtime::spawn_tmux_window(&args, &spawn_window)
-    })
-    .await
-    .map_err(|e| ConductorError::Agent(format!("spawn task panicked: {e}")))?;
+    spawn_tmux_blocking(&state, &run.id, args, window_name.clone()).await?;
 
-    match spawn_result {
-        Ok(()) => {
-            state.events.emit(ConductorEvent::RepoAgentStarted {
-                run_id: run.id.clone(),
-                repo_id: repo_id.clone(),
-            });
-            Ok((StatusCode::CREATED, Json(run)))
-        }
-        Err(e) => {
-            let db = state.db.lock().await;
-            let agent_mgr = AgentManager::new(&db);
-            let _ = agent_mgr.update_run_failed(&run.id, &e);
-            Err(ConductorError::Agent(e).into())
-        }
-    }
+    state.events.emit(ConductorEvent::RepoAgentStarted {
+        run_id: run.id.clone(),
+        repo_id: repo_id.clone(),
+    });
+    Ok((StatusCode::CREATED, Json(run)))
 }
 
 /// List repo-scoped agent runs (newest first).
