@@ -520,6 +520,12 @@ mod tests {
     }
 
     #[test]
+    fn stderr_file_path_sanitizes_null_bytes() {
+        let path = super::stderr_file_path("foo\0bar");
+        assert_eq!(path, "/tmp/conductor-agent-foo_bar.err");
+    }
+
+    #[test]
     fn build_shell_command_basic() {
         use std::borrow::Cow;
         let args = vec![

@@ -704,18 +704,18 @@ pub async fn restart_agent(
 
         let agent_mgr = AgentManager::new(&db);
 
-        let new_run = agent_mgr.restart_run(&run_id)?;
-
-        // Validate that run_id belongs to the URL worktree_id (IDOR guard).
-        // Use the new_run's worktree_id (copied from the original) as source of truth.
-        if new_run.worktree_id.as_deref() != Some(worktree_id.as_str()) {
-            let _ = agent_mgr
-                .update_run_failed(&new_run.id, "run does not belong to the specified worktree");
+        // Validate ownership BEFORE creating the child run (IDOR guard).
+        let original = agent_mgr.get_run(&run_id)?.ok_or_else(|| {
+            ConductorError::Agent(format!("Run {run_id} not found"))
+        })?;
+        if original.worktree_id.as_deref() != Some(worktree_id.as_str()) {
             return Err(ConductorError::Agent(
                 "run does not belong to the specified worktree".to_string(),
             )
             .into());
         }
+
+        let new_run = agent_mgr.restart_run(&run_id)?;
 
         // Resolve worktree path from new_run.worktree_id (single source of truth).
         let wt_mgr = WorktreeManager::new(&db, &config);
