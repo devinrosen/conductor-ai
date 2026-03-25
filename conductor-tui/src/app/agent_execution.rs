@@ -750,7 +750,15 @@ impl App {
             use std::process::Command;
 
             let db = conductor_core::config::db_path();
-            let conn = conductor_core::db::open_database(&db).unwrap();
+            let conn = match conductor_core::db::open_database(&db) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Action::RepoAgentStopComplete {
+                        result: Err(format!("Failed to open database: {e}")),
+                    });
+                    return;
+                }
+            };
             let mgr = AgentManager::new(&conn);
 
             if let Some(ref window) = tmux_window {
