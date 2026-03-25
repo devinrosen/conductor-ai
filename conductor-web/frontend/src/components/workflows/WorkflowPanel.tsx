@@ -9,9 +9,10 @@ import { RunWorkflowModal } from "./RunWorkflowModal";
 interface WorkflowPanelProps {
   repoId: string;
   worktreeId: string;
+  ticketId?: string;
 }
 
-export function WorkflowPanel({ repoId, worktreeId }: WorkflowPanelProps) {
+export function WorkflowPanel({ repoId, worktreeId, ticketId }: WorkflowPanelProps) {
   const [defs, setDefs] = useState<WorkflowDefSummary[]>([]);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [runModalDef, setRunModalDef] = useState<WorkflowDefSummary | null>(null);
@@ -99,6 +100,7 @@ export function WorkflowPanel({ repoId, worktreeId }: WorkflowPanelProps) {
         <RunWorkflowModal
           def={runModalDef}
           worktreeId={worktreeId}
+          ticketId={ticketId}
           onClose={() => setRunModalDef(null)}
           onStarted={() => {
             setRunModalDef(null);

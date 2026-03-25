@@ -553,7 +553,7 @@ export function WorktreeDetailPage() {
       </div>
 
       {activeTab === "workflows" && worktreeId && repoId && (
-        <WorkflowPanel repoId={repoId} worktreeId={worktreeId} />
+        <WorkflowPanel repoId={repoId} worktreeId={worktreeId} ticketId={worktree.ticket_id ?? undefined} />
       )}
 
       {/* Agent Section */}
