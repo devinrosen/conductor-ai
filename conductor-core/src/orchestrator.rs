@@ -245,7 +245,12 @@ pub fn orchestrate_run(
                     let _ = mgr.update_step_status(step_id, StepStatus::Failed);
                 }
                 // Cancel the child run if it timed out
-                let _ = mgr.update_run_cancelled(&child_run.id);
+                if let Err(cancel_err) = mgr.update_run_cancelled(&child_run.id) {
+                    tracing::warn!(
+                        run_id = %child_run.id,
+                        "Failed to mark cancelled agent run: {cancel_err}"
+                    );
+                }
                 // Try to kill the tmux window
                 let _ = Command::new("tmux")
                     .args(["kill-window", "-t", &format!(":{child_window}")])
