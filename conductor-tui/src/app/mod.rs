@@ -404,8 +404,14 @@ impl App {
                 } = self.state.modal
                 {
                     *selected = index;
+                    self.handle_workflow_picker_confirm();
+                } else if let Modal::TemplatePicker {
+                    ref mut selected, ..
+                } = self.state.modal
+                {
+                    *selected = index;
+                    self.handle_template_picker_confirm();
                 }
-                self.handle_workflow_picker_confirm();
             }
             Action::WorkflowPickerDefsLoaded {
                 target,
@@ -610,6 +616,9 @@ impl App {
                 | Modal::WorkflowPicker {
                     ref mut selected, ..
                 }
+                | Modal::TemplatePicker {
+                    ref mut selected, ..
+                }
                 | Modal::IssueSourceManager {
                     ref mut selected, ..
                 }
@@ -676,6 +685,13 @@ impl App {
                 } => {
                     *selected = items.len().saturating_sub(1);
                 }
+                Modal::TemplatePicker {
+                    ref items,
+                    ref mut selected,
+                    ..
+                } => {
+                    *selected = items.len().saturating_sub(1);
+                }
                 Modal::IssueSourceManager {
                     ref sources,
                     ref mut selected,
@@ -734,6 +750,10 @@ impl App {
 
             // Workflow actions
             Action::PickWorkflow => self.handle_pick_workflow(),
+            Action::PickTemplate => self.handle_pick_template(),
+            Action::TemplateInstantiateReady { .. } => {
+                // Future: could open an agent session with the prompt
+            }
             Action::RunWorkflow => self.handle_run_workflow(),
             Action::RunPrWorkflow => self.handle_run_pr_workflow(),
             Action::ResumeWorkflow => self.handle_resume_workflow(),

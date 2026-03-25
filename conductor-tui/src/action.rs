@@ -355,6 +355,16 @@ pub enum Action {
     ToggleWorkflowDefsCollapse,
     /// Open a workflow picker for the current context (worktree, PR, etc.)
     PickWorkflow,
+    /// Open the template picker for the current context (scaffold a new workflow from a template).
+    #[allow(dead_code)]
+    PickTemplate,
+    /// Background result: template instantiation prompt was built successfully.
+    #[allow(dead_code)]
+    TemplateInstantiateReady {
+        template_name: String,
+        prompt: String,
+        suggested_filename: String,
+    },
     RunWorkflow,
     RunPrWorkflow,
     ResumeWorkflow,

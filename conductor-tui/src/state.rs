@@ -854,6 +854,15 @@ pub enum Modal {
         items: Vec<WorkflowPickerItem>,
         selected: usize,
     },
+    /// Template picker: browse and select a built-in workflow template for instantiation.
+    TemplatePicker {
+        items: Vec<conductor_core::workflow_template::WorkflowTemplate>,
+        selected: usize,
+        repo_slug: String,
+        repo_path: String,
+        worktree_slug: Option<String>,
+        worktree_path: Option<String>,
+    },
     /// Non-dismissable progress indicator shown while a background operation runs.
     Progress {
         message: String,
@@ -939,6 +948,9 @@ impl fmt::Debug for Modal {
             Modal::BranchPicker { .. } => write!(f, "Modal::BranchPicker"),
             Modal::WorkflowPicker { ref target, .. } => {
                 write!(f, "Modal::WorkflowPicker(target={target:?})")
+            }
+            Modal::TemplatePicker { selected, .. } => {
+                write!(f, "Modal::TemplatePicker(selected={selected})")
             }
             Modal::Progress { message } => {
                 write!(f, "Modal::Progress({message:?})")

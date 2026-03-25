@@ -327,6 +327,97 @@ pub(super) fn tool_run_workflow(
     ))
 }
 
+pub(super) fn tool_list_templates(
+    _db_path: &Path,
+    _args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::workflow_template::list_embedded_templates;
+
+    let templates = list_embedded_templates();
+    if templates.is_empty() {
+        return tool_ok("No workflow templates available.");
+    }
+
+    let mut out = String::new();
+    for t in &templates {
+        let targets = if t.metadata.target_types.is_empty() {
+            "any".to_string()
+        } else {
+            t.metadata.target_types.join(", ")
+        };
+        out.push_str(&format!(
+            "name: {}\nversion: {}\ndescription: {}\ntargets: {}\n",
+            t.metadata.name, t.metadata.version, t.metadata.description, targets
+        ));
+        if !t.metadata.hints.is_empty() {
+            out.push_str("hints:\n");
+            for h in &t.metadata.hints {
+                out.push_str(&format!("  - {h}\n"));
+            }
+        }
+        out.push('\n');
+    }
+    tool_ok(out)
+}
+
+pub(super) fn tool_instantiate_template(
+    db_path: &Path,
+    args: &serde_json::Map<String, Value>,
+) -> CallToolResult {
+    use conductor_core::repo::RepoManager;
+    use conductor_core::workflow::WorkflowManager;
+    use conductor_core::workflow_template::{build_instantiation_prompt, get_embedded_template};
+    use conductor_core::worktree::WorktreeManager;
+
+    let template_name = require_arg!(args, "template");
+    let repo_slug = require_arg!(args, "repo");
+    let worktree_slug = get_arg(args, "worktree");
+
+    let tmpl = match get_embedded_template(template_name) {
+        Some(t) => t,
+        None => {
+            return tool_err(format!(
+                "Template '{template_name}' not found. Use conductor_list_templates to see available templates."
+            ))
+        }
+    };
+
+    let (conn, config) = match open_db_and_config(db_path) {
+        Ok(v) => v,
+        Err(e) => return tool_err(e),
+    };
+
+    let repo = match RepoManager::new(&conn, &config).get_by_slug(repo_slug) {
+        Ok(r) => r,
+        Err(e) => return tool_err(e),
+    };
+
+    let working_dir = if let Some(wt_slug) = worktree_slug {
+        let wt_mgr = WorktreeManager::new(&conn, &config);
+        match wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug) {
+            Ok(wt) => wt.path,
+            Err(e) => return tool_err(e),
+        }
+    } else {
+        repo.local_path.clone()
+    };
+
+    let (existing_defs, _) =
+        WorkflowManager::list_defs(&working_dir, &repo.local_path).unwrap_or_default();
+    let existing_names: Vec<String> = existing_defs.iter().map(|d| d.name.clone()).collect();
+
+    let prompt_result = build_instantiation_prompt(&tmpl, &working_dir, &existing_names);
+
+    tool_ok(format!(
+        "template: {} v{}\nsuggested_filename: {}\nprompt_length: {}\n\n--- Agent Prompt ---\n\n{}",
+        tmpl.metadata.name,
+        tmpl.metadata.version,
+        prompt_result.suggested_filename,
+        prompt_result.prompt.len(),
+        prompt_result.prompt,
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

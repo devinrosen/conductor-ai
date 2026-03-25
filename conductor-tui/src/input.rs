@@ -256,6 +256,26 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::TemplatePicker { ref items, .. } => {
+            return match key.code {
+                KeyCode::Esc => Action::DismissModal,
+                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
+                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
+                KeyCode::Enter => Action::InputSubmit,
+                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
+                KeyCode::Char(c) if c.is_ascii_digit() => {
+                    let n = c.to_digit(10).unwrap() as usize;
+                    if n >= 1 && n <= items.len() {
+                        // Jump to the selected item
+                        Action::SelectWorkflowItem(n - 1)
+                    } else {
+                        Action::None
+                    }
+                }
+                _ => Action::None,
+            };
+        }
         Modal::WorkflowPicker { ref items, .. } => {
             return match key.code {
                 KeyCode::Esc => Action::DismissModal,

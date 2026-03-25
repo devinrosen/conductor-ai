@@ -640,6 +640,90 @@ pub async fn reject_gate(
     })))
 }
 
+// ── Template endpoints ────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct TemplateSummary {
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub target_types: Vec<String>,
+    pub hints: Vec<String>,
+}
+
+/// GET /api/templates — list all embedded workflow templates.
+pub async fn list_templates() -> Json<Vec<TemplateSummary>> {
+    use conductor_core::workflow_template::list_embedded_templates;
+
+    let templates = list_embedded_templates();
+    let summaries: Vec<TemplateSummary> = templates
+        .into_iter()
+        .map(|t| TemplateSummary {
+            name: t.metadata.name,
+            description: t.metadata.description,
+            version: t.metadata.version,
+            target_types: t.metadata.target_types,
+            hints: t.metadata.hints,
+        })
+        .collect();
+    Json(summaries)
+}
+
+#[derive(Deserialize)]
+pub struct InstantiateTemplateRequest {
+    pub template: String,
+    pub repo: String,
+    pub worktree: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct InstantiateTemplateResponse {
+    pub template_name: String,
+    pub template_version: String,
+    pub suggested_filename: String,
+    pub prompt: String,
+}
+
+/// POST /api/templates/instantiate — build the agent instantiation prompt for a template.
+pub async fn instantiate_template(
+    State(state): State<AppState>,
+    Json(req): Json<InstantiateTemplateRequest>,
+) -> Result<Json<InstantiateTemplateResponse>, ApiError> {
+    use conductor_core::workflow_template::{build_instantiation_prompt, get_embedded_template};
+
+    let tmpl = get_embedded_template(&req.template).ok_or_else(|| {
+        ApiError(ConductorError::InvalidInput(format!(
+            "Template '{}' not found",
+            req.template
+        )))
+    })?;
+
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+    let repo = RepoManager::new(&db, &config).get_by_slug(&req.repo)?;
+
+    let working_dir = if let Some(ref wt_slug) = req.worktree {
+        let wt_mgr = WorktreeManager::new(&db, &config);
+        let wt = wt_mgr.get_by_slug_or_branch(&repo.id, wt_slug)?;
+        wt.path
+    } else {
+        repo.local_path.clone()
+    };
+
+    let (existing_defs, _) =
+        WorkflowManager::list_defs(&working_dir, &repo.local_path).unwrap_or_default();
+    let existing_names: Vec<String> = existing_defs.iter().map(|d| d.name.clone()).collect();
+
+    let prompt_result = build_instantiation_prompt(&tmpl, &working_dir, &existing_names);
+
+    Ok(Json(InstantiateTemplateResponse {
+        template_name: tmpl.metadata.name,
+        template_version: tmpl.metadata.version,
+        suggested_filename: prompt_result.suggested_filename,
+        prompt: prompt_result.prompt,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
