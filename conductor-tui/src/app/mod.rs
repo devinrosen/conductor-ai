@@ -548,6 +548,31 @@ impl App {
                 | Modal::GithubDiscover { ref mut cursor, .. } => {
                     *cursor = 0;
                 }
+                Modal::ModelPicker {
+                    ref mut selected,
+                    ref mut custom_active,
+                    ..
+                } => {
+                    *selected = 0;
+                    *custom_active = false;
+                }
+                Modal::BranchPicker {
+                    ref mut selected, ..
+                }
+                | Modal::BaseBranchPicker {
+                    ref mut selected, ..
+                }
+                | Modal::WorkflowPicker {
+                    ref mut selected, ..
+                }
+                | Modal::IssueSourceManager {
+                    ref mut selected, ..
+                }
+                | Modal::Notifications {
+                    ref mut selected, ..
+                } => {
+                    *selected = 0;
+                }
                 _ => {
                     self.state.set_focused_index(0);
                 }
@@ -573,6 +598,51 @@ impl App {
                     ..
                 } => {
                     *cursor = repos.len().saturating_sub(1);
+                }
+                Modal::ModelPicker {
+                    ref mut selected,
+                    ref mut custom_active,
+                    allow_default,
+                    ..
+                } => {
+                    let total =
+                        conductor_core::models::KNOWN_MODELS.len() + 1 + usize::from(allow_default);
+                    *selected = total.saturating_sub(1);
+                    *custom_active = false;
+                }
+                Modal::BranchPicker {
+                    ref items,
+                    ref mut selected,
+                    ..
+                } => {
+                    *selected = items.len().saturating_sub(1);
+                }
+                Modal::BaseBranchPicker {
+                    ref items,
+                    ref mut selected,
+                    ..
+                } => {
+                    *selected = items.len().saturating_sub(1);
+                }
+                Modal::WorkflowPicker {
+                    ref items,
+                    ref mut selected,
+                    ..
+                } => {
+                    *selected = items.len().saturating_sub(1);
+                }
+                Modal::IssueSourceManager {
+                    ref sources,
+                    ref mut selected,
+                    ..
+                } => {
+                    *selected = sources.len().saturating_sub(1);
+                }
+                Modal::Notifications {
+                    ref notifications,
+                    ref mut selected,
+                } => {
+                    *selected = notifications.len().saturating_sub(1);
                 }
                 _ => {
                     let (_, len) = self.state.focused_index_and_len();

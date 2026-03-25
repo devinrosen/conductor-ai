@@ -110,6 +110,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
                 KeyCode::Enter => Action::InputSubmit,
                 KeyCode::Backspace => Action::InputBackspace,
+                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
                 _ => Action::None,
             };
         }
@@ -130,6 +132,13 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                     let new_idx = (selected + 1) % len;
                     return Action::ThemePreview(new_idx);
                 }
+                KeyCode::Char('g') | KeyCode::Home => {
+                    return Action::ThemePreview(0);
+                }
+                KeyCode::Char('G') | KeyCode::End => {
+                    let new_idx = len.saturating_sub(1);
+                    return Action::ThemePreview(new_idx);
+                }
                 KeyCode::Enter => return Action::InputSubmit,
                 KeyCode::Esc => return Action::DismissModal,
                 _ => return Action::None,
@@ -142,6 +151,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
                 KeyCode::Char('a') => Action::IssueSourceAdd,
                 KeyCode::Char('d') => Action::IssueSourceDelete,
+                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
                 _ => Action::None,
             };
         }
@@ -203,6 +214,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
                 KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
                 KeyCode::Enter => Action::SelectBranch(None),
+                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
                 KeyCode::Char(c) if c.is_ascii_digit() => {
                     let n = c.to_digit(10).unwrap() as usize;
                     if n >= 1 && n <= items.len() {
@@ -220,6 +233,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
                 KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
                 KeyCode::Enter => Action::SelectBaseBranch(None),
+                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
                 KeyCode::Char(c) if c.is_ascii_digit() => {
                     let n = c.to_digit(10).unwrap() as usize;
                     if n >= 1 && n <= items.len() {
@@ -247,6 +262,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
                 KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
                 KeyCode::Enter => Action::InputSubmit,
+                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
                 KeyCode::Char(c) if c.is_ascii_digit() => {
                     let n = c.to_digit(10).unwrap() as usize;
                     if n >= 1 && n <= items.len() {
@@ -267,6 +284,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Esc | KeyCode::Char('q') => Action::DismissModal,
                 KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
                 KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
                 _ => Action::None,
             };
         }
