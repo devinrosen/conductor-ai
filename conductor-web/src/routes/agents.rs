@@ -695,8 +695,6 @@ fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {
 fn cancel_agent_run(mgr: &AgentManager, run: &AgentRun) -> Result<(), ApiError> {
     if let Some(ref window) = run.tmux_window {
         mgr.capture_agent_log(&run.id, window);
-    }
-    if let Some(ref window) = run.tmux_window {
         let _ = Command::new("tmux")
             .args(["kill-window", "-t", &format!(":{window}")])
             .output();

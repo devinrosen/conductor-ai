@@ -366,6 +366,25 @@ pub fn spawn_child_tmux(
 mod tests {
     use std::borrow::Cow;
 
+    #[test]
+    fn repo_agent_window_name_basic() {
+        let name = super::repo_agent_window_name("my-repo", "01ABCDEF99XYZW");
+        assert_eq!(name, "repo-my-repo-01ABCDEF");
+    }
+
+    #[test]
+    fn repo_agent_window_name_short_run_id() {
+        // run_id shorter than 8 chars — should use full run_id
+        let name = super::repo_agent_window_name("r", "abc");
+        assert_eq!(name, "repo-r-abc");
+    }
+
+    #[test]
+    fn repo_agent_window_name_exact_8_chars() {
+        let name = super::repo_agent_window_name("slug", "12345678");
+        assert_eq!(name, "repo-slug-12345678");
+    }
+
     fn assert_inline_prompt(args: &[Cow<'static, str>], prompt: &str) {
         let prompt_idx = args
             .iter()
