@@ -156,7 +156,11 @@ pub(super) fn derive_worktree_slug(source_id: &str, title: &str) -> String {
         }
     };
 
-    format!("{}-{}", source_id, truncated)
+    if truncated.is_empty() {
+        source_id.to_string()
+    } else {
+        format!("{}-{}", source_id, truncated)
+    }
 }
 
 /// Send a workflow execution result through the background channel.
@@ -367,6 +371,21 @@ mod tests {
         // Total should be ≤ 40 chars
         assert!(slug.len() <= 40, "slug too long: {} chars", slug.len());
         assert!(slug.starts_with("99-"));
+    }
+
+    #[test]
+    fn derive_slug_empty_title() {
+        assert_eq!(derive_worktree_slug("123", ""), "123");
+    }
+
+    #[test]
+    fn derive_slug_all_special_chars() {
+        assert_eq!(derive_worktree_slug("42", "!!@@##"), "42");
+    }
+
+    #[test]
+    fn derive_slug_whitespace_only() {
+        assert_eq!(derive_worktree_slug("7", "   "), "7");
     }
 
     // ── build_form_fields ───────────────────────────────────────────────────
