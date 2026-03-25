@@ -95,16 +95,6 @@ mod tests {
         m
     }
 
-    fn seed_test_repo(db: &std::path::Path) {
-        use conductor_core::db::open_database;
-        let conn = open_database(db).expect("open db");
-        conn.execute(
-            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
-             VALUES ('r1', 'test-repo', '/tmp/repo', 'https://github.com/test/repo.git', '/tmp/ws', '2024-01-01T00:00:00Z')",
-            [],
-        ).unwrap();
-    }
-
     #[test]
     fn test_create_gh_issue_missing_repo() {
         let (_f, db) = make_test_db();
