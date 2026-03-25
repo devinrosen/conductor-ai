@@ -492,6 +492,7 @@ enum WorktreeCommands {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum TicketCommands {
     /// Sync tickets from configured sources
     Sync {
@@ -2390,7 +2391,6 @@ fn generate_plan(
 ///
 /// Uses `--output-format json` (single JSON result) since the tmux terminal IS the display.
 /// Claude's interactive output goes directly to the terminal; we only parse the final JSON result.
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn run_agent(
     conn: &rusqlite::Connection,

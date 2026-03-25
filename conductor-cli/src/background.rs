@@ -206,7 +206,7 @@ fn redirect_stdio_to_devnull() {
     // SAFETY: We open /dev/null (always available on Unix) and dup2 it onto the
     // standard file descriptors. This is standard Unix daemonization practice.
     unsafe {
-        let devnull = libc::open(b"/dev/null\0".as_ptr() as *const libc::c_char, libc::O_RDWR);
+        let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR);
         if devnull < 0 {
             return; // Best effort -- don't crash the workflow over this.
         }
