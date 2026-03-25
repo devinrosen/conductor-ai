@@ -705,9 +705,9 @@ pub async fn restart_agent(
         let agent_mgr = AgentManager::new(&db);
 
         // Validate ownership BEFORE creating the child run (IDOR guard).
-        let original = agent_mgr.get_run(&run_id)?.ok_or_else(|| {
-            ConductorError::Agent(format!("Run {run_id} not found"))
-        })?;
+        let original = agent_mgr
+            .get_run(&run_id)?
+            .ok_or_else(|| ConductorError::Agent(format!("Run {run_id} not found")))?;
         if original.worktree_id.as_deref() != Some(worktree_id.as_str()) {
             return Err(ConductorError::Agent(
                 "run does not belong to the specified worktree".to_string(),
