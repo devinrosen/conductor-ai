@@ -162,7 +162,15 @@ async fn main() -> Result<()> {
         .layer(cors)
         .with_state(state);
 
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
+    let host: std::net::IpAddr = std::env::var("CONDUCTOR_HOST")
+        .unwrap_or_else(|_| "127.0.0.1".to_string())
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid CONDUCTOR_HOST: {e}"))?;
+    let port: u16 = std::env::var("CONDUCTOR_PORT")
+        .unwrap_or_else(|_| "3000".to_string())
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid CONDUCTOR_PORT: {e}"))?;
+    let addr = std::net::SocketAddr::from((host, port));
     tracing::info!("Listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
