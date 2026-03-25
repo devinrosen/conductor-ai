@@ -520,20 +520,64 @@ impl App {
             Action::LaunchAgent => self.handle_launch_agent(),
             Action::PromptRepoAgent => self.handle_prompt_repo_agent(),
             Action::OrchestrateAgent => self.handle_orchestrate_agent(),
-            Action::StopAgent => self.handle_stop_agent(),
-            Action::SubmitFeedback => self.handle_submit_feedback(),
-            Action::DismissFeedback => self.handle_dismiss_feedback(),
+            Action::StopAgent => {
+                if self.is_repo_agent_context() {
+                    self.handle_stop_repo_agent();
+                } else {
+                    self.handle_stop_agent();
+                }
+            }
+            Action::SubmitFeedback => {
+                if self.is_repo_agent_context() {
+                    self.handle_submit_repo_feedback();
+                } else {
+                    self.handle_submit_feedback();
+                }
+            }
+            Action::DismissFeedback => {
+                if self.is_repo_agent_context() {
+                    self.handle_dismiss_repo_feedback();
+                } else {
+                    self.handle_dismiss_feedback();
+                }
+            }
             Action::CopyLastCodeBlock => self.handle_copy_last_code_block(),
-            Action::ExpandAgentEvent => self.handle_expand_agent_event(),
+            Action::ExpandAgentEvent => {
+                if self.is_repo_agent_context() {
+                    self.handle_expand_repo_agent_event();
+                } else {
+                    self.handle_expand_agent_event();
+                }
+            }
             Action::AgentActivityDown => {
-                let len = self.state.data.agent_activity_len();
-                let cur = self.state.agent_list_state.borrow().selected().unwrap_or(0);
-                if len > 0 && cur + 1 < len {
-                    self.state.agent_list_state.borrow_mut().select_next();
+                if self.is_repo_agent_context() {
+                    let len = self.state.data.repo_agent_activity_len();
+                    let cur = self
+                        .state
+                        .repo_agent_list_state
+                        .borrow()
+                        .selected()
+                        .unwrap_or(0);
+                    if len > 0 && cur + 1 < len {
+                        self.state.repo_agent_list_state.borrow_mut().select_next();
+                    }
+                } else {
+                    let len = self.state.data.agent_activity_len();
+                    let cur = self.state.agent_list_state.borrow().selected().unwrap_or(0);
+                    if len > 0 && cur + 1 < len {
+                        self.state.agent_list_state.borrow_mut().select_next();
+                    }
                 }
             }
             Action::AgentActivityUp => {
-                self.state.agent_list_state.borrow_mut().select_previous();
+                if self.is_repo_agent_context() {
+                    self.state
+                        .repo_agent_list_state
+                        .borrow_mut()
+                        .select_previous();
+                } else {
+                    self.state.agent_list_state.borrow_mut().select_previous();
+                }
             }
             // Scroll navigation (all views + discover modals)
             Action::GoToTop => match self.state.modal {
@@ -881,10 +925,13 @@ impl App {
                     payload.active_non_worktree_workflow_runs;
                 self.state.data.live_turns_by_worktree = payload.live_turns_by_worktree;
                 self.state.data.features_by_repo = payload.features_by_repo;
+                self.state.data.latest_repo_agent_runs = payload.latest_repo_agent_runs;
                 self.state.unread_notification_count = payload.unread_notification_count;
                 self.refresh_pending_feedback();
+                self.refresh_pending_repo_feedback();
                 self.state.data.rebuild_maps();
                 self.reload_agent_events();
+                self.reload_repo_agent_events();
                 self.state.rebuild_filtered_tickets();
                 self.clamp_indices();
                 // Always redraw since workflow column is persistent across all views.
@@ -939,6 +986,7 @@ impl App {
                     Ok(msg) => {
                         self.state.status_message = Some(msg);
                         self.refresh_data();
+                        self.reload_repo_agent_events();
                     }
                     Err(e) => {
                         self.state.modal = Modal::Error { message: e };
@@ -1223,6 +1271,90 @@ impl App {
         self.state.data.agent_created_issues = mgr
             .list_created_issues_for_worktree(wt_id)
             .unwrap_or_default();
+    }
+
+    /// Reload repo-scoped agent events for the currently selected repo.
+    fn reload_repo_agent_events(&mut self) {
+        use conductor_core::agent::{AgentManager, AgentRunEvent};
+
+        let Some(ref repo_id) = self.state.selected_repo_id else {
+            self.state.data.repo_agent_events = Vec::new();
+            self.state.data.repo_agent_run_info = std::collections::HashMap::new();
+            return;
+        };
+
+        let mgr = AgentManager::new(&self.conn);
+        // list_repo_scoped returns DESC order; reverse for chronological
+        let mut runs = mgr.list_repo_scoped(repo_id).unwrap_or_default();
+        runs.reverse();
+
+        // Load events: prefer DB records, fall back to log file parsing
+        let db_events: Vec<AgentRunEvent> = runs
+            .iter()
+            .flat_map(|run| mgr.list_events_for_run(&run.id).unwrap_or_default())
+            .collect();
+        let all_events = if !db_events.is_empty() {
+            db_events
+        } else {
+            let mut fallback = Vec::new();
+            for run in &runs {
+                if let Some(ref path) = run.log_file {
+                    let events = conductor_core::agent::parse_agent_log(path);
+                    for ev in events {
+                        fallback.push(AgentRunEvent {
+                            id: conductor_core::new_id(),
+                            run_id: run.id.clone(),
+                            kind: ev.kind,
+                            summary: ev.summary,
+                            started_at: run.started_at.clone(),
+                            ended_at: None,
+                            metadata: None,
+                        });
+                    }
+                }
+            }
+            fallback
+        };
+
+        // Build run_id -> (run_number, model, started_at) map for boundary headers
+        let mut run_info = std::collections::HashMap::new();
+        for (i, run) in runs.iter().enumerate() {
+            run_info.insert(
+                run.id.clone(),
+                (i + 1, run.model.clone(), run.started_at.clone()),
+            );
+        }
+        self.state.data.repo_agent_run_info = run_info;
+        self.state.data.repo_agent_events = all_events;
+
+        // Clamp ListState selection to valid range
+        let len = self.state.data.repo_agent_activity_len();
+        let cur = self.state.repo_agent_list_state.borrow().selected();
+        if let Some(idx) = cur {
+            if len == 0 {
+                self.state.repo_agent_list_state.borrow_mut().select(None);
+            } else if idx >= len {
+                self.state
+                    .repo_agent_list_state
+                    .borrow_mut()
+                    .select(Some(len - 1));
+            }
+        }
+    }
+
+    /// Refresh pending feedback for the currently selected repo's repo-scoped agent.
+    fn refresh_pending_repo_feedback(&mut self) {
+        use conductor_core::agent::AgentManager;
+
+        let Some(ref repo_id) = self.state.selected_repo_id else {
+            self.state.data.pending_repo_feedback = None;
+            return;
+        };
+
+        let mgr = AgentManager::new(&self.conn);
+        let latest = mgr.latest_repo_scoped(repo_id).ok().flatten();
+        self.state.data.pending_repo_feedback =
+            latest.and_then(|run| mgr.pending_feedback_for_run(&run.id).ok().flatten());
     }
 }
 
@@ -1618,6 +1750,7 @@ mod action_handler_tests {
                 live_turns_by_worktree: std::collections::HashMap::new(),
                 features_by_repo: std::collections::HashMap::new(),
                 unread_notification_count: 0,
+                latest_repo_agent_runs: std::collections::HashMap::new(),
             },
         )));
 

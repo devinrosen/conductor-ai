@@ -451,6 +451,12 @@ impl App {
                 RepoDetailFocus::Prs => {
                     self.state.detail_pr_index = self.state.detail_pr_index.saturating_sub(1);
                 }
+                RepoDetailFocus::RepoAgent => {
+                    self.state
+                        .repo_agent_list_state
+                        .borrow_mut()
+                        .select_previous();
+                }
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
                 WorkflowRunDetailFocus::Info => {
@@ -595,6 +601,18 @@ impl App {
                 RepoDetailFocus::Prs => {
                     clamp_increment(&mut self.state.detail_pr_index, self.state.detail_prs.len());
                 }
+                RepoDetailFocus::RepoAgent => {
+                    let len = self.state.data.repo_agent_activity_len();
+                    let cur = self
+                        .state
+                        .repo_agent_list_state
+                        .borrow()
+                        .selected()
+                        .unwrap_or(0);
+                    if len > 0 && cur + 1 < len {
+                        self.state.repo_agent_list_state.borrow_mut().select_next();
+                    }
+                }
             },
             View::WorkflowRunDetail => match self.state.workflow_run_detail_focus {
                 WorkflowRunDetailFocus::Info => {
@@ -682,6 +700,9 @@ impl App {
             self.state.rebuild_filtered_tickets();
             self.state.repo_detail_focus = RepoDetailFocus::Worktrees;
             self.state.view = View::RepoDetail;
+            self.reload_repo_agent_events();
+            self.refresh_pending_repo_feedback();
+            *self.state.repo_agent_list_state.borrow_mut() = ratatui::widgets::ListState::default();
         }
     }
 
@@ -737,6 +758,10 @@ impl App {
                 }
                 RepoDetailFocus::Prs => {
                     // No-op: PR selection deferred to a future ticket.
+                }
+                RepoDetailFocus::RepoAgent => {
+                    // Enter on repo agent event opens detail modal
+                    self.handle_expand_repo_agent_event();
                 }
             },
             View::WorkflowRunDetail => {

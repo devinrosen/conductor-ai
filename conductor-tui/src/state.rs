@@ -325,6 +325,7 @@ pub enum RepoDetailFocus {
     Worktrees,
     Tickets,
     Prs,
+    RepoAgent,
 }
 
 impl RepoDetailFocus {
@@ -333,16 +334,18 @@ impl RepoDetailFocus {
             Self::Info => Self::Worktrees,
             Self::Worktrees => Self::Prs,
             Self::Prs => Self::Tickets,
-            Self::Tickets => Self::Info,
+            Self::Tickets => Self::RepoAgent,
+            Self::RepoAgent => Self::Info,
         }
     }
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Info => Self::Tickets,
+            Self::Info => Self::RepoAgent,
             Self::Worktrees => Self::Info,
             Self::Prs => Self::Worktrees,
             Self::Tickets => Self::Prs,
+            Self::RepoAgent => Self::Tickets,
         }
     }
 }
@@ -1209,6 +1212,14 @@ pub struct DataCache {
     /// Active features per repo (repo_id → active FeatureRows).
     /// Populated by the background poller each tick.
     pub features_by_repo: HashMap<String, Vec<FeatureRow>>,
+    /// repo_id -> latest repo-scoped AgentRun (populated by DB poller)
+    pub latest_repo_agent_runs: HashMap<String, AgentRun>,
+    /// Persisted agent events for the currently viewed repo's repo-scoped agent (from DB)
+    pub repo_agent_events: Vec<AgentRunEvent>,
+    /// run_id -> (run_number, model, started_at) for repo agent run boundary headers
+    pub repo_agent_run_info: HashMap<String, (usize, Option<String>, String)>,
+    /// Pending feedback request for the currently viewed repo's repo agent (if any)
+    pub pending_repo_feedback: Option<FeedbackRequest>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.
@@ -1289,6 +1300,63 @@ impl DataCache {
     /// separator row or is out of range.
     pub fn event_at_visual_index(&self, visual_target: usize) -> Option<&AgentRunEvent> {
         match self.visual_rows().into_iter().nth(visual_target)? {
+            VisualRow::Event(ev) => Some(ev),
+            VisualRow::RunSeparator(..) => None,
+        }
+    }
+
+    // --- Repo agent activity helpers (mirrors worktree agent helpers above) ---
+
+    fn count_repo_agent_separators(&self) -> usize {
+        if self.repo_agent_run_info.len() <= 1 {
+            return 0;
+        }
+        let mut count = 0;
+        let mut prev_run_id: Option<&str> = None;
+        for ev in &self.repo_agent_events {
+            if prev_run_id.is_none_or(|p| p != ev.run_id)
+                && self.repo_agent_run_info.contains_key(&ev.run_id)
+            {
+                count += 1;
+            }
+            prev_run_id = Some(&ev.run_id);
+        }
+        count
+    }
+
+    pub fn repo_agent_visual_rows(&self) -> Vec<VisualRow<'_>> {
+        let has_multiple_runs = self.repo_agent_run_info.len() > 1;
+        let mut rows =
+            Vec::with_capacity(self.repo_agent_events.len() + self.count_repo_agent_separators());
+        let mut prev_run_id: Option<&str> = None;
+
+        for ev in &self.repo_agent_events {
+            if has_multiple_runs && prev_run_id.is_none_or(|p| p != ev.run_id) {
+                if let Some((run_num, model, started_at)) = self.repo_agent_run_info.get(&ev.run_id)
+                {
+                    rows.push(VisualRow::RunSeparator(
+                        *run_num,
+                        model.as_deref(),
+                        started_at,
+                    ));
+                }
+            }
+            prev_run_id = Some(&ev.run_id);
+            rows.push(VisualRow::Event(ev));
+        }
+        rows
+    }
+
+    pub fn repo_agent_activity_len(&self) -> usize {
+        self.repo_agent_events.len() + self.count_repo_agent_separators()
+    }
+
+    pub fn repo_agent_event_at_visual_index(&self, visual_target: usize) -> Option<&AgentRunEvent> {
+        match self
+            .repo_agent_visual_rows()
+            .into_iter()
+            .nth(visual_target)?
+        {
             VisualRow::Event(ev) => Some(ev),
             VisualRow::RunSeparator(..) => None,
         }
@@ -1375,6 +1443,8 @@ pub struct AppState {
 
     // Agent activity list navigation (replaces the old Paragraph scroll offset)
     pub agent_list_state: RefCell<ListState>,
+    /// Repo agent activity list navigation (repo detail view)
+    pub repo_agent_list_state: RefCell<ListState>,
     // WorktreeDetail two-panel focus model
     pub worktree_detail_focus: WorktreeDetailFocus,
     /// Selected row index in the WorktreeDetail info panel (for j/k navigation and y/o actions).
@@ -1791,6 +1861,7 @@ impl AppState {
             filtered_tickets: Vec::new(),
             filtered_detail_tickets: Vec::new(),
             agent_list_state: RefCell::new(ListState::default()),
+            repo_agent_list_state: RefCell::new(ListState::default()),
             worktree_detail_focus: WorktreeDetailFocus::InfoPanel,
             worktree_detail_selected_row: 0,
             repo_detail_info_row: 0,
@@ -1831,6 +1902,11 @@ impl AppState {
             workflow_def_step_index: 0,
             workflow_def_expanded_calls: HashSet::new(),
         }
+    }
+
+    /// Total number of visual rows in the repo agent activity list.
+    pub fn repo_agent_activity_len(&self) -> usize {
+        self.data.repo_agent_activity_len()
     }
 
     /// Returns the filter that should receive input based on current view/focus.
@@ -1956,6 +2032,10 @@ impl AppState {
                     (self.detail_ticket_index, self.filtered_detail_tickets.len())
                 }
                 RepoDetailFocus::Prs => (self.detail_pr_index, self.detail_prs.len()),
+                RepoDetailFocus::RepoAgent => {
+                    let idx = self.repo_agent_list_state.borrow().selected().unwrap_or(0);
+                    (idx, self.repo_agent_activity_len())
+                }
             },
             View::WorktreeDetail => {
                 let idx = self.agent_list_state.borrow().selected().unwrap_or(0);
@@ -1996,6 +2076,9 @@ impl AppState {
                 RepoDetailFocus::Worktrees => self.detail_wt_index = index,
                 RepoDetailFocus::Tickets => self.detail_ticket_index = index,
                 RepoDetailFocus::Prs => self.detail_pr_index = index,
+                RepoDetailFocus::RepoAgent => {
+                    self.repo_agent_list_state.borrow_mut().select(Some(index));
+                }
             },
             View::WorktreeDetail => {
                 self.agent_list_state.borrow_mut().select(Some(index));
@@ -2499,15 +2582,17 @@ pub(crate) mod tests {
         assert_eq!(RepoDetailFocus::Info.next(), RepoDetailFocus::Worktrees);
         assert_eq!(RepoDetailFocus::Worktrees.next(), RepoDetailFocus::Prs);
         assert_eq!(RepoDetailFocus::Prs.next(), RepoDetailFocus::Tickets);
-        assert_eq!(RepoDetailFocus::Tickets.next(), RepoDetailFocus::Info);
+        assert_eq!(RepoDetailFocus::Tickets.next(), RepoDetailFocus::RepoAgent);
+        assert_eq!(RepoDetailFocus::RepoAgent.next(), RepoDetailFocus::Info);
     }
 
     #[test]
     fn repo_detail_focus_prev_cycles_backward() {
-        assert_eq!(RepoDetailFocus::Info.prev(), RepoDetailFocus::Tickets);
+        assert_eq!(RepoDetailFocus::Info.prev(), RepoDetailFocus::RepoAgent);
         assert_eq!(RepoDetailFocus::Worktrees.prev(), RepoDetailFocus::Info);
         assert_eq!(RepoDetailFocus::Prs.prev(), RepoDetailFocus::Worktrees);
         assert_eq!(RepoDetailFocus::Tickets.prev(), RepoDetailFocus::Prs);
+        assert_eq!(RepoDetailFocus::RepoAgent.prev(), RepoDetailFocus::Tickets);
     }
 
     #[test]
@@ -2517,6 +2602,7 @@ pub(crate) mod tests {
             RepoDetailFocus::Worktrees,
             RepoDetailFocus::Tickets,
             RepoDetailFocus::Prs,
+            RepoDetailFocus::RepoAgent,
         ] {
             assert_eq!(focus.next().prev(), focus);
             assert_eq!(focus.prev().next(), focus);

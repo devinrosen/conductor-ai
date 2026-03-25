@@ -712,6 +712,137 @@ impl App {
             let _ = tx.send(Action::RepoAgentLaunched { result });
         });
     }
+
+    /// Returns true if the current context is the repo agent pane in RepoDetail.
+    pub(super) fn is_repo_agent_context(&self) -> bool {
+        self.state.view == crate::state::View::RepoDetail
+            && self.state.repo_detail_focus == crate::state::RepoDetailFocus::RepoAgent
+    }
+
+    /// Stop the running repo-scoped agent for the currently selected repo.
+    pub(super) fn handle_stop_repo_agent(&mut self) {
+        use std::process::Command;
+
+        let run = self
+            .state
+            .selected_repo_id
+            .as_ref()
+            .and_then(|id| self.state.data.latest_repo_agent_runs.get(id))
+            .cloned();
+
+        let Some(run) = run else { return };
+        if !run.is_active() {
+            return;
+        }
+
+        let run_id = run.id.clone();
+        let tmux_window = run.tmux_window.clone();
+        let mgr = AgentManager::new(&self.conn);
+
+        if let Some(ref window) = tmux_window {
+            mgr.capture_agent_log(&run_id, window);
+        }
+        if let Some(ref window) = tmux_window {
+            let _ = Command::new("tmux")
+                .args(["kill-window", "-t", &format!(":{window}")])
+                .output();
+        }
+        let _ = mgr.update_run_cancelled(&run_id);
+
+        self.state.status_message = Some("Repo agent cancelled".to_string());
+        self.refresh_data();
+        self.reload_repo_agent_events();
+    }
+
+    /// Submit feedback for the repo-scoped agent.
+    pub(super) fn handle_submit_repo_feedback(&mut self) {
+        let Some(fb) = self.state.data.pending_repo_feedback.clone() else {
+            self.state.status_message = Some("No pending feedback request".to_string());
+            return;
+        };
+
+        use conductor_core::agent::FeedbackType;
+
+        let format_opts = |opts: &[conductor_core::agent::FeedbackOption]| -> String {
+            opts.iter()
+                .enumerate()
+                .map(|(i, o)| format!("{}. {}", i + 1, o.label))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let placeholder = match fb.feedback_type {
+            FeedbackType::Confirm => "Type y or n...".to_string(),
+            FeedbackType::SingleSelect => {
+                let opts_text = fb.options.as_deref().map(format_opts).unwrap_or_default();
+                format!("Type the number of your choice:\n{opts_text}")
+            }
+            FeedbackType::MultiSelect => {
+                let opts_text = fb.options.as_deref().map(format_opts).unwrap_or_default();
+                format!("Type numbers separated by commas (e.g. 1,3):\n{opts_text}")
+            }
+            FeedbackType::Text => "Type your feedback response...".to_string(),
+        };
+
+        let mut textarea = tui_textarea::TextArea::default();
+        textarea.set_placeholder_text(&placeholder);
+
+        self.state.modal = Modal::AgentPrompt {
+            title: format!("Repo Agent Feedback: {}", &fb.prompt),
+            prompt: fb.prompt.clone(),
+            textarea: Box::new(textarea),
+            on_submit: InputAction::FeedbackResponse {
+                feedback_id: fb.id.clone(),
+            },
+        };
+    }
+
+    /// Dismiss feedback for the repo-scoped agent.
+    pub(super) fn handle_dismiss_repo_feedback(&mut self) {
+        let Some(fb) = self.state.data.pending_repo_feedback.clone() else {
+            self.state.status_message = Some("No pending feedback request".to_string());
+            return;
+        };
+
+        let mgr = AgentManager::new(&self.conn);
+        match mgr.dismiss_feedback(&fb.id) {
+            Ok(()) => {
+                self.state.status_message =
+                    Some("Feedback dismissed — repo agent resumed".to_string());
+                self.state.data.pending_repo_feedback = None;
+                self.refresh_data();
+                self.reload_repo_agent_events();
+            }
+            Err(e) => {
+                self.state.status_message = Some(format!("Failed to dismiss feedback: {e}"));
+            }
+        }
+    }
+
+    /// Expand a repo agent event detail modal.
+    pub(super) fn handle_expand_repo_agent_event(&mut self) {
+        let idx = self
+            .state
+            .repo_agent_list_state
+            .borrow()
+            .selected()
+            .unwrap_or(0);
+        let Some(ev) = self.state.data.repo_agent_event_at_visual_index(idx) else {
+            return;
+        };
+
+        let title = format!("[{}] {}", ev.kind, ev.started_at);
+        let body = ev.summary.clone();
+        let line_count = body.lines().count();
+
+        self.state.modal = Modal::EventDetail {
+            title,
+            body,
+            line_count,
+            scroll_offset: 0,
+            horizontal_offset: 0,
+        };
+    }
 }
 
 // Suppress unused import for Arc — it's used indirectly via the workflow_shutdown field

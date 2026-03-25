@@ -195,6 +195,35 @@ impl<'a> AgentManager<'a> {
         self.runs_to_worktree_map(runs)
     }
 
+    /// Returns the latest repo-scoped agent run for each repo, keyed by repo_id.
+    /// Only includes runs where `worktree_id IS NULL` (repo-level agents).
+    pub fn latest_repo_scoped_runs_all(&self) -> Result<HashMap<String, AgentRun>> {
+        let mut runs = query_collect(
+            self.conn,
+            &format!(
+                "SELECT {AGENT_RUN_COLS_A} \
+                 FROM agent_runs a \
+                 INNER JOIN ( \
+                     SELECT repo_id, MAX(started_at) AS max_started \
+                     FROM agent_runs \
+                     WHERE worktree_id IS NULL AND repo_id IS NOT NULL \
+                     GROUP BY repo_id \
+                 ) latest ON a.repo_id = latest.repo_id AND a.started_at = latest.max_started \
+                 WHERE a.worktree_id IS NULL"
+            ),
+            [],
+            row_to_agent_run,
+        )?;
+        self.populate_plans(&mut runs)?;
+        let mut map = HashMap::new();
+        for run in runs {
+            if let Some(ref repo_id) = run.repo_id {
+                map.insert(repo_id.clone(), run);
+            }
+        }
+        Ok(map)
+    }
+
     /// Returns the latest top-level agent run for a single worktree, or `None` if none exist.
     ///
     /// `parent_run_id IS NULL` filters to top-level runs — sub-agent child runs are excluded.

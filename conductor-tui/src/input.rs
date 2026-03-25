@@ -524,7 +524,26 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => {}
             }
         }
-        if let KeyCode::Char('a') = key.code {
+        if state.repo_detail_focus == crate::state::RepoDetailFocus::RepoAgent {
+            let latest_run = state
+                .selected_repo_id
+                .as_ref()
+                .and_then(|id| state.data.latest_repo_agent_runs.get(id));
+            let is_active = latest_run.map(|r| r.is_active()).unwrap_or(false);
+            let is_waiting = latest_run
+                .map(|r| r.is_waiting_for_feedback())
+                .unwrap_or(false);
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => return Action::AgentActivityDown,
+                KeyCode::Char('k') | KeyCode::Up => return Action::AgentActivityUp,
+                KeyCode::Char('x') if is_active => return Action::StopAgent,
+                KeyCode::Char('f') if is_waiting => return Action::SubmitFeedback,
+                KeyCode::Char('F') if is_waiting => return Action::DismissFeedback,
+                KeyCode::Enter => return Action::ExpandAgentEvent,
+                _ => {}
+            }
+        }
+        if let KeyCode::Char('p') = key.code {
             return Action::PromptRepoAgent;
         }
         if let KeyCode::Char('I') = key.code {

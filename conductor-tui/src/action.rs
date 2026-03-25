@@ -66,6 +66,8 @@ pub struct DataRefreshedPayload {
     pub features_by_repo: HashMap<String, Vec<FeatureRow>>,
     /// Number of unread in-app notifications.
     pub unread_notification_count: usize,
+    /// repo_id -> latest repo-scoped AgentRun (populated by DB poller)
+    pub latest_repo_agent_runs: HashMap<String, AgentRun>,
 }
 
 /// Every user intent or background result flows through this enum.

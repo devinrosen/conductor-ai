@@ -320,6 +320,7 @@ pub fn poll_data() -> Option<PollResult> {
     let tickets = ticket_syncer.list(None).ok()?;
     let ticket_labels = ticket_syncer.get_all_labels().unwrap_or_default();
     let latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
+    let latest_repo_agent_runs = agent_mgr.latest_repo_scoped_runs_all().unwrap_or_default();
     let ticket_agent_totals = agent_mgr.totals_by_ticket_all().unwrap_or_default();
 
     use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
@@ -432,6 +433,7 @@ pub fn poll_data() -> Option<PollResult> {
         live_turns_by_worktree,
         features_by_repo,
         unread_notification_count,
+        latest_repo_agent_runs,
     }));
     Some(PollResult {
         action,
