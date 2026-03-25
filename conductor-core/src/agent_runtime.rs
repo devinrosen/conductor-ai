@@ -214,7 +214,7 @@ pub fn poll_child_completion(
 /// Maximum number of CLI arguments produced by `build_agent_args`:
 /// 2 subcommands + 4 fixed flags + 2 for prompt/prompt-file + 2 optional resume
 /// + 2 optional model + 2 optional bot_name + 2 optional permission-mode.
-const AGENT_ARGS_CAPACITY: usize = 16;
+const AGENT_ARGS_CAPACITY: usize = 18;
 
 /// Build the `conductor agent run` argument list for a child agent.
 ///
@@ -308,6 +308,11 @@ pub fn build_agent_args_with_mode(
         if let Some(val) = mode.cli_flag_value() {
             args.push(Cow::Owned(val.to_string()));
         }
+    }
+
+    if let Some(crate::config::AgentPermissionMode::Plan) = permission_mode {
+        args.push(Cow::Borrowed("--allowedTools"));
+        args.push(Cow::Borrowed("mcp__conductor__*"));
     }
 
     Ok(args)
@@ -572,6 +577,41 @@ mod tests {
             .position(|a| a == "--permission-mode")
             .expect("expected --permission-mode flag");
         assert_eq!(args[idx + 1], "plan", "expected 'plan' value after flag");
+
+        let at_idx = args
+            .iter()
+            .position(|a| a == "--allowedTools")
+            .expect("expected --allowedTools flag for plan mode");
+        assert_eq!(
+            args[at_idx + 1],
+            "mcp__conductor__*",
+            "expected conductor MCP wildcard"
+        );
+    }
+
+    #[test]
+    fn build_agent_args_non_plan_no_allowed_tools() {
+        use crate::config::AgentPermissionMode;
+        for mode in &[
+            AgentPermissionMode::SkipPermissions,
+            AgentPermissionMode::AutoMode,
+        ] {
+            let args = super::build_agent_args_with_mode(
+                "run-1",
+                "/tmp/wt",
+                "prompt",
+                None,
+                None,
+                None,
+                Some(mode),
+            )
+            .unwrap();
+            assert!(
+                !args.iter().any(|a| a == "--allowedTools"),
+                "expected no --allowedTools for {:?}",
+                mode
+            );
+        }
     }
 
     #[test]
