@@ -12,6 +12,14 @@ use rusqlite::Connection;
 
 use crate::agent::{list_live_tmux_windows, AgentManager, AgentRun, AgentRunStatus};
 
+/// Build a tmux window name for a repo-scoped agent run.
+///
+/// Format: `repo-{slug}-{short_id}` where `short_id` is the first 8 chars of `run_id`.
+pub fn repo_agent_window_name(slug: &str, run_id: &str) -> String {
+    let short_id = &run_id[..8.min(run_id.len())];
+    format!("repo-{slug}-{short_id}")
+}
+
 /// Resolve the path to the `conductor` binary.
 ///
 /// Looks for a sibling `conductor` next to the current executable first,

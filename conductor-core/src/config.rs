@@ -608,6 +608,18 @@ mod tests {
     }
 
     #[test]
+    fn test_agent_permission_mode_cli_flag_plan() {
+        assert_eq!(AgentPermissionMode::Plan.cli_flag(), "--permission-mode");
+    }
+
+    #[test]
+    fn test_agent_permission_mode_cli_flag_value() {
+        assert_eq!(AgentPermissionMode::AutoMode.cli_flag_value(), None);
+        assert_eq!(AgentPermissionMode::SkipPermissions.cli_flag_value(), None);
+        assert_eq!(AgentPermissionMode::Plan.cli_flag_value(), Some("plan"));
+    }
+
+    #[test]
     fn test_model_default_is_none() {
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(config.general.model, None);

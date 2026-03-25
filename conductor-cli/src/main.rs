@@ -1014,7 +1014,10 @@ fn main() -> Result<()> {
                     };
                     let perm_mode = match permission_mode.as_deref() {
                         Some("plan") => Some(conductor_core::config::AgentPermissionMode::Plan),
-                        _ => None,
+                        Some(other) => {
+                            anyhow::bail!("Unknown permission-mode '{}'; valid values: plan", other)
+                        }
+                        None => None,
                     };
                     run_agent(
                         &conn,

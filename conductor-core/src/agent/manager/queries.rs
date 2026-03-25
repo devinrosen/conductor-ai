@@ -1044,4 +1044,59 @@ mod tests {
         assert_eq!(map_r2.len(), 1);
         assert!(map_r2.contains_key("w3"));
     }
+
+    #[test]
+    fn test_list_repo_scoped() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // Create a repo-scoped run (no worktree)
+        let repo_run = mgr
+            .create_repo_run("r1", "Analyse the repo", None, None)
+            .unwrap();
+
+        // Create a worktree-scoped run (should not appear)
+        let _wt_run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+
+        let runs = mgr.list_repo_scoped("r1").unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, repo_run.id);
+        assert!(runs[0].worktree_id.is_none());
+    }
+
+    #[test]
+    fn test_list_repo_scoped_empty() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let runs = mgr.list_repo_scoped("r1").unwrap();
+        assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn test_latest_repo_scoped() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let _older = mgr
+            .create_repo_run("r1", "First question", None, None)
+            .unwrap();
+        let newer = mgr
+            .create_repo_run("r1", "Second question", None, None)
+            .unwrap();
+
+        let latest = mgr.latest_repo_scoped("r1").unwrap().unwrap();
+        assert_eq!(latest.id, newer.id);
+    }
+
+    #[test]
+    fn test_latest_repo_scoped_empty() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let result = mgr.latest_repo_scoped("r1").unwrap();
+        assert!(result.is_none());
+    }
 }

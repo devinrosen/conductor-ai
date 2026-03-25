@@ -204,20 +204,7 @@ pub async fn stop_agent(
         .into());
     }
 
-    // Capture tmux scrollback before killing
-    if let Some(ref window) = run.tmux_window {
-        agent_mgr.capture_agent_log(&run.id, window);
-    }
-
-    // Kill tmux window
-    if let Some(ref window) = run.tmux_window {
-        let _ = Command::new("tmux")
-            .args(["kill-window", "-t", &format!(":{window}")])
-            .output();
-    }
-
-    // Mark as cancelled
-    agent_mgr.update_run_cancelled(&run.id)?;
+    cancel_agent_run(&agent_mgr, &run)?;
 
     // Re-fetch to get updated record
     let updated = agent_mgr.latest_for_worktree(&worktree_id)?.unwrap_or(run);
@@ -704,6 +691,20 @@ fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {
     }
 }
 
+/// Capture tmux log, kill tmux window, and mark run as cancelled.
+fn cancel_agent_run(mgr: &AgentManager, run: &AgentRun) -> Result<(), ApiError> {
+    if let Some(ref window) = run.tmux_window {
+        mgr.capture_agent_log(&run.id, window);
+    }
+    if let Some(ref window) = run.tmux_window {
+        let _ = Command::new("tmux")
+            .args(["kill-window", "-t", &format!(":{window}")])
+            .output();
+    }
+    mgr.update_run_cancelled(&run.id)?;
+    Ok(())
+}
+
 // ── Repo-scoped agent routes ────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -732,8 +733,7 @@ pub async fn start_repo_agent(
 
     // Tmux window name: repo-<slug>-<short_id>
     let run_id = conductor_core::new_id();
-    let short_id = &run_id[..8.min(run_id.len())];
-    let window_name = format!("repo-{}-{short_id}", repo.slug);
+    let window_name = conductor_core::agent_runtime::repo_agent_window_name(&repo.slug, &run_id);
 
     let run =
         agent_mgr.create_repo_run(&repo_id, &body.prompt, Some(&window_name), model.as_deref())?;
@@ -792,23 +792,16 @@ pub async fn stop_repo_agent(
         .get_run(&run_id)?
         .ok_or_else(|| ConductorError::Agent("Agent run not found".to_string()))?;
 
+    // Validate run belongs to the requested repo
+    if run.repo_id.as_deref() != Some(&repo_id) {
+        return Err(ConductorError::Agent("Agent run not found".to_string()).into());
+    }
+
     if !run.is_active() {
         return Err(ConductorError::Agent("Agent is not running".to_string()).into());
     }
 
-    // Capture tmux scrollback before killing
-    if let Some(ref window) = run.tmux_window {
-        agent_mgr.capture_agent_log(&run.id, window);
-    }
-
-    // Kill tmux window
-    if let Some(ref window) = run.tmux_window {
-        let _ = Command::new("tmux")
-            .args(["kill-window", "-t", &format!(":{window}")])
-            .output();
-    }
-
-    agent_mgr.update_run_cancelled(&run.id)?;
+    cancel_agent_run(&agent_mgr, &run)?;
 
     let updated = agent_mgr.get_run(&run_id)?.unwrap_or(run);
 
@@ -823,10 +816,18 @@ pub async fn stop_repo_agent(
 /// Get events for a repo-scoped agent run.
 pub async fn repo_agent_events(
     State(state): State<AppState>,
-    Path((_repo_id, run_id)): Path<(String, String)>,
+    Path((repo_id, run_id)): Path<(String, String)>,
 ) -> Result<Json<Vec<AgentEventResponse>>, ApiError> {
     let db = state.db.lock().await;
     let agent_mgr = AgentManager::new(&db);
+
+    // Validate run belongs to the requested repo
+    let run = agent_mgr
+        .get_run(&run_id)?
+        .ok_or_else(|| ConductorError::Agent("Agent run not found".to_string()))?;
+    if run.repo_id.as_deref() != Some(&repo_id) {
+        return Err(ConductorError::Agent("Agent run not found".to_string()).into());
+    }
 
     let events: Vec<AgentEventResponse> = agent_mgr
         .list_events_for_run(&run_id)?

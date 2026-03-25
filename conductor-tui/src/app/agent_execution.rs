@@ -663,53 +663,54 @@ impl App {
         repo_path: String,
         repo_slug: String,
     ) {
-        let mgr = AgentManager::new(&self.conn);
+        let Some(ref tx) = self.bg_tx else { return };
+        let tx = tx.clone();
 
-        // Tmux window name: repo-<slug>-<short_id>
-        let run_id_preview = conductor_core::new_id();
-        let short_id = &run_id_preview[..8.min(run_id_preview.len())];
-        let window_name = format!("repo-{repo_slug}-{short_id}");
-
-        let run = match mgr.create_repo_run(&repo_id, &prompt, Some(&window_name), None) {
-            Ok(run) => run,
-            Err(e) => {
-                self.state.modal = Modal::Error {
-                    message: format!("Failed to create repo agent run: {e}"),
-                };
-                return;
-            }
+        self.state.modal = Modal::Progress {
+            message: "Launching repo agent…".into(),
         };
 
-        // Build args with plan permission mode (read-only)
-        let plan_mode = conductor_core::config::AgentPermissionMode::Plan;
-        let args = match conductor_core::agent_runtime::build_agent_args_with_mode(
-            &run.id,
-            &repo_path,
-            &prompt,
-            None,
-            None,
-            None,
-            Some(&plan_mode),
-        ) {
-            Ok(a) => a,
-            Err(e) => {
-                let _ = mgr.update_run_failed(&run.id, &e);
-                self.state.modal = Modal::Error { message: e };
-                return;
-            }
-        };
+        std::thread::spawn(move || {
+            let result = (|| -> std::result::Result<String, String> {
+                let db = conductor_core::config::db_path();
+                let conn = conductor_core::db::open_database(&db).map_err(|e| e.to_string())?;
+                let mgr = AgentManager::new(&conn);
 
-        match conductor_core::agent_runtime::spawn_tmux_window(&args, &window_name) {
-            Ok(()) => {
-                self.state.status_message =
-                    Some(format!("Repo agent launched in tmux window: {window_name}"));
-                self.refresh_data();
-            }
-            Err(e) => {
-                let _ = mgr.update_run_failed(&run.id, &e);
-                self.state.modal = Modal::Error { message: e };
-            }
-        }
+                let run_id_preview = conductor_core::new_id();
+                let window_name = conductor_core::agent_runtime::repo_agent_window_name(
+                    &repo_slug,
+                    &run_id_preview,
+                );
+
+                let run = mgr
+                    .create_repo_run(&repo_id, &prompt, Some(&window_name), None)
+                    .map_err(|e| format!("Failed to create repo agent run: {e}"))?;
+
+                let plan_mode = conductor_core::config::AgentPermissionMode::Plan;
+                let args = conductor_core::agent_runtime::build_agent_args_with_mode(
+                    &run.id,
+                    &repo_path,
+                    &prompt,
+                    None,
+                    None,
+                    None,
+                    Some(&plan_mode),
+                )
+                .inspect_err(|e| {
+                    let _ = mgr.update_run_failed(&run.id, e);
+                })?;
+
+                conductor_core::agent_runtime::spawn_tmux_window(&args, &window_name).inspect_err(
+                    |e| {
+                        let _ = mgr.update_run_failed(&run.id, e);
+                    },
+                )?;
+
+                Ok(format!("Repo agent launched in tmux window: {window_name}"))
+            })();
+
+            let _ = tx.send(Action::RepoAgentLaunched { result });
+        });
     }
 }
 

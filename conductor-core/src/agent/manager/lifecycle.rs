@@ -388,4 +388,24 @@ mod tests {
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert!(fetched.model.is_none());
     }
+
+    #[test]
+    fn test_create_repo_run() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_repo_run("r1", "Analyse the repo", Some("repo-test-abc"), None)
+            .unwrap();
+
+        assert_eq!(run.repo_id.as_deref(), Some("r1"));
+        assert!(run.worktree_id.is_none());
+        assert_eq!(run.prompt, "Analyse the repo");
+        assert_eq!(run.tmux_window.as_deref(), Some("repo-test-abc"));
+        assert_eq!(run.status, AgentRunStatus::Running);
+
+        let fetched = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched.repo_id.as_deref(), Some("r1"));
+        assert!(fetched.worktree_id.is_none());
+    }
 }

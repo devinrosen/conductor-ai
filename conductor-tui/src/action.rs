@@ -265,6 +265,11 @@ pub enum Action {
         message: String,
     },
 
+    // Background result for repo agent launch
+    RepoAgentLaunched {
+        result: Result<String, String>,
+    },
+
     // Background result for worktree delete readiness check
     DeleteWorktreeReady {
         repo_slug: String,
