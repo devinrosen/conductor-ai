@@ -1342,3 +1342,154 @@ async fn test_list_features_nonexistent_repo() {
         .unwrap();
     assert_eq!(resp.status(), 404);
 }
+
+// ── Stop agent (worktree-scoped) tests ──────────────────────────────
+
+#[tokio::test]
+async fn test_stop_agent_happy_path() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    let client = reqwest::Client::new();
+    let run_id = fetch_run_id(&base).await;
+
+    // Verify the run is active before stopping
+    let runs: Vec<serde_json::Value> = reqwest::get(format!("{base}/api/worktrees/w1/agent-runs"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(runs[0]["status"], "running");
+
+    // Stop the agent
+    let resp = client
+        .post(format!("{base}/api/worktrees/w1/agent/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "stop_agent should succeed for active run"
+    );
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["id"], run_id);
+    assert_eq!(
+        body["status"], "cancelled",
+        "run should be marked cancelled"
+    );
+}
+
+#[tokio::test]
+async fn test_stop_agent_already_stopped() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    let client = reqwest::Client::new();
+
+    // First stop succeeds
+    let resp = client
+        .post(format!("{base}/api/worktrees/w1/agent/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Second stop should fail (not running)
+    let resp = client
+        .post(format!("{base}/api/worktrees/w1/agent/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_client_error() || resp.status().is_server_error(),
+        "stopping an already-cancelled run should error"
+    );
+}
+
+// ── Stop repo agent happy-path tests ────────────────────────────────
+
+#[tokio::test]
+async fn test_stop_repo_agent_happy_path() {
+    let base = spawn_test_server_with_setup(seed_repo_agent_run).await;
+    let client = reqwest::Client::new();
+
+    // Fetch the repo and run IDs
+    let repos: Vec<serde_json::Value> = reqwest::get(format!("{base}/api/repos"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let repo_id = repos[0]["id"].as_str().unwrap();
+
+    let runs: Vec<serde_json::Value> =
+        reqwest::get(format!("{base}/api/repos/{repo_id}/agent/runs"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    assert_eq!(runs.len(), 1);
+    let run_id = runs[0]["id"].as_str().unwrap();
+    assert_eq!(runs[0]["status"], "running");
+
+    // Stop the repo agent
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/agent/{run_id}/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "stop_repo_agent should succeed for active run"
+    );
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["id"], run_id);
+    assert_eq!(
+        body["status"], "cancelled",
+        "run should be marked cancelled"
+    );
+}
+
+#[tokio::test]
+async fn test_stop_repo_agent_already_stopped() {
+    let base = spawn_test_server_with_setup(seed_repo_agent_run).await;
+    let client = reqwest::Client::new();
+
+    let repos: Vec<serde_json::Value> = reqwest::get(format!("{base}/api/repos"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let repo_id = repos[0]["id"].as_str().unwrap();
+
+    let runs: Vec<serde_json::Value> =
+        reqwest::get(format!("{base}/api/repos/{repo_id}/agent/runs"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let run_id = runs[0]["id"].as_str().unwrap();
+
+    // First stop succeeds
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/agent/{run_id}/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Second stop should fail
+    let resp = client
+        .post(format!("{base}/api/repos/{repo_id}/agent/{run_id}/stop"))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_client_error() || resp.status().is_server_error(),
+        "stopping an already-cancelled run should error"
+    );
+}

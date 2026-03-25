@@ -822,14 +822,17 @@ async fn cancel_agent_blocking(state: &AppState, run_id: &str, tmux_window: Opti
 
     let rid = run_id.to_owned();
     let w = window.clone();
-    let log_path = tokio::task::spawn_blocking(move || {
-        let path = conductor_core::agent::capture_tmux_scrollback(&rid, &w);
-        conductor_core::agent::kill_tmux_window(&w);
-        path
+    let log_path = match tokio::task::spawn_blocking(move || {
+        conductor_core::agent::capture_and_kill_tmux_window(&rid, &w)
     })
     .await
-    .ok()
-    .flatten();
+    {
+        Ok(path) => path,
+        Err(e) => {
+            warn!(run_id, %e, "cancel_agent_blocking: spawn_blocking task panicked");
+            None
+        }
+    };
 
     // Persist log file path under a brief lock (best-effort).
     if let Some(path) = log_path {
