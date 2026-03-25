@@ -2461,6 +2461,9 @@ fn run_agent(
         if let Some(val) = effective_perm_mode.cli_flag_value() {
             cmd.arg(val);
         }
+        if let Some(pattern) = effective_perm_mode.allowed_tools() {
+            cmd.arg("--allowedTools").arg(pattern);
+        }
         cmd.env(CONDUCTOR_RUN_ID_ENV, run_id)
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
