@@ -336,8 +336,9 @@ pub enum Action {
     },
     SelectBranch(Option<usize>),
 
-    /// Select a workflow picker item by number-key shortcut (0-indexed).
-    SelectWorkflowItem(usize),
+    /// Select a list-picker item by number-key shortcut (0-indexed).
+    /// Used by both WorkflowPicker and TemplatePicker modals.
+    SelectListItem(usize),
     /// Background result: workflow items loaded, ready to show post-create workflow picker.
     PostCreatePickerReady {
         items: Vec<crate::state::WorkflowPickerItem>,
@@ -355,6 +356,14 @@ pub enum Action {
     ToggleWorkflowDefsCollapse,
     /// Open a workflow picker for the current context (worktree, PR, etc.)
     PickWorkflow,
+    /// Open the template picker for the current context (scaffold a new workflow from a template).
+    PickTemplate,
+    /// Background result: template instantiation prompt was built successfully.
+    TemplateInstantiateReady {
+        template_name: String,
+        prompt: String,
+        suggested_filename: String,
+    },
     RunWorkflow,
     RunPrWorkflow,
     ResumeWorkflow,

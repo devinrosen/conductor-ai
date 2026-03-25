@@ -400,6 +400,14 @@ impl App {
                 wrap_decrement(selected, items.len());
                 return;
             }
+            Modal::TemplatePicker {
+                ref items,
+                ref mut selected,
+                ..
+            } => {
+                wrap_decrement(selected, items.len());
+                return;
+            }
             Modal::GithubDiscoverOrgs {
                 ref orgs,
                 ref mut cursor,
@@ -538,6 +546,14 @@ impl App {
                 return;
             }
             Modal::WorkflowPicker {
+                ref items,
+                ref mut selected,
+                ..
+            } => {
+                wrap_increment(selected, items.len());
+                return;
+            }
+            Modal::TemplatePicker {
                 ref items,
                 ref mut selected,
                 ..

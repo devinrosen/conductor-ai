@@ -244,6 +244,12 @@ impl App {
             return;
         }
 
+        // TemplatePicker: confirm the selected template
+        if matches!(self.state.modal, Modal::TemplatePicker { .. }) {
+            self.handle_template_picker_confirm();
+            return;
+        }
+
         // ConfirmByName: only proceed if typed value matches expected slug
         if let Modal::ConfirmByName {
             ref expected,

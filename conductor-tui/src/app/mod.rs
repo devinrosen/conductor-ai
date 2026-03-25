@@ -398,14 +398,20 @@ impl App {
                 };
             }
             Action::SelectBranch(index) => self.handle_branch_pick(index),
-            Action::SelectWorkflowItem(index) => {
+            Action::SelectListItem(index) => {
                 if let Modal::WorkflowPicker {
                     ref mut selected, ..
                 } = self.state.modal
                 {
                     *selected = index;
+                    self.handle_workflow_picker_confirm();
+                } else if let Modal::TemplatePicker {
+                    ref mut selected, ..
+                } = self.state.modal
+                {
+                    *selected = index;
+                    self.handle_template_picker_confirm();
                 }
-                self.handle_workflow_picker_confirm();
             }
             Action::WorkflowPickerDefsLoaded {
                 target,
@@ -610,6 +616,9 @@ impl App {
                 | Modal::WorkflowPicker {
                     ref mut selected, ..
                 }
+                | Modal::TemplatePicker {
+                    ref mut selected, ..
+                }
                 | Modal::IssueSourceManager {
                     ref mut selected, ..
                 }
@@ -676,6 +685,13 @@ impl App {
                 } => {
                     *selected = items.len().saturating_sub(1);
                 }
+                Modal::TemplatePicker {
+                    ref items,
+                    ref mut selected,
+                    ..
+                } => {
+                    *selected = items.len().saturating_sub(1);
+                }
                 Modal::IssueSourceManager {
                     ref sources,
                     ref mut selected,
@@ -734,6 +750,18 @@ impl App {
 
             // Workflow actions
             Action::PickWorkflow => self.handle_pick_workflow(),
+            Action::PickTemplate => self.handle_pick_template(),
+            Action::TemplateInstantiateReady {
+                template_name,
+                prompt,
+                suggested_filename,
+            } => {
+                self.state.modal = Modal::None;
+                self.state.status_message = Some(format!(
+                    "Template '{template_name}' ready — prompt prepared ({} chars), output: .conductor/workflows/{suggested_filename}",
+                    prompt.len(),
+                ));
+            }
             Action::RunWorkflow => self.handle_run_workflow(),
             Action::RunPrWorkflow => self.handle_run_pr_workflow(),
             Action::ResumeWorkflow => self.handle_resume_workflow(),

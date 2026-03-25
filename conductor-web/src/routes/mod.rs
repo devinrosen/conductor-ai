@@ -195,6 +195,12 @@ pub fn api_router() -> Router<AppState> {
             "/api/workflows/runs/{id}/gate/reject",
             post(workflows::reject_gate),
         )
+        // Workflow Templates
+        .route("/api/templates", get(workflows::list_templates))
+        .route(
+            "/api/templates/instantiate",
+            post(workflows::instantiate_template),
+        )
         // Issue Sources
         .route(
             "/api/repos/{id}/sources",

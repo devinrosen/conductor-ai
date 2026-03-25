@@ -320,6 +320,41 @@ enum WorkflowCommands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// List available workflow templates (built-in scaffolding)
+    #[command(name = "template-list")]
+    TemplateList,
+    /// Show details of a workflow template
+    #[command(name = "template-show")]
+    TemplateShow {
+        /// Template name
+        name: String,
+    },
+    /// Scaffold a new workflow from a built-in template (agent-assisted)
+    #[command(
+        name = "from-template",
+        after_help = "Examples:\n  conductor workflow from-template create-issue my-repo\n  conductor workflow from-template create-issue my-repo my-worktree"
+    )]
+    FromTemplate {
+        /// Template name (see `workflow template-list`)
+        template: String,
+        /// Repo slug
+        repo: String,
+        /// Worktree slug (optional; uses repo root if omitted)
+        worktree: Option<String>,
+    },
+    /// Upgrade a workflow to match a newer template version (agent-assisted)
+    #[command(
+        name = "upgrade-from-template",
+        after_help = "Examples:\n  conductor workflow upgrade-from-template create-issue my-repo"
+    )]
+    UpgradeFromTemplate {
+        /// Template name
+        template: String,
+        /// Repo slug
+        repo: String,
+        /// Worktree slug (optional)
+        worktree: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2174,6 +2209,179 @@ fn main() -> Result<()> {
                     let count = wf_mgr.purge(repo_id.as_deref(), &statuses)?;
                     println!("Purged {count} workflow run(s).");
                 }
+            }
+            WorkflowCommands::TemplateList => {
+                use conductor_core::workflow_template::list_embedded_templates;
+                let templates = list_embedded_templates();
+                if templates.is_empty() {
+                    println!("No workflow templates available.");
+                } else {
+                    println!(
+                        "{:<20} {:<10} {:<15} DESCRIPTION",
+                        "NAME", "VERSION", "TARGETS"
+                    );
+                    for t in &templates {
+                        let targets = if t.metadata.target_types.is_empty() {
+                            "any".to_string()
+                        } else {
+                            t.metadata.target_types.join(", ")
+                        };
+                        println!(
+                            "{:<20} {:<10} {:<15} {}",
+                            t.metadata.name, t.metadata.version, targets, t.metadata.description
+                        );
+                    }
+                }
+            }
+            WorkflowCommands::TemplateShow { name } => {
+                use conductor_core::workflow_template::get_embedded_template;
+                match get_embedded_template(&name) {
+                    Some(t) => {
+                        println!("Name:        {}", t.metadata.name);
+                        println!("Version:     {}", t.metadata.version);
+                        println!("Description: {}", t.metadata.description);
+                        if !t.metadata.target_types.is_empty() {
+                            println!("Targets:     {}", t.metadata.target_types.join(", "));
+                        }
+                        if !t.metadata.hints.is_empty() {
+                            println!("\nHints:");
+                            for h in &t.metadata.hints {
+                                println!("  - {h}");
+                            }
+                        }
+                        println!("\n--- Template Body ---\n");
+                        println!("{}", t.body);
+                    }
+                    None => {
+                        eprintln!("Template '{name}' not found. Run `conductor workflow template-list` to see available templates.");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            WorkflowCommands::FromTemplate {
+                template,
+                repo,
+                worktree,
+            } => {
+                use conductor_core::workflow_template::{
+                    build_instantiation_prompt, collect_existing_workflow_names,
+                    get_embedded_template,
+                };
+
+                let tmpl = get_embedded_template(&template).ok_or_else(|| {
+                    anyhow::anyhow!("Template '{template}' not found. Run `conductor workflow template-list` to see available templates.")
+                })?;
+
+                let repo_mgr = RepoManager::new(&conn, &config);
+                let r = repo_mgr.get_by_slug(&repo)?;
+
+                let (working_dir, _worktree_id) = if let Some(ref wt_slug) = worktree {
+                    let wt_mgr = WorktreeManager::new(&conn, &config);
+                    let wt = wt_mgr.get_by_slug_or_branch(&r.id, wt_slug)?;
+                    (wt.path, Some(wt.id))
+                } else {
+                    (r.local_path.clone(), None)
+                };
+
+                let existing_names = collect_existing_workflow_names(&working_dir, &r.local_path);
+
+                let prompt_result =
+                    build_instantiation_prompt(&tmpl, &working_dir, &existing_names);
+
+                println!(
+                    "Template: {} v{}",
+                    tmpl.metadata.name, tmpl.metadata.version
+                );
+                println!("Repo:     {repo}");
+                if let Some(ref wt) = worktree {
+                    println!("Worktree: {wt}");
+                }
+                println!(
+                    "Output:   .conductor/workflows/{}",
+                    prompt_result.suggested_filename
+                );
+                println!(
+                    "\nAgent prompt has been prepared ({} chars).",
+                    prompt_result.prompt.len()
+                );
+                println!("To instantiate, run this workflow with an agent that can write files in the repo.");
+                println!("\n--- Prompt Preview (first 500 chars) ---\n");
+                let preview: String = prompt_result.prompt.chars().take(500).collect();
+                println!("{preview}…");
+            }
+            WorkflowCommands::UpgradeFromTemplate {
+                template,
+                repo,
+                worktree,
+            } => {
+                use conductor_core::workflow_template::{
+                    build_upgrade_prompt, extract_template_version, get_embedded_template,
+                    template_slug,
+                };
+
+                let tmpl = get_embedded_template(&template)
+                    .ok_or_else(|| anyhow::anyhow!("Template '{template}' not found."))?;
+
+                let repo_mgr = RepoManager::new(&conn, &config);
+                let r = repo_mgr.get_by_slug(&repo)?;
+
+                let working_dir = if let Some(ref wt_slug) = worktree {
+                    let wt_mgr = WorktreeManager::new(&conn, &config);
+                    let wt = wt_mgr.get_by_slug_or_branch(&r.id, wt_slug)?;
+                    wt.path
+                } else {
+                    r.local_path.clone()
+                };
+
+                let suggested_name = template_slug(&tmpl.metadata.name);
+                let wf_path = std::path::Path::new(&working_dir)
+                    .join(".conductor")
+                    .join("workflows")
+                    .join(format!("{suggested_name}.wf"));
+
+                if !wf_path.exists() {
+                    anyhow::bail!(
+                        "No existing workflow found at {}. Use `from-template` to create one first.",
+                        wf_path.display()
+                    );
+                }
+
+                let current_content = std::fs::read_to_string(&wf_path)
+                    .context("Failed to read existing workflow")?;
+
+                let current_version =
+                    extract_template_version(&current_content).map(|(_, v)| v.to_string());
+
+                if let Some(ref cv) = current_version {
+                    if cv == &tmpl.metadata.version {
+                        println!(
+                            "Workflow is already at template version {}. No upgrade needed.",
+                            tmpl.metadata.version
+                        );
+                        return Ok(());
+                    }
+                    println!("Upgrading from v{cv} to v{}", tmpl.metadata.version);
+                } else {
+                    println!(
+                        "No version comment found. Upgrading to v{}",
+                        tmpl.metadata.version
+                    );
+                }
+
+                let prompt_result = build_upgrade_prompt(
+                    &tmpl,
+                    &current_content,
+                    current_version.as_deref(),
+                    &working_dir,
+                );
+
+                println!(
+                    "Agent prompt prepared ({} chars).",
+                    prompt_result.prompt.len()
+                );
+                println!("\n--- Prompt Preview (first 500 chars) ---\n");
+                let preview: String = prompt_result.prompt.chars().take(500).collect();
+                println!("{preview}…");
             }
         },
         Commands::Statusline { command } => match command {

@@ -1702,6 +1702,98 @@ impl App {
             None => (None, "not set".to_string()),
         }
     }
+
+    /// Open the template picker modal with embedded templates.
+    pub(super) fn handle_pick_template(&mut self) {
+        use conductor_core::workflow_template::list_embedded_templates;
+
+        let templates = list_embedded_templates();
+        if templates.is_empty() {
+            self.state.modal = Modal::Error {
+                message: "No workflow templates available.".to_string(),
+            };
+            return;
+        }
+
+        // Resolve repo context
+        let (repo_slug, repo_path) = match self.selected_repo_slug_and_path() {
+            Some(v) => v,
+            None => {
+                self.state.status_message = Some("No repo selected".to_string());
+                return;
+            }
+        };
+
+        // Resolve optional worktree context
+        let wt_path = self
+            .state
+            .selected_worktree_id
+            .as_ref()
+            .and_then(|wt_id| self.resolve_worktree_paths(wt_id))
+            .map(|(path, _)| path);
+
+        self.state.modal = Modal::TemplatePicker {
+            items: templates,
+            selected: 0,
+            repo_slug,
+            repo_path,
+            worktree_path: wt_path,
+        };
+    }
+
+    /// Confirm the selected template and build the instantiation prompt off-thread.
+    pub(super) fn handle_template_picker_confirm(&mut self) {
+        let (template, repo_path, wt_path) = if let Modal::TemplatePicker {
+            ref items,
+            selected,
+            ref repo_path,
+            ref worktree_path,
+            ..
+        } = self.state.modal
+        {
+            if let Some(tmpl) = items.get(selected) {
+                (tmpl.clone(), repo_path.clone(), worktree_path.clone())
+            } else {
+                return;
+            }
+        } else {
+            return;
+        };
+
+        let Some(ref bg_tx) = self.bg_tx else {
+            return;
+        };
+        let tx = bg_tx.clone();
+
+        self.state.modal = Modal::Progress {
+            message: "Building template prompt…".into(),
+        };
+
+        let working_dir = wt_path.unwrap_or_else(|| repo_path.clone());
+        let repo_path_owned = repo_path;
+        std::thread::spawn(move || {
+            use conductor_core::workflow_template::{
+                build_instantiation_prompt, collect_existing_workflow_names,
+            };
+
+            let existing_names = collect_existing_workflow_names(&working_dir, &repo_path_owned);
+            let prompt_result =
+                build_instantiation_prompt(&template, &working_dir, &existing_names);
+
+            let _ = tx.send(Action::TemplateInstantiateReady {
+                template_name: format!("{} v{}", template.metadata.name, template.metadata.version),
+                suggested_filename: prompt_result.suggested_filename,
+                prompt: prompt_result.prompt,
+            });
+        });
+    }
+
+    /// Helper: get the repo slug and local path for the selected repo.
+    fn selected_repo_slug_and_path(&self) -> Option<(String, String)> {
+        let repo_id = self.state.selected_repo_id.as_ref()?;
+        let repo = self.state.data.repos.iter().find(|r| r.id == *repo_id)?;
+        Some((repo.slug.clone(), repo.local_path.clone()))
+    }
 }
 
 #[cfg(test)]

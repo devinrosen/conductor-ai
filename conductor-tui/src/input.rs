@@ -256,6 +256,26 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::TemplatePicker { ref items, .. } => {
+            return match key.code {
+                KeyCode::Esc => Action::DismissModal,
+                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
+                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
+                KeyCode::Enter => Action::InputSubmit,
+                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
+                KeyCode::Char(c) if c.is_ascii_digit() => {
+                    let n = c.to_digit(10).unwrap() as usize;
+                    if n >= 1 && n <= items.len() {
+                        // Jump to the selected item
+                        Action::SelectListItem(n - 1)
+                    } else {
+                        Action::None
+                    }
+                }
+                _ => Action::None,
+            };
+        }
         Modal::WorkflowPicker { ref items, .. } => {
             return match key.code {
                 KeyCode::Esc => Action::DismissModal,
@@ -267,7 +287,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Char(c) if c.is_ascii_digit() => {
                     let n = c.to_digit(10).unwrap() as usize;
                     if n >= 1 && n <= items.len() {
-                        Action::SelectWorkflowItem(n - 1)
+                        Action::SelectListItem(n - 1)
                     } else {
                         Action::None
                     }
@@ -343,6 +363,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('w') if state.workflows_focus == crate::state::WorkflowsFocus::Runs => {
                 return Action::PickWorkflow;
             }
+            KeyCode::Char('t') if state.workflows_focus == crate::state::WorkflowsFocus::Runs => {
+                return Action::PickTemplate;
+            }
             // Right / l: enter or exit the step tree pane when viewing defs.
             KeyCode::Right | KeyCode::Char('l')
                 if state.workflows_focus == crate::state::WorkflowsFocus::Defs =>
@@ -396,6 +419,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('F') if is_waiting_for_feedback => return Action::DismissFeedback,
             KeyCode::Char('r') => return Action::ResumeWorktreeWorkflow,
             KeyCode::Char('w') => return Action::PickWorkflow,
+            KeyCode::Char('t') => return Action::PickTemplate,
             KeyCode::Char('y') => return Action::WorktreeDetailCopy,
             KeyCode::Char('o') => return Action::WorktreeDetailOpen,
             KeyCode::Char('j')
@@ -723,11 +747,11 @@ mod tests {
         let state = workflow_picker_state(3); // items: [StartAgent, workflow-0, Skip]
         assert!(matches!(
             map_key(key(KeyCode::Char('1')), &state),
-            Action::SelectWorkflowItem(0)
+            Action::SelectListItem(0)
         ));
         assert!(matches!(
             map_key(key(KeyCode::Char('3')), &state),
-            Action::SelectWorkflowItem(2)
+            Action::SelectListItem(2)
         ));
     }
 
@@ -1008,7 +1032,7 @@ mod tests {
         let state = dashboard_state();
         // All of these were removed in the keybinding cleanup (#515)
         // Note: 'w' was re-added as PickWorkflow
-        for ch in ['p', 'P', 't', 'D'] {
+        for ch in ['p', 'P', 'D'] {
             assert!(
                 matches!(map_key(key(KeyCode::Char(ch)), &state), Action::None),
                 "key '{ch}' should map to Action::None after removal but did not"
@@ -1349,6 +1373,39 @@ mod tests {
         assert!(matches!(
             map_key(key(KeyCode::Char('w')), &state),
             Action::PickWorkflow
+        ));
+    }
+
+    // --- `t` key: PickTemplate binding ---
+
+    #[test]
+    fn t_maps_to_pick_template_in_workflow_column_runs() {
+        let mut state = AppState::new();
+        state.column_focus = crate::state::ColumnFocus::Workflow;
+        state.workflows_focus = crate::state::WorkflowsFocus::Runs;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('t')), &state),
+            Action::PickTemplate
+        ));
+    }
+
+    #[test]
+    fn t_maps_to_pick_template_in_worktree_detail() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::InfoPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('t')), &state),
+            Action::PickTemplate
+        ));
+    }
+
+    #[test]
+    fn t_does_not_map_to_pick_template_in_workflow_column_defs() {
+        let mut state = AppState::new();
+        state.column_focus = crate::state::ColumnFocus::Workflow;
+        state.workflows_focus = crate::state::WorkflowsFocus::Defs;
+        assert!(!matches!(
+            map_key(key(KeyCode::Char('t')), &state),
+            Action::PickTemplate
         ));
     }
 }
