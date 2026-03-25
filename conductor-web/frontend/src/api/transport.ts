@@ -2,19 +2,11 @@
  * Transport adapter for conductor frontend.
  *
  * Detects whether the app is running inside Tauri (desktop) or in a browser
- * (web) and provides the appropriate transport for API calls.
+ * (web) and provides the appropriate base URL for API calls.
  *
- * - **Web mode**: Uses `fetch()` against the REST API (default behavior)
- * - **Tauri mode**: Uses `@tauri-apps/api/core` invoke to call Rust commands directly
- *
- * Usage:
- *   import { isDesktop, invokeCommand } from './transport';
- *
- *   if (isDesktop()) {
- *     const repos = await invokeCommand<Repo[]>('list_repos');
- *   } else {
- *     const repos = await request<Repo[]>('/repos');
- *   }
+ * - **Web mode**: Uses relative `/api` paths (served by the same origin)
+ * - **Tauri mode**: Queries the embedded server port via `get_api_port` and
+ *   uses `http://127.0.0.1:{port}/api` as the base URL.
  */
 
 // Tauri v2 injects this global at startup; we use it only for detection.
@@ -43,9 +35,6 @@ let cachedInvoke: typeof import("@tauri-apps/api/core").invoke | null = null;
  * Uses a lazy dynamic import of `@tauri-apps/api/core` so the Tauri SDK is
  * only bundled when running inside the desktop container (tree-shaken in
  * web-only builds).
- *
- * In web mode, this function throws — callers should check `isDesktop()` first
- * or use the higher-level API functions in `client.ts` which handle both modes.
  */
 export async function invokeCommand<T>(
   command: string,
@@ -56,4 +45,43 @@ export async function invokeCommand<T>(
     cachedInvoke = mod.invoke;
   }
   return cachedInvoke<T>(command, args);
+}
+
+// In-flight promise for origin resolution — shared by all concurrent callers
+// so only one IPC round-trip fires even when multiple components mount at once.
+let originPromise: Promise<string> | null = null;
+
+/**
+ * Returns the base origin for non-API connections (e.g. EventSource).
+ *
+ * - Web mode: empty string (relative URLs work)
+ * - Desktop mode: `http://127.0.0.1:{port}`
+ */
+export async function getApiOrigin(): Promise<string> {
+  if (originPromise) return originPromise;
+
+  originPromise = (async () => {
+    if (isDesktop()) {
+      const port = await invokeCommand<number>("get_api_port");
+      return `http://127.0.0.1:${port}`;
+    }
+    return "";
+  })();
+  // Clear cache on rejection so subsequent callers can retry the IPC call.
+  originPromise.catch(() => {
+    originPromise = null;
+  });
+  return originPromise;
+}
+
+/**
+ * Returns the base URL for API requests.
+ *
+ * Delegates to `getApiOrigin()` so there is only one IPC call and one cache.
+ *
+ * - Web mode: `/api` (relative, same origin)
+ * - Desktop mode: `http://127.0.0.1:{port}/api` (embedded server)
+ */
+export async function getApiBaseUrl(): Promise<string> {
+  return `${await getApiOrigin()}/api`;
 }

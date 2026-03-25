@@ -1,0 +1,56 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - heading "Conductor" [level=1] [ref=e6]
+      - button "Close menu" [ref=e7]: ✕
+    - navigation [ref=e8]:
+      - link "Activity" [ref=e9]:
+        - /url: /
+      - link "Repos" [ref=e10]:
+        - /url: /repos
+      - link "Workflows" [ref=e11]:
+        - /url: /workflows
+      - link "Tickets" [ref=e12]:
+        - /url: /tickets
+      - generic [ref=e13]: Repos
+      - link "e2e-repo-1774135339566-ba0118" [ref=e14]:
+        - /url: /repos/01KM9B9TV6B8QGH6WA1M1D7CVJ
+      - link "e2e-repo-1774135341436-adde65" [ref=e15]:
+        - /url: /repos/01KM9B9WNM1X71AT021WMMJJFG
+      - link "e2e-repo-1774135356090-4142ff" [ref=e16]:
+        - /url: /repos/01KM9BAAZHE9ZFVKNBP11TG0KJ
+      - link "e2e-repo-1774135358102-80aa4f" [ref=e17]:
+        - /url: /repos/01KM9BACYCH5EX9RHPXK9C6HXB
+      - link "e2e-repo-1774135359191-c23eaa" [ref=e18]:
+        - /url: /repos/01KM9BAE0ECMD66QXPDADKX4ZA
+    - generic [ref=e19]:
+      - link "Settings" [ref=e20]:
+        - /url: /settings
+      - generic [ref=e21]: Press ? for shortcuts
+  - main [ref=e22]:
+    - generic [ref=e23]:
+      - button "Open menu" [ref=e24]: ☰
+      - generic [ref=e25]: Conductor
+      - button "Notifications" [ref=e28]:
+        - img [ref=e29]
+    - generic [ref=e32]:
+      - paragraph [ref=e33]: Repo not found
+      - link "Back to dashboard" [ref=e34]:
+        - /url: /
+  - generic [ref=e35]:
+    - link "Activity" [ref=e36]:
+      - /url: /
+      - img [ref=e37]
+      - text: Activity
+    - link "Repos" [ref=e39]:
+      - /url: /repos
+      - img [ref=e40]
+      - text: Repos
+    - link "Workflows" [ref=e42]:
+      - /url: /workflows
+      - img [ref=e43]
+      - text: Workflows
+```

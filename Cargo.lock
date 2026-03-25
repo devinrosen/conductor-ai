@@ -745,12 +745,15 @@ name = "conductor-desktop"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "axum",
  "conductor-core",
+ "conductor-web",
  "rusqlite",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]

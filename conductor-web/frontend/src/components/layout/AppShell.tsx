@@ -33,7 +33,7 @@ export function useRepos() {
 }
 
 export function AppShell() {
-  const { data: repos, loading, refetch } = useApi(() => api.listRepos(), []);
+  const { data: repos, loading, error, refetch } = useApi(() => api.listRepos(), []);
   const [helpOpen, setHelpOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { toasts, addToast, dismissToast } = useToast();
@@ -81,6 +81,25 @@ export function AppShell() {
   }, [refetch, addToast]);
 
   useConductorEvents(handlers);
+
+  if (error && !repos) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-50">
+        <div className="max-w-md text-center p-8">
+          <h1 className="text-xl font-semibold text-gray-900 mb-2">
+            Unable to connect
+          </h1>
+          <p className="text-gray-600 mb-4">{error}</p>
+          <button
+            onClick={refetch}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <ReposContext.Provider

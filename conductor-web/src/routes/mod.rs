@@ -8,10 +8,24 @@ pub mod tickets;
 pub mod workflows;
 pub mod worktrees;
 
+use axum::http::HeaderValue;
 use axum::routing::{delete, get, patch, post};
 use axum::Router;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::state::AppState;
+
+/// Build the API router with CORS restricted to the given origins.
+///
+/// This keeps CORS configuration inside conductor-web so that embedders
+/// (e.g. conductor-desktop) don't need to depend on axum/tower-http directly.
+pub fn api_router_with_cors(allowed_origins: Vec<HeaderValue>) -> Router<AppState> {
+    let cors = CorsLayer::new()
+        .allow_origin(allowed_origins)
+        .allow_methods(Any)
+        .allow_headers(Any);
+    api_router().layer(cors)
+}
 
 pub fn api_router() -> Router<AppState> {
     Router::new()

@@ -1,0 +1,48 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - heading "Conductor" [level=1] [ref=e6]
+      - button "Close menu" [ref=e7]: ✕
+    - navigation [ref=e8]:
+      - link "Activity" [ref=e9]:
+        - /url: /
+      - link "Repos" [ref=e10]:
+        - /url: /repos
+      - link "Workflows" [ref=e11]:
+        - /url: /workflows
+      - link "Tickets" [ref=e12]:
+        - /url: /tickets
+      - generic [ref=e13]: Repos
+      - link "e2e-repo-1774135369629-dafdf9" [ref=e14]:
+        - /url: /repos/01KM9BAR6M1SGBGNDZN99N12R5
+    - generic [ref=e15]:
+      - link "Settings" [ref=e16]:
+        - /url: /settings
+      - generic [ref=e17]: Press ? for shortcuts
+  - main [ref=e18]:
+    - generic [ref=e19]:
+      - button "Open menu" [ref=e20]: ☰
+      - generic [ref=e21]: Conductor
+      - button "Notifications" [ref=e24]:
+        - img [ref=e25]
+    - generic [ref=e28]:
+      - paragraph [ref=e29]: Worktree not found
+      - link "Back to repo" [ref=e30]:
+        - /url: /repos/01KM9BAP06M9BPKMDM1S212F34
+  - generic [ref=e31]:
+    - link "Activity" [ref=e32]:
+      - /url: /
+      - img [ref=e33]
+      - text: Activity
+    - link "Repos" [ref=e35]:
+      - /url: /repos
+      - img [ref=e36]
+      - text: Repos
+    - link "Workflows" [ref=e38]:
+      - /url: /workflows
+      - img [ref=e39]
+      - text: Workflows
+```

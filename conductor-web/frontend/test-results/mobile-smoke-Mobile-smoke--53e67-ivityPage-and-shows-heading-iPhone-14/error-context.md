@@ -1,0 +1,59 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - heading "Conductor" [level=1] [ref=e6]
+      - button "Close menu" [ref=e7]: ✕
+    - navigation [ref=e8]:
+      - link "Activity" [ref=e9]:
+        - /url: /
+      - link "Repos" [ref=e10]:
+        - /url: /repos
+      - link "Workflows" [ref=e11]:
+        - /url: /workflows
+      - link "Tickets" [ref=e12]:
+        - /url: /tickets
+      - generic [ref=e13]: Repos
+      - link "e2e-repo-1774135369629-dafdf9" [ref=e14]:
+        - /url: /repos/01KM9BAR6M1SGBGNDZN99N12R5
+    - generic [ref=e15]:
+      - link "Settings" [ref=e16]:
+        - /url: /settings
+      - generic [ref=e17]: Press ? for shortcuts
+  - main [ref=e18]:
+    - generic [ref=e19]:
+      - button "Open menu" [ref=e20]: ☰
+      - generic [ref=e21]: Conductor
+      - button "Notifications" [ref=e24]:
+        - img [ref=e25]
+    - generic [ref=e28]:
+      - generic [ref=e29]:
+        - heading "Repos" [level=2] [ref=e30]
+        - generic [ref=e31]:
+          - button "Discover from GitHub" [ref=e32]
+          - button "Register Repo" [ref=e33]
+      - link "e2e-repo-1774135369629-dafdf9 file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-SddM7D 0 worktrees Created 29 seconds ago" [ref=e35]:
+        - /url: /repos/01KM9BAR6M1SGBGNDZN99N12R5
+        - heading "e2e-repo-1774135369629-dafdf9" [level=3] [ref=e36]
+        - paragraph [ref=e37]: file:///var/folders/xd/d__2mrpj73gck0w8jgv020jr0000gp/T/conductor-e2e-SddM7D
+        - generic [ref=e38]:
+          - generic [ref=e39]: 0 worktrees
+          - generic [ref=e40]:
+            - text: Created
+            - time [ref=e41]: 29 seconds ago
+  - generic [ref=e42]:
+    - link "Activity" [ref=e43]:
+      - /url: /
+      - img [ref=e44]
+      - text: Activity
+    - link "Repos" [ref=e46]:
+      - /url: /repos
+      - img [ref=e47]
+      - text: Repos
+    - link "Workflows" [ref=e49]:
+      - /url: /workflows
+      - img [ref=e50]
+      - text: Workflows
+```
