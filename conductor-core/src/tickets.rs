@@ -230,6 +230,10 @@ impl<'a> TicketSyncer<'a> {
     }
 
     /// List tickets, optionally filtered by repo.
+    ///
+    /// Results are sorted by issue number descending (highest first).
+    /// Non-numeric `source_id` values (e.g. Jira keys like `PROJ-123`) cast to 0
+    /// and sort after all numeric IDs, ordered among themselves by string comparison.
     pub fn list(&self, repo_id: Option<&str>) -> Result<Vec<Ticket>> {
         let query = match repo_id {
             Some(_) => {
@@ -1851,5 +1855,68 @@ mod tests {
             result.unwrap_err(),
             ConductorError::TicketNotFound { .. }
         ));
+    }
+
+    #[test]
+    fn test_list_sorts_by_issue_number_descending() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Insert tickets with numeric source_ids in non-sequential order
+        let tickets = vec![
+            make_ticket("5", "Issue 5"),
+            make_ticket("123", "Issue 123"),
+            make_ticket("1", "Issue 1"),
+            make_ticket("42", "Issue 42"),
+        ];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+
+        let result = syncer.list(Some("r1")).unwrap();
+        let ids: Vec<&str> = result.iter().map(|t| t.source_id.as_str()).collect();
+        assert_eq!(ids, vec!["123", "42", "5", "1"]);
+    }
+
+    #[test]
+    fn test_list_filtered_sorts_by_issue_number_descending() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![
+            make_ticket("10", "Issue 10"),
+            make_ticket("200", "Issue 200"),
+            make_ticket("3", "Issue 3"),
+        ];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+
+        let filter = TicketFilter {
+            labels: vec![],
+            search: None,
+            include_closed: false,
+        };
+        let result = syncer.list_filtered(Some("r1"), &filter).unwrap();
+        let ids: Vec<&str> = result.iter().map(|t| t.source_id.as_str()).collect();
+        assert_eq!(ids, vec!["200", "10", "3"]);
+    }
+
+    #[test]
+    fn test_list_sorts_non_numeric_source_ids_to_end() {
+        // Non-numeric source_ids (e.g. Jira keys) CAST to 0, so they sort
+        // after all numeric IDs. Among themselves, they fall back to the
+        // secondary `source_id DESC` (string) sort.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![
+            make_ticket("PROJ-10", "Jira ticket 10"),
+            make_ticket("5", "GitHub issue 5"),
+            make_ticket("PROJ-3", "Jira ticket 3"),
+            make_ticket("100", "GitHub issue 100"),
+        ];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+
+        let result = syncer.list(Some("r1")).unwrap();
+        let ids: Vec<&str> = result.iter().map(|t| t.source_id.as_str()).collect();
+        // Numeric IDs first (descending), then non-numeric (string descending)
+        assert_eq!(ids, vec!["100", "5", "PROJ-3", "PROJ-10"]);
     }
 }
