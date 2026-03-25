@@ -691,6 +691,54 @@ fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {
     }
 }
 
+/// Restart a failed/cancelled agent run by creating a new run with the
+/// same prompt/config and re-spawning a tmux window.
+pub async fn restart_agent(
+    State(state): State<AppState>,
+    Path((worktree_id, run_id)): Path<(String, String)>,
+) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+
+    let agent_mgr = AgentManager::new(&db);
+
+    let new_run = agent_mgr.restart_run(&run_id)?;
+
+    // Look up worktree path for agent args
+    let wt_mgr = WorktreeManager::new(&db, &config);
+    let wt = wt_mgr.get_by_id(&worktree_id)?;
+
+    let window_name = new_run.tmux_window.as_deref().unwrap_or(&wt.slug);
+
+    let args = conductor_core::agent_runtime::build_agent_args(
+        &new_run.id,
+        &wt.path,
+        &new_run.prompt,
+        None,
+        new_run.model.as_deref(),
+        new_run.bot_name.as_deref(),
+    )
+    .map_err(|e| {
+        let _ = agent_mgr.update_run_failed(&new_run.id, &e);
+        ConductorError::Agent(e)
+    })?;
+
+    match conductor_core::agent_runtime::spawn_tmux_window(&args, window_name) {
+        Ok(()) => {
+            state.events.emit(ConductorEvent::AgentRestarted {
+                run_id: new_run.id.clone(),
+                old_run_id: run_id,
+                worktree_id: worktree_id.clone(),
+            });
+            Ok((StatusCode::CREATED, Json(new_run)))
+        }
+        Err(e) => {
+            let _ = agent_mgr.update_run_failed(&new_run.id, &e);
+            Err(ConductorError::Agent(e).into())
+        }
+    }
+}
+
 /// Capture tmux log, kill tmux window, and mark run as cancelled.
 fn cancel_agent_run(mgr: &AgentManager, run: &AgentRun) -> Result<(), ApiError> {
     if let Some(ref window) = run.tmux_window {

@@ -408,6 +408,13 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         let is_active = agent_run.is_some_and(|run| run.is_active());
         let is_waiting_for_feedback = agent_run.is_some_and(|run| run.is_waiting_for_feedback());
+        let is_failed = agent_run.is_some_and(|run| {
+            matches!(
+                run.status,
+                conductor_core::agent::AgentRunStatus::Failed
+                    | conductor_core::agent::AgentRunStatus::Cancelled
+            )
+        });
 
         let focus = state.worktree_detail_focus;
 
@@ -415,6 +422,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('p') => return Action::LaunchAgent,
             KeyCode::Char('O') if !is_active => return Action::OrchestrateAgent,
             KeyCode::Char('x') if is_active => return Action::StopAgent,
+            KeyCode::Char('R') if is_failed => return Action::RestartAgent,
             KeyCode::Char('f') if is_waiting_for_feedback => return Action::SubmitFeedback,
             KeyCode::Char('F') if is_waiting_for_feedback => return Action::DismissFeedback,
             KeyCode::Char('r') => return Action::ResumeWorktreeWorkflow,

@@ -171,6 +171,7 @@ pub enum Action {
     PromptRepoAgent,
     OrchestrateAgent,
     StopAgent,
+    RestartAgent,
     #[allow(dead_code)]
     CopyLastCodeBlock,
     ExpandAgentEvent,
@@ -285,6 +286,10 @@ pub enum Action {
     },
     // Background result for worktree agent stop
     AgentStopComplete {
+        result: Result<String, String>,
+    },
+    // Background result for agent restart
+    AgentRestartComplete {
         result: Result<String, String>,
     },
 

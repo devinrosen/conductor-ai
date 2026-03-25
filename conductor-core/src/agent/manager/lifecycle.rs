@@ -193,6 +193,35 @@ impl<'a> AgentManager<'a> {
         )?;
         Ok(())
     }
+
+    /// Create a new run by cloning the prompt/config from a failed run.
+    ///
+    /// The original run must be in a terminal state (failed or cancelled).
+    /// The new run gets `parent_run_id` set to the original run's ID to
+    /// preserve the restart lineage.
+    ///
+    /// Returns the newly created `AgentRun` record (status = Running).
+    pub fn restart_run(&self, run_id: &str) -> Result<AgentRun> {
+        let original = self.get_run(run_id)?.ok_or_else(|| {
+            crate::error::ConductorError::Agent(format!("Run {run_id} not found"))
+        })?;
+
+        if original.is_active() {
+            return Err(crate::error::ConductorError::Agent(
+                "Cannot restart an active run".to_string(),
+            ));
+        }
+
+        self.create_run_with_parent(
+            original.worktree_id.as_deref(),
+            original.repo_id.as_deref(),
+            &original.prompt,
+            original.tmux_window.as_deref(),
+            original.model.as_deref(),
+            Some(run_id),
+            original.bot_name.as_deref(),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -387,6 +416,72 @@ mod tests {
 
         let fetched = mgr.get_run(&run.id).unwrap().unwrap();
         assert!(fetched.model.is_none());
+    }
+
+    #[test]
+    fn test_restart_run_creates_new_run_with_same_config() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(
+                Some("w1"),
+                "Fix the bug",
+                Some("feat-test"),
+                Some("claude-sonnet-4-6"),
+            )
+            .unwrap();
+        mgr.update_run_failed(&run.id, "Crashed").unwrap();
+
+        let restarted = mgr.restart_run(&run.id).unwrap();
+        assert_eq!(restarted.status, AgentRunStatus::Running);
+        assert_eq!(restarted.prompt, "Fix the bug");
+        assert_eq!(restarted.model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(restarted.tmux_window.as_deref(), Some("feat-test"));
+        assert_eq!(restarted.parent_run_id.as_deref(), Some(run.id.as_str()));
+        assert_ne!(restarted.id, run.id);
+
+        // Original run stays failed
+        let original = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(original.status, AgentRunStatus::Failed);
+    }
+
+    #[test]
+    fn test_restart_run_rejects_active_run() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+        // Run is still Running — restart should fail
+        let result = mgr.restart_run(&run.id);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_restart_run_not_found() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let result = mgr.restart_run("nonexistent-id");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_restart_run_preserves_repo_scope() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_repo_run("r1", "Analyse the repo", Some("repo-test-abc"), None)
+            .unwrap();
+        mgr.update_run_failed(&run.id, "Crashed").unwrap();
+
+        let restarted = mgr.restart_run(&run.id).unwrap();
+        assert_eq!(restarted.repo_id.as_deref(), Some("r1"));
+        assert!(restarted.worktree_id.is_none());
+        assert_eq!(restarted.prompt, "Analyse the repo");
+        assert_eq!(restarted.parent_run_id.as_deref(), Some(run.id.as_str()));
     }
 
     #[test]
