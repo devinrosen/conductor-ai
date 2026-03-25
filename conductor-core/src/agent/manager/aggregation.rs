@@ -738,7 +738,9 @@ mod tests {
 
         // Add a non-completed (running) run for r1/t1 — should be excluded by the
         // `status = 'completed'` filter and not inflate totals.
-        let _running_run = mgr.create_run(Some("w1"), "still running", None, None).unwrap();
+        let _running_run = mgr
+            .create_run(Some("w1"), "still running", None, None)
+            .unwrap();
 
         // Repo r1 should only include t1, and the running run should be excluded
         let r1_totals = mgr.totals_by_ticket_for_repo("r1").unwrap();
