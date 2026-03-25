@@ -292,6 +292,7 @@ pub fn poll_data() -> Option<PollResult> {
         if now - LAST_REAP.load(Ordering::Relaxed) >= 30 {
             LAST_REAP.store(now, Ordering::Relaxed);
             let _ = agent_mgr.reap_orphaned_runs();
+            let _ = agent_mgr.dismiss_expired_feedback_requests();
             let _ = wt_mgr.reap_stale_worktrees();
             if config.general.auto_cleanup_merged_branches {
                 match wt_mgr.cleanup_merged_worktrees(None) {

@@ -245,6 +245,13 @@ export interface RunWorkflowRequest {
   inputs?: Record<string, string>;
 }
 
+export type FeedbackType = "text" | "confirm" | "single_select" | "multi_select";
+
+export interface FeedbackOption {
+  value: string;
+  label: string;
+}
+
 export interface FeedbackRequest {
   id: string;
   run_id: string;
@@ -252,6 +259,9 @@ export interface FeedbackRequest {
   response: string | null;
   status: "pending" | "responded" | "dismissed";
   created_at: string;
+  feedback_type: FeedbackType;
+  options?: FeedbackOption[];
+  timeout_secs?: number;
 }
 
 export interface Notification {

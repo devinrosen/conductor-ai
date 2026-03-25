@@ -638,8 +638,58 @@ impl App {
                 if value.is_empty() {
                     return;
                 }
+                // Convert user input based on feedback type (select → option value)
+                let resolved_value = if let Some(ref fb) = self.state.data.pending_feedback {
+                    use conductor_core::agent::FeedbackType;
+                    match fb.feedback_type {
+                        FeedbackType::Confirm => {
+                            let trimmed = value.trim().to_lowercase();
+                            if trimmed.starts_with('y') {
+                                "yes".to_string()
+                            } else {
+                                "no".to_string()
+                            }
+                        }
+                        FeedbackType::SingleSelect => {
+                            if let Some(ref opts) = fb.options {
+                                if let Ok(idx) = value.trim().parse::<usize>() {
+                                    if idx >= 1 && idx <= opts.len() {
+                                        opts[idx - 1].value.clone()
+                                    } else {
+                                        value.clone()
+                                    }
+                                } else {
+                                    value.clone()
+                                }
+                            } else {
+                                value.clone()
+                            }
+                        }
+                        FeedbackType::MultiSelect => {
+                            if let Some(ref opts) = fb.options {
+                                let selected: Vec<String> = value
+                                    .split(',')
+                                    .filter_map(|s| {
+                                        let idx = s.trim().parse::<usize>().ok()?;
+                                        if idx >= 1 && idx <= opts.len() {
+                                            Some(opts[idx - 1].value.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                                serde_json::to_string(&selected).unwrap_or(value.clone())
+                            } else {
+                                value.clone()
+                            }
+                        }
+                        FeedbackType::Text => value.clone(),
+                    }
+                } else {
+                    value.clone()
+                };
                 let mgr = AgentManager::new(&self.conn);
-                match mgr.submit_feedback(&feedback_id, &value) {
+                match mgr.submit_feedback(&feedback_id, &resolved_value) {
                     Ok(_) => {
                         self.state.status_message =
                             Some("Feedback submitted — agent resumed".to_string());

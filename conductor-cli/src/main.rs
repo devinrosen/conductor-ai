@@ -982,6 +982,9 @@ fn main() -> Result<()> {
                 if let Err(e) = agent_mgr.reap_orphaned_runs() {
                     eprintln!("Warning: reap_orphaned_runs failed: {e}");
                 }
+                if let Err(e) = agent_mgr.dismiss_expired_feedback_requests() {
+                    eprintln!("Warning: dismiss_expired_feedback_requests failed: {e}");
+                }
                 let wf_mgr = WorkflowManager::new(&conn);
                 if let Err(e) = wf_mgr.reap_orphaned_workflow_runs() {
                     eprintln!("Warning: reap_orphaned_workflow_runs failed: {e}");
@@ -2600,13 +2603,19 @@ fn run_agent(
                         // would fill the OS pipe buffer (64 KB) if Claude keeps writing,
                         // causing a deadlock. We wait after child.wait() instead.
                         if ev.kind == "text" {
-                            if let Some(feedback_prompt) =
-                                conductor_core::agent::parse_feedback_marker(&ev.summary)
+                            if let Some(parsed) =
+                                conductor_core::agent::parse_feedback_marker_structured(&ev.summary)
                             {
                                 eprintln!(
-                                    "[conductor] Agent requesting feedback: {feedback_prompt}"
+                                    "[conductor] Agent requesting feedback: {}",
+                                    parsed.prompt
                                 );
-                                match mgr.request_feedback(run_id, feedback_prompt) {
+                                let params = conductor_core::agent::FeedbackRequestParams {
+                                    feedback_type: parsed.feedback_type,
+                                    options: parsed.options,
+                                    timeout_secs: parsed.timeout_secs,
+                                };
+                                match mgr.request_feedback(run_id, &parsed.prompt, Some(&params)) {
                                     Ok(fb) => {
                                         eprintln!(
                                             "[conductor] Feedback requested (id: {}), will wait after turn completes",

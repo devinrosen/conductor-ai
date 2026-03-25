@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 49;
+pub const LATEST_SCHEMA_VERSION: u32 = 50;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -890,6 +890,22 @@ pub fn run(conn: &Connection) -> Result<()> {
     if version < 49 {
         conn.execute_batch(include_str!("migrations/049_feature_last_commit_at.sql"))?;
         bump_version(conn, 49)?;
+    }
+
+    if version < 50 {
+        // Only ALTER if feedback_requests table exists (created in migration 18).
+        let has_table: bool = conn
+            .prepare("SELECT 1 FROM feedback_requests LIMIT 0")
+            .is_ok();
+        if has_table {
+            let has_col: bool = conn
+                .prepare("SELECT feedback_type FROM feedback_requests LIMIT 0")
+                .is_ok();
+            if !has_col {
+                conn.execute_batch(include_str!("migrations/050_feedback_type_and_timeout.sql"))?;
+            }
+        }
+        bump_version(conn, 50)?;
     }
 
     Ok(())

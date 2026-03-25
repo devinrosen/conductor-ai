@@ -201,9 +201,44 @@ impl App {
             return;
         };
 
+        use conductor_core::agent::FeedbackType;
+
+        let placeholder = match fb.feedback_type {
+            FeedbackType::Confirm => "Type y or n...".to_string(),
+            FeedbackType::SingleSelect => {
+                let opts_text = fb
+                    .options
+                    .as_ref()
+                    .map(|opts| {
+                        opts.iter()
+                            .enumerate()
+                            .map(|(i, o)| format!("{}. {}", i + 1, o.label))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                format!("Type the number of your choice:\n{opts_text}")
+            }
+            FeedbackType::MultiSelect => {
+                let opts_text = fb
+                    .options
+                    .as_ref()
+                    .map(|opts| {
+                        opts.iter()
+                            .enumerate()
+                            .map(|(i, o)| format!("{}. {}", i + 1, o.label))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                format!("Type numbers separated by commas (e.g. 1,3):\n{opts_text}")
+            }
+            FeedbackType::Text => "Type your feedback response...".to_string(),
+        };
+
         // Open a text area modal for the user to type their response
         let mut textarea = tui_textarea::TextArea::default();
-        textarea.set_placeholder_text("Type your feedback response...");
+        textarea.set_placeholder_text(&placeholder);
 
         self.state.modal = Modal::AgentPrompt {
             title: format!("Agent Feedback: {}", &fb.prompt),

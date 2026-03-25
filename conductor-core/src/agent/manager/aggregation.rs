@@ -201,7 +201,8 @@ mod tests {
         let _run2 = mgr.create_run(Some("w1"), "Task 2", None, None).unwrap();
         let run3 = mgr.create_run(Some("w2"), "Task 3", None, None).unwrap();
         // Set run3 to waiting_for_feedback via request_feedback
-        mgr.request_feedback(&run3.id, "What should I do?").unwrap();
+        mgr.request_feedback(&run3.id, "What should I do?", None)
+            .unwrap();
 
         // Also create a completed run — should not appear in counts
         let run4 = mgr.create_run(Some("w1"), "Task 4", None, None).unwrap();

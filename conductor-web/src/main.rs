@@ -96,6 +96,7 @@ async fn main() -> Result<()> {
                 let conn = db.blocking_lock();
                 let mgr = AgentManager::new(&conn);
                 mgr.reap_orphaned_runs()?;
+                mgr.dismiss_expired_feedback_requests()?;
                 let cfg = cfg.blocking_read();
                 let wt_mgr = conductor_core::worktree::WorktreeManager::new(&conn, &cfg);
                 wt_mgr.reap_stale_worktrees()?;

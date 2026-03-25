@@ -6,16 +6,44 @@ use crate::error::{ConductorError, Result};
 
 use super::super::db::{optional_row, row_to_feedback_request, FEEDBACK_SELECT};
 use super::super::status::truncate_utf8;
-use super::super::status::{FeedbackStatus, FEEDBACK_MAX_LEN};
-use super::super::types::FeedbackRequest;
+use super::super::status::{FeedbackStatus, FeedbackType, FEEDBACK_MAX_LEN};
+use super::super::types::{FeedbackRequest, FeedbackRequestParams};
 use super::AgentManager;
 
 impl<'a> AgentManager<'a> {
     /// Transition a run to "waiting_for_feedback" and create a feedback request.
-    pub fn request_feedback(&self, run_id: &str, prompt: &str) -> Result<FeedbackRequest> {
+    ///
+    /// The optional `params` argument carries structured feedback metadata
+    /// (type, selectable options, timeout). Pass `None` for plain text feedback
+    /// (backward-compatible default).
+    pub fn request_feedback(
+        &self,
+        run_id: &str,
+        prompt: &str,
+        params: Option<&FeedbackRequestParams>,
+    ) -> Result<FeedbackRequest> {
         let prompt = truncate_utf8(prompt, FEEDBACK_MAX_LEN);
         let id = crate::new_id();
         let now = Utc::now().to_rfc3339();
+
+        let feedback_type = params.map(|p| p.feedback_type.clone()).unwrap_or_default();
+        let options = params.and_then(|p| p.options.clone());
+        let options_json = options
+            .as_ref()
+            .map(|o| serde_json::to_string(o).unwrap_or_default());
+        let timeout_secs = params.and_then(|p| p.timeout_secs);
+
+        // Validate: select types require options
+        if matches!(
+            feedback_type,
+            FeedbackType::SingleSelect | FeedbackType::MultiSelect
+        ) && options.as_ref().is_none_or(|o| o.is_empty())
+        {
+            return Err(ConductorError::Agent(
+                "SingleSelect and MultiSelect feedback types require at least one option"
+                    .to_string(),
+            ));
+        }
 
         // Update run status
         self.conn.execute(
@@ -31,12 +59,25 @@ impl<'a> AgentManager<'a> {
             status: FeedbackStatus::Pending,
             created_at: now.clone(),
             responded_at: None,
+            feedback_type: feedback_type.clone(),
+            options: options.clone(),
+            timeout_secs,
         };
 
         self.conn.execute(
-            "INSERT INTO feedback_requests (id, run_id, prompt, status, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![req.id, req.run_id, req.prompt, req.status, req.created_at],
+            "INSERT INTO feedback_requests \
+             (id, run_id, prompt, status, created_at, feedback_type, options_json, timeout_secs) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                req.id,
+                req.run_id,
+                req.prompt,
+                req.status,
+                req.created_at,
+                feedback_type,
+                options_json,
+                timeout_secs,
+            ],
         )?;
 
         Ok(req)
@@ -177,13 +218,44 @@ impl<'a> AgentManager<'a> {
             row_to_feedback_request,
         )
     }
+
+    /// Dismiss all pending feedback requests whose per-request timeout has expired.
+    ///
+    /// For each expired request the feedback is marked `dismissed` and the
+    /// parent run is resumed (back to `running`).  Returns the number of
+    /// requests that were auto-dismissed.
+    pub fn dismiss_expired_feedback_requests(&self) -> Result<usize> {
+        let now = Utc::now().to_rfc3339();
+
+        // Find pending requests that have a timeout and have exceeded it.
+        let expired: Vec<FeedbackRequest> = query_collect(
+            self.conn,
+            &format!(
+                "{FEEDBACK_SELECT} WHERE status = 'pending' \
+                 AND timeout_secs IS NOT NULL \
+                 AND datetime(created_at, '+' || timeout_secs || ' seconds') <= datetime(?1)"
+            ),
+            params![now],
+            row_to_feedback_request,
+        )?;
+
+        let mut dismissed = 0;
+        for fb in &expired {
+            // Use dismiss_feedback which handles status update + run resume.
+            if self.dismiss_feedback(&fb.id).is_ok() {
+                dismissed += 1;
+            }
+        }
+        Ok(dismissed)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::setup_db;
     use super::super::AgentManager;
-    use crate::agent::status::{AgentRunStatus, FeedbackStatus};
+    use crate::agent::status::{AgentRunStatus, FeedbackStatus, FeedbackType};
+    use crate::agent::types::{FeedbackOption, FeedbackRequestParams};
 
     #[test]
     fn test_request_feedback() {
@@ -196,7 +268,7 @@ mod tests {
         assert_eq!(run.status, AgentRunStatus::Running);
 
         let fb = mgr
-            .request_feedback(&run.id, "Should I refactor this module?")
+            .request_feedback(&run.id, "Should I refactor this module?", None)
             .unwrap();
         assert_eq!(fb.run_id, run.id);
         assert_eq!(fb.prompt, "Should I refactor this module?");
@@ -217,7 +289,7 @@ mod tests {
             .create_run(Some("w1"), "Fix the bug", None, None)
             .unwrap();
         let fb = mgr
-            .request_feedback(&run.id, "Proceed with refactor?")
+            .request_feedback(&run.id, "Proceed with refactor?", None)
             .unwrap();
 
         let updated = mgr.submit_feedback(&fb.id, "Yes, go ahead").unwrap();
@@ -237,7 +309,9 @@ mod tests {
         let run = mgr
             .create_run(Some("w1"), "Fix the bug", None, None)
             .unwrap();
-        let fb = mgr.request_feedback(&run.id, "Need approval").unwrap();
+        let fb = mgr
+            .request_feedback(&run.id, "Need approval", None)
+            .unwrap();
 
         mgr.dismiss_feedback(&fb.id).unwrap();
 
@@ -259,7 +333,7 @@ mod tests {
 
         assert!(mgr.pending_feedback_for_run(&run.id).unwrap().is_none());
 
-        let fb = mgr.request_feedback(&run.id, "Need input").unwrap();
+        let fb = mgr.request_feedback(&run.id, "Need input", None).unwrap();
         let pending = mgr.pending_feedback_for_run(&run.id).unwrap().unwrap();
         assert_eq!(pending.id, fb.id);
 
@@ -278,7 +352,9 @@ mod tests {
 
         assert!(mgr.pending_feedback_for_worktree("w1").unwrap().is_none());
 
-        let fb = mgr.request_feedback(&run.id, "Approve this?").unwrap();
+        let fb = mgr
+            .request_feedback(&run.id, "Approve this?", None)
+            .unwrap();
         let pending = mgr.pending_feedback_for_worktree("w1").unwrap().unwrap();
         assert_eq!(pending.id, fb.id);
 
@@ -294,10 +370,10 @@ mod tests {
             .create_run(Some("w1"), "Fix the bug", None, None)
             .unwrap();
 
-        let fb1 = mgr.request_feedback(&run.id, "Question 1").unwrap();
+        let fb1 = mgr.request_feedback(&run.id, "Question 1", None).unwrap();
         mgr.submit_feedback(&fb1.id, "Answer 1").unwrap();
 
-        let fb2 = mgr.request_feedback(&run.id, "Question 2").unwrap();
+        let fb2 = mgr.request_feedback(&run.id, "Question 2", None).unwrap();
 
         let all = mgr.list_feedback_for_run(&run.id).unwrap();
         assert_eq!(all.len(), 2);
@@ -322,7 +398,7 @@ mod tests {
         let run = mgr
             .create_run(Some("w1"), "Fix the bug", None, None)
             .unwrap();
-        let fb = mgr.request_feedback(&run.id, "Approve?").unwrap();
+        let fb = mgr.request_feedback(&run.id, "Approve?", None).unwrap();
 
         conn.execute(
             "DELETE FROM agent_runs WHERE id = ?1",
@@ -341,7 +417,7 @@ mod tests {
         let run = mgr
             .create_run(Some("w1"), "Fix the bug", None, None)
             .unwrap();
-        let fb = mgr.request_feedback(&run.id, "Proceed?").unwrap();
+        let fb = mgr.request_feedback(&run.id, "Proceed?", None).unwrap();
 
         mgr.submit_feedback(&fb.id, "Yes").unwrap();
 
@@ -365,7 +441,7 @@ mod tests {
         let run = mgr
             .create_run(Some("w1"), "Fix the bug", None, None)
             .unwrap();
-        let fb = mgr.request_feedback(&run.id, "Approve?").unwrap();
+        let fb = mgr.request_feedback(&run.id, "Approve?", None).unwrap();
 
         mgr.dismiss_feedback(&fb.id).unwrap();
 
@@ -397,9 +473,9 @@ mod tests {
             .create_run(Some("w1"), "test prompt", None, None)
             .unwrap();
 
-        let req1 = mgr.request_feedback(&run.id, "question 1").unwrap();
-        let req2 = mgr.request_feedback(&run.id, "question 2").unwrap();
-        let req3 = mgr.request_feedback(&run.id, "question 3").unwrap();
+        let req1 = mgr.request_feedback(&run.id, "question 1", None).unwrap();
+        let req2 = mgr.request_feedback(&run.id, "question 2", None).unwrap();
+        let req3 = mgr.request_feedback(&run.id, "question 3", None).unwrap();
         mgr.submit_feedback(&req3.id, "answered").unwrap();
 
         let pending = mgr.list_all_pending_feedback_requests().unwrap();
@@ -416,8 +492,8 @@ mod tests {
         let run1 = mgr.create_run(Some("w1"), "run 1", None, None).unwrap();
         let run2 = mgr.create_run(Some("w2"), "run 2", None, None).unwrap();
 
-        mgr.request_feedback(&run1.id, "from run 1").unwrap();
-        mgr.request_feedback(&run2.id, "from run 2").unwrap();
+        mgr.request_feedback(&run1.id, "from run 1", None).unwrap();
+        mgr.request_feedback(&run2.id, "from run 2", None).unwrap();
 
         let pending = mgr.list_all_pending_feedback_requests().unwrap();
         assert_eq!(
@@ -425,5 +501,100 @@ mod tests {
             2,
             "pending requests from all runs should be returned"
         );
+    }
+
+    #[test]
+    fn test_request_feedback_with_structured_params() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+
+        let params = FeedbackRequestParams {
+            feedback_type: FeedbackType::SingleSelect,
+            options: Some(vec![
+                FeedbackOption {
+                    value: "p0".to_string(),
+                    label: "P0 — Critical".to_string(),
+                },
+                FeedbackOption {
+                    value: "p1".to_string(),
+                    label: "P1 — High".to_string(),
+                },
+            ]),
+            timeout_secs: Some(300),
+        };
+
+        let fb = mgr
+            .request_feedback(&run.id, "Pick priority", Some(&params))
+            .unwrap();
+        assert_eq!(fb.feedback_type, FeedbackType::SingleSelect);
+        assert_eq!(fb.options.as_ref().unwrap().len(), 2);
+        assert_eq!(fb.options.as_ref().unwrap()[0].value, "p0");
+        assert_eq!(fb.timeout_secs, Some(300));
+
+        // Verify it round-trips through the DB
+        let fetched = mgr.get_feedback(&fb.id).unwrap().unwrap();
+        assert_eq!(fetched.feedback_type, FeedbackType::SingleSelect);
+        assert_eq!(fetched.options.as_ref().unwrap().len(), 2);
+        assert_eq!(fetched.timeout_secs, Some(300));
+    }
+
+    #[test]
+    fn test_request_feedback_select_requires_options() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr
+            .create_run(Some("w1"), "Fix the bug", None, None)
+            .unwrap();
+
+        let params = FeedbackRequestParams {
+            feedback_type: FeedbackType::SingleSelect,
+            options: None,
+            timeout_secs: None,
+        };
+
+        let err = mgr
+            .request_feedback(&run.id, "Pick one", Some(&params))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("require at least one option"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_dismiss_expired_feedback_requests() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let run = mgr.create_run(Some("w1"), "task", None, None).unwrap();
+
+        // Create a feedback request with a 0-second timeout (already expired)
+        let params = FeedbackRequestParams {
+            feedback_type: FeedbackType::default(),
+            options: None,
+            timeout_secs: Some(0),
+        };
+        let fb = mgr
+            .request_feedback(&run.id, "urgent question", Some(&params))
+            .unwrap();
+
+        // Also create one without a timeout (should NOT be dismissed)
+        let run2 = mgr.create_run(Some("w2"), "task2", None, None).unwrap();
+        let fb2 = mgr.request_feedback(&run2.id, "no timeout", None).unwrap();
+
+        let dismissed = mgr.dismiss_expired_feedback_requests().unwrap();
+        assert_eq!(dismissed, 1);
+
+        let fetched = mgr.get_feedback(&fb.id).unwrap().unwrap();
+        assert_eq!(fetched.status, FeedbackStatus::Dismissed);
+
+        let fetched2 = mgr.get_feedback(&fb2.id).unwrap().unwrap();
+        assert_eq!(fetched2.status, FeedbackStatus::Pending);
+
+        // Run resumed after timeout dismiss
+        let fetched_run = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(fetched_run.status, AgentRunStatus::Running);
     }
 }

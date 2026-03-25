@@ -588,7 +588,7 @@ pub async fn request_feedback(
         .into());
     }
 
-    let feedback = mgr.request_feedback(&run.id, &body.prompt)?;
+    let feedback = mgr.request_feedback(&run.id, &body.prompt, None)?;
 
     state.events.emit(ConductorEvent::FeedbackRequested {
         run_id: run.id.clone(),

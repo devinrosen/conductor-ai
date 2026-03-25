@@ -1,10 +1,13 @@
 use super::status::StepStatus;
-use super::types::{AgentCreatedIssue, AgentRun, AgentRunEvent, FeedbackRequest, PlanStep};
+use super::types::{
+    AgentCreatedIssue, AgentRun, AgentRunEvent, FeedbackOption, FeedbackRequest, PlanStep,
+};
 use crate::error::Result;
 
 /// Shared SELECT column list for the `feedback_requests` table.
 pub(super) const FEEDBACK_SELECT: &str =
-    "SELECT id, run_id, prompt, response, status, created_at, responded_at FROM feedback_requests";
+    "SELECT id, run_id, prompt, response, status, created_at, responded_at, \
+     feedback_type, options_json, timeout_secs FROM feedback_requests";
 
 /// Shared SELECT column list for the `agent_runs` table (plain, unaliased form).
 pub(super) const AGENT_RUN_SELECT: &str =
@@ -148,6 +151,9 @@ pub(super) const AGENT_CREATED_ISSUES_SELECT: &str =
      FROM agent_created_issues";
 
 pub(super) fn row_to_feedback_request(row: &rusqlite::Row) -> rusqlite::Result<FeedbackRequest> {
+    let options_json: Option<String> = row.get(8)?;
+    let options: Option<Vec<FeedbackOption>> =
+        options_json.and_then(|j| serde_json::from_str(&j).ok());
     Ok(FeedbackRequest {
         id: row.get(0)?,
         run_id: row.get(1)?,
@@ -156,6 +162,9 @@ pub(super) fn row_to_feedback_request(row: &rusqlite::Row) -> rusqlite::Result<F
         status: row.get(4)?,
         created_at: row.get(5)?,
         responded_at: row.get(6)?,
+        feedback_type: row.get(7)?,
+        options,
+        timeout_secs: row.get(9)?,
     })
 }
 

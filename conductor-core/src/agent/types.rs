@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::status::{AgentRunStatus, FeedbackStatus, StepStatus};
+use super::status::{AgentRunStatus, FeedbackStatus, FeedbackType, StepStatus};
 
 /// A single step in an agent's two-phase execution plan.
 /// Stored as individual records in the `agent_run_steps` table.
@@ -200,6 +200,15 @@ pub struct AgentCreatedIssue {
     pub created_at: String,
 }
 
+/// A selectable option for `SingleSelect` / `MultiSelect` feedback types.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedbackOption {
+    /// Machine-readable value sent back as the response.
+    pub value: String,
+    /// Human-readable label shown to the user.
+    pub label: String,
+}
+
 /// A human-in-the-loop feedback request created by an agent run.
 /// The agent pauses execution and waits for the user to respond.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +222,23 @@ pub struct FeedbackRequest {
     pub status: FeedbackStatus,
     pub created_at: String,
     pub responded_at: Option<String>,
+    /// The kind of input requested (text, confirm, single_select, multi_select).
+    #[serde(default)]
+    pub feedback_type: FeedbackType,
+    /// Selectable options for `SingleSelect` / `MultiSelect` types.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<FeedbackOption>>,
+    /// Per-request timeout in seconds. `None` means wait indefinitely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<i64>,
+}
+
+/// Parameters for creating a new feedback request (builder-style).
+#[derive(Debug, Clone, Default)]
+pub struct FeedbackRequestParams {
+    pub feedback_type: FeedbackType,
+    pub options: Option<Vec<FeedbackOption>>,
+    pub timeout_secs: Option<i64>,
 }
 
 /// Aggregated agent stats for a ticket (across all linked worktrees).

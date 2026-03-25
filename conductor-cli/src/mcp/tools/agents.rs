@@ -123,6 +123,21 @@ pub(super) fn tool_list_agent_runs(
         if let Some(ended) = &run.ended_at {
             out.push_str(&format!("ended_at: {ended}\n"));
         }
+        // Show pending feedback details for waiting runs
+        if run.status == conductor_core::agent::AgentRunStatus::WaitingForFeedback {
+            if let Ok(Some(fb)) = agent_mgr.pending_feedback_for_run(&run.id) {
+                out.push_str(&format!("feedback_prompt: {}\n", fb.prompt));
+                out.push_str(&format!("feedback_type: {}\n", fb.feedback_type));
+                if let Some(ref opts) = fb.options {
+                    for opt in opts {
+                        out.push_str(&format!("  option: {} ({})\n", opt.label, opt.value));
+                    }
+                }
+                if let Some(timeout) = fb.timeout_secs {
+                    out.push_str(&format!("feedback_timeout_secs: {timeout}\n"));
+                }
+            }
+        }
         out.push('\n');
     }
 
@@ -161,9 +176,26 @@ pub(super) fn tool_submit_agent_feedback(
         }
         Err(e) => return tool_err(e),
     };
+
+    // For select types, include the options in the response so the caller
+    // knows what values are valid.
+    let type_hint = format!("feedback_type: {}", pending.feedback_type);
+    let options_hint = pending
+        .options
+        .as_ref()
+        .map(|opts| {
+            let items: Vec<String> = opts
+                .iter()
+                .map(|o| format!("  - {} ({})", o.label, o.value))
+                .collect();
+            format!("\nOptions:\n{}", items.join("\n"))
+        })
+        .unwrap_or_default();
+
     match mgr.submit_feedback(&pending.id, feedback) {
         Ok(_) => tool_ok(format!(
-            "Feedback submitted for run {run_id}. Agent has been resumed."
+            "Feedback submitted for run {run_id}. Agent has been resumed.\n\
+             [{type_hint}]{options_hint}"
         )),
         Err(e) => tool_err(e),
     }
@@ -305,7 +337,8 @@ mod tests {
                 .create_run(Some("w1"), "needs feedback", None, None)
                 .unwrap();
             // Transition to waiting_for_feedback via request_feedback
-            mgr.request_feedback(&run.id, "Please approve?").unwrap();
+            mgr.request_feedback(&run.id, "Please approve?", None)
+                .unwrap();
         }
 
         let args = args_with("status", "waiting_for_feedback");
@@ -384,7 +417,7 @@ mod tests {
             .create_run(None, "do something", None, None)
             .expect("create run");
         // Create a pending feedback request (this also sets run status to waiting_for_feedback)
-        mgr.request_feedback(&run.id, "Should I proceed?")
+        mgr.request_feedback(&run.id, "Should I proceed?", None)
             .expect("request feedback");
 
         let mut args = serde_json::Map::new();

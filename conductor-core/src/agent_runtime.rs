@@ -130,6 +130,9 @@ impl std::fmt::Display for PollError {
 ///
 /// If `shutdown` is provided and the flag is set to `true` during polling,
 /// returns [`PollError::Shutdown`] immediately.
+///
+/// Time spent in `WaitingForFeedback` status is excluded from the timeout
+/// calculation so that human response time does not cause step timeouts.
 pub fn poll_child_completion(
     conn: &Connection,
     child_run_id: &str,
@@ -138,6 +141,10 @@ pub fn poll_child_completion(
     shutdown: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> std::result::Result<AgentRun, PollError> {
     let start = std::time::Instant::now();
+    // Track cumulative time spent waiting for feedback so we can exclude it
+    // from the timeout budget.
+    let mut feedback_wait_total = Duration::ZERO;
+    let mut feedback_wait_start: Option<std::time::Instant> = None;
 
     loop {
         if let Some(flag) = shutdown {
@@ -146,7 +153,9 @@ pub fn poll_child_completion(
             }
         }
 
-        if start.elapsed() > timeout {
+        // Effective elapsed = wall time − feedback wait time
+        let effective_elapsed = start.elapsed().saturating_sub(feedback_wait_total);
+        if effective_elapsed > timeout {
             return Err(PollError::Timeout(format!(
                 "Child run {} timed out after {:.0}s",
                 child_run_id,
@@ -160,7 +169,18 @@ pub fn poll_child_completion(
                 AgentRunStatus::Completed | AgentRunStatus::Failed | AgentRunStatus::Cancelled => {
                     return Ok(run)
                 }
-                AgentRunStatus::Running | AgentRunStatus::WaitingForFeedback => {}
+                AgentRunStatus::WaitingForFeedback => {
+                    // Start tracking feedback wait if not already
+                    if feedback_wait_start.is_none() {
+                        feedback_wait_start = Some(std::time::Instant::now());
+                    }
+                }
+                AgentRunStatus::Running => {
+                    // If we were waiting for feedback, accumulate that time
+                    if let Some(wait_start) = feedback_wait_start.take() {
+                        feedback_wait_total += wait_start.elapsed();
+                    }
+                }
             },
             Ok(None) => {
                 return Err(PollError::Other(format!(
