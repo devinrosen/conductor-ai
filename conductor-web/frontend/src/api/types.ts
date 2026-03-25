@@ -142,14 +142,6 @@ export interface AgentCreatedIssue {
   created_at: string;
 }
 
-export interface PushResult {
-  message: string;
-}
-
-export interface CreatePrResult {
-  url: string;
-}
-
 export interface TicketDetail {
   agent_totals: TicketAgentTotals | null;
   worktrees: Worktree[];

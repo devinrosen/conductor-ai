@@ -42,10 +42,6 @@ export function WorktreeDetailPage() {
 
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [pathCopied, setPathCopied] = useState(false);
-  const [pushing, setPushing] = useState(false);
-  const [pushResult, setPushResult] = useState<string | null>(null);
-  const [creatingPr, setCreatingPr] = useState(false);
-  const [prResult, setPrResult] = useState<string | null>(null);
   const [linkingTicket, setLinkingTicket] = useState(false);
   const [selectedTicketId, setSelectedTicketId] = useState("");
   const [editingModel, setEditingModel] = useState(false);
@@ -245,32 +241,6 @@ export function WorktreeDetailPage() {
     navigate(`/repos/${repoId}`);
   }
 
-  async function handlePush() {
-    setPushing(true);
-    setPushResult(null);
-    try {
-      const result = await api.pushWorktree(worktreeId!);
-      setPushResult(result.message);
-    } catch (err) {
-      setPushResult(err instanceof Error ? err.message : "Push failed");
-    } finally {
-      setPushing(false);
-    }
-  }
-
-  async function handleCreatePr(draft: boolean) {
-    setCreatingPr(true);
-    setPrResult(null);
-    try {
-      const result = await api.createPr(worktreeId!, draft);
-      setPrResult(result.url);
-    } catch (err) {
-      setPrResult(err instanceof Error ? err.message : "PR creation failed");
-    } finally {
-      setCreatingPr(false);
-    }
-  }
-
   async function handleLinkTicket() {
     if (!selectedTicketId) return;
     setLinkingTicket(true);
@@ -279,7 +249,7 @@ export function WorktreeDetailPage() {
       setSelectedTicketId("");
       refetchWorktrees();
     } catch (err) {
-      setPushResult(err instanceof Error ? err.message : "Link failed");
+      alert(err instanceof Error ? err.message : "Link failed");
     } finally {
       setLinkingTicket(false);
     }
@@ -413,60 +383,6 @@ export function WorktreeDetailPage() {
           </div>
         </dl>
       </div>
-
-      {/* Actions — only for active worktrees */}
-      {isActive && (
-        <section>
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
-            Actions
-          </h3>
-          <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={handlePush}
-                disabled={pushing}
-                className="px-3 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              >
-                {pushing ? "Pushing..." : "Push Branch"}
-              </button>
-              <button
-                onClick={() => handleCreatePr(false)}
-                disabled={creatingPr}
-                className="px-3 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              >
-                {creatingPr ? "Creating..." : "Create PR"}
-              </button>
-              <button
-                onClick={() => handleCreatePr(true)}
-                disabled={creatingPr}
-                className="px-3 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              >
-                Draft PR
-              </button>
-            </div>
-            {(pushResult || prResult) && (
-              <p className="text-xs text-gray-500">
-                {prResult ? (
-                  prResult.startsWith("http") ? (
-                    <a
-                      href={prResult}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-indigo-600 hover:underline"
-                    >
-                      {prResult}
-                    </a>
-                  ) : (
-                    prResult
-                  )
-                ) : (
-                  pushResult
-                )}
-              </p>
-            )}
-          </div>
-        </section>
-      )}
 
       {/* Linked Ticket */}
       {linkedTicket && (

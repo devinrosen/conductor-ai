@@ -59,8 +59,6 @@ pub fn api_router() -> Router<AppState> {
             "/api/worktrees/{id}/model",
             patch(worktrees::patch_worktree_model),
         )
-        .route("/api/worktrees/{id}/push", post(worktrees::push_worktree))
-        .route("/api/worktrees/{id}/pr", post(worktrees::create_pr))
         .route(
             "/api/worktrees/{id}/link-ticket",
             post(worktrees::link_ticket),
