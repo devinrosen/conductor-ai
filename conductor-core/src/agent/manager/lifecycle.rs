@@ -447,6 +447,32 @@ mod tests {
     }
 
     #[test]
+    fn test_restart_run_from_cancelled() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        let run = mgr
+            .create_run(
+                Some("w1"),
+                "Fix the bug",
+                Some("feat-test"),
+                Some("claude-sonnet-4-6"),
+            )
+            .unwrap();
+        mgr.update_run_cancelled(&run.id).unwrap();
+
+        let restarted = mgr.restart_run(&run.id).unwrap();
+        assert_eq!(restarted.status, AgentRunStatus::Running);
+        assert_eq!(restarted.prompt, "Fix the bug");
+        assert_eq!(restarted.model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(restarted.parent_run_id.as_deref(), Some(run.id.as_str()));
+
+        // Original run stays cancelled
+        let original = mgr.get_run(&run.id).unwrap().unwrap();
+        assert_eq!(original.status, AgentRunStatus::Cancelled);
+    }
+
+    #[test]
     fn test_restart_run_rejects_active_run() {
         let conn = setup_db();
         let mgr = AgentManager::new(&conn);

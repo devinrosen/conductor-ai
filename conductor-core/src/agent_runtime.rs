@@ -34,13 +34,26 @@ fn resolve_conductor_bin() -> String {
                 .then(|| sibling.to_string_lossy().into_owned())
         })
         .unwrap_or_else(|| "conductor".to_string());
-    eprintln!("[conductor] resolved binary: {resolved}");
+    tracing::debug!("[conductor] resolved binary: {resolved}");
     resolved
 }
 
 /// Build the path for the stderr capture file for a given tmux window name.
+///
+/// The window name is sanitized to replace path separators and other
+/// potentially dangerous characters, ensuring the file always lands in `/tmp`.
 fn stderr_file_path(window_name: &str) -> String {
-    format!("/tmp/conductor-agent-{window_name}.err")
+    let sanitized: String = window_name
+        .chars()
+        .map(|c| {
+            if c == '/' || c == '\\' || c == '\0' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    format!("/tmp/conductor-agent-{sanitized}.err")
 }
 
 /// Spawn a new tmux window running `conductor <args>`, then verify it is alive.
@@ -491,6 +504,19 @@ mod tests {
     fn stderr_file_path_format() {
         let path = super::stderr_file_path("my-window-123");
         assert_eq!(path, "/tmp/conductor-agent-my-window-123.err");
+    }
+
+    #[test]
+    fn stderr_file_path_sanitizes_slashes() {
+        let path = super::stderr_file_path("../../etc/passwd");
+        assert_eq!(path, "/tmp/conductor-agent-.._.._etc_passwd.err");
+        assert!(!path.contains('/') || path.starts_with("/tmp/conductor-agent-"));
+    }
+
+    #[test]
+    fn stderr_file_path_sanitizes_backslashes() {
+        let path = super::stderr_file_path("foo\\bar");
+        assert_eq!(path, "/tmp/conductor-agent-foo_bar.err");
     }
 
     #[test]
