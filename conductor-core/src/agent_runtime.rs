@@ -515,4 +515,153 @@ mod tests {
             .unwrap();
         assert_eq!(args[timeout_idx + 1], "120");
     }
+
+    #[test]
+    fn build_agent_args_with_mode_skip_permissions() {
+        use crate::config::AgentPermissionMode;
+        let args = super::build_agent_args_with_mode(
+            "run-1",
+            "/tmp/wt",
+            "prompt",
+            None,
+            None,
+            None,
+            Some(&AgentPermissionMode::SkipPermissions),
+        )
+        .unwrap();
+        assert!(
+            args.iter().any(|a| a == "--dangerously-skip-permissions"),
+            "expected --dangerously-skip-permissions flag"
+        );
+    }
+
+    #[test]
+    fn build_agent_args_with_mode_auto_mode() {
+        use crate::config::AgentPermissionMode;
+        let args = super::build_agent_args_with_mode(
+            "run-1",
+            "/tmp/wt",
+            "prompt",
+            None,
+            None,
+            None,
+            Some(&AgentPermissionMode::AutoMode),
+        )
+        .unwrap();
+        assert!(
+            args.iter().any(|a| a == "--enable-auto-mode"),
+            "expected --enable-auto-mode flag"
+        );
+    }
+
+    #[test]
+    fn build_agent_args_with_mode_plan() {
+        use crate::config::AgentPermissionMode;
+        let args = super::build_agent_args_with_mode(
+            "run-1",
+            "/tmp/wt",
+            "prompt",
+            None,
+            None,
+            None,
+            Some(&AgentPermissionMode::Plan),
+        )
+        .unwrap();
+        let idx = args
+            .iter()
+            .position(|a| a == "--permission-mode")
+            .expect("expected --permission-mode flag");
+        assert_eq!(args[idx + 1], "plan", "expected 'plan' value after flag");
+    }
+
+    #[test]
+    fn build_agent_args_with_mode_none() {
+        let args =
+            super::build_agent_args_with_mode("run-1", "/tmp/wt", "prompt", None, None, None, None)
+                .unwrap();
+        assert!(
+            !args.iter().any(|a| a == "--dangerously-skip-permissions"
+                || a == "--enable-auto-mode"
+                || a == "--permission-mode"),
+            "no permission flag should appear when mode is None"
+        );
+    }
+
+    #[test]
+    fn build_agent_args_with_model_override() {
+        let args = super::build_agent_args_with_mode(
+            "run-1",
+            "/tmp/wt",
+            "prompt",
+            None,
+            Some("claude-sonnet-4-6"),
+            None,
+            None,
+        )
+        .unwrap();
+        let idx = args
+            .iter()
+            .position(|a| a == "--model")
+            .expect("expected --model flag");
+        assert_eq!(args[idx + 1], "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn build_agent_args_with_bot_name() {
+        let args = super::build_agent_args_with_mode(
+            "run-1",
+            "/tmp/wt",
+            "prompt",
+            None,
+            None,
+            Some("my-bot"),
+            None,
+        )
+        .unwrap();
+        let idx = args
+            .iter()
+            .position(|a| a == "--bot-name")
+            .expect("expected --bot-name flag");
+        assert_eq!(args[idx + 1], "my-bot");
+    }
+
+    #[test]
+    fn build_agent_args_all_options() {
+        use crate::config::AgentPermissionMode;
+        let args = super::build_agent_args_with_mode(
+            "run-all",
+            "/tmp/wt",
+            "prompt",
+            Some("sess-123"),
+            Some("claude-opus-4-6"),
+            Some("bot-x"),
+            Some(&AgentPermissionMode::Plan),
+        )
+        .unwrap();
+
+        // Verify all flags present
+        let resume_idx = args
+            .iter()
+            .position(|a| a == "--resume")
+            .expect("--resume missing");
+        assert_eq!(args[resume_idx + 1], "sess-123");
+
+        let model_idx = args
+            .iter()
+            .position(|a| a == "--model")
+            .expect("--model missing");
+        assert_eq!(args[model_idx + 1], "claude-opus-4-6");
+
+        let bot_idx = args
+            .iter()
+            .position(|a| a == "--bot-name")
+            .expect("--bot-name missing");
+        assert_eq!(args[bot_idx + 1], "bot-x");
+
+        let perm_idx = args
+            .iter()
+            .position(|a| a == "--permission-mode")
+            .expect("--permission-mode missing");
+        assert_eq!(args[perm_idx + 1], "plan");
+    }
 }
