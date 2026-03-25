@@ -770,27 +770,24 @@ impl<'a> WorktreeManager<'a> {
     /// When `repo_slug` is `Some`, only worktrees for that repo are checked.
     /// Returns the number of worktrees cleaned up.
     pub fn cleanup_merged_worktrees(&self, repo_slug: Option<&str>) -> Result<usize> {
-        self.cleanup_merged_worktrees_with_merge_check(repo_slug, crate::github::has_merged_pr)
+        self.cleanup_merged_worktrees_with_merge_check(
+            repo_slug,
+            crate::github::merged_branches_for_repo,
+        )
     }
 
     pub(crate) fn cleanup_merged_worktrees_with_merge_check(
         &self,
         repo_slug: Option<&str>,
-        merge_check: impl Fn(&str, &str) -> bool,
+        merge_check: impl Fn(&str, &[String]) -> std::collections::HashSet<String>,
     ) -> Result<usize> {
+        let base_query = "SELECT w.id, w.branch, w.path, r.local_path, r.remote_url, w.repo_id, w.base_branch
+                 FROM worktrees w
+                 JOIN repos r ON r.id = w.repo_id
+                 WHERE w.status = 'active'";
         let query = match repo_slug {
-            Some(_) => {
-                "SELECT w.id, w.branch, w.path, r.local_path, r.remote_url, w.repo_id, w.base_branch
-                 FROM worktrees w
-                 JOIN repos r ON r.id = w.repo_id
-                 WHERE w.status = 'active' AND r.slug = ?1"
-            }
-            None => {
-                "SELECT w.id, w.branch, w.path, r.local_path, r.remote_url, w.repo_id, w.base_branch
-                 FROM worktrees w
-                 JOIN repos r ON r.id = w.repo_id
-                 WHERE w.status = 'active'"
-            }
+            Some(_) => format!("{base_query} AND r.slug = ?1"),
+            None => base_query.to_string(),
         };
 
         let mapper = |row: &rusqlite::Row| -> rusqlite::Result<[String; 7]> {
@@ -805,16 +802,31 @@ impl<'a> WorktreeManager<'a> {
             ])
         };
         let rows: Vec<[String; 7]> = match repo_slug {
-            Some(slug) => query_collect(self.conn, query, params![slug], mapper)?,
-            None => query_collect(self.conn, query, [], mapper)?,
+            Some(slug) => query_collect(self.conn, &query, params![slug], mapper)?,
+            None => query_collect(self.conn, &query, [], mapper)?,
         };
+
+        // Group branches by remote_url and batch-check merged status per repo.
+        let mut branches_by_remote: std::collections::HashMap<&str, Vec<String>> =
+            std::collections::HashMap::new();
+        for row in &rows {
+            branches_by_remote
+                .entry(row[4].as_str())
+                .or_default()
+                .push(row[1].clone());
+        }
+        let mut merged_branches: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for (remote_url, branches) in &branches_by_remote {
+            merged_branches.extend(merge_check(remote_url, branches));
+        }
 
         let now = Utc::now().to_rfc3339();
         let mut cleaned = 0usize;
 
         for row in &rows {
-            let [wt_id, branch, wt_path, repo_path, remote_url, repo_id, base_branch] = row;
-            if !merge_check(remote_url, branch) {
+            let [wt_id, branch, wt_path, repo_path, _remote_url, repo_id, base_branch] = row;
+            if !merged_branches.contains(branch) {
                 continue;
             }
 
@@ -2443,9 +2455,11 @@ mod tests {
 
         // w1 from setup_db is active with branch "feat/test"
         let mgr = WorktreeManager::new(&conn, &config);
-        // Simulate merged PR: merge_check always returns true
+        // Simulate merged PR: merge_check returns all branches as merged
         let count = mgr
-            .cleanup_merged_worktrees_with_merge_check(None, |_, _| true)
+            .cleanup_merged_worktrees_with_merge_check(None, |_, branches| {
+                branches.iter().cloned().collect()
+            })
             .unwrap();
         assert_eq!(count, 1);
 
@@ -2472,9 +2486,11 @@ mod tests {
         let config = Config::default();
 
         let mgr = WorktreeManager::new(&conn, &config);
-        // merge_check returns false — no cleanup
+        // merge_check returns empty — no cleanup
         let count = mgr
-            .cleanup_merged_worktrees_with_merge_check(None, |_, _| false)
+            .cleanup_merged_worktrees_with_merge_check(None, |_, _| {
+                std::collections::HashSet::new()
+            })
             .unwrap();
         assert_eq!(count, 0);
 
@@ -2498,9 +2514,11 @@ mod tests {
         ).unwrap();
 
         let mgr = WorktreeManager::new(&conn, &config);
-        // merge_check returns true, but w1 is already merged so should be skipped
+        // merge_check returns all branches, but w1 is already merged so should be skipped
         let count = mgr
-            .cleanup_merged_worktrees_with_merge_check(None, |_, _| true)
+            .cleanup_merged_worktrees_with_merge_check(None, |_, branches| {
+                branches.iter().cloned().collect()
+            })
             .unwrap();
         assert_eq!(count, 0);
     }
@@ -2525,7 +2543,9 @@ mod tests {
         let mgr = WorktreeManager::new(&conn, &config);
         // Both worktrees have merged PRs
         let count = mgr
-            .cleanup_merged_worktrees_with_merge_check(None, |_, _| true)
+            .cleanup_merged_worktrees_with_merge_check(None, |_, branches| {
+                branches.iter().cloned().collect()
+            })
             .unwrap();
         assert_eq!(count, 2);
 
@@ -2564,7 +2584,9 @@ mod tests {
         let mgr = WorktreeManager::new(&conn, &config);
         // Only clean up "other-repo"
         let count = mgr
-            .cleanup_merged_worktrees_with_merge_check(Some("other-repo"), |_, _| true)
+            .cleanup_merged_worktrees_with_merge_check(Some("other-repo"), |_, branches| {
+                branches.iter().cloned().collect()
+            })
             .unwrap();
         assert_eq!(count, 1);
 

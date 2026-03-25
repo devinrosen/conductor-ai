@@ -100,8 +100,12 @@ async fn main() -> Result<()> {
                 let wt_mgr = conductor_core::worktree::WorktreeManager::new(&conn, &cfg);
                 wt_mgr.reap_stale_worktrees()?;
                 if cfg.general.auto_cleanup_merged_branches {
-                    if let Err(e) = wt_mgr.cleanup_merged_worktrees(None) {
-                        tracing::warn!("cleanup_merged_worktrees failed: {e}");
+                    match wt_mgr.cleanup_merged_worktrees(None) {
+                        Ok(n) if n > 0 => {
+                            tracing::info!("Auto-cleaned {n} merged worktree(s)")
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!("cleanup_merged_worktrees failed: {e}"),
                     }
                 }
                 let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
