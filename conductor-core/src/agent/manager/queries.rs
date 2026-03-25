@@ -1172,16 +1172,8 @@ mod tests {
             .and_then(|run| run.claude_session_id);
         assert_eq!(resume_id.as_deref(), Some("sess-abc"));
 
-        // Simulate new_session=true → explicitly skip (no DB call needed)
-        let new_session = true;
-        let resume_id = if new_session {
-            None
-        } else {
-            mgr.latest_repo_scoped("r1")
-                .unwrap()
-                .and_then(|run| run.claude_session_id)
-        };
-        assert!(resume_id.is_none(), "new_session=true should skip resume");
+        // Note: the `new_session=true` branch in start_repo_agent is a trivial
+        // bool guard (`if body.new_session { None }`) — no DB-level test needed.
     }
 
     #[test]
