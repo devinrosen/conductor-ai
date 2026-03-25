@@ -1375,4 +1375,37 @@ mod tests {
             Action::PickWorkflow
         ));
     }
+
+    // --- `t` key: PickTemplate binding ---
+
+    #[test]
+    fn t_maps_to_pick_template_in_workflow_column_runs() {
+        let mut state = AppState::new();
+        state.column_focus = crate::state::ColumnFocus::Workflow;
+        state.workflows_focus = crate::state::WorkflowsFocus::Runs;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('t')), &state),
+            Action::PickTemplate
+        ));
+    }
+
+    #[test]
+    fn t_maps_to_pick_template_in_worktree_detail() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::InfoPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('t')), &state),
+            Action::PickTemplate
+        ));
+    }
+
+    #[test]
+    fn t_does_not_map_to_pick_template_in_workflow_column_defs() {
+        let mut state = AppState::new();
+        state.column_focus = crate::state::ColumnFocus::Workflow;
+        state.workflows_focus = crate::state::WorkflowsFocus::Defs;
+        assert!(!matches!(
+            map_key(key(KeyCode::Char('t')), &state),
+            Action::PickTemplate
+        ));
+    }
 }

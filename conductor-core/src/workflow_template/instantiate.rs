@@ -295,4 +295,12 @@ mod tests {
             "workflow create_issue {\n}\n# Generated from template: create-issue v1.0.0\n";
         assert!(extract_template_version(content).is_none());
     }
+
+    #[test]
+    fn test_collect_existing_workflow_names_invalid_dir_returns_empty() {
+        // An invalid working_dir causes WorkflowManager::list_defs to error.
+        // collect_existing_workflow_names should return an empty Vec, not panic.
+        let result = collect_existing_workflow_names("/nonexistent/path/xyz", "/nonexistent/repo");
+        assert!(result.is_empty());
+    }
 }
