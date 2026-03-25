@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::process::Command;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -220,32 +219,45 @@ pub async fn start_agent(
     Ok((StatusCode::CREATED, Json(run)))
 }
 
-/// Stop a running agent: capture scrollback, kill tmux, mark cancelled.
+/// Stop a running agent: mark cancelled under lock, then capture scrollback
+/// and kill tmux on a blocking thread without holding the DB mutex.
 pub async fn stop_agent(
     State(state): State<AppState>,
     Path(worktree_id): Path<String>,
 ) -> Result<Json<AgentRun>, ApiError> {
+    // Phase 1: DB operations under lock — validate + mark cancelled immediately.
+    let (run, tmux_window) = {
+        let db = state.db.lock().await;
+        let agent_mgr = AgentManager::new(&db);
+
+        let run = agent_mgr
+            .latest_for_worktree(&worktree_id)?
+            .ok_or_else(|| {
+                conductor_core::error::ConductorError::Agent(
+                    "No agent run found for this worktree".to_string(),
+                )
+            })?;
+
+        if !run.is_active() {
+            return Err(conductor_core::error::ConductorError::Agent(
+                "Agent is not running".to_string(),
+            )
+            .into());
+        }
+
+        agent_mgr.update_run_cancelled(&run.id)?;
+
+        let tmux_window = run.tmux_window.clone();
+        (run, tmux_window)
+    };
+    // DB lock is now dropped.
+
+    // Phase 2: tmux cleanup on a blocking thread (no lock held).
+    cancel_agent_blocking(&state, &run.id, tmux_window).await;
+
+    // Re-fetch under lock to return the updated record.
     let db = state.db.lock().await;
     let agent_mgr = AgentManager::new(&db);
-
-    let run = agent_mgr
-        .latest_for_worktree(&worktree_id)?
-        .ok_or_else(|| {
-            conductor_core::error::ConductorError::Agent(
-                "No agent run found for this worktree".to_string(),
-            )
-        })?;
-
-    if !run.is_active() {
-        return Err(conductor_core::error::ConductorError::Agent(
-            "Agent is not running".to_string(),
-        )
-        .into());
-    }
-
-    cancel_agent_run(&agent_mgr, &run)?;
-
-    // Re-fetch to get updated record
     let updated = agent_mgr.latest_for_worktree(&worktree_id)?.unwrap_or(run);
 
     state.events.emit(ConductorEvent::AgentStopped {
@@ -800,16 +812,33 @@ pub async fn restart_agent(
     Ok((StatusCode::CREATED, Json(new_run)))
 }
 
-/// Capture tmux log, kill tmux window, and mark run as cancelled.
-fn cancel_agent_run(mgr: &AgentManager, run: &AgentRun) -> Result<(), ApiError> {
-    if let Some(ref window) = run.tmux_window {
-        mgr.capture_agent_log(&run.id, window);
-        let _ = Command::new("tmux")
-            .args(["kill-window", "-t", &format!(":{window}")])
-            .output();
+/// Capture tmux scrollback and kill the tmux window on a blocking thread,
+/// then persist the log file path in the DB. Best-effort — failures are logged
+/// but do not fail the request.
+async fn cancel_agent_blocking(state: &AppState, run_id: &str, tmux_window: Option<String>) {
+    let Some(window) = tmux_window else {
+        return;
+    };
+
+    let rid = run_id.to_owned();
+    let w = window.clone();
+    let log_path = tokio::task::spawn_blocking(move || {
+        let path = conductor_core::agent::capture_tmux_scrollback(&rid, &w);
+        conductor_core::agent::kill_tmux_window(&w);
+        path
+    })
+    .await
+    .ok()
+    .flatten();
+
+    // Persist log file path under a brief lock (best-effort).
+    if let Some(path) = log_path {
+        let db = state.db.lock().await;
+        let agent_mgr = AgentManager::new(&db);
+        if let Err(e) = agent_mgr.update_run_log_file(run_id, &path) {
+            warn!(run_id, %e, "failed to record agent log path in DB after cancel");
+        }
     }
-    mgr.update_run_cancelled(&run.id)?;
-    Ok(())
 }
 
 // ── Repo-scoped agent routes ────────────────────────────────────────────
@@ -910,24 +939,37 @@ pub async fn stop_repo_agent(
     State(state): State<AppState>,
     Path((repo_id, run_id)): Path<(String, String)>,
 ) -> Result<Json<AgentRun>, ApiError> {
+    // Phase 1: DB operations under lock — validate + mark cancelled immediately.
+    let (run, tmux_window) = {
+        let db = state.db.lock().await;
+        let agent_mgr = AgentManager::new(&db);
+
+        let run = agent_mgr
+            .get_run(&run_id)?
+            .ok_or_else(|| ConductorError::Agent("Agent run not found".to_string()))?;
+
+        // Validate run belongs to the requested repo
+        if run.repo_id.as_deref() != Some(&repo_id) {
+            return Err(ConductorError::Agent("Agent run not found".to_string()).into());
+        }
+
+        if !run.is_active() {
+            return Err(ConductorError::Agent("Agent is not running".to_string()).into());
+        }
+
+        agent_mgr.update_run_cancelled(&run.id)?;
+
+        let tmux_window = run.tmux_window.clone();
+        (run, tmux_window)
+    };
+    // DB lock is now dropped.
+
+    // Phase 2: tmux cleanup on a blocking thread (no lock held).
+    cancel_agent_blocking(&state, &run.id, tmux_window).await;
+
+    // Re-fetch under lock to return the updated record.
     let db = state.db.lock().await;
     let agent_mgr = AgentManager::new(&db);
-
-    let run = agent_mgr
-        .get_run(&run_id)?
-        .ok_or_else(|| ConductorError::Agent("Agent run not found".to_string()))?;
-
-    // Validate run belongs to the requested repo
-    if run.repo_id.as_deref() != Some(&repo_id) {
-        return Err(ConductorError::Agent("Agent run not found".to_string()).into());
-    }
-
-    if !run.is_active() {
-        return Err(ConductorError::Agent("Agent is not running".to_string()).into());
-    }
-
-    cancel_agent_run(&agent_mgr, &run)?;
-
     let updated = agent_mgr.get_run(&run_id)?.unwrap_or(run);
 
     state.events.emit(ConductorEvent::RepoAgentStopped {
