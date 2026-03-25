@@ -1006,6 +1006,18 @@ impl App {
                     }
                 }
             }
+            Action::AgentStopComplete { result } => {
+                self.state.modal = Modal::None;
+                match result {
+                    Ok(msg) => {
+                        self.state.status_message = Some(msg);
+                        self.refresh_data();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error { message: e };
+                    }
+                }
+            }
             Action::BackgroundError { message } => {
                 self.state.modal = Modal::Error { message };
             }

@@ -149,10 +149,10 @@ impl App {
         );
     }
 
+    /// Stop the running worktree agent.
+    /// Runs blocking subprocess calls on a background thread per the TUI threading rule.
     pub(super) fn handle_stop_agent(&mut self) {
-        use std::process::Command;
-
-        let run = self.selected_worktree_run();
+        let run = self.selected_worktree_run().cloned();
 
         let Some(run) = run else {
             return;
@@ -162,28 +162,44 @@ impl App {
             return;
         }
 
+        let Some(ref tx) = self.bg_tx else { return };
+        let tx = tx.clone();
         let run_id = run.id.clone();
         let tmux_window = run.tmux_window.clone();
 
-        let mgr = AgentManager::new(&self.conn);
+        self.state.modal = crate::state::Modal::Progress {
+            message: "Stopping agent…".into(),
+        };
 
-        // Best-effort: capture tmux scrollback before killing
-        if let Some(ref window) = tmux_window {
-            mgr.capture_agent_log(&run_id, window);
-        }
+        std::thread::spawn(move || {
+            use std::process::Command;
 
-        // Kill the tmux window
-        if let Some(ref window) = tmux_window {
-            let _ = Command::new("tmux")
-                .args(["kill-window", "-t", &format!(":{window}")])
-                .output();
-        }
+            let db = conductor_core::config::db_path();
+            let conn = match conductor_core::db::open_database(&db) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Action::AgentStopComplete {
+                        result: Err(format!("Failed to open database: {e}")),
+                    });
+                    return;
+                }
+            };
+            let mgr = AgentManager::new(&conn);
 
-        // Update DB record to cancelled
-        let _ = mgr.update_run_cancelled(&run_id);
+            if let Some(ref window) = tmux_window {
+                mgr.capture_agent_log(&run_id, window);
+                let _ = Command::new("tmux")
+                    .args(["kill-window", "-t", &format!(":{window}")])
+                    .output();
+            }
 
-        self.state.status_message = Some("Agent cancelled".to_string());
-        self.refresh_data();
+            let result = mgr
+                .update_run_cancelled(&run_id)
+                .map(|()| "Agent cancelled".to_string())
+                .map_err(|e| format!("Failed to cancel agent: {e}"));
+
+            let _ = tx.send(Action::AgentStopComplete { result });
+        });
     }
 
     pub(super) fn require_pending_feedback(&mut self) -> Option<FeedbackRequest> {
