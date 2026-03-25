@@ -298,7 +298,12 @@ fn execute_call_with_schema(
             }
             Err(e) => {
                 tracing::warn!("Step '{}' poll error: {e}", agent_label);
-                let _ = state.agent_mgr.update_run_cancelled(&child_run.id);
+                if let Err(cancel_err) = state.agent_mgr.update_run_cancelled(&child_run.id) {
+                    tracing::warn!(
+                        run_id = %child_run.id,
+                        "Failed to mark cancelled agent run: {cancel_err}"
+                    );
+                }
                 let cancel_msg = e.to_string();
                 state.wf_mgr.update_step_status(
                     &step_id,
