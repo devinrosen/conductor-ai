@@ -55,6 +55,17 @@ fn make_call_node(name: &str) -> WorkflowNode {
     })
 }
 
+fn make_while_node(body: Vec<WorkflowNode>) -> WhileNode {
+    WhileNode {
+        step: "s".into(),
+        marker: "m".into(),
+        max_iterations: 5,
+        stuck_after: None,
+        on_max_iter: OnMaxIter::Fail,
+        body,
+    }
+}
+
 fn make_gate_node_wf(name: &str) -> WorkflowNode {
     WorkflowNode::Gate(GateNode {
         name: name.into(),
@@ -146,14 +157,7 @@ fn test_collect_leaf_unless_node() {
 
 #[test]
 fn test_collect_leaf_while_node() {
-    let node = WorkflowNode::While(WhileNode {
-        step: "check".into(),
-        marker: "done".into(),
-        max_iterations: 3,
-        stuck_after: None,
-        on_max_iter: OnMaxIter::Fail,
-        body: vec![make_call_node("loop-body")],
-    });
+    let node = WorkflowNode::While(make_while_node(vec![make_call_node("loop-body")]));
     assert_eq!(collect_leaf_step_keys(&node), vec!["loop-body"]);
 }
 
@@ -193,14 +197,10 @@ fn test_collect_leaf_nested() {
     // if { while { call + gate } }
     let node = WorkflowNode::If(IfNode {
         condition: Condition::BoolInput { input: "go".into() },
-        body: vec![WorkflowNode::While(WhileNode {
-            step: "s".into(),
-            marker: "m".into(),
-            max_iterations: 5,
-            stuck_after: None,
-            on_max_iter: OnMaxIter::Continue,
-            body: vec![make_call_node("deep"), make_gate_node_wf("deep-gate")],
-        })],
+        body: vec![WorkflowNode::While(make_while_node(vec![
+            make_call_node("deep"),
+            make_gate_node_wf("deep-gate"),
+        ]))],
     });
     assert_eq!(collect_leaf_step_keys(&node), vec!["deep", "deep-gate"]);
 }
@@ -215,14 +215,7 @@ fn test_find_max_completed_while_iteration_no_resume_ctx() {
     let config = make_resume_config();
     let state = make_loop_test_state(&conn, config);
     // state.resume_ctx is None → should return 0
-    let node = WhileNode {
-        step: "s".into(),
-        marker: "m".into(),
-        max_iterations: 5,
-        stuck_after: None,
-        on_max_iter: OnMaxIter::Fail,
-        body: vec![make_call_node("body")],
-    };
+    let node = make_while_node(vec![make_call_node("body")]);
     assert_eq!(find_max_completed_while_iteration(&state, &node), 0);
 }
 
@@ -236,14 +229,7 @@ fn test_find_max_completed_while_iteration_empty_body() {
         step_map: HashMap::new(),
         child_runs: HashMap::new(),
     });
-    let node = WhileNode {
-        step: "s".into(),
-        marker: "m".into(),
-        max_iterations: 5,
-        stuck_after: None,
-        on_max_iter: OnMaxIter::Fail,
-        body: vec![], // no body nodes
-    };
+    let node = make_while_node(vec![]); // no body nodes
     assert_eq!(find_max_completed_while_iteration(&state, &node), 0);
 }
 
@@ -266,14 +252,7 @@ fn test_find_max_completed_while_iteration_partial() {
         child_runs: HashMap::new(),
     });
 
-    let node = WhileNode {
-        step: "s".into(),
-        marker: "m".into(),
-        max_iterations: 5,
-        stuck_after: None,
-        on_max_iter: OnMaxIter::Fail,
-        body: vec![make_call_node("body")],
-    };
+    let node = make_while_node(vec![make_call_node("body")]);
     // Iterations 0 and 1 are complete, so resume from 2
     assert_eq!(find_max_completed_while_iteration(&state, &node), 2);
 }
@@ -297,14 +276,7 @@ fn test_find_max_completed_while_iteration_multi_body_keys() {
         child_runs: HashMap::new(),
     });
 
-    let node = WhileNode {
-        step: "s".into(),
-        marker: "m".into(),
-        max_iterations: 5,
-        stuck_after: None,
-        on_max_iter: OnMaxIter::Fail,
-        body: vec![make_call_node("a"), make_call_node("b")],
-    };
+    let node = make_while_node(vec![make_call_node("a"), make_call_node("b")]);
     // Only iteration 0 is fully complete
     assert_eq!(find_max_completed_while_iteration(&state, &node), 1);
 }
