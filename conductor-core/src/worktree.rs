@@ -608,6 +608,19 @@ impl<'a> WorktreeManager<'a> {
 
         check_output(git_in(&worktree.path).args(["push", "-u", "origin", &worktree.branch]))?;
 
+        // If this worktree targets a feature branch, refresh its last_commit_at
+        // cache so staleness detection stays up to date on the most common write path.
+        if let Some(ref base_branch) = worktree.base_branch {
+            let feat_mgr = crate::feature::FeatureManager::new(self.conn, self.config);
+            if let Some(fid) =
+                feat_mgr.get_active_id_by_repo_and_branch(&worktree.repo_id, base_branch)?
+            {
+                if let Err(e) = feat_mgr.refresh_last_commit(&fid) {
+                    tracing::warn!("failed to refresh last_commit_at for feature {fid}: {e}");
+                }
+            }
+        }
+
         Ok(format!(
             "Pushed {} to origin/{}",
             worktree.slug, worktree.branch

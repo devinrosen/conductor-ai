@@ -481,18 +481,21 @@ fn snap_modal_branch_picker() {
                 worktree_count: 0,
                 ticket_count: 0,
                 base_branch: None,
+                stale_days: None,
             },
             BranchPickerItem {
                 branch: Some("feat/auth-flow".into()),
                 worktree_count: 1,
                 ticket_count: 1,
                 base_branch: Some("main".into()),
+                stale_days: None,
             },
             BranchPickerItem {
                 branch: Some("feat/dashboard".into()),
                 worktree_count: 2,
                 ticket_count: 0,
                 base_branch: Some("main".into()),
+                stale_days: None,
             },
         ],
         tree_positions: vec![

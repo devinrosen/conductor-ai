@@ -142,6 +142,10 @@ pub struct DefaultsConfig {
     pub worktree_prefix_feat: String,
     #[serde(default = "default_fix_prefix")]
     pub worktree_prefix_fix: String,
+    /// Number of days after which an active feature with no recent activity is
+    /// considered stale. Set to 0 to disable stale detection.
+    #[serde(default = "default_stale_feature_days")]
+    pub stale_feature_days: u32,
 }
 
 fn default_workspace_root() -> PathBuf {
@@ -162,6 +166,10 @@ fn default_feat_prefix() -> String {
 
 fn default_fix_prefix() -> String {
     "fix-".to_string()
+}
+
+fn default_stale_feature_days() -> u32 {
+    14
 }
 
 fn default_true() -> bool {
@@ -187,6 +195,7 @@ impl Default for DefaultsConfig {
             default_branch: default_branch(),
             worktree_prefix_feat: default_feat_prefix(),
             worktree_prefix_fix: default_fix_prefix(),
+            stale_feature_days: default_stale_feature_days(),
         }
     }
 }

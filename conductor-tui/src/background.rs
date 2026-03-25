@@ -385,6 +385,25 @@ pub fn poll_data() -> Option<PollResult> {
 
     // Load active features for all repos in a single query.
     let feat_mgr = FeatureManager::new(&conn, &config);
+
+    // Refresh last_commit_at cache at most once per 60 seconds.
+    {
+        static LAST_REFRESH: AtomicI64 = AtomicI64::new(0);
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        if now_secs - LAST_REFRESH.load(Ordering::Relaxed) >= 60 {
+            LAST_REFRESH.store(now_secs, Ordering::Relaxed);
+            let repos_for_refresh = repo_mgr.list().unwrap_or_default();
+            for repo in &repos_for_refresh {
+                if let Err(e) = feat_mgr.refresh_last_commit_all(&repo.slug) {
+                    tracing::warn!("refresh_last_commit_all for {}: {e}", repo.slug);
+                }
+            }
+        }
+    }
+
     let features_by_repo = feat_mgr.list_all_active().unwrap_or_else(|e| {
         tracing::warn!("list_all_active features failed: {e}");
         std::collections::HashMap::new()

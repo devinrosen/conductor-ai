@@ -644,6 +644,9 @@ pub fn render_branch_picker(
                             if item.ticket_count == 1 { "" } else { "s" }
                         ));
                     }
+                    if let Some(days) = item.stale_days {
+                        parts.push(format!("\u{26a0} stale {days}d"));
+                    }
                     let label = if parts.is_empty() {
                         branch.clone()
                     } else {

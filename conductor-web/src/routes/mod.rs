@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod events;
+pub mod features;
 pub mod issue_sources;
 pub mod model_config;
 pub mod notifications;
@@ -73,6 +74,8 @@ pub fn api_router() -> Router<AppState> {
             "/api/tickets/{ticket_id}/detail",
             get(tickets::ticket_detail),
         )
+        // Features
+        .route("/api/repos/{slug}/features", get(features::list_features))
         // Agent stats (aggregates)
         .route(
             "/api/worktrees/{id}/agent-runs",

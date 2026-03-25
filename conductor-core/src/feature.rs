@@ -72,6 +72,10 @@ pub struct FeatureRow {
     pub created_at: String,
     pub worktree_count: i64,
     pub ticket_count: i64,
+    /// Cached timestamp of the most recent git commit on the feature branch.
+    pub last_commit_at: Option<String>,
+    /// Most recent worktree creation time targeting this feature branch (computed via subquery).
+    pub last_worktree_activity: Option<String>,
 }
 
 /// A branch that has active worktrees but no matching feature record.
@@ -93,7 +97,9 @@ pub struct UnregisteredBranch {
 const FEATURE_ROW_FRAGMENT: &str = "\
     f.id, f.name, f.branch, f.base_branch, f.status, f.created_at, \
     (SELECT COUNT(*) FROM worktrees w WHERE w.repo_id = f.repo_id AND w.base_branch = f.branch AND w.status = 'active') AS wt_count, \
-    (SELECT COUNT(*) FROM feature_tickets ft WHERE ft.feature_id = f.id) AS ticket_count \
+    (SELECT COUNT(*) FROM feature_tickets ft WHERE ft.feature_id = f.id) AS ticket_count, \
+    f.last_commit_at, \
+    (SELECT MAX(w2.created_at) FROM worktrees w2 WHERE w2.repo_id = f.repo_id AND w2.base_branch = f.branch AND w2.status = 'active') AS last_wt_activity \
     FROM features f";
 
 const FEATURE_ROW_ORDER: &str = " ORDER BY f.created_at DESC";
@@ -120,6 +126,8 @@ fn map_feature_row_cols(
         created_at: row.get(offset + 5)?,
         worktree_count: row.get(offset + 6)?,
         ticket_count: row.get(offset + 7)?,
+        last_commit_at: row.get(offset + 8)?,
+        last_worktree_activity: row.get(offset + 9)?,
     })
 }
 
@@ -728,6 +736,99 @@ impl<'a> FeatureManager<'a> {
     }
 
     // -----------------------------------------------------------------------
+    // Staleness detection
+    // -----------------------------------------------------------------------
+
+    /// Refresh `last_commit_at` for a single feature by running `git log` on
+    /// the feature branch. Returns the new timestamp, or `None` if the branch
+    /// is not reachable locally.
+    pub fn refresh_last_commit(&self, feature_id: &str) -> Result<Option<String>> {
+        let feature = self.get_by_id(feature_id)?;
+        let repo = RepoManager::new(self.conn, self.config).get_by_id(&feature.repo_id)?;
+
+        let ts = last_commit_timestamp(&repo.local_path, &feature.branch);
+
+        self.conn.execute(
+            "UPDATE features SET last_commit_at = ?1 WHERE id = ?2",
+            params![ts, feature_id],
+        )?;
+        Ok(ts)
+    }
+
+    /// Batch-refresh `last_commit_at` for all active features of a repo.
+    /// Uses a single `git for-each-ref` call to avoid N+1 subprocess spawns.
+    pub fn refresh_last_commit_all(&self, repo_slug: &str) -> Result<()> {
+        let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
+
+        let features: Vec<(String, String)> = query_collect(
+            self.conn,
+            "SELECT id, branch FROM features WHERE repo_id = ?1 AND status = 'active'",
+            params![repo.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+
+        if features.is_empty() {
+            return Ok(());
+        }
+
+        // Batch-fetch committer dates for all local branches in one subprocess.
+        let branch_timestamps = batch_branch_timestamps(&repo.local_path);
+
+        for (id, branch) in &features {
+            let ts = branch_timestamps.get(branch.as_str()).cloned();
+
+            self.conn.execute(
+                "UPDATE features SET last_commit_at = ?1 WHERE id = ?2",
+                params![ts, id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Returns `true` when the feature is stale: active with no recent git
+    /// commits and no recent worktree activity within `threshold_days`.
+    /// A threshold of 0 disables stale detection (always returns false).
+    pub fn is_stale(feature: &FeatureRow, threshold_days: u32) -> bool {
+        if threshold_days == 0 {
+            return false;
+        }
+        if feature.status != FeatureStatus::Active {
+            return false;
+        }
+        let cutoff = Utc::now() - chrono::Duration::days(threshold_days as i64);
+
+        let is_recent = |ts: &str| -> bool {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .map(|dt| dt.with_timezone(&Utc) >= cutoff)
+                .unwrap_or(false)
+        };
+
+        let commit_recent = feature.last_commit_at.as_deref().is_some_and(is_recent);
+        let wt_recent = feature
+            .last_worktree_activity
+            .as_deref()
+            .is_some_and(is_recent);
+
+        !commit_recent && !wt_recent
+    }
+
+    /// Compute the number of days since the most recent activity (commit or
+    /// worktree). Returns `None` when no activity data is available.
+    pub fn stale_days(feature: &FeatureRow) -> Option<u64> {
+        let latest = [
+            feature.last_commit_at.as_deref(),
+            feature.last_worktree_activity.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .max()?;
+
+        let parsed = chrono::DateTime::parse_from_rfc3339(latest).ok()?;
+        let diff = Utc::now().signed_duration_since(parsed);
+        Some(diff.num_days().max(0) as u64)
+    }
+
+    // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
 
@@ -796,11 +897,73 @@ impl<'a> FeatureManager<'a> {
         }
         Ok(())
     }
+
+    /// Return the feature ID for an active feature matching `repo_id` + `branch`,
+    /// or `None` if no such feature exists.
+    pub fn get_active_id_by_repo_and_branch(
+        &self,
+        repo_id: &str,
+        branch: &str,
+    ) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM features WHERE repo_id = ?1 AND branch = ?2 AND status = 'active'",
+                params![repo_id, branch],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Free helpers
 // ---------------------------------------------------------------------------
+
+/// Run `git log -1 --format=%cI <branch>` and return the committer timestamp,
+/// or `None` if the branch is not reachable locally.
+fn last_commit_timestamp(repo_path: &str, branch: &str) -> Option<String> {
+    match git_in(repo_path)
+        .args(["log", "-1", "--format=%cI", branch])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Fetch committer dates for all local branches in a single subprocess call.
+/// Returns a map from short branch name to ISO 8601 timestamp.
+fn batch_branch_timestamps(repo_path: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let output = git_in(repo_path)
+        .args([
+            "for-each-ref",
+            "--format=%(refname:short) %(committerdate:iso-strict)",
+            "refs/heads/",
+        ])
+        .output();
+    if let Ok(out) = output {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                if let Some((branch, ts)) = line.split_once(' ') {
+                    if !ts.is_empty() {
+                        map.insert(branch.to_string(), ts.to_string());
+                    }
+                }
+            }
+        }
+    }
+    map
+}
 
 fn map_feature_row(row: &rusqlite::Row) -> rusqlite::Result<Feature> {
     Ok(Feature {
@@ -2410,5 +2573,128 @@ mod tests {
             matches!(err, ConductorError::Workflow(ref msg) if msg.contains("only active features")),
             "expected Workflow error about active features, got: {err:?}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Staleness detection tests
+    // -----------------------------------------------------------------------
+
+    fn make_feature_row(
+        last_commit_at: Option<&str>,
+        last_wt_activity: Option<&str>,
+    ) -> FeatureRow {
+        FeatureRow {
+            id: "test-id".to_string(),
+            name: "test-feature".to_string(),
+            branch: "feat/test".to_string(),
+            base_branch: "main".to_string(),
+            status: FeatureStatus::Active,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            worktree_count: 0,
+            ticket_count: 0,
+            last_commit_at: last_commit_at.map(|s| s.to_string()),
+            last_worktree_activity: last_wt_activity.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_is_stale_within_threshold() {
+        let recent = Utc::now().to_rfc3339();
+        let row = make_feature_row(Some(&recent), None);
+        assert!(!FeatureManager::is_stale(&row, 14));
+    }
+
+    #[test]
+    fn test_is_stale_past_threshold() {
+        let old = (Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+        let row = make_feature_row(Some(&old), None);
+        assert!(FeatureManager::is_stale(&row, 14));
+    }
+
+    #[test]
+    fn test_is_stale_no_data() {
+        let row = make_feature_row(None, None);
+        assert!(FeatureManager::is_stale(&row, 14));
+    }
+
+    #[test]
+    fn test_is_stale_disabled() {
+        let old = (Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+        let row = make_feature_row(Some(&old), None);
+        assert!(!FeatureManager::is_stale(&row, 0));
+    }
+
+    #[test]
+    fn test_stale_days_calculation() {
+        let ten_days_ago = (Utc::now() - chrono::Duration::days(10)).to_rfc3339();
+        let row = make_feature_row(Some(&ten_days_ago), None);
+        let days = FeatureManager::stale_days(&row).unwrap();
+        assert!((9..=11).contains(&days), "expected ~10 days, got {days}");
+    }
+
+    #[test]
+    fn test_stale_days_no_data() {
+        let row = make_feature_row(None, None);
+        assert!(FeatureManager::stale_days(&row).is_none());
+    }
+
+    #[test]
+    fn test_last_worktree_activity_prevents_stale() {
+        let old_commit = (Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+        let recent_wt = Utc::now().to_rfc3339();
+        let row = make_feature_row(Some(&old_commit), Some(&recent_wt));
+        assert!(!FeatureManager::is_stale(&row, 14));
+    }
+
+    #[test]
+    fn test_is_stale_non_active_feature() {
+        let old = (Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+        let mut row = make_feature_row(Some(&old), None);
+        row.status = FeatureStatus::Closed;
+        assert!(!FeatureManager::is_stale(&row, 14));
+    }
+
+    #[test]
+    fn test_last_commit_at_in_feature_row_query() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let feat_id = insert_feature(&conn, &repo_id, "stale-test", "feat/stale-test");
+
+        // Set last_commit_at manually
+        let ts = "2024-06-15T12:00:00+00:00";
+        conn.execute(
+            "UPDATE features SET last_commit_at = ?1 WHERE id = ?2",
+            params![ts, feat_id],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let features = mgr.list("test-repo").unwrap();
+        let f = features.iter().find(|f| f.name == "stale-test").unwrap();
+        assert_eq!(f.last_commit_at.as_deref(), Some(ts));
+    }
+
+    #[test]
+    fn test_last_worktree_activity_in_feature_row_query() {
+        let conn = setup_db();
+        let repo_id = insert_repo(&conn);
+        let _feat_id = insert_feature(&conn, &repo_id, "wt-activity", "feat/wt-activity");
+
+        // Insert a worktree targeting the feature branch
+        let wt_id = crate::new_id();
+        let wt_created = "2024-08-20T10:00:00Z";
+        conn.execute(
+            "INSERT INTO worktrees (id, repo_id, slug, branch, base_branch, path, status, created_at)
+             VALUES (?1, ?2, 'wt-act', 'feat/wt-activity-impl', 'feat/wt-activity', '/tmp/wt', 'active', ?3)",
+            params![wt_id, repo_id, wt_created],
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let mgr = FeatureManager::new(&conn, &config);
+        let features = mgr.list("test-repo").unwrap();
+        let f = features.iter().find(|f| f.name == "wt-activity").unwrap();
+        assert_eq!(f.last_worktree_activity.as_deref(), Some(wt_created));
     }
 }

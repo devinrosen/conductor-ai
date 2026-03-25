@@ -368,8 +368,11 @@ impl App {
                             if features.is_empty() && orphans.is_empty() {
                                 return Ok(Vec::new());
                             }
+                            let stale_days = config.defaults.stale_feature_days;
                             Ok::<Vec<BranchPickerItem>, String>(
-                                BranchPickerItem::from_features_and_orphans(&features, &orphans),
+                                BranchPickerItem::from_features_and_orphans_with_stale(
+                                    &features, &orphans, stale_days,
+                                ),
                             )
                         })();
                         match result {
@@ -800,8 +803,11 @@ impl App {
                         .list_unregistered_branches(&repo.id, &repo.default_branch)
                         .map_err(|e| format!("Failed to list unregistered branches: {e}"))?;
 
+                    let stale_days = config.defaults.stale_feature_days;
                     Ok::<Vec<BranchPickerItem>, String>(
-                        BranchPickerItem::from_features_and_orphans(&features, &orphans),
+                        BranchPickerItem::from_features_and_orphans_with_stale(
+                            &features, &orphans, stale_days,
+                        ),
                     )
                 })();
                 match result {
@@ -1071,12 +1077,14 @@ mod tests {
                 worktree_count: 0,
                 ticket_count: 0,
                 base_branch: None,
+                stale_days: None,
             },
             crate::state::BranchPickerItem {
                 branch: Some("feat/notifications".to_string()),
                 worktree_count: 0,
                 ticket_count: 0,
                 base_branch: Some("main".to_string()),
+                stale_days: None,
             },
         ]
     }
@@ -1210,12 +1218,14 @@ mod tests {
                 worktree_count: 0,
                 ticket_count: 0,
                 base_branch: None,
+                stale_days: None,
             },
             BranchPickerItem {
                 branch: Some("feat/notifications".to_string()),
                 worktree_count: 2,
                 ticket_count: 1,
                 base_branch: Some("main".to_string()),
+                stale_days: None,
             },
         ];
         app.handle_feature_branches_loaded(
