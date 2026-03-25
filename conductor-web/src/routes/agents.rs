@@ -16,6 +16,8 @@ use conductor_core::repo::RepoManager;
 use conductor_core::tickets::{build_agent_prompt, TicketSyncer};
 use conductor_core::worktree::WorktreeManager;
 
+use tracing::warn;
+
 use crate::error::ApiError;
 use crate::events::ConductorEvent;
 use crate::state::AppState;
@@ -38,13 +40,17 @@ async fn spawn_tmux_blocking(
             let msg = format!("spawn task panicked: {join_err}");
             let db = state.db.lock().await;
             let agent_mgr = AgentManager::new(&db);
-            let _ = agent_mgr.update_run_failed(run_id, &msg);
+            if let Err(db_err) = agent_mgr.update_run_failed(run_id, &msg) {
+                warn!(run_id, %db_err, "failed to mark agent run as failed after spawn panic");
+            }
             Err(ConductorError::Agent(msg).into())
         }
         Ok(Err(tmux_err)) => {
             let db = state.db.lock().await;
             let agent_mgr = AgentManager::new(&db);
-            let _ = agent_mgr.update_run_failed(run_id, &tmux_err);
+            if let Err(db_err) = agent_mgr.update_run_failed(run_id, &tmux_err) {
+                warn!(run_id, %db_err, "failed to mark agent run as failed after tmux error");
+            }
             Err(ConductorError::Agent(tmux_err).into())
         }
         Ok(Ok(())) => Ok(()),
