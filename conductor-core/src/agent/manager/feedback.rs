@@ -56,9 +56,7 @@ pub fn normalize_feedback_response(
                     })
                     .collect();
                 serde_json::to_string(&selected).map_err(|e| {
-                    ConductorError::Agent(format!(
-                        "Failed to serialize multi-select response: {e}"
-                    ))
+                    ConductorError::Agent(format!("Failed to serialize multi-select response: {e}"))
                 })
             } else {
                 Ok(raw_value.to_string())
@@ -247,8 +245,10 @@ impl<'a> AgentManager<'a> {
              ORDER BY created_at DESC",
             placeholders.join(", ")
         );
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            run_ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = run_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
         let all: Vec<FeedbackRequest> =
             query_collect(self.conn, &sql, params.as_slice(), row_to_feedback_request)?;
         // Keep only the most recent pending per run (already ordered by created_at DESC).
