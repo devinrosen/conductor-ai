@@ -379,10 +379,9 @@ pub fn build_agent_args_with_mode(
         }
     }
 
-    if let Some(pattern) = permission_mode.and_then(|m| m.allowed_tools()) {
-        args.push(Cow::Borrowed("--allowedTools"));
-        args.push(Cow::Borrowed(pattern));
-    }
+    // NOTE: --allowedTools is NOT passed to the conductor binary here.
+    // It is derived from --permission-mode and passed to the `claude` CLI
+    // subprocess inside run_agent() (conductor-cli/src/main.rs).
 
     Ok(args)
 }
@@ -721,14 +720,11 @@ mod tests {
             .expect("expected --permission-mode flag");
         assert_eq!(args[idx + 1], "plan", "expected 'plan' value after flag");
 
-        let at_idx = args
-            .iter()
-            .position(|a| a == "--allowedTools")
-            .expect("expected --allowedTools flag for plan mode");
-        assert_eq!(
-            args[at_idx + 1],
-            "mcp__conductor__*",
-            "expected conductor MCP wildcard"
+        // --allowedTools must NOT appear in conductor args — it is passed
+        // to the claude CLI subprocess inside run_agent(), not here.
+        assert!(
+            !args.iter().any(|a| a == "--allowedTools"),
+            "conductor args must not contain --allowedTools (it belongs on the claude CLI)"
         );
     }
 
