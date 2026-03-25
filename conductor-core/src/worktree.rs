@@ -781,7 +781,8 @@ impl<'a> WorktreeManager<'a> {
         repo_slug: Option<&str>,
         merge_check: impl Fn(&str, &[String]) -> std::collections::HashSet<String>,
     ) -> Result<usize> {
-        let base_query = "SELECT w.id, w.branch, w.path, r.local_path, r.remote_url, w.repo_id, w.base_branch
+        let base_query =
+            "SELECT w.id, w.branch, w.path, r.local_path, r.remote_url, w.repo_id, w.base_branch
                  FROM worktrees w
                  JOIN repos r ON r.id = w.repo_id
                  WHERE w.status = 'active'";

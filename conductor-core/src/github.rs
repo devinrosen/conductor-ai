@@ -616,7 +616,15 @@ pub fn merged_branches_for_repo(
     let slug = repo_slug(&owner, &repo);
     let limit = branches.len().max(50).to_string();
     let Ok(output) = run_gh(&[
-        "pr", "list", "--repo", &slug, "--state", "merged", "--json", "headRefName", "--limit",
+        "pr",
+        "list",
+        "--repo",
+        &slug,
+        "--state",
+        "merged",
+        "--json",
+        "headRefName",
+        "--limit",
         &limit,
     ]) else {
         return result;
