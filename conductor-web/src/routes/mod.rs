@@ -116,6 +116,10 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/worktrees/{id}/agent/stop", post(agents::stop_agent))
         .route("/api/worktrees/{id}/agent/events", get(agents::get_events))
         .route(
+            "/api/worktrees/{id}/agent/runs/{run_id}/restart",
+            post(agents::restart_agent),
+        )
+        .route(
             "/api/worktrees/{id}/agent/runs/{run_id}/events",
             get(agents::get_run_events),
         )

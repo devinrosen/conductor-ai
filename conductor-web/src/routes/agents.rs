@@ -691,6 +691,90 @@ fn strip_worktree_prefix(summary: &str, worktree_path: &str) -> String {
     }
 }
 
+/// Restart a failed/cancelled agent run by creating a new run with the
+/// same prompt/config and re-spawning a tmux window.
+pub async fn restart_agent(
+    State(state): State<AppState>,
+    Path((worktree_id, run_id)): Path<(String, String)>,
+) -> Result<(StatusCode, Json<AgentRun>), ApiError> {
+    // Scope DB + config access so locks are dropped before the blocking spawn.
+    let (new_run, args, window_name) = {
+        let db = state.db.lock().await;
+        let config = state.config.read().await;
+
+        let agent_mgr = AgentManager::new(&db);
+
+        // Validate ownership BEFORE creating the child run (IDOR guard).
+        let original = agent_mgr
+            .get_run(&run_id)?
+            .ok_or_else(|| ConductorError::Agent(format!("Run {run_id} not found")))?;
+        if original.worktree_id.as_deref() != Some(worktree_id.as_str()) {
+            return Err(ConductorError::Agent(
+                "run does not belong to the specified worktree".to_string(),
+            )
+            .into());
+        }
+
+        let new_run = agent_mgr.restart_run(&run_id)?;
+
+        // Resolve worktree path from new_run.worktree_id (single source of truth).
+        let wt_mgr = WorktreeManager::new(&db, &config);
+        let wt = wt_mgr.get_by_id(
+            new_run
+                .worktree_id
+                .as_deref()
+                .expect("worktree_id verified above"),
+        )?;
+
+        let window_name = new_run
+            .tmux_window
+            .as_deref()
+            .unwrap_or(&wt.slug)
+            .to_string();
+
+        let args = conductor_core::agent_runtime::build_agent_args(
+            &new_run.id,
+            &wt.path,
+            &new_run.prompt,
+            None,
+            new_run.model.as_deref(),
+            new_run.bot_name.as_deref(),
+        )
+        .map_err(|e| {
+            let _ = agent_mgr.update_run_failed(&new_run.id, &e);
+            ConductorError::Agent(e)
+        })?;
+
+        (new_run, args, window_name)
+    };
+    // DB and config locks are now dropped.
+
+    // Spawn tmux off the async runtime thread to avoid blocking the executor.
+    let spawn_window = window_name.clone();
+    let spawn_result = tokio::task::spawn_blocking(move || {
+        conductor_core::agent_runtime::spawn_tmux_window(&args, &spawn_window)
+    })
+    .await
+    .map_err(|e| ConductorError::Agent(format!("spawn task panicked: {e}")))?;
+
+    match spawn_result {
+        Ok(()) => {
+            state.events.emit(ConductorEvent::AgentRestarted {
+                run_id: new_run.id.clone(),
+                old_run_id: run_id,
+                worktree_id: worktree_id.clone(),
+            });
+            Ok((StatusCode::CREATED, Json(new_run)))
+        }
+        Err(e) => {
+            let db = state.db.lock().await;
+            let agent_mgr = AgentManager::new(&db);
+            let _ = agent_mgr.update_run_failed(&new_run.id, &e);
+            Err(ConductorError::Agent(e).into())
+        }
+    }
+}
+
 /// Capture tmux log, kill tmux window, and mark run as cancelled.
 fn cancel_agent_run(mgr: &AgentManager, run: &AgentRun) -> Result<(), ApiError> {
     if let Some(ref window) = run.tmux_window {

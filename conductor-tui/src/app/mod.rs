@@ -533,6 +533,7 @@ impl App {
                     self.handle_stop_agent();
                 }
             }
+            Action::RestartAgent => self.handle_restart_agent(),
             Action::SubmitFeedback => {
                 if self.is_repo_agent_context() {
                     self.handle_submit_repo_feedback();
@@ -1009,7 +1010,8 @@ impl App {
                 self.state.modal = Modal::Error { message };
             }
             Action::AgentLaunchComplete { result }
-            | Action::OrchestrateLaunchComplete { result } => {
+            | Action::OrchestrateLaunchComplete { result }
+            | Action::AgentRestartComplete { result } => {
                 self.state.modal = Modal::None;
                 match result {
                     Ok(msg) => {

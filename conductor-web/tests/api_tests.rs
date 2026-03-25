@@ -1047,6 +1047,67 @@ async fn test_list_run_feedback_empty() {
     assert!(body.is_empty());
 }
 
+// ── Restart agent route tests ────────────────────────────────────────
+
+fn seed_failed_agent_run(conn: &Connection) {
+    seed_repo_and_worktree(conn);
+    let mgr = AgentManager::new(conn);
+    let run = mgr
+        .create_run(Some("w1"), "test prompt", Some("feat-test"), None)
+        .unwrap();
+    mgr.update_run_failed(&run.id, "crashed").unwrap();
+}
+
+#[tokio::test]
+async fn test_restart_agent_unknown_run() {
+    let base = spawn_test_server_with_setup(seed_repo_and_worktree).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!(
+            "{base}/api/worktrees/w1/agent/runs/nonexistent-id/restart"
+        ))
+        .send()
+        .await
+        .unwrap();
+    // Unknown run_id → error from restart_run
+    assert!(resp.status().is_client_error() || resp.status().is_server_error());
+}
+
+#[tokio::test]
+async fn test_restart_agent_rejects_active_run() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    let client = reqwest::Client::new();
+    let run_id = fetch_run_id(&base).await;
+
+    let resp = client
+        .post(format!(
+            "{base}/api/worktrees/w1/agent/runs/{run_id}/restart"
+        ))
+        .send()
+        .await
+        .unwrap();
+    // Active run → cannot restart
+    assert!(resp.status().is_client_error() || resp.status().is_server_error());
+}
+
+#[tokio::test]
+async fn test_restart_agent_wrong_worktree_id() {
+    let base = spawn_test_server_with_setup(seed_failed_agent_run).await;
+    let client = reqwest::Client::new();
+    let run_id = fetch_run_id(&base).await;
+
+    // Use a different worktree_id than the one the run belongs to
+    let resp = client
+        .post(format!(
+            "{base}/api/worktrees/wrong-wt/agent/runs/{run_id}/restart"
+        ))
+        .send()
+        .await
+        .unwrap();
+    // IDOR guard → error
+    assert!(resp.status().is_client_error() || resp.status().is_server_error());
+}
+
 // ── Notification route tests ─────────────────────────────────────────
 
 #[tokio::test]
