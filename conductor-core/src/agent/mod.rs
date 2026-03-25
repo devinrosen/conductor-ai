@@ -15,6 +15,7 @@ pub use log_parsing::{
     parse_result_event,
 };
 
+pub use manager::feedback::normalize_feedback_response;
 pub use manager::AgentManager;
 
 pub use status::{

@@ -7,8 +7,66 @@ use crate::error::{ConductorError, Result};
 use super::super::db::{optional_row, row_to_feedback_request, FEEDBACK_SELECT};
 use super::super::status::truncate_utf8;
 use super::super::status::{FeedbackStatus, FeedbackType, FEEDBACK_MAX_LEN};
-use super::super::types::{FeedbackRequest, FeedbackRequestParams};
+use super::super::types::{FeedbackOption, FeedbackRequest, FeedbackRequestParams};
 use super::AgentManager;
+
+/// Normalize a raw user response based on feedback type and available options.
+///
+/// For `Confirm`: normalizes to "yes" / "no".
+/// For `SingleSelect`: maps a 1-based index to the option value.
+/// For `MultiSelect`: maps comma-separated 1-based indices to a JSON array of option values.
+/// For `Text`: returns the raw value unchanged.
+///
+/// Returns `Err` only if JSON serialization fails for multi-select.
+pub fn normalize_feedback_response(
+    feedback_type: &FeedbackType,
+    options: Option<&[FeedbackOption]>,
+    raw_value: &str,
+) -> Result<String> {
+    match feedback_type {
+        FeedbackType::Confirm => {
+            let trimmed = raw_value.trim().to_lowercase();
+            if trimmed.starts_with('y') {
+                Ok("yes".to_string())
+            } else {
+                Ok("no".to_string())
+            }
+        }
+        FeedbackType::SingleSelect => {
+            if let Some(opts) = options {
+                if let Ok(idx) = raw_value.trim().parse::<usize>() {
+                    if idx >= 1 && idx <= opts.len() {
+                        return Ok(opts[idx - 1].value.clone());
+                    }
+                }
+            }
+            Ok(raw_value.to_string())
+        }
+        FeedbackType::MultiSelect => {
+            if let Some(opts) = options {
+                let selected: Vec<String> = raw_value
+                    .split(',')
+                    .filter_map(|s| {
+                        let idx = s.trim().parse::<usize>().ok()?;
+                        if idx >= 1 && idx <= opts.len() {
+                            Some(opts[idx - 1].value.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                serde_json::to_string(&selected).map_err(|e| {
+                    ConductorError::Agent(format!(
+                        "Failed to serialize multi-select response: {e}"
+                    ))
+                })
+            } else {
+                Ok(raw_value.to_string())
+            }
+        }
+        FeedbackType::Text => Ok(raw_value.to_string()),
+    }
+}
 
 impl<'a> AgentManager<'a> {
     /// Transition a run to "waiting_for_feedback" and create a feedback request.
@@ -30,7 +88,12 @@ impl<'a> AgentManager<'a> {
         let options = params.and_then(|p| p.options.clone());
         let options_json = options
             .as_ref()
-            .map(|o| serde_json::to_string(o).unwrap_or_default());
+            .map(|o| {
+                serde_json::to_string(o).map_err(|e| {
+                    ConductorError::Agent(format!("Failed to serialize feedback options: {e}"))
+                })
+            })
+            .transpose()?;
         let timeout_secs = params.and_then(|p| p.timeout_secs);
 
         // Validate: select types require options
@@ -169,6 +232,33 @@ impl<'a> AgentManager<'a> {
         optional_row(result)
     }
 
+    /// Batch-fetch pending feedback requests for multiple run IDs at once.
+    /// Returns a map of run_id → FeedbackRequest (most recent pending per run).
+    pub fn pending_feedback_for_runs(
+        &self,
+        run_ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, FeedbackRequest>> {
+        if run_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let placeholders: Vec<String> = (1..=run_ids.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "{FEEDBACK_SELECT} WHERE run_id IN ({}) AND status = 'pending' \
+             ORDER BY created_at DESC",
+            placeholders.join(", ")
+        );
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            run_ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+        let all: Vec<FeedbackRequest> =
+            query_collect(self.conn, &sql, params.as_slice(), row_to_feedback_request)?;
+        // Keep only the most recent pending per run (already ordered by created_at DESC).
+        let mut map = std::collections::HashMap::new();
+        for fb in all {
+            map.entry(fb.run_id.clone()).or_insert(fb);
+        }
+        Ok(map)
+    }
+
     /// Get a feedback request by ID.
     pub fn get_feedback(&self, feedback_id: &str) -> Result<Option<FeedbackRequest>> {
         let result = self.conn.query_row(
@@ -242,8 +332,14 @@ impl<'a> AgentManager<'a> {
         let mut dismissed = 0;
         for fb in &expired {
             // Use dismiss_feedback which handles status update + run resume.
-            if self.dismiss_feedback(&fb.id).is_ok() {
-                dismissed += 1;
+            match self.dismiss_feedback(&fb.id) {
+                Ok(()) => dismissed += 1,
+                Err(e) => {
+                    eprintln!(
+                        "warn: failed to dismiss expired feedback {} for run {}: {e}",
+                        fb.id, fb.run_id
+                    );
+                }
             }
         }
         Ok(dismissed)

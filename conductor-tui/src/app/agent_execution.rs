@@ -203,34 +203,22 @@ impl App {
 
         use conductor_core::agent::FeedbackType;
 
+        let format_opts = |opts: &[conductor_core::agent::FeedbackOption]| -> String {
+            opts.iter()
+                .enumerate()
+                .map(|(i, o)| format!("{}. {}", i + 1, o.label))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
         let placeholder = match fb.feedback_type {
             FeedbackType::Confirm => "Type y or n...".to_string(),
             FeedbackType::SingleSelect => {
-                let opts_text = fb
-                    .options
-                    .as_ref()
-                    .map(|opts| {
-                        opts.iter()
-                            .enumerate()
-                            .map(|(i, o)| format!("{}. {}", i + 1, o.label))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    })
-                    .unwrap_or_default();
+                let opts_text = fb.options.as_deref().map(format_opts).unwrap_or_default();
                 format!("Type the number of your choice:\n{opts_text}")
             }
             FeedbackType::MultiSelect => {
-                let opts_text = fb
-                    .options
-                    .as_ref()
-                    .map(|opts| {
-                        opts.iter()
-                            .enumerate()
-                            .map(|(i, o)| format!("{}. {}", i + 1, o.label))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    })
-                    .unwrap_or_default();
+                let opts_text = fb.options.as_deref().map(format_opts).unwrap_or_default();
                 format!("Type numbers separated by commas (e.g. 1,3):\n{opts_text}")
             }
             FeedbackType::Text => "Type your feedback response...".to_string(),

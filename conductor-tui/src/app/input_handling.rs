@@ -640,50 +640,19 @@ impl App {
                 }
                 // Convert user input based on feedback type (select → option value)
                 let resolved_value = if let Some(ref fb) = self.state.data.pending_feedback {
-                    use conductor_core::agent::FeedbackType;
-                    match fb.feedback_type {
-                        FeedbackType::Confirm => {
-                            let trimmed = value.trim().to_lowercase();
-                            if trimmed.starts_with('y') {
-                                "yes".to_string()
-                            } else {
-                                "no".to_string()
-                            }
+                    use conductor_core::agent::normalize_feedback_response;
+                    match normalize_feedback_response(
+                        &fb.feedback_type,
+                        fb.options.as_deref(),
+                        &value,
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            self.state.modal = Modal::Error {
+                                message: format!("Failed to encode feedback response: {e}"),
+                            };
+                            return;
                         }
-                        FeedbackType::SingleSelect => {
-                            if let Some(ref opts) = fb.options {
-                                if let Ok(idx) = value.trim().parse::<usize>() {
-                                    if idx >= 1 && idx <= opts.len() {
-                                        opts[idx - 1].value.clone()
-                                    } else {
-                                        value.clone()
-                                    }
-                                } else {
-                                    value.clone()
-                                }
-                            } else {
-                                value.clone()
-                            }
-                        }
-                        FeedbackType::MultiSelect => {
-                            if let Some(ref opts) = fb.options {
-                                let selected: Vec<String> = value
-                                    .split(',')
-                                    .filter_map(|s| {
-                                        let idx = s.trim().parse::<usize>().ok()?;
-                                        if idx >= 1 && idx <= opts.len() {
-                                            Some(opts[idx - 1].value.clone())
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
-                                serde_json::to_string(&selected).unwrap_or(value.clone())
-                            } else {
-                                value.clone()
-                            }
-                        }
-                        FeedbackType::Text => value.clone(),
                     }
                 } else {
                     value.clone()

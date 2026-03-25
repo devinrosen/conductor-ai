@@ -153,8 +153,13 @@ pub fn poll_child_completion(
             }
         }
 
-        // Effective elapsed = wall time − feedback wait time
-        let effective_elapsed = start.elapsed().saturating_sub(feedback_wait_total);
+        // Effective elapsed = wall time − feedback wait time (including current wait)
+        let current_wait = feedback_wait_start
+            .map(|ws| ws.elapsed())
+            .unwrap_or(Duration::ZERO);
+        let effective_elapsed = start
+            .elapsed()
+            .saturating_sub(feedback_wait_total + current_wait);
         if effective_elapsed > timeout {
             return Err(PollError::Timeout(format!(
                 "Child run {} timed out after {:.0}s",

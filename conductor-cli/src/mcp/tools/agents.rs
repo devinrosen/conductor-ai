@@ -106,6 +106,17 @@ pub(super) fn tool_list_agent_runs(
         Err(e) => return tool_err(e),
     };
 
+    // Batch-load pending feedback for all waiting runs (avoids N+1 queries)
+    let waiting_run_ids: Vec<&str> = runs
+        .iter()
+        .filter(|r| r.status == conductor_core::agent::AgentRunStatus::WaitingForFeedback)
+        .map(|r| r.id.as_str())
+        .collect();
+    let feedback_map = match agent_mgr.pending_feedback_for_runs(&waiting_run_ids) {
+        Ok(m) => m,
+        Err(e) => return tool_err(e),
+    };
+
     let mut out = String::new();
     for run in &runs {
         out.push_str(&format!("run_id: {}\n", run.id));
@@ -124,18 +135,16 @@ pub(super) fn tool_list_agent_runs(
             out.push_str(&format!("ended_at: {ended}\n"));
         }
         // Show pending feedback details for waiting runs
-        if run.status == conductor_core::agent::AgentRunStatus::WaitingForFeedback {
-            if let Ok(Some(fb)) = agent_mgr.pending_feedback_for_run(&run.id) {
-                out.push_str(&format!("feedback_prompt: {}\n", fb.prompt));
-                out.push_str(&format!("feedback_type: {}\n", fb.feedback_type));
-                if let Some(ref opts) = fb.options {
-                    for opt in opts {
-                        out.push_str(&format!("  option: {} ({})\n", opt.label, opt.value));
-                    }
+        if let Some(fb) = feedback_map.get(&run.id) {
+            out.push_str(&format!("feedback_prompt: {}\n", fb.prompt));
+            out.push_str(&format!("feedback_type: {}\n", fb.feedback_type));
+            if let Some(ref opts) = fb.options {
+                for opt in opts {
+                    out.push_str(&format!("  option: {} ({})\n", opt.label, opt.value));
                 }
-                if let Some(timeout) = fb.timeout_secs {
-                    out.push_str(&format!("feedback_timeout_secs: {timeout}\n"));
-                }
+            }
+            if let Some(timeout) = fb.timeout_secs {
+                out.push_str(&format!("feedback_timeout_secs: {timeout}\n"));
             }
         }
         out.push('\n');

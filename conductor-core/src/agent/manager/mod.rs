@@ -1,6 +1,6 @@
 pub(crate) mod aggregation;
 pub(crate) mod events;
-pub(crate) mod feedback;
+pub mod feedback;
 pub(crate) mod lifecycle;
 pub(crate) mod orphans;
 pub(crate) mod plan_steps;
