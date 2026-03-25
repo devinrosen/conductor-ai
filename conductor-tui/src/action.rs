@@ -275,6 +275,14 @@ pub enum Action {
     RepoAgentStopComplete {
         result: Result<String, String>,
     },
+    // Background result for worktree agent launch
+    AgentLaunchComplete {
+        result: Result<String, String>,
+    },
+    // Background result for orchestrate agent launch
+    OrchestrateLaunchComplete {
+        result: Result<String, String>,
+    },
     // Background result for worktree agent stop
     AgentStopComplete {
         result: Result<String, String>,

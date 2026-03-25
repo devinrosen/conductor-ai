@@ -336,47 +336,51 @@ impl App {
         worktree_path: String,
         worktree_slug: String,
     ) {
-        // Resolve model: per-worktree → per-repo → global config
+        let Some(ref tx) = self.bg_tx else { return };
+        let tx = tx.clone();
+
+        // Resolve model on main thread (pure in-memory lookup)
         let (model, _) = self.resolve_model_for_worktree(&worktree_id);
 
-        // Create DB record with tmux window name
-        let mgr = AgentManager::new(&self.conn);
-        let run = match mgr.create_run(
-            Some(&worktree_id),
-            &prompt,
-            Some(&worktree_slug),
-            model.as_deref(),
-        ) {
-            Ok(run) => run,
-            Err(e) => {
-                self.state.modal = Modal::Error {
-                    message: format!("Failed to create agent run: {e}"),
-                };
-                return;
-            }
+        self.state.modal = Modal::Progress {
+            message: "Launching orchestrator…".into(),
         };
 
-        // Build the conductor agent orchestrate command
-        let args = conductor_core::agent_runtime::build_orchestrate_args(
-            &run.id,
-            &worktree_path,
-            model.as_deref(),
-            false,
-            None,
-        );
+        std::thread::spawn(move || {
+            let result = (|| -> std::result::Result<String, String> {
+                let db = conductor_core::config::db_path();
+                let conn = conductor_core::db::open_database(&db).map_err(|e| e.to_string())?;
+                let mgr = AgentManager::new(&conn);
 
-        match conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug) {
-            Ok(()) => {
-                self.state.status_message = Some(format!(
+                let run = mgr
+                    .create_run(
+                        Some(&worktree_id),
+                        &prompt,
+                        Some(&worktree_slug),
+                        model.as_deref(),
+                    )
+                    .map_err(|e| format!("Failed to create agent run: {e}"))?;
+
+                let args = conductor_core::agent_runtime::build_orchestrate_args(
+                    &run.id,
+                    &worktree_path,
+                    model.as_deref(),
+                    false,
+                    None,
+                );
+
+                conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug)
+                    .inspect_err(|e| {
+                        let _ = mgr.update_run_failed(&run.id, e);
+                    })?;
+
+                Ok(format!(
                     "Orchestrator launched in tmux window: {worktree_slug}"
-                ));
-                self.refresh_data();
-            }
-            Err(e) => {
-                let _ = mgr.update_run_failed(&run.id, &e);
-                self.state.modal = Modal::Error { message: e };
-            }
-        }
+                ))
+            })();
+
+            let _ = tx.send(Action::OrchestrateLaunchComplete { result });
+        });
     }
 
     pub(super) fn spawn_worktree_create(
@@ -598,51 +602,50 @@ impl App {
         resume_session_id: Option<String>,
         model: Option<String>,
     ) {
-        // Create DB record with tmux window name
-        let mgr = AgentManager::new(&self.conn);
-        let run = match mgr.create_run(
-            Some(&worktree_id),
-            &prompt,
-            Some(&worktree_slug),
-            model.as_deref(),
-        ) {
-            Ok(run) => run,
-            Err(e) => {
-                self.state.modal = Modal::Error {
-                    message: format!("Failed to create agent run: {e}"),
-                };
-                return;
-            }
+        let Some(ref tx) = self.bg_tx else { return };
+        let tx = tx.clone();
+
+        self.state.modal = Modal::Progress {
+            message: "Launching agent…".into(),
         };
 
-        // Build the conductor agent run command
-        let args = match conductor_core::agent_runtime::build_agent_args(
-            &run.id,
-            &worktree_path,
-            &prompt,
-            resume_session_id.as_deref(),
-            model.as_deref(),
-            None,
-        ) {
-            Ok(a) => a,
-            Err(e) => {
-                let _ = mgr.update_run_failed(&run.id, &e);
-                self.state.modal = Modal::Error { message: e };
-                return;
-            }
-        };
+        std::thread::spawn(move || {
+            let result = (|| -> std::result::Result<String, String> {
+                let db = conductor_core::config::db_path();
+                let conn = conductor_core::db::open_database(&db).map_err(|e| e.to_string())?;
+                let mgr = AgentManager::new(&conn);
 
-        match conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug) {
-            Ok(()) => {
-                self.state.status_message =
-                    Some(format!("Agent launched in tmux window: {worktree_slug}"));
-                self.refresh_data();
-            }
-            Err(e) => {
-                let _ = mgr.update_run_failed(&run.id, &e);
-                self.state.modal = Modal::Error { message: e };
-            }
-        }
+                let run = mgr
+                    .create_run(
+                        Some(&worktree_id),
+                        &prompt,
+                        Some(&worktree_slug),
+                        model.as_deref(),
+                    )
+                    .map_err(|e| format!("Failed to create agent run: {e}"))?;
+
+                let args = conductor_core::agent_runtime::build_agent_args(
+                    &run.id,
+                    &worktree_path,
+                    &prompt,
+                    resume_session_id.as_deref(),
+                    model.as_deref(),
+                    None,
+                )
+                .inspect_err(|e| {
+                    let _ = mgr.update_run_failed(&run.id, e);
+                })?;
+
+                conductor_core::agent_runtime::spawn_tmux_window(&args, &worktree_slug)
+                    .inspect_err(|e| {
+                        let _ = mgr.update_run_failed(&run.id, e);
+                    })?;
+
+                Ok(format!("Agent launched in tmux window: {worktree_slug}"))
+            })();
+
+            let _ = tx.send(Action::AgentLaunchComplete { result });
+        });
     }
 
     pub(super) fn handle_prompt_repo_agent(&mut self) {
