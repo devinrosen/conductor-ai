@@ -6,6 +6,33 @@ use std::sync::OnceLock;
 
 use crate::error::{ConductorError, Result};
 
+/// Controls which permission flag is passed to Claude Code when launching agent runs.
+///
+/// ```toml
+/// [general]
+/// agent_permission_mode = "auto-mode"       # default — uses --enable-auto-mode
+/// agent_permission_mode = "skip-permissions" # legacy — uses --dangerously-skip-permissions
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentPermissionMode {
+    /// Use `--enable-auto-mode` (default, recommended).
+    #[default]
+    AutoMode,
+    /// Use `--dangerously-skip-permissions` (legacy fallback).
+    SkipPermissions,
+}
+
+impl AgentPermissionMode {
+    /// Returns the CLI flag string to pass to the `claude` command.
+    pub fn cli_flag(&self) -> &str {
+        match self {
+            Self::AutoMode => "--enable-auto-mode",
+            Self::SkipPermissions => "--dangerously-skip-permissions",
+        }
+    }
+}
+
 /// Controls whether an agent is auto-started after creating a worktree from a ticket.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -120,6 +147,10 @@ pub struct GeneralConfig {
     pub sync_interval_minutes: u32,
     #[serde(default)]
     pub auto_start_agent: AutoStartAgent,
+    /// Which permission flag to pass to Claude Code for agent runs.
+    /// Defaults to `auto-mode` (`--enable-auto-mode`).
+    #[serde(default)]
+    pub agent_permission_mode: AgentPermissionMode,
     /// Global default model for Claude agent runs (e.g. "sonnet", "claude-opus-4-6").
     /// Overridden by per-worktree and per-run model settings. Omit to use claude's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -186,6 +217,7 @@ impl Default for GeneralConfig {
             workspace_root: default_workspace_root(),
             sync_interval_minutes: default_sync_interval(),
             auto_start_agent: AutoStartAgent::default(),
+            agent_permission_mode: AgentPermissionMode::default(),
             model: None,
             inject_startup_context: true,
             theme: None,
@@ -507,6 +539,61 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.general.auto_start_agent, AutoStartAgent::Never);
+    }
+
+    #[test]
+    fn test_agent_permission_mode_default() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(
+            config.general.agent_permission_mode,
+            AgentPermissionMode::AutoMode
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_auto_mode() {
+        let config: Config = toml::from_str(
+            r#"
+            [general]
+            agent_permission_mode = "auto-mode"
+        "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.general.agent_permission_mode,
+            AgentPermissionMode::AutoMode
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_skip_permissions() {
+        let config: Config = toml::from_str(
+            r#"
+            [general]
+            agent_permission_mode = "skip-permissions"
+        "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.general.agent_permission_mode,
+            AgentPermissionMode::SkipPermissions
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_cli_flag_auto() {
+        assert_eq!(
+            AgentPermissionMode::AutoMode.cli_flag(),
+            "--enable-auto-mode"
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_cli_flag_skip() {
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.cli_flag(),
+            "--dangerously-skip-permissions"
+        );
     }
 
     #[test]

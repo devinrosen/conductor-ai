@@ -2212,7 +2212,11 @@ fn truncate_str(s: &str, max: usize) -> String {
 /// Generate an implementation plan by asking Claude to produce a JSON step list.
 ///
 /// Returns `None` (non-fatal) if plan generation fails or produces no steps.
-fn generate_plan(worktree_path: &str, prompt: &str) -> Option<Vec<PlanStep>> {
+fn generate_plan(
+    worktree_path: &str,
+    prompt: &str,
+    config: &conductor_core::config::Config,
+) -> Option<Vec<PlanStep>> {
     let plan_prompt = format!(
         "You are planning a software development task. \
          Generate a concise implementation plan as a JSON array.\n\n\
@@ -2229,7 +2233,7 @@ fn generate_plan(worktree_path: &str, prompt: &str) -> Option<Vec<PlanStep>> {
         .arg(&plan_prompt)
         .arg("--output-format")
         .arg("json")
-        .arg("--dangerously-skip-permissions")
+        .arg(config.general.agent_permission_mode.cli_flag())
         .current_dir(worktree_path)
         .output()
         .ok()?;
@@ -2320,7 +2324,7 @@ fn run_agent(
     // Phase 1: Plan generation (only for new runs, not resumes)
     if resume_session_id.is_none() {
         eprintln!("[conductor] Phase 1: Generating plan...");
-        match generate_plan(worktree_path, &effective_prompt) {
+        match generate_plan(worktree_path, &effective_prompt, &config) {
             Some(steps) => {
                 eprintln!("[conductor] Plan ({} steps):", steps.len());
                 for (i, step) in steps.iter().enumerate() {
@@ -2436,7 +2440,7 @@ fn run_agent(
         cmd.arg("--output-format")
             .arg("stream-json")
             .arg("--verbose")
-            .arg("--dangerously-skip-permissions")
+            .arg(config.general.agent_permission_mode.cli_flag())
             .env(CONDUCTOR_RUN_ID_ENV, run_id)
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -2877,7 +2881,7 @@ fn run_orchestrate(
 
     // Phase 1: Generate plan
     eprintln!("[orchestrator] Generating plan...");
-    let steps = generate_plan(worktree_path, &effective_prompt);
+    let steps = generate_plan(worktree_path, &effective_prompt, config);
     match steps {
         Some(ref plan_steps) => {
             eprintln!("[orchestrator] Plan ({} steps):", plan_steps.len());
