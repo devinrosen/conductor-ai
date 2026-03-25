@@ -18,7 +18,7 @@ export function deriveWorktreeSlug(sourceId: string, title: string): string {
 
   let truncated = titleSlug;
   if (titleSlug.length > budget) {
-    const lastDash = titleSlug.lastIndexOf("-", budget);
+    const lastDash = titleSlug.lastIndexOf("-", budget - 1);
     truncated = lastDash > 0 ? titleSlug.slice(0, lastDash) : titleSlug.slice(0, budget);
   }
 
