@@ -234,11 +234,11 @@ impl<'a> TicketSyncer<'a> {
         let query = match repo_id {
             Some(_) => {
                 "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json
-                 FROM tickets WHERE repo_id = ?1 ORDER BY synced_at DESC"
+                 FROM tickets WHERE repo_id = ?1 ORDER BY CAST(source_id AS INTEGER) DESC, source_id DESC"
             }
             None => {
                 "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json
-                 FROM tickets ORDER BY synced_at DESC"
+                 FROM tickets ORDER BY CAST(source_id AS INTEGER) DESC, source_id DESC"
             }
         };
 
@@ -294,10 +294,10 @@ impl<'a> TicketSyncer<'a> {
         }
 
         let sql = if conditions.is_empty() {
-            format!("{select} ORDER BY t.synced_at DESC")
+            format!("{select} ORDER BY CAST(t.source_id AS INTEGER) DESC, t.source_id DESC")
         } else {
             format!(
-                "{select} WHERE {} ORDER BY t.synced_at DESC",
+                "{select} WHERE {} ORDER BY CAST(t.source_id AS INTEGER) DESC, t.source_id DESC",
                 conditions.join(" AND ")
             )
         };
