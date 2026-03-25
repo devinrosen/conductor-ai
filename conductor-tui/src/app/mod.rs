@@ -2816,8 +2816,10 @@ workflow my-wf {
         let mut app = make_app();
         let original = app.state.theme;
         // Create a modified theme to simulate preview
-        let mut preview_theme = crate::theme::Theme::default();
-        preview_theme.border_focused = ratatui::style::Color::Red;
+        let preview_theme = crate::theme::Theme {
+            border_focused: ratatui::style::Color::Red,
+            ..Default::default()
+        };
         app.state.theme = preview_theme;
         // Set up ThemePicker modal with original saved
         app.state.modal = Modal::ThemePicker {
