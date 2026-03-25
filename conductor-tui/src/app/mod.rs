@@ -2674,4 +2674,208 @@ workflow my-wf {
             Some("https://github.com/x/y/issues/42".into())
         );
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Task 6: Tick behavior, scroll, input modal, dismiss modal tests
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn tick_auto_clears_status_after_timeout() {
+        let mut app = make_app();
+        app.state.status_message = Some("hello".into());
+        // Backdate so it appears to have been set 5 seconds ago
+        app.state.status_message_at =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(5));
+        app.handle_action(Action::Tick);
+        assert!(app.state.status_message.is_none());
+    }
+
+    #[test]
+    fn tick_preserves_recent_status_message() {
+        let mut app = make_app();
+        app.state.status_message = Some("fresh".into());
+        app.state.status_message_at = Some(std::time::Instant::now());
+        app.handle_action(Action::Tick);
+        assert_eq!(app.state.status_message.as_deref(), Some("fresh"));
+    }
+
+    #[test]
+    fn tick_prunes_finished_workflow_threads() {
+        let mut app = make_app();
+        // Spawn a thread that finishes immediately
+        let handle = std::thread::spawn(|| {});
+        // Wait for it to finish
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        app.workflow_threads.push(handle);
+        assert_eq!(app.workflow_threads.len(), 1);
+        app.handle_action(Action::Tick);
+        assert_eq!(app.workflow_threads.len(), 0);
+    }
+
+    #[test]
+    fn scroll_left_decrements_horizontal_offset() {
+        let mut app = make_app();
+        app.state.modal = Modal::EventDetail {
+            title: "Test".into(),
+            body: "long line".into(),
+            line_count: 1,
+            scroll_offset: 0,
+            horizontal_offset: 8,
+        };
+        app.handle_action(Action::ScrollLeft);
+        if let Modal::EventDetail {
+            horizontal_offset, ..
+        } = app.state.modal
+        {
+            assert_eq!(horizontal_offset, 4);
+        } else {
+            panic!("expected EventDetail");
+        }
+    }
+
+    #[test]
+    fn scroll_right_increments_horizontal_offset() {
+        let mut app = make_app();
+        app.state.modal = Modal::EventDetail {
+            title: "Test".into(),
+            body: "long line".into(),
+            line_count: 1,
+            scroll_offset: 0,
+            horizontal_offset: 0,
+        };
+        app.handle_action(Action::ScrollRight);
+        if let Modal::EventDetail {
+            horizontal_offset, ..
+        } = app.state.modal
+        {
+            assert_eq!(horizontal_offset, 4);
+        } else {
+            panic!("expected EventDetail");
+        }
+    }
+
+    #[test]
+    fn scroll_left_noop_outside_event_detail() {
+        let mut app = make_app();
+        app.state.modal = Modal::Help;
+        app.handle_action(Action::ScrollLeft);
+        assert!(matches!(app.state.modal, Modal::Help));
+    }
+
+    #[test]
+    fn input_char_appends_to_input_modal_value() {
+        let mut app = make_app();
+        app.state.modal = Modal::Input {
+            title: "Test".into(),
+            prompt: "Enter:".into(),
+            value: "ab".into(),
+            on_submit: crate::state::InputAction::LinkTicket {
+                worktree_id: "w1".into(),
+            },
+        };
+        app.handle_action(Action::InputChar('c'));
+        if let Modal::Input { ref value, .. } = app.state.modal {
+            assert_eq!(value, "abc");
+        } else {
+            panic!("expected Input modal");
+        }
+    }
+
+    #[test]
+    fn input_backspace_removes_from_input_modal_value() {
+        let mut app = make_app();
+        app.state.modal = Modal::Input {
+            title: "Test".into(),
+            prompt: "Enter:".into(),
+            value: "abc".into(),
+            on_submit: crate::state::InputAction::LinkTicket {
+                worktree_id: "w1".into(),
+            },
+        };
+        app.handle_action(Action::InputBackspace);
+        if let Modal::Input { ref value, .. } = app.state.modal {
+            assert_eq!(value, "ab");
+        } else {
+            panic!("expected Input modal");
+        }
+    }
+
+    #[test]
+    fn dismiss_modal_noop_on_progress() {
+        let mut app = make_app();
+        app.state.modal = Modal::Progress {
+            message: "Working…".into(),
+        };
+        app.handle_action(Action::DismissModal);
+        // Progress modal should NOT be dismissed
+        assert!(matches!(app.state.modal, Modal::Progress { .. }));
+    }
+
+    #[test]
+    fn dismiss_modal_theme_picker_restores_original_theme() {
+        let mut app = make_app();
+        let original = app.state.theme;
+        // Create a modified theme to simulate preview
+        let mut preview_theme = crate::theme::Theme::default();
+        preview_theme.border_focused = ratatui::style::Color::Red;
+        app.state.theme = preview_theme;
+        // Set up ThemePicker modal with original saved
+        app.state.modal = Modal::ThemePicker {
+            themes: vec![("dark".into(), "Built-in".into())],
+            loaded_themes: vec![preview_theme],
+            selected: 0,
+            original_theme: original,
+            original_name: "default".into(),
+        };
+        app.handle_action(Action::DismissModal);
+        assert!(matches!(app.state.modal, Modal::None));
+        // Theme should be restored to original (Cyan border, not Red)
+        assert_eq!(app.state.theme.border_focused, original.border_focused);
+    }
+
+    // Navigation dispatch smoke tests (detailed logic tested in navigation.rs)
+
+    #[test]
+    fn action_select_dispatches_to_select() {
+        let mut app = make_app();
+        app.state.view = View::Dashboard;
+        app.state.column_focus = crate::state::ColumnFocus::Content;
+        // Empty dashboard → select is a no-op, but doesn't crash
+        app.handle_action(Action::Select);
+        assert_eq!(app.state.view, View::Dashboard);
+    }
+
+    #[test]
+    fn action_move_up_dispatches() {
+        let mut app = make_app();
+        app.state.view = View::Dashboard;
+        app.state.column_focus = crate::state::ColumnFocus::Content;
+        app.state.dashboard_index = 1;
+        app.state.data.repos = vec![conductor_core::repo::Repo {
+            id: "r1".into(),
+            slug: "repo".into(),
+            local_path: "/tmp/repo".into(),
+            remote_url: "https://github.com/x/r".into(),
+            default_branch: "main".into(),
+            workspace_dir: "/tmp".into(),
+            created_at: "2024-01-01T00:00:00Z".into(),
+            model: None,
+            allow_agent_issue_creation: false,
+        }];
+        app.state.data.worktrees = vec![conductor_core::worktree::Worktree {
+            id: "w1".into(),
+            repo_id: "r1".into(),
+            slug: "feat-a".into(),
+            branch: "feat/a".into(),
+            path: "/tmp/ws/feat-a".into(),
+            ticket_id: None,
+            status: conductor_core::worktree::WorktreeStatus::Active,
+            created_at: "2024-01-01T00:00:00Z".into(),
+            completed_at: None,
+            model: None,
+            base_branch: None,
+        }];
+        app.handle_action(Action::MoveUp);
+        assert_eq!(app.state.dashboard_index, 0);
+    }
 }

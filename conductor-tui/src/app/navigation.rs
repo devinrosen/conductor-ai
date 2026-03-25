@@ -858,3 +858,496 @@ impl App {
 // patterns that Rust doesn't track as "used" via match.
 #[allow(unused_imports)]
 const _: Option<FormField> = None;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{ColumnFocus, View, WorkflowDefFocus, WorkflowsFocus};
+
+    fn make_test_app() -> App {
+        let conn = conductor_core::test_helpers::create_test_conn();
+        App::new(
+            conn,
+            conductor_core::config::Config::default(),
+            crate::theme::Theme::default(),
+        )
+    }
+
+    fn make_test_repo(id: &str, slug: &str) -> conductor_core::repo::Repo {
+        conductor_core::repo::Repo {
+            id: id.into(),
+            slug: slug.into(),
+            local_path: format!("/tmp/{slug}"),
+            remote_url: format!("https://github.com/test/{slug}.git"),
+            default_branch: "main".into(),
+            workspace_dir: "/tmp".into(),
+            created_at: "2024-01-01T00:00:00Z".into(),
+            model: None,
+            allow_agent_issue_creation: false,
+        }
+    }
+
+    fn make_gate(
+        id: &str,
+        run_id: &str,
+        step_name: &str,
+    ) -> conductor_core::workflow::PendingGateRow {
+        conductor_core::workflow::PendingGateRow {
+            step: conductor_core::workflow::WorkflowRunStep {
+                id: id.into(),
+                workflow_run_id: run_id.into(),
+                step_name: step_name.into(),
+                role: "worker".into(),
+                can_commit: false,
+                condition_expr: None,
+                status: conductor_core::workflow::WorkflowStepStatus::Waiting,
+                child_run_id: None,
+                position: 0,
+                started_at: None,
+                ended_at: None,
+                result_text: None,
+                condition_met: None,
+                iteration: 0,
+                parallel_group_id: None,
+                context_out: None,
+                markers_out: None,
+                retry_count: 0,
+                gate_type: None,
+                gate_prompt: None,
+                gate_timeout: None,
+                gate_approved_by: None,
+                gate_approved_at: None,
+                gate_feedback: None,
+                structured_output: None,
+                output_file: None,
+            },
+            workflow_name: "test-wf".into(),
+            target_label: None,
+            branch: None,
+            ticket_ref: None,
+        }
+    }
+
+    fn make_test_worktree(
+        id: &str,
+        repo_id: &str,
+        slug: &str,
+    ) -> conductor_core::worktree::Worktree {
+        conductor_core::worktree::Worktree {
+            id: id.into(),
+            repo_id: repo_id.into(),
+            slug: slug.into(),
+            branch: format!("feat/{slug}"),
+            path: format!("/tmp/ws/{slug}"),
+            ticket_id: None,
+            status: conductor_core::worktree::WorktreeStatus::Active,
+            created_at: "2024-01-01T00:00:00Z".into(),
+            completed_at: None,
+            model: None,
+            base_branch: None,
+        }
+    }
+
+    // ── clamp_indices ─────────────────────────────────────────────────
+
+    #[test]
+    fn clamp_indices_preserves_valid_index() {
+        let mut app = make_test_app();
+        app.state.data.repos = vec![make_test_repo("r1", "repo-a")];
+        app.state.data.worktrees = vec![make_test_worktree("w1", "r1", "feat-a")];
+        app.state.dashboard_index = 1; // worktree row (valid)
+        app.clamp_indices();
+        assert_eq!(app.state.dashboard_index, 1);
+    }
+
+    #[test]
+    fn clamp_indices_clamps_oversized_dashboard_index() {
+        let mut app = make_test_app();
+        app.state.data.repos = vec![make_test_repo("r1", "repo-a")];
+        // dashboard_rows has 1 entry (just the repo header)
+        app.state.dashboard_index = 10;
+        app.clamp_indices();
+        assert_eq!(app.state.dashboard_index, 0);
+    }
+
+    #[test]
+    fn clamp_indices_empty_lists_no_clamp() {
+        let mut app = make_test_app();
+        app.state.dashboard_index = 5;
+        app.state.ticket_index = 3;
+        app.clamp_indices();
+        // Empty lists → clamp block doesn't fire, indices stay as-is
+        assert_eq!(app.state.dashboard_index, 5);
+        assert_eq!(app.state.ticket_index, 3);
+    }
+
+    #[test]
+    fn clamp_indices_clamps_ticket_index() {
+        let mut app = make_test_app();
+        app.state.filtered_tickets = vec![conductor_core::tickets::Ticket {
+            id: "t1".into(),
+            repo_id: "r1".into(),
+            source_type: "github".into(),
+            source_id: "1".into(),
+            title: "Ticket".into(),
+            body: "".into(),
+            state: "open".into(),
+            labels: "".into(),
+            assignee: None,
+            priority: None,
+            url: "".into(),
+            synced_at: "2024-01-01T00:00:00Z".into(),
+            raw_json: "{}".into(),
+        }];
+        app.state.ticket_index = 5;
+        app.clamp_indices();
+        assert_eq!(app.state.ticket_index, 0);
+    }
+
+    // ── go_back ───────────────────────────────────────────────────────
+
+    #[test]
+    fn go_back_dashboard_shows_confirm_quit() {
+        let mut app = make_test_app();
+        app.state.view = View::Dashboard;
+        app.go_back();
+        assert!(matches!(app.state.modal, Modal::Confirm { .. }));
+    }
+
+    #[test]
+    fn go_back_repo_detail_to_dashboard() {
+        let mut app = make_test_app();
+        app.state.view = View::RepoDetail;
+        app.state.selected_repo_id = Some("r1".into());
+        app.go_back();
+        assert_eq!(app.state.view, View::Dashboard);
+        assert!(app.state.selected_repo_id.is_none());
+    }
+
+    #[test]
+    fn go_back_worktree_detail_with_repo_goes_to_repo_detail() {
+        let mut app = make_test_app();
+        app.state.view = View::WorktreeDetail;
+        app.state.selected_repo_id = Some("r1".into());
+        app.state.selected_worktree_id = Some("w1".into());
+        app.go_back();
+        assert_eq!(app.state.view, View::RepoDetail);
+        assert!(app.state.selected_worktree_id.is_none());
+    }
+
+    #[test]
+    fn go_back_worktree_detail_without_repo_goes_to_dashboard() {
+        let mut app = make_test_app();
+        app.state.view = View::WorktreeDetail;
+        app.state.selected_repo_id = None;
+        app.state.selected_worktree_id = Some("w1".into());
+        app.go_back();
+        assert_eq!(app.state.view, View::Dashboard);
+        assert!(app.state.selected_worktree_id.is_none());
+    }
+
+    #[test]
+    fn go_back_workflow_run_detail_restores_previous_view() {
+        let mut app = make_test_app();
+        app.state.view = View::WorkflowRunDetail;
+        app.state.previous_view = Some(View::RepoDetail);
+        app.state.selected_workflow_run_id = Some("run1".into());
+        app.go_back();
+        assert_eq!(app.state.view, View::RepoDetail);
+        assert_eq!(app.state.column_focus, ColumnFocus::Workflow);
+        assert_eq!(app.state.workflows_focus, WorkflowsFocus::Runs);
+        assert!(app.state.selected_workflow_run_id.is_none());
+    }
+
+    #[test]
+    fn go_back_workflow_def_detail_restores_defs_focus() {
+        let mut app = make_test_app();
+        app.state.view = View::WorkflowDefDetail;
+        app.state.previous_view = Some(View::Dashboard);
+        app.state.selected_workflow_def = Some(conductor_core::workflow::WorkflowDef {
+            name: "test".into(),
+            description: String::new(),
+            trigger: conductor_core::workflow::WorkflowTrigger::Manual,
+            targets: vec![],
+            inputs: vec![],
+            body: vec![],
+            always: vec![],
+            source_path: String::new(),
+        });
+        app.go_back();
+        assert_eq!(app.state.view, View::Dashboard);
+        assert!(app.state.selected_workflow_def.is_none());
+        assert_eq!(app.state.column_focus, ColumnFocus::Workflow);
+        assert_eq!(app.state.workflows_focus, WorkflowsFocus::Defs);
+    }
+
+    #[test]
+    fn go_back_from_step_tree_exits_pane_not_view() {
+        let mut app = make_test_app();
+        app.state.column_focus = ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Defs;
+        app.state.workflow_def_focus = WorkflowDefFocus::Steps;
+        app.state.view = View::Dashboard;
+        app.go_back();
+        assert_eq!(app.state.workflow_def_focus, WorkflowDefFocus::List);
+        assert_eq!(app.state.view, View::Dashboard);
+    }
+
+    // ── next_panel / prev_panel ───────────────────────────────────────
+
+    #[test]
+    fn next_panel_dashboard_is_noop() {
+        let mut app = make_test_app();
+        app.state.view = View::Dashboard;
+        app.state.column_focus = ColumnFocus::Content;
+        app.next_panel();
+        // Should remain Dashboard — no panel cycling on dashboard
+        assert_eq!(app.state.view, View::Dashboard);
+    }
+
+    #[test]
+    fn next_panel_repo_detail_cycles_focus() {
+        let mut app = make_test_app();
+        app.state.view = View::RepoDetail;
+        app.state.column_focus = ColumnFocus::Content;
+        app.state.repo_detail_focus = RepoDetailFocus::Info;
+        app.next_panel();
+        assert_eq!(app.state.repo_detail_focus, RepoDetailFocus::Worktrees);
+    }
+
+    #[test]
+    fn prev_panel_repo_detail_cycles_backward() {
+        let mut app = make_test_app();
+        app.state.view = View::RepoDetail;
+        app.state.column_focus = ColumnFocus::Content;
+        app.state.repo_detail_focus = RepoDetailFocus::Worktrees;
+        app.prev_panel();
+        assert_eq!(app.state.repo_detail_focus, RepoDetailFocus::Info);
+    }
+
+    #[test]
+    fn next_panel_worktree_detail_toggles() {
+        let mut app = make_test_app();
+        app.state.view = View::WorktreeDetail;
+        app.state.column_focus = ColumnFocus::Content;
+        app.state.worktree_detail_focus = WorktreeDetailFocus::InfoPanel;
+        app.next_panel();
+        assert_eq!(
+            app.state.worktree_detail_focus,
+            WorktreeDetailFocus::LogPanel
+        );
+        app.next_panel();
+        assert_eq!(
+            app.state.worktree_detail_focus,
+            WorktreeDetailFocus::InfoPanel
+        );
+    }
+
+    #[test]
+    fn next_panel_workflow_column_cycles_defs_to_runs_no_gates() {
+        let mut app = make_test_app();
+        app.state.column_focus = ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Defs;
+        // No gates → should skip Gates and go to Runs
+        app.next_panel();
+        assert_eq!(app.state.workflows_focus, WorkflowsFocus::Runs);
+    }
+
+    #[test]
+    fn next_panel_workflow_column_cycles_with_gates() {
+        let mut app = make_test_app();
+        app.state.column_focus = ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Defs;
+        // Add a gate so Gates pane is visible
+        app.state.detail_gates = vec![make_gate("s1", "run1", "gate1")];
+        app.next_panel();
+        assert_eq!(app.state.workflows_focus, WorkflowsFocus::Gates);
+        app.next_panel();
+        assert_eq!(app.state.workflows_focus, WorkflowsFocus::Runs);
+    }
+
+    #[test]
+    fn prev_panel_workflow_column_cycles_backward() {
+        let mut app = make_test_app();
+        app.state.column_focus = ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Defs;
+        // No gates
+        app.prev_panel();
+        assert_eq!(app.state.workflows_focus, WorkflowsFocus::Runs);
+    }
+
+    #[test]
+    fn next_panel_step_tree_exits_to_list() {
+        let mut app = make_test_app();
+        app.state.column_focus = ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Defs;
+        app.state.workflow_def_focus = WorkflowDefFocus::Steps;
+        app.next_panel();
+        assert_eq!(app.state.workflow_def_focus, WorkflowDefFocus::List);
+    }
+
+    // ── move_up / move_down ───────────────────────────────────────────
+
+    #[test]
+    fn move_up_dashboard_saturates_at_zero() {
+        let mut app = make_test_app();
+        app.state.view = View::Dashboard;
+        app.state.column_focus = ColumnFocus::Content;
+        app.state.dashboard_index = 0;
+        app.move_up();
+        assert_eq!(app.state.dashboard_index, 0);
+    }
+
+    #[test]
+    fn move_down_dashboard_increments() {
+        let mut app = make_test_app();
+        app.state.view = View::Dashboard;
+        app.state.column_focus = ColumnFocus::Content;
+        app.state.data.repos = vec![make_test_repo("r1", "repo-a")];
+        app.state.data.worktrees = vec![make_test_worktree("w1", "r1", "feat-a")];
+        app.state.dashboard_index = 0;
+        app.move_down();
+        assert_eq!(app.state.dashboard_index, 1);
+    }
+
+    #[test]
+    fn move_down_dashboard_clamps_at_end() {
+        let mut app = make_test_app();
+        app.state.view = View::Dashboard;
+        app.state.column_focus = ColumnFocus::Content;
+        app.state.data.repos = vec![make_test_repo("r1", "repo-a")];
+        // Only 1 row (repo header) → can't go past 0
+        app.state.dashboard_index = 0;
+        app.move_down();
+        assert_eq!(app.state.dashboard_index, 0);
+    }
+
+    #[test]
+    fn move_up_dashboard_decrements() {
+        let mut app = make_test_app();
+        app.state.view = View::Dashboard;
+        app.state.column_focus = ColumnFocus::Content;
+        app.state.data.repos = vec![make_test_repo("r1", "repo-a")];
+        app.state.data.worktrees = vec![make_test_worktree("w1", "r1", "feat-a")];
+        app.state.dashboard_index = 1;
+        app.move_up();
+        assert_eq!(app.state.dashboard_index, 0);
+    }
+
+    #[test]
+    fn move_up_event_detail_modal_decrements_scroll() {
+        let mut app = make_test_app();
+        app.state.modal = Modal::EventDetail {
+            title: "Test".into(),
+            body: "line1\nline2\nline3".into(),
+            line_count: 3,
+            scroll_offset: 2,
+            horizontal_offset: 0,
+        };
+        app.move_up();
+        if let Modal::EventDetail { scroll_offset, .. } = app.state.modal {
+            assert_eq!(scroll_offset, 1);
+        } else {
+            panic!("expected EventDetail modal");
+        }
+    }
+
+    #[test]
+    fn move_down_event_detail_modal_increments_scroll() {
+        let mut app = make_test_app();
+        app.state.modal = Modal::EventDetail {
+            title: "Test".into(),
+            body: "line1\nline2\nline3".into(),
+            line_count: 3,
+            scroll_offset: 0,
+            horizontal_offset: 0,
+        };
+        app.move_down();
+        if let Modal::EventDetail { scroll_offset, .. } = app.state.modal {
+            assert_eq!(scroll_offset, 1);
+        } else {
+            panic!("expected EventDetail modal");
+        }
+    }
+
+    #[test]
+    fn move_up_in_workflow_column_moves_workflow_index() {
+        let mut app = make_test_app();
+        app.state.column_focus = ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Runs;
+        app.state.workflow_run_index = 1;
+        app.move_up();
+        assert_eq!(app.state.workflow_run_index, 0);
+    }
+
+    #[test]
+    fn move_down_in_workflow_column_increments_gate_index() {
+        let mut app = make_test_app();
+        app.state.column_focus = ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Gates;
+        app.state.detail_gate_index = 0;
+        app.state.detail_gates = vec![
+            make_gate("s1", "run1", "gate1"),
+            make_gate("s2", "run1", "gate2"),
+        ];
+        app.move_down();
+        assert_eq!(app.state.detail_gate_index, 1);
+    }
+
+    // ── select ────────────────────────────────────────────────────────
+
+    #[test]
+    fn select_dashboard_repo_navigates_to_repo_detail() {
+        let mut app = make_test_app();
+        let repo = make_test_repo("r1", "repo-a");
+        // Also register in DB so navigate_to_repo_detail doesn't fail
+        app.conn
+            .execute(
+                "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+                 VALUES ('r1', 'repo-a', '/tmp/repo-a', 'https://github.com/test/repo-a.git', '/tmp', '2024-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        app.state.data.repos = vec![repo];
+        app.state.view = View::Dashboard;
+        app.state.column_focus = ColumnFocus::Content;
+        app.state.dashboard_index = 0; // repo row
+        app.select();
+        assert_eq!(app.state.view, View::RepoDetail);
+        assert_eq!(app.state.selected_repo_id.as_deref(), Some("r1"));
+    }
+
+    #[test]
+    fn select_dashboard_worktree_navigates_to_worktree_detail() {
+        let mut app = make_test_app();
+        let repo = make_test_repo("r1", "repo-a");
+        let wt = make_test_worktree("w1", "r1", "feat-a");
+        app.state.data.repos = vec![repo];
+        app.state.data.worktrees = vec![wt];
+        app.state.view = View::Dashboard;
+        app.state.column_focus = ColumnFocus::Content;
+        app.state.dashboard_index = 1; // worktree row
+        app.select();
+        assert_eq!(app.state.view, View::WorktreeDetail);
+        assert_eq!(app.state.selected_worktree_id.as_deref(), Some("w1"));
+    }
+
+    #[test]
+    fn select_on_empty_dashboard_is_noop() {
+        let mut app = make_test_app();
+        app.state.view = View::Dashboard;
+        app.state.column_focus = ColumnFocus::Content;
+        app.select();
+        assert_eq!(app.state.view, View::Dashboard);
+    }
+
+    #[test]
+    fn select_workflow_column_delegates() {
+        let mut app = make_test_app();
+        app.state.column_focus = ColumnFocus::Workflow;
+        app.state.workflows_focus = WorkflowsFocus::Runs;
+        // No runs → select is a no-op
+        app.select();
+        assert_eq!(app.state.view, View::Dashboard);
+    }
+}
