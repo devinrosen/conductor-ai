@@ -310,9 +310,9 @@ pub fn build_agent_args_with_mode(
         }
     }
 
-    if let Some(crate::config::AgentPermissionMode::Plan) = permission_mode {
+    if let Some(pattern) = permission_mode.and_then(|m| m.allowed_tools()) {
         args.push(Cow::Borrowed("--allowedTools"));
-        args.push(Cow::Borrowed("mcp__conductor__*"));
+        args.push(Cow::Borrowed(pattern));
     }
 
     Ok(args)

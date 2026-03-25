@@ -42,6 +42,16 @@ impl AgentPermissionMode {
             _ => None,
         }
     }
+
+    /// Returns the `--allowedTools` glob pattern for this mode, if any.
+    ///
+    /// Plan mode restricts agents to conductor MCP tools only.
+    pub fn allowed_tools(&self) -> Option<&'static str> {
+        match self {
+            Self::Plan => Some("mcp__conductor__*"),
+            _ => None,
+        }
+    }
 }
 
 /// Controls whether an agent is auto-started after creating a worktree from a ticket.
