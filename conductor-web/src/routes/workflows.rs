@@ -1114,4 +1114,32 @@ mod tests {
             "handler must invoke execute_workflow — no workflow_runs row found for 'noop'"
         );
     }
+
+    #[test]
+    fn test_workflow_source_serialized_values() {
+        use conductor_core::workflow::WorkflowSource;
+
+        // Create a minimal built-in def.
+        let mut builtin_def = WorkflowDef {
+            name: "test".into(),
+            description: "test".into(),
+            trigger: conductor_core::workflow::WorkflowTrigger::Manual,
+            inputs: vec![],
+            body: vec![],
+            always: vec![],
+            targets: vec![],
+            source: WorkflowSource::BuiltIn,
+            source_path: "<builtin>".into(),
+        };
+        let summary = WorkflowDefSummary::from(&builtin_def);
+        assert_eq!(
+            summary.source, "built_in",
+            "BuiltIn must serialize to \"built_in\""
+        );
+
+        // Flip to Repo.
+        builtin_def.source = WorkflowSource::Repo;
+        let summary = WorkflowDefSummary::from(&builtin_def);
+        assert_eq!(summary.source, "repo", "Repo must serialize to \"repo\"");
+    }
 }

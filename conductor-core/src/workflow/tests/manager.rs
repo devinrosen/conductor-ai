@@ -799,6 +799,52 @@ fn test_purge_all_terminal_statuses() {
 }
 
 #[test]
+fn test_list_defs_repo_overrides_builtin() {
+    use crate::workflow_dsl::WorkflowSource;
+    use std::fs;
+    use tempfile::tempdir;
+
+    let tmp = tempdir().unwrap();
+    let wf_dir = tmp.path().join(".conductor").join("workflows");
+    fs::create_dir_all(&wf_dir).unwrap();
+
+    // Create a repo-level "hello" workflow that shadows the built-in one.
+    fs::write(
+        wf_dir.join("hello.wf"),
+        "workflow hello { meta { description = \"repo override\" trigger = manual targets = [\"worktree\"] } call plan }",
+    )
+    .unwrap();
+
+    let (defs, _) =
+        WorkflowManager::list_defs(tmp.path().to_str().unwrap(), "/nonexistent").unwrap();
+
+    // Only one "hello" should exist, and it should be the repo version.
+    let hello_defs: Vec<_> = defs.iter().filter(|d| d.name == "hello").collect();
+    assert_eq!(
+        hello_defs.len(),
+        1,
+        "expected exactly one hello def, got {}",
+        hello_defs.len()
+    );
+    assert_eq!(
+        hello_defs[0].source,
+        WorkflowSource::Repo,
+        "repo def should shadow built-in"
+    );
+}
+
+#[test]
+fn test_list_defs_includes_builtins_when_no_repo_defs() {
+    use crate::workflow_dsl::WorkflowSource;
+
+    let (defs, _) = WorkflowManager::list_defs("/nonexistent", "/nonexistent").unwrap();
+    assert!(
+        defs.iter().any(|d| d.source == WorkflowSource::BuiltIn),
+        "expected at least one built-in workflow"
+    );
+}
+
+#[test]
 fn test_purge_single_status_filter() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);

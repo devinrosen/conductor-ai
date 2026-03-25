@@ -1249,10 +1249,11 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
-    /// Load workflow definitions from the filesystem for a worktree.
+    /// Load workflow definitions from the filesystem for a worktree, merged
+    /// with built-in workflows embedded in the binary.
     ///
-    /// Wraps `workflow_dsl::load_workflow_defs` so consumers don't need to
-    /// reach into the low-level DSL module directly.
+    /// Repo-level definitions take precedence: if a repo `.wf` file has the
+    /// same name as a built-in, the built-in is shadowed.
     ///
     /// Returns `(defs, warnings)` — warnings contain one [`WorkflowWarning`]
     /// per `.wf` file that failed to parse. Successfully-parsed definitions are
@@ -1264,16 +1265,33 @@ impl<'a> WorkflowManager<'a> {
         Vec<crate::workflow_dsl::WorkflowDef>,
         Vec<crate::workflow_dsl::WorkflowWarning>,
     )> {
-        workflow_dsl::load_workflow_defs(worktree_path, repo_path)
+        let (mut defs, mut warnings) = workflow_dsl::load_workflow_defs(worktree_path, repo_path)?;
+
+        // Append built-in workflows, skipping any whose name collides with a repo def.
+        let (builtin_defs, builtin_warnings) = crate::builtin_workflows::load_builtin_defs();
+        warnings.extend(builtin_warnings);
+
+        let repo_names: std::collections::HashSet<String> =
+            defs.iter().map(|d| d.name.clone()).collect();
+        for def in builtin_defs {
+            if !repo_names.contains(&def.name) {
+                defs.push(def);
+            }
+        }
+
+        Ok((defs, warnings))
     }
 
     /// Load a single workflow definition by name.
+    ///
+    /// Checks the repo `.conductor/workflows/` directory first, then falls back
+    /// to built-in workflows embedded in the binary.
     pub fn load_def_by_name(
         worktree_path: &str,
         repo_path: &str,
         name: &str,
     ) -> Result<crate::workflow_dsl::WorkflowDef> {
-        workflow_dsl::load_workflow_by_name(worktree_path, repo_path, name)
+        super::load_workflow_by_name(worktree_path, repo_path, name)
     }
 
     /// Validate a single workflow definition using the full batch validation

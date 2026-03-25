@@ -302,7 +302,7 @@ fn test_load_from_file() {
 
     let (defs, warnings) =
         load_workflow_defs(tmp.path().to_str().unwrap(), "/nonexistent").unwrap();
-    // At least the repo workflow, plus any built-ins
+    // Should contain only the repo-level workflow (built-ins merged at manager layer).
     assert!(defs.iter().any(|d| d.name == "simple"));
     assert!(warnings.is_empty());
 }
@@ -2244,7 +2244,7 @@ fn test_load_workflow_defs_skips_unreadable_file() {
     fs::set_permissions(&bad_path, fs::Permissions::from_mode(0o644)).unwrap();
 
     let (defs, warnings) = result.unwrap();
-    // The readable workflow is returned (plus any built-ins).
+    // The readable workflow is returned (built-ins merged at manager layer).
     assert!(
         defs.iter().any(|d| d.name == "good"),
         "expected 'good' workflow to be parseable"

@@ -13,6 +13,13 @@ use crate::workflow_dsl::{parse_workflow_str, WorkflowDef, WorkflowSource, Workf
 const BUILTIN_SOURCES: &[(&str, &str)] =
     &[("hello", include_str!("../builtin_workflows/hello.wf"))];
 
+/// Tag a parsed definition as built-in so it can be distinguished from
+/// repo-level definitions by the UI and engine.
+fn apply_builtin_metadata(def: &mut WorkflowDef) {
+    def.source = WorkflowSource::BuiltIn;
+    def.source_path = "<builtin>".to_string();
+}
+
 /// Parse all embedded workflow sources and return `(defs, warnings)`.
 ///
 /// Mirrors the signature of `load_workflow_defs` so callers can merge the
@@ -24,8 +31,7 @@ pub fn load_builtin_defs() -> (Vec<WorkflowDef>, Vec<WorkflowWarning>) {
     for (name, source) in BUILTIN_SOURCES {
         match parse_workflow_str(source, "<builtin>") {
             Ok(mut def) => {
-                def.source = WorkflowSource::BuiltIn;
-                def.source_path = "<builtin>".to_string();
+                apply_builtin_metadata(&mut def);
                 defs.push(def);
             }
             Err(e) => {
@@ -46,13 +52,18 @@ pub fn load_builtin_by_name(name: &str) -> Option<WorkflowDef> {
     BUILTIN_SOURCES
         .iter()
         .find(|(n, _)| *n == name)
-        .and_then(|(_, source)| {
-            parse_workflow_str(source, "<builtin>").ok().map(|mut def| {
-                def.source = WorkflowSource::BuiltIn;
-                def.source_path = "<builtin>".to_string();
-                def
-            })
-        })
+        .and_then(
+            |(name, source)| match parse_workflow_str(source, "<builtin>") {
+                Ok(mut def) => {
+                    apply_builtin_metadata(&mut def);
+                    Some(def)
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to parse built-in workflow '{name}': {e}");
+                    None
+                }
+            },
+        )
 }
 
 #[cfg(test)]

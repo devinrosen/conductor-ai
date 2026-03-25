@@ -368,17 +368,14 @@ pub(super) fn execute_call_workflow(
     let step_key = node.workflow.clone();
 
     // Load the child workflow definition once (it won't change between retries)
-    let child_def = crate::workflow_dsl::load_workflow_by_name(
-        &state.working_dir,
-        &state.repo_path,
-        &node.workflow,
-    )
-    .map_err(|e| {
-        ConductorError::Workflow(format!(
-            "Failed to load sub-workflow '{}': {e}",
-            node.workflow
-        ))
-    })?;
+    let child_def =
+        super::load_workflow_by_name(&state.working_dir, &state.repo_path, &node.workflow)
+            .map_err(|e| {
+                ConductorError::Workflow(format!(
+                    "Failed to load sub-workflow '{}': {e}",
+                    node.workflow
+                ))
+            })?;
 
     // Retry loop
     let max_attempts = 1 + node.retries;

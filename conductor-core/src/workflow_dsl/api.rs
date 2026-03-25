@@ -1,6 +1,5 @@
 use std::fs;
 
-use crate::builtin_workflows;
 use crate::error::{ConductorError, Result};
 use crate::text_util::{resolve_conductor_subdir, resolve_conductor_subdir_for_file};
 
@@ -51,18 +50,6 @@ pub fn load_workflow_defs(
                     });
                 }
             }
-        }
-    }
-
-    // 2. Append built-in workflows, skipping any whose name collides with a repo def.
-    let (builtin_defs, builtin_warnings) = builtin_workflows::load_builtin_defs();
-    warnings.extend(builtin_warnings);
-
-    let repo_names: std::collections::HashSet<String> =
-        defs.iter().map(|d| d.name.clone()).collect();
-    for def in builtin_defs {
-        if !repo_names.contains(&def.name) {
-            defs.push(def);
         }
     }
 
@@ -123,20 +110,15 @@ pub fn load_workflow_by_name(
 ) -> Result<WorkflowDef> {
     validate_workflow_name(name)?;
 
-    // Try repo-level first.
     let filename = format!("{name}.wf");
-    if let Some(workflows_dir) =
+    let workflows_dir =
         resolve_conductor_subdir_for_file(worktree_path, repo_path, "workflows", &filename)
-    {
-        return parse_workflow_file(&workflows_dir.join(&filename));
-    }
-
-    // Fall back to built-in.
-    builtin_workflows::load_builtin_by_name(name).ok_or_else(|| {
-        ConductorError::Workflow(format!(
-            "Workflow '{name}' not found in .conductor/workflows/ or built-in workflows"
-        ))
-    })
+            .ok_or_else(|| {
+                ConductorError::Workflow(format!(
+                    "Workflow '{name}' not found in .conductor/workflows/"
+                ))
+            })?;
+    parse_workflow_file(&workflows_dir.join(&filename))
 }
 
 /// Maximum allowed workflow nesting depth.
@@ -218,26 +200,14 @@ mod tests {
     }
 
     #[test]
-    fn test_load_workflow_defs_includes_builtins() {
-        // Non-existent paths → no repo defs, only built-ins.
+    fn test_load_workflow_defs_empty_without_dir() {
+        // Non-existent paths → no repo defs, empty result.
         let (defs, _) = load_workflow_defs("/nonexistent", "/nonexistent").unwrap();
-        assert!(
-            defs.iter()
-                .any(|d| d.source == super::super::types::WorkflowSource::BuiltIn),
-            "expected at least one built-in workflow"
-        );
+        assert!(defs.is_empty());
     }
 
     #[test]
-    fn test_load_workflow_by_name_falls_back_to_builtin() {
-        // "hello" is a built-in — should succeed even with no repo dir.
-        let def = load_workflow_by_name("/nonexistent", "/nonexistent", "hello").unwrap();
-        assert_eq!(def.name, "hello");
-        assert_eq!(def.source, super::super::types::WorkflowSource::BuiltIn);
-    }
-
-    #[test]
-    fn test_load_workflow_by_name_not_found_anywhere() {
+    fn test_load_workflow_by_name_not_found() {
         let result = load_workflow_by_name("/nonexistent", "/nonexistent", "no-such-workflow");
         assert!(result.is_err());
     }

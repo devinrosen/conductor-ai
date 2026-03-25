@@ -548,7 +548,7 @@ fn evaluate_hooks(
             final_status,
         );
 
-        let hook_wf = match crate::workflow_dsl::load_workflow_by_name(
+        let hook_wf = match super::load_workflow_by_name(
             &state.working_dir,
             &state.repo_path,
             hook_wf_name,

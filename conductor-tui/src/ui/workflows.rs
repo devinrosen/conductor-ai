@@ -25,6 +25,16 @@ use crate::state::WorkflowRunRow;
 use crate::state::WorkflowsFocus;
 use crate::theme::Theme;
 
+/// Append a `[built-in]` badge span if the definition is a built-in workflow.
+fn push_builtin_badge<'a>(spans: &mut Vec<Span<'a>>, source: &WorkflowSource, theme: &Theme) {
+    if *source == WorkflowSource::BuiltIn {
+        spans.push(Span::styled(
+            "  [built-in]",
+            Style::default().fg(theme.label_accent),
+        ));
+    }
+}
+
 /// Returns a short context label for workflow pane titles, e.g. "my-repo" or "feat-123".
 /// Returns `None` when in global (all-repos) mode.
 fn workflow_context_label(state: &AppState) -> Option<String> {
@@ -205,12 +215,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                 ),
                 Span::styled(badge_text, Style::default().fg(badge_color)),
             ];
-            if def.source == WorkflowSource::BuiltIn {
-                spans.push(Span::styled(
-                    "  [built-in]",
-                    Style::default().fg(state.theme.label_accent),
-                ));
-            }
+            push_builtin_badge(&mut spans, &def.source, &state.theme);
             if !def.targets.is_empty() {
                 let badge = format!("  [{}]", def.targets.join(", "));
                 spans.push(Span::styled(
@@ -290,12 +295,7 @@ pub(super) fn render_defs(frame: &mut Frame, area: Rect, state: &AppState) {
                     ),
                     Span::styled(badge_text, Style::default().fg(badge_color)),
                 ];
-                if def.source == WorkflowSource::BuiltIn {
-                    spans.push(Span::styled(
-                        "  [built-in]",
-                        Style::default().fg(state.theme.label_accent),
-                    ));
-                }
+                push_builtin_badge(&mut spans, &def.source, &state.theme);
                 if !def.targets.is_empty() {
                     let badge = format!("  [{}]", def.targets.join(", "));
                     spans.push(Span::styled(
