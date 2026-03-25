@@ -1140,6 +1140,7 @@ pub enum InputAction {
         repo_id: String,
         repo_path: String,
         repo_slug: String,
+        resume_session_id: Option<String>,
     },
     /// Second step: model picker for workflow runs.
     /// Carries the workflow target + inputs through the modal roundtrip.

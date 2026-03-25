@@ -592,11 +592,12 @@ impl App {
                 repo_id,
                 repo_path,
                 repo_slug,
+                resume_session_id,
             } => {
                 if value.is_empty() {
                     return;
                 }
-                self.start_repo_agent_tmux(value, repo_id, repo_path, repo_slug);
+                self.start_repo_agent_tmux(value, repo_id, repo_path, repo_slug, resume_session_id);
             }
             InputAction::OrchestratePrompt {
                 worktree_id,
