@@ -112,9 +112,21 @@ impl<'a> AgentManager<'a> {
         self.load_optional_run(result)
     }
 
+    /// Convert a list of runs into a map keyed by worktree_id, populating plans.
+    fn runs_to_worktree_map(&self, mut runs: Vec<AgentRun>) -> Result<HashMap<String, AgentRun>> {
+        self.populate_plans(&mut runs)?;
+        let mut map = HashMap::new();
+        for run in runs {
+            if let Some(ref wt_id) = run.worktree_id {
+                map.insert(wt_id.clone(), run);
+            }
+        }
+        Ok(map)
+    }
+
     /// Returns the latest agent run for each worktree, keyed by worktree_id.
     pub fn latest_runs_by_worktree(&self) -> Result<HashMap<String, AgentRun>> {
-        let mut runs = query_collect(
+        let runs = query_collect(
             self.conn,
             &format!(
                 "SELECT {AGENT_RUN_COLS_A} \
@@ -127,14 +139,7 @@ impl<'a> AgentManager<'a> {
             [],
             row_to_agent_run,
         )?;
-        self.populate_plans(&mut runs)?;
-        let mut map = HashMap::new();
-        for run in runs {
-            if let Some(ref wt_id) = run.worktree_id {
-                map.insert(wt_id.clone(), run);
-            }
-        }
-        Ok(map)
+        self.runs_to_worktree_map(runs)
     }
 
     /// Returns the latest agent run for each worktree belonging to a specific repo,
@@ -143,7 +148,7 @@ impl<'a> AgentManager<'a> {
         &self,
         repo_id: &str,
     ) -> Result<HashMap<String, AgentRun>> {
-        let mut runs = query_collect(
+        let runs = query_collect(
             self.conn,
             &format!(
                 "SELECT {AGENT_RUN_COLS_A} \
@@ -159,14 +164,7 @@ impl<'a> AgentManager<'a> {
             params![repo_id],
             row_to_agent_run,
         )?;
-        self.populate_plans(&mut runs)?;
-        let mut map = HashMap::new();
-        for run in runs {
-            if let Some(ref wt_id) = run.worktree_id {
-                map.insert(wt_id.clone(), run);
-            }
-        }
-        Ok(map)
+        self.runs_to_worktree_map(runs)
     }
 
     /// Returns the latest top-level agent run for a single worktree, or `None` if none exist.

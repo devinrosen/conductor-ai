@@ -9,10 +9,24 @@ use super::super::types::{ActiveAgentCounts, CostPhase, RunTreeTotals, TicketAge
 use super::AgentManager;
 
 impl<'a> AgentManager<'a> {
-    /// Returns aggregated agent stats per ticket (across all linked worktrees).
-    /// Only includes completed runs with recorded metrics.
-    pub fn totals_by_ticket_all(&self) -> Result<HashMap<String, TicketAgentTotals>> {
-        let mut stmt = self.conn.prepare_cached(
+    /// Shared implementation for ticket-level aggregation with optional repo filter.
+    fn totals_by_ticket_inner(
+        &self,
+        repo_id: Option<&str>,
+    ) -> Result<HashMap<String, TicketAgentTotals>> {
+        let (where_clause, param_values): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+            match repo_id {
+                Some(id) => (
+                    "WHERE w.ticket_id IS NOT NULL AND a.status = 'completed' AND w.repo_id = ?1",
+                    vec![Box::new(id.to_string())],
+                ),
+                None => (
+                    "WHERE w.ticket_id IS NOT NULL AND a.status = 'completed'",
+                    vec![],
+                ),
+            };
+
+        let sql = format!(
             "SELECT w.ticket_id, \
                     COUNT(*) AS total_runs, \
                     COALESCE(SUM(a.cost_usd), 0.0) AS total_cost, \
@@ -24,11 +38,14 @@ impl<'a> AgentManager<'a> {
                     COALESCE(SUM(a.cache_creation_input_tokens), 0) AS total_cache_creation_tokens \
              FROM agent_runs a \
              JOIN worktrees w ON a.worktree_id = w.id \
-             WHERE w.ticket_id IS NOT NULL AND a.status = 'completed' \
-             GROUP BY w.ticket_id",
-        )?;
+             {where_clause} \
+             GROUP BY w.ticket_id"
+        );
 
-        let rows = stmt.query_map([], |row| {
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(param_refs.as_slice(), |row| {
             Ok(TicketAgentTotals {
                 ticket_id: row.get(0)?,
                 total_runs: row.get(1)?,
@@ -50,48 +67,19 @@ impl<'a> AgentManager<'a> {
         Ok(map)
     }
 
+    /// Returns aggregated agent stats per ticket (across all linked worktrees).
+    /// Only includes completed runs with recorded metrics.
+    pub fn totals_by_ticket_all(&self) -> Result<HashMap<String, TicketAgentTotals>> {
+        self.totals_by_ticket_inner(None)
+    }
+
     /// Returns aggregated agent stats per ticket for a specific repo.
     /// Only includes completed runs with recorded metrics.
     pub fn totals_by_ticket_for_repo(
         &self,
         repo_id: &str,
     ) -> Result<HashMap<String, TicketAgentTotals>> {
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT w.ticket_id, \
-                    COUNT(*) AS total_runs, \
-                    COALESCE(SUM(a.cost_usd), 0.0) AS total_cost, \
-                    COALESCE(SUM(a.num_turns), 0) AS total_turns, \
-                    COALESCE(SUM(a.duration_ms), 0) AS total_duration_ms, \
-                    COALESCE(SUM(a.input_tokens), 0) AS total_input_tokens, \
-                    COALESCE(SUM(a.output_tokens), 0) AS total_output_tokens, \
-                    COALESCE(SUM(a.cache_read_input_tokens), 0) AS total_cache_read_tokens, \
-                    COALESCE(SUM(a.cache_creation_input_tokens), 0) AS total_cache_creation_tokens \
-             FROM agent_runs a \
-             JOIN worktrees w ON a.worktree_id = w.id \
-             WHERE w.ticket_id IS NOT NULL AND a.status = 'completed' AND w.repo_id = ?1 \
-             GROUP BY w.ticket_id",
-        )?;
-
-        let rows = stmt.query_map(params![repo_id], |row| {
-            Ok(TicketAgentTotals {
-                ticket_id: row.get(0)?,
-                total_runs: row.get(1)?,
-                total_cost: row.get(2)?,
-                total_turns: row.get(3)?,
-                total_duration_ms: row.get(4)?,
-                total_input_tokens: row.get(5)?,
-                total_output_tokens: row.get(6)?,
-                total_cache_read_tokens: row.get(7)?,
-                total_cache_creation_tokens: row.get(8)?,
-            })
-        })?;
-
-        let mut map = HashMap::new();
-        for totals in rows {
-            let totals = totals?;
-            map.insert(totals.ticket_id.clone(), totals);
-        }
-        Ok(map)
+        self.totals_by_ticket_inner(Some(repo_id))
     }
 
     /// Build a per-phase cost breakdown for all runs in a worktree.
@@ -748,7 +736,11 @@ mod tests {
         )
         .unwrap();
 
-        // Repo r1 should only include t1
+        // Add a non-completed (running) run for r1/t1 — should be excluded by the
+        // `status = 'completed'` filter and not inflate totals.
+        let _running_run = mgr.create_run(Some("w1"), "still running", None, None).unwrap();
+
+        // Repo r1 should only include t1, and the running run should be excluded
         let r1_totals = mgr.totals_by_ticket_for_repo("r1").unwrap();
         assert_eq!(r1_totals.len(), 1);
         let t1 = r1_totals.get("t1").unwrap();
