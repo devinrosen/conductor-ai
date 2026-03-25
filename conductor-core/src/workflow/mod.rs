@@ -28,7 +28,9 @@ pub use crate::workflow_dsl::{
 /// Load a single workflow definition by name.
 ///
 /// Checks the repo `.conductor/workflows/` directory first, then falls back to
-/// built-in workflows embedded in the binary.
+/// built-in workflows embedded in the binary. Parse errors in repo-level `.wf`
+/// files are propagated immediately — only "not found" triggers the built-in
+/// fallback.
 pub fn load_workflow_by_name(
     worktree_path: &str,
     repo_path: &str,
@@ -36,11 +38,14 @@ pub fn load_workflow_by_name(
 ) -> crate::error::Result<WorkflowDef> {
     match crate::workflow_dsl::load_workflow_by_name(worktree_path, repo_path, name) {
         Ok(def) => Ok(def),
-        Err(_) => crate::builtin_workflows::load_builtin_by_name(name).ok_or_else(|| {
-            crate::error::ConductorError::Workflow(format!(
-                "Workflow '{name}' not found in .conductor/workflows/ or built-in workflows"
-            ))
-        }),
+        Err(crate::error::ConductorError::Workflow(msg)) if msg.contains("not found") => {
+            crate::builtin_workflows::load_builtin_by_name(name).ok_or_else(|| {
+                crate::error::ConductorError::Workflow(format!(
+                    "Workflow '{name}' not found in .conductor/workflows/ or built-in workflows"
+                ))
+            })
+        }
+        Err(e) => Err(e),
     }
 }
 

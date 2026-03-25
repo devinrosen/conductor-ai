@@ -3,6 +3,7 @@
 mod common;
 mod execution;
 mod gates;
+mod load;
 mod manager;
 mod output;
 mod resumption;
