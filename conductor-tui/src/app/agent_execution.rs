@@ -200,7 +200,11 @@ impl App {
         let Some(fb) = self.require_pending_feedback() else {
             return;
         };
+        self.open_feedback_modal(&fb, "Agent Feedback");
+    }
 
+    /// Open the feedback modal for a given request, with a configurable title prefix.
+    fn open_feedback_modal(&mut self, fb: &FeedbackRequest, title_prefix: &str) {
         use conductor_core::agent::FeedbackType;
 
         let format_opts = |opts: &[conductor_core::agent::FeedbackOption]| -> String {
@@ -224,12 +228,11 @@ impl App {
             FeedbackType::Text => "Type your feedback response...".to_string(),
         };
 
-        // Open a text area modal for the user to type their response
         let mut textarea = tui_textarea::TextArea::default();
         textarea.set_placeholder_text(&placeholder);
 
         self.state.modal = Modal::AgentPrompt {
-            title: format!("Agent Feedback: {}", &fb.prompt),
+            title: format!("{title_prefix}: {}", &fb.prompt),
             prompt: fb.prompt.clone(),
             textarea: Box::new(textarea),
             on_submit: InputAction::FeedbackResponse {
@@ -720,9 +723,8 @@ impl App {
     }
 
     /// Stop the running repo-scoped agent for the currently selected repo.
+    /// Runs blocking subprocess calls on a background thread per the TUI threading rule.
     pub(super) fn handle_stop_repo_agent(&mut self) {
-        use std::process::Command;
-
         let run = self
             .state
             .selected_repo_id
@@ -735,23 +737,36 @@ impl App {
             return;
         }
 
+        let Some(ref tx) = self.bg_tx else { return };
+        let tx = tx.clone();
         let run_id = run.id.clone();
         let tmux_window = run.tmux_window.clone();
-        let mgr = AgentManager::new(&self.conn);
 
-        if let Some(ref window) = tmux_window {
-            mgr.capture_agent_log(&run_id, window);
-        }
-        if let Some(ref window) = tmux_window {
-            let _ = Command::new("tmux")
-                .args(["kill-window", "-t", &format!(":{window}")])
-                .output();
-        }
-        let _ = mgr.update_run_cancelled(&run_id);
+        self.state.modal = crate::state::Modal::Progress {
+            message: "Stopping repo agent…".into(),
+        };
 
-        self.state.status_message = Some("Repo agent cancelled".to_string());
-        self.refresh_data();
-        self.reload_repo_agent_events();
+        std::thread::spawn(move || {
+            use std::process::Command;
+
+            let db = conductor_core::config::db_path();
+            let conn = conductor_core::db::open_database(&db).unwrap();
+            let mgr = AgentManager::new(&conn);
+
+            if let Some(ref window) = tmux_window {
+                mgr.capture_agent_log(&run_id, window);
+                let _ = Command::new("tmux")
+                    .args(["kill-window", "-t", &format!(":{window}")])
+                    .output();
+            }
+
+            let result = mgr
+                .update_run_cancelled(&run_id)
+                .map(|()| "Repo agent cancelled".to_string())
+                .map_err(|e| format!("Failed to cancel repo agent: {e}"));
+
+            let _ = tx.send(Action::RepoAgentStopComplete { result });
+        });
     }
 
     /// Submit feedback for the repo-scoped agent.
@@ -760,41 +775,7 @@ impl App {
             self.state.status_message = Some("No pending feedback request".to_string());
             return;
         };
-
-        use conductor_core::agent::FeedbackType;
-
-        let format_opts = |opts: &[conductor_core::agent::FeedbackOption]| -> String {
-            opts.iter()
-                .enumerate()
-                .map(|(i, o)| format!("{}. {}", i + 1, o.label))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-
-        let placeholder = match fb.feedback_type {
-            FeedbackType::Confirm => "Type y or n...".to_string(),
-            FeedbackType::SingleSelect => {
-                let opts_text = fb.options.as_deref().map(format_opts).unwrap_or_default();
-                format!("Type the number of your choice:\n{opts_text}")
-            }
-            FeedbackType::MultiSelect => {
-                let opts_text = fb.options.as_deref().map(format_opts).unwrap_or_default();
-                format!("Type numbers separated by commas (e.g. 1,3):\n{opts_text}")
-            }
-            FeedbackType::Text => "Type your feedback response...".to_string(),
-        };
-
-        let mut textarea = tui_textarea::TextArea::default();
-        textarea.set_placeholder_text(&placeholder);
-
-        self.state.modal = Modal::AgentPrompt {
-            title: format!("Repo Agent Feedback: {}", &fb.prompt),
-            prompt: fb.prompt.clone(),
-            textarea: Box::new(textarea),
-            on_submit: InputAction::FeedbackResponse {
-                feedback_id: fb.id.clone(),
-            },
-        };
+        self.open_feedback_modal(&fb, "Repo Agent Feedback");
     }
 
     /// Dismiss feedback for the repo-scoped agent.

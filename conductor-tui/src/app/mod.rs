@@ -993,6 +993,19 @@ impl App {
                     }
                 }
             }
+            Action::RepoAgentStopComplete { result } => {
+                self.state.modal = Modal::None;
+                match result {
+                    Ok(msg) => {
+                        self.state.status_message = Some(msg);
+                        self.refresh_data();
+                        self.reload_repo_agent_events();
+                    }
+                    Err(e) => {
+                        self.state.modal = Modal::Error { message: e };
+                    }
+                }
+            }
             Action::BackgroundError { message } => {
                 self.state.modal = Modal::Error { message };
             }
@@ -1288,11 +1301,8 @@ impl App {
         let mut runs = mgr.list_repo_scoped(repo_id).unwrap_or_default();
         runs.reverse();
 
-        // Load events: prefer DB records, fall back to log file parsing
-        let db_events: Vec<AgentRunEvent> = runs
-            .iter()
-            .flat_map(|run| mgr.list_events_for_run(&run.id).unwrap_or_default())
-            .collect();
+        // Load events: single query for all repo-scoped runs (avoids N+1)
+        let db_events = mgr.list_events_for_repo(repo_id).unwrap_or_default();
         let all_events = if !db_events.is_empty() {
             db_events
         } else {

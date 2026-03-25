@@ -1243,123 +1243,101 @@ pub enum VisualRow<'a> {
     Event(&'a AgentRunEvent),
 }
 
-impl DataCache {
-    /// Count the number of run-boundary separator rows that would be inserted
-    /// when there are multiple runs. Shared by `visual_rows` and
-    /// `agent_activity_len` so the logic lives in one place.
-    fn count_separators(&self) -> usize {
-        if self.agent_run_info.len() <= 1 {
-            return 0;
-        }
-        let mut count = 0;
-        let mut prev_run_id: Option<&str> = None;
-        for ev in &self.agent_events {
-            if prev_run_id.is_none_or(|p| p != ev.run_id)
-                && self.agent_run_info.contains_key(&ev.run_id)
-            {
-                count += 1;
+/// Shared logic for building visual rows from events + run info.
+/// Used by both worktree-agent and repo-agent activity lists.
+fn build_visual_rows<'a>(
+    events: &'a [AgentRunEvent],
+    run_info: &'a HashMap<String, (usize, Option<String>, String)>,
+) -> Vec<VisualRow<'a>> {
+    let sep_count = count_run_separators(events, run_info);
+    let has_multiple_runs = run_info.len() > 1;
+    let mut rows = Vec::with_capacity(events.len() + sep_count);
+    let mut prev_run_id: Option<&str> = None;
+
+    for ev in events {
+        if has_multiple_runs && prev_run_id.is_none_or(|p| p != ev.run_id) {
+            if let Some((run_num, model, started_at)) = run_info.get(&ev.run_id) {
+                rows.push(VisualRow::RunSeparator(
+                    *run_num,
+                    model.as_deref(),
+                    started_at.as_str(),
+                ));
             }
-            prev_run_id = Some(&ev.run_id);
         }
-        count
+        prev_run_id = Some(&ev.run_id);
+        rows.push(VisualRow::Event(ev));
     }
+    rows
+}
 
-    /// Iterate the agent activity list as visual rows, interleaving run-group
-    /// separators when there are multiple runs. This is the single source of
-    /// truth for the visual-index ↔ event mapping used by both the renderer
-    /// and the action handler.
-    pub fn visual_rows(&self) -> Vec<VisualRow<'_>> {
-        let has_multiple_runs = self.agent_run_info.len() > 1;
-        let mut rows = Vec::with_capacity(self.agent_events.len() + self.count_separators());
-        let mut prev_run_id: Option<&str> = None;
-
-        for ev in &self.agent_events {
-            if has_multiple_runs && prev_run_id.is_none_or(|p| p != ev.run_id) {
-                if let Some((run_num, model, started_at)) = self.agent_run_info.get(&ev.run_id) {
-                    rows.push(VisualRow::RunSeparator(
-                        *run_num,
-                        model.as_deref(),
-                        started_at.as_str(),
-                    ));
-                }
-            }
-            prev_run_id = Some(&ev.run_id);
-            rows.push(VisualRow::Event(ev));
+fn count_run_separators(
+    events: &[AgentRunEvent],
+    run_info: &HashMap<String, (usize, Option<String>, String)>,
+) -> usize {
+    if run_info.len() <= 1 {
+        return 0;
+    }
+    let mut count = 0;
+    let mut prev_run_id: Option<&str> = None;
+    for ev in events {
+        if prev_run_id.is_none_or(|p| p != ev.run_id) && run_info.contains_key(&ev.run_id) {
+            count += 1;
         }
-        rows
+        prev_run_id = Some(&ev.run_id);
+    }
+    count
+}
+
+fn event_at_index<'a>(
+    events: &'a [AgentRunEvent],
+    run_info: &'a HashMap<String, (usize, Option<String>, String)>,
+    visual_target: usize,
+) -> Option<&'a AgentRunEvent> {
+    match build_visual_rows(events, run_info)
+        .into_iter()
+        .nth(visual_target)?
+    {
+        VisualRow::Event(ev) => Some(ev),
+        VisualRow::RunSeparator(..) => None,
+    }
+}
+
+impl DataCache {
+    /// Iterate the agent activity list as visual rows, interleaving run-group
+    /// separators when there are multiple runs.
+    pub fn visual_rows(&self) -> Vec<VisualRow<'_>> {
+        build_visual_rows(&self.agent_events, &self.agent_run_info)
     }
 
     /// Total number of items in the agent activity list, including run boundary
-    /// separators. Must match the item count built in `render_agent_activity`.
+    /// separators.
     pub fn agent_activity_len(&self) -> usize {
-        self.agent_events.len() + self.count_separators()
+        self.agent_events.len() + count_run_separators(&self.agent_events, &self.agent_run_info)
     }
 
     /// Map a visual index (which may include run-separator rows) back to the
-    /// underlying `AgentRunEvent`. Returns `None` if the index points at a
-    /// separator row or is out of range.
+    /// underlying `AgentRunEvent`.
     pub fn event_at_visual_index(&self, visual_target: usize) -> Option<&AgentRunEvent> {
-        match self.visual_rows().into_iter().nth(visual_target)? {
-            VisualRow::Event(ev) => Some(ev),
-            VisualRow::RunSeparator(..) => None,
-        }
+        event_at_index(&self.agent_events, &self.agent_run_info, visual_target)
     }
 
-    // --- Repo agent activity helpers (mirrors worktree agent helpers above) ---
-
-    fn count_repo_agent_separators(&self) -> usize {
-        if self.repo_agent_run_info.len() <= 1 {
-            return 0;
-        }
-        let mut count = 0;
-        let mut prev_run_id: Option<&str> = None;
-        for ev in &self.repo_agent_events {
-            if prev_run_id.is_none_or(|p| p != ev.run_id)
-                && self.repo_agent_run_info.contains_key(&ev.run_id)
-            {
-                count += 1;
-            }
-            prev_run_id = Some(&ev.run_id);
-        }
-        count
-    }
+    // --- Repo agent activity helpers (delegates to shared logic) ---
 
     pub fn repo_agent_visual_rows(&self) -> Vec<VisualRow<'_>> {
-        let has_multiple_runs = self.repo_agent_run_info.len() > 1;
-        let mut rows =
-            Vec::with_capacity(self.repo_agent_events.len() + self.count_repo_agent_separators());
-        let mut prev_run_id: Option<&str> = None;
-
-        for ev in &self.repo_agent_events {
-            if has_multiple_runs && prev_run_id.is_none_or(|p| p != ev.run_id) {
-                if let Some((run_num, model, started_at)) = self.repo_agent_run_info.get(&ev.run_id)
-                {
-                    rows.push(VisualRow::RunSeparator(
-                        *run_num,
-                        model.as_deref(),
-                        started_at,
-                    ));
-                }
-            }
-            prev_run_id = Some(&ev.run_id);
-            rows.push(VisualRow::Event(ev));
-        }
-        rows
+        build_visual_rows(&self.repo_agent_events, &self.repo_agent_run_info)
     }
 
     pub fn repo_agent_activity_len(&self) -> usize {
-        self.repo_agent_events.len() + self.count_repo_agent_separators()
+        self.repo_agent_events.len()
+            + count_run_separators(&self.repo_agent_events, &self.repo_agent_run_info)
     }
 
     pub fn repo_agent_event_at_visual_index(&self, visual_target: usize) -> Option<&AgentRunEvent> {
-        match self
-            .repo_agent_visual_rows()
-            .into_iter()
-            .nth(visual_target)?
-        {
-            VisualRow::Event(ev) => Some(ev),
-            VisualRow::RunSeparator(..) => None,
-        }
+        event_at_index(
+            &self.repo_agent_events,
+            &self.repo_agent_run_info,
+            visual_target,
+        )
     }
 
     pub fn rebuild_maps(&mut self) {
@@ -2865,6 +2843,92 @@ pub(crate) mod tests {
         // 3 events + 3 separators (r1, r2, r1 transitions) = 6
         assert_eq!(cache.agent_activity_len(), 6);
         assert_eq!(cache.agent_activity_len(), cache.visual_rows().len());
+    }
+
+    // --- Repo agent visual-row helpers (delegates to shared logic) ---
+
+    #[test]
+    fn repo_agent_activity_len_empty() {
+        let cache = DataCache::default();
+        assert_eq!(cache.repo_agent_activity_len(), 0);
+        assert_eq!(
+            cache.repo_agent_activity_len(),
+            cache.repo_agent_visual_rows().len()
+        );
+    }
+
+    #[test]
+    fn repo_agent_activity_len_single_run() {
+        let mut cache = DataCache {
+            repo_agent_events: vec![make_event("e1", "r1"), make_event("e2", "r1")],
+            ..Default::default()
+        };
+        cache
+            .repo_agent_run_info
+            .insert("r1".into(), (1, None, "2026-01-01T00:00:00Z".into()));
+        assert_eq!(cache.repo_agent_activity_len(), 2);
+        assert_eq!(
+            cache.repo_agent_activity_len(),
+            cache.repo_agent_visual_rows().len()
+        );
+    }
+
+    #[test]
+    fn repo_agent_activity_len_multiple_runs() {
+        let mut cache = DataCache {
+            repo_agent_events: vec![
+                make_event("e1", "r1"),
+                make_event("e2", "r1"),
+                make_event("e3", "r2"),
+            ],
+            ..Default::default()
+        };
+        cache
+            .repo_agent_run_info
+            .insert("r1".into(), (1, None, "2026-01-01T00:00:00Z".into()));
+        cache
+            .repo_agent_run_info
+            .insert("r2".into(), (2, None, "2026-01-01T00:01:00Z".into()));
+        // 3 events + 2 separators = 5
+        assert_eq!(cache.repo_agent_activity_len(), 5);
+        assert_eq!(
+            cache.repo_agent_activity_len(),
+            cache.repo_agent_visual_rows().len()
+        );
+    }
+
+    #[test]
+    fn repo_agent_event_at_visual_index_returns_event() {
+        let mut cache = DataCache {
+            repo_agent_events: vec![make_event("e1", "r1"), make_event("e2", "r1")],
+            ..Default::default()
+        };
+        cache
+            .repo_agent_run_info
+            .insert("r1".into(), (1, None, "2026-01-01T00:00:00Z".into()));
+        // Single run → no separators, indices 0 and 1 are events
+        assert_eq!(cache.repo_agent_event_at_visual_index(0).unwrap().id, "e1");
+        assert_eq!(cache.repo_agent_event_at_visual_index(1).unwrap().id, "e2");
+        assert!(cache.repo_agent_event_at_visual_index(2).is_none());
+    }
+
+    #[test]
+    fn repo_agent_event_at_visual_index_skips_separator() {
+        let mut cache = DataCache {
+            repo_agent_events: vec![make_event("e1", "r1"), make_event("e2", "r2")],
+            ..Default::default()
+        };
+        cache
+            .repo_agent_run_info
+            .insert("r1".into(), (1, None, "2026-01-01T00:00:00Z".into()));
+        cache
+            .repo_agent_run_info
+            .insert("r2".into(), (2, None, "2026-01-01T00:01:00Z".into()));
+        // Visual layout: [sep-r1, e1, sep-r2, e2]
+        assert!(cache.repo_agent_event_at_visual_index(0).is_none()); // separator
+        assert_eq!(cache.repo_agent_event_at_visual_index(1).unwrap().id, "e1");
+        assert!(cache.repo_agent_event_at_visual_index(2).is_none()); // separator
+        assert_eq!(cache.repo_agent_event_at_visual_index(3).unwrap().id, "e2");
     }
 
     #[test]

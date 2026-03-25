@@ -1128,4 +1128,43 @@ mod tests {
         let result = mgr.latest_repo_scoped("r1").unwrap();
         assert!(result.is_none());
     }
+
+    #[test]
+    fn test_latest_repo_scoped_runs_all() {
+        let conn = setup_db();
+        // Insert a second repo so we can verify cross-repo behaviour.
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r2', 'other-repo', '/tmp/other', 'https://github.com/test/other.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        let mgr = AgentManager::new(&conn);
+
+        // No repo-scoped runs yet → empty map
+        let map = mgr.latest_repo_scoped_runs_all().unwrap();
+        assert!(map.is_empty());
+
+        // Create repo-scoped runs
+        let _r1_old = mgr.create_repo_run("r1", "Old prompt", None, None).unwrap();
+        let r1_new = mgr.create_repo_run("r1", "New prompt", None, None).unwrap();
+        let r2_only = mgr.create_repo_run("r2", "R2 prompt", None, None).unwrap();
+
+        // Also create a worktree-scoped run — should NOT appear
+        mgr.create_run(Some("w1"), "Worktree task", None, None)
+            .unwrap();
+
+        let map = mgr.latest_repo_scoped_runs_all().unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(
+            map.get("r1").unwrap().id,
+            r1_new.id,
+            "should return latest for r1"
+        );
+        assert_eq!(
+            map.get("r2").unwrap().id,
+            r2_only.id,
+            "should return the only run for r2"
+        );
+    }
 }

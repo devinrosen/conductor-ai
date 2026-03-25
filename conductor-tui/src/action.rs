@@ -271,6 +271,10 @@ pub enum Action {
     RepoAgentLaunched {
         result: Result<String, String>,
     },
+    // Background result for repo agent stop
+    RepoAgentStopComplete {
+        result: Result<String, String>,
+    },
 
     // Background result for worktree delete readiness check
     DeleteWorktreeReady {
