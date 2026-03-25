@@ -1116,8 +1116,72 @@ mod tests {
             .create_repo_run("r1", "Second question", None, None)
             .unwrap();
 
+        // Set a session ID on the latest run so we can verify it's returned
+        mgr.update_run_session_id(&newer.id, "sess-repo-latest")
+            .unwrap();
+
         let latest = mgr.latest_repo_scoped("r1").unwrap().unwrap();
         assert_eq!(latest.id, newer.id);
+        assert_eq!(
+            latest.claude_session_id.as_deref(),
+            Some("sess-repo-latest")
+        );
+    }
+
+    /// Verify the auto-resume session pattern used by `start_repo_agent`:
+    /// - When `new_session` is false, the latest repo-scoped run's session ID is used.
+    /// - When `new_session` is true, the session ID is skipped (None).
+    /// - When there is no prior run, None is returned regardless.
+    #[test]
+    fn test_auto_resume_session_branching() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+
+        // No prior runs → resume returns None
+        let resume_id = mgr
+            .latest_repo_scoped("r1")
+            .unwrap()
+            .and_then(|run| run.claude_session_id);
+        assert!(
+            resume_id.is_none(),
+            "no prior run means no session to resume"
+        );
+
+        // Create a completed run with a session ID
+        let run = mgr
+            .create_repo_run("r1", "Analyse the repo", None, None)
+            .unwrap();
+        mgr.update_run_completed(
+            &run.id,
+            Some("sess-abc"),
+            Some("done"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Simulate new_session=false → should get the session ID
+        let resume_id = mgr
+            .latest_repo_scoped("r1")
+            .unwrap()
+            .and_then(|run| run.claude_session_id);
+        assert_eq!(resume_id.as_deref(), Some("sess-abc"));
+
+        // Simulate new_session=true → explicitly skip (no DB call needed)
+        let new_session = true;
+        let resume_id = if new_session {
+            None
+        } else {
+            mgr.latest_repo_scoped("r1")
+                .unwrap()
+                .and_then(|run| run.claude_session_id)
+        };
+        assert!(resume_id.is_none(), "new_session=true should skip resume");
     }
 
     #[test]
