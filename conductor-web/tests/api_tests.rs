@@ -1030,13 +1030,12 @@ async fn test_dismiss_feedback_nonexistent() {
 async fn test_list_run_feedback_empty() {
     let base = spawn_test_server_with_setup(seed_agent_run).await;
     // Get the run id
-    let runs: Vec<serde_json::Value> =
-        reqwest::get(format!("{base}/api/worktrees/w1/agent/runs"))
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
+    let runs: Vec<serde_json::Value> = reqwest::get(format!("{base}/api/worktrees/w1/agent/runs"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let run_id = runs[0]["id"].as_str().unwrap();
     let resp = reqwest::get(format!(
         "{base}/api/worktrees/w1/agent/runs/{run_id}/feedback"
