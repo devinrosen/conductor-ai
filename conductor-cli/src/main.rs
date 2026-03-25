@@ -1336,18 +1336,34 @@ fn main() -> Result<()> {
             }
             FeatureCommands::List { repo } => {
                 let mgr = FeatureManager::new(&conn, &config);
+                // Refresh last_commit_at cache before listing
+                let _ = mgr.refresh_last_commit_all(&repo);
                 let features = mgr.list(&repo)?;
+                let stale_days_threshold = config.defaults.stale_feature_days;
                 if features.is_empty() {
                     println!("No features. Create one with `conductor feature create`.");
                 } else {
                     println!(
-                        "  {:<25} {:<30} {:<10} {:<5} {:<5}",
+                        "  {:<25} {:<30} {:<10} {:<5} {:<5} STALE",
                         "NAME", "BRANCH", "STATUS", "WTs", "TKTs"
                     );
-                    for f in features {
+                    for f in &features {
+                        let stale_label = if FeatureManager::is_stale(f, stale_days_threshold) {
+                            match FeatureManager::stale_days(f) {
+                                Some(d) => format!("\u{26a0} stale {d}d"),
+                                None => "\u{26a0} stale".to_string(),
+                            }
+                        } else {
+                            String::new()
+                        };
                         println!(
-                            "  {:<25} {:<30} {:<10} {:<5} {:<5}",
-                            f.name, f.branch, f.status, f.worktree_count, f.ticket_count
+                            "  {:<25} {:<30} {:<10} {:<5} {:<5} {}",
+                            f.name,
+                            f.branch,
+                            f.status,
+                            f.worktree_count,
+                            f.ticket_count,
+                            stale_label
                         );
                     }
                 }

@@ -687,27 +687,40 @@ pub struct BranchPickerItem {
     pub ticket_count: i64,
     /// The base branch this item is based on (`None` for default branch entry).
     pub base_branch: Option<String>,
+    /// Days since last activity (commit or worktree creation), if stale.
+    pub stale_days: Option<u64>,
 }
 
 impl BranchPickerItem {
     /// Build the picker list from features and unregistered (orphan) branches.
     /// The first entry is always `None` (repo default branch sentinel).
-    pub fn from_features_and_orphans(
+    /// When `stale_threshold_days > 0`, computes staleness badges for features.
+    pub fn from_features_and_orphans_with_stale(
         features: &[conductor_core::feature::FeatureRow],
         orphans: &[conductor_core::feature::UnregisteredBranch],
+        stale_threshold_days: u32,
     ) -> Vec<Self> {
+        use conductor_core::feature::FeatureManager;
+
         let mut items = vec![Self {
             branch: None,
             worktree_count: 0,
             ticket_count: 0,
             base_branch: None,
+            stale_days: None,
         }];
         for f in features {
+            let sd = if FeatureManager::is_stale(f, stale_threshold_days) {
+                FeatureManager::stale_days(f)
+            } else {
+                None
+            };
             items.push(Self {
                 branch: Some(f.branch.clone()),
                 worktree_count: f.worktree_count,
                 ticket_count: f.ticket_count,
                 base_branch: Some(f.base_branch.clone()),
+                stale_days: sd,
             });
         }
         for orphan in orphans {
@@ -716,6 +729,7 @@ impl BranchPickerItem {
                 worktree_count: orphan.worktree_count,
                 ticket_count: 0,
                 base_branch: orphan.base_branch.clone(),
+                stale_days: None,
             });
         }
         items
@@ -4598,6 +4612,7 @@ pub(crate) mod tests {
             worktree_count: 0,
             ticket_count: 0,
             base_branch: base_branch.map(|s| s.to_string()),
+            stale_days: None,
         }
     }
 

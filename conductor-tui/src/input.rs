@@ -731,6 +731,7 @@ mod tests {
                 worktree_count: 0,
                 ticket_count: 0,
                 base_branch: None,
+                stale_days: None,
             });
         }
         for i in 1..item_count {
@@ -739,6 +740,7 @@ mod tests {
                 worktree_count: 0,
                 ticket_count: 0,
                 base_branch: Some("main".into()),
+                stale_days: None,
             });
         }
         let (ordered, tree_positions) = crate::state::build_branch_picker_tree(&items);
