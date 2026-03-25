@@ -2240,15 +2240,16 @@ fn generate_plan(
          Aim for 3-8 concrete, actionable steps."
     );
 
-    let output = Command::new("claude")
-        .arg("-p")
+    let mut cmd = Command::new("claude");
+    cmd.arg("-p")
         .arg(&plan_prompt)
         .arg("--output-format")
         .arg("json")
-        .arg(config.general.agent_permission_mode.cli_flag())
-        .current_dir(worktree_path)
-        .output()
-        .ok()?;
+        .arg(config.general.agent_permission_mode.cli_flag());
+    if let Some(val) = config.general.agent_permission_mode.cli_flag_value() {
+        cmd.arg(val);
+    }
+    let output = cmd.current_dir(worktree_path).output().ok()?;
 
     if !output.status.success() {
         return None;
