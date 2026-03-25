@@ -36,6 +36,12 @@ const kindConfig: Record<
     text: "text-red-400",
     border: "border-l-red-500",
   },
+  tool_error: {
+    label: "ERR",
+    badge: "bg-red-900 text-red-300",
+    text: "text-red-400",
+    border: "border-l-red-500",
+  },
   prompt: {
     label: "YOU",
     badge: "bg-blue-900 text-blue-300",
