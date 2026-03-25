@@ -342,6 +342,16 @@ mod tests {
         conn
     }
 
+    /// Insert a minimal agent_run row with only required fields for FK/query tests.
+    fn insert_minimal_run(conn: &Connection, id: &str) {
+        conn.execute(
+            "INSERT INTO agent_runs (id, prompt, status, started_at) \
+             VALUES (?1, 'hi', 'running', '2025-01-01T00:00:00Z')",
+            [id],
+        )
+        .unwrap();
+    }
+
     #[test]
     fn row_to_agent_run_maps_all_fields() {
         let conn = test_db();
@@ -416,12 +426,7 @@ mod tests {
     #[test]
     fn row_to_agent_run_handles_null_optionals() {
         let conn = test_db();
-        conn.execute(
-            "INSERT INTO agent_runs (id, prompt, status, started_at) \
-             VALUES ('run-null', 'hi', 'running', '2025-01-01T00:00:00Z')",
-            [],
-        )
-        .unwrap();
+        insert_minimal_run(&conn, "run-null");
 
         let run: AgentRun = conn
             .query_row(
@@ -456,12 +461,7 @@ mod tests {
     fn row_to_plan_step_maps_fields() {
         let conn = test_db();
         // Insert a parent run first (FK constraint)
-        conn.execute(
-            "INSERT INTO agent_runs (id, prompt, status, started_at) \
-             VALUES ('run-step', 'hi', 'running', '2025-01-01T00:00:00Z')",
-            [],
-        )
-        .unwrap();
+        insert_minimal_run(&conn, "run-step");
         conn.execute(
             "INSERT INTO agent_run_steps (id, run_id, position, description, status, \
              started_at, completed_at) \
@@ -491,12 +491,7 @@ mod tests {
     #[test]
     fn row_to_agent_run_event_maps_fields() {
         let conn = test_db();
-        conn.execute(
-            "INSERT INTO agent_runs (id, prompt, status, started_at) \
-             VALUES ('run-evt', 'hi', 'running', '2025-01-01T00:00:00Z')",
-            [],
-        )
-        .unwrap();
+        insert_minimal_run(&conn, "run-evt");
         conn.execute(
             "INSERT INTO agent_run_events (id, run_id, kind, summary, started_at, ended_at, metadata) \
              VALUES ('evt-1', 'run-evt', 'tool_error', 'something broke', \
@@ -525,12 +520,7 @@ mod tests {
     #[test]
     fn row_to_feedback_request_maps_fields() {
         let conn = test_db();
-        conn.execute(
-            "INSERT INTO agent_runs (id, prompt, status, started_at) \
-             VALUES ('run-fb', 'hi', 'running', '2025-01-01T00:00:00Z')",
-            [],
-        )
-        .unwrap();
+        insert_minimal_run(&conn, "run-fb");
 
         let options_json = r#"[{"value":"yes","label":"Yes"},{"value":"no","label":"No"}]"#;
         conn.execute(
@@ -573,12 +563,7 @@ mod tests {
     #[test]
     fn row_to_agent_created_issue_maps_fields() {
         let conn = test_db();
-        conn.execute(
-            "INSERT INTO agent_runs (id, prompt, status, started_at) \
-             VALUES ('run-aci', 'hi', 'running', '2025-01-01T00:00:00Z')",
-            [],
-        )
-        .unwrap();
+        insert_minimal_run(&conn, "run-aci");
         conn.execute(
             "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
              VALUES ('repo-aci', 'test-repo', '/tmp/repo', 'https://github.com/org/repo', \

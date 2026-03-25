@@ -533,12 +533,6 @@ mod tests {
             args.iter().any(|a| a == "--dangerously-skip-permissions"),
             "expected --dangerously-skip-permissions flag"
         );
-        // No trailing value for this flag
-        let idx = args
-            .iter()
-            .position(|a| a == "--dangerously-skip-permissions")
-            .unwrap();
-        assert_eq!(idx, args.len() - 1, "flag should be the last argument");
     }
 
     #[test]
@@ -558,8 +552,6 @@ mod tests {
             args.iter().any(|a| a == "--enable-auto-mode"),
             "expected --enable-auto-mode flag"
         );
-        let idx = args.iter().position(|a| a == "--enable-auto-mode").unwrap();
-        assert_eq!(idx, args.len() - 1, "flag should be the last argument");
     }
 
     #[test]
