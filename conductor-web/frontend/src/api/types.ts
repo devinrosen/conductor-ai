@@ -118,7 +118,7 @@ export interface RunTreeTotals {
 export interface AgentEvent {
   id: string;
   run_id: string;
-  kind: "text" | "tool" | "result" | "system" | "error" | "prompt";
+  kind: "text" | "tool" | "result" | "system" | "error" | "tool_error" | "prompt";
   summary: string;
   started_at: string;
   ended_at: string | null;
