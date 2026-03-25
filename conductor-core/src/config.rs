@@ -10,16 +10,16 @@ use crate::error::{ConductorError, Result};
 ///
 /// ```toml
 /// [general]
-/// agent_permission_mode = "auto-mode"       # default — uses --enable-auto-mode
-/// agent_permission_mode = "skip-permissions" # legacy — uses --dangerously-skip-permissions
+/// agent_permission_mode = "skip-permissions" # default — uses --dangerously-skip-permissions
+/// agent_permission_mode = "auto-mode"        # uses --enable-auto-mode (may prompt in headless agents)
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AgentPermissionMode {
-    /// Use `--enable-auto-mode` (default, recommended).
-    #[default]
+    /// Use `--enable-auto-mode` (may prompt for permissions in headless agents).
     AutoMode,
-    /// Use `--dangerously-skip-permissions` (legacy fallback).
+    /// Use `--dangerously-skip-permissions` (default for headless agent runs).
+    #[default]
     SkipPermissions,
     /// Use `--permission-mode plan` (read-only mode for repo-scoped agents).
     Plan,
@@ -557,7 +557,7 @@ mod tests {
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(
             config.general.agent_permission_mode,
-            AgentPermissionMode::AutoMode
+            AgentPermissionMode::SkipPermissions
         );
     }
 
