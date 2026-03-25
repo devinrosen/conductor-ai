@@ -1026,6 +1026,28 @@ async fn test_dismiss_feedback_nonexistent() {
     assert_eq!(resp.status(), 400);
 }
 
+#[tokio::test]
+async fn test_list_run_feedback_empty() {
+    let base = spawn_test_server_with_setup(seed_agent_run).await;
+    // Get the run id
+    let runs: Vec<serde_json::Value> =
+        reqwest::get(format!("{base}/api/worktrees/w1/agent/runs"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let run_id = runs[0]["id"].as_str().unwrap();
+    let resp = reqwest::get(format!(
+        "{base}/api/worktrees/w1/agent/runs/{run_id}/feedback"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(body.is_empty());
+}
+
 // ── Notification route tests ─────────────────────────────────────────
 
 #[tokio::test]
@@ -1209,6 +1231,34 @@ async fn test_suggest_model() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(body["suggested"].is_string());
+}
+
+#[tokio::test]
+async fn test_patch_global_model_set_and_clear() {
+    let base = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    // Set a model
+    let resp = client
+        .patch(format!("{base}/api/config/model"))
+        .json(&serde_json::json!({ "model": "claude-sonnet-4-20250514" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["model"], "claude-sonnet-4-20250514");
+
+    // Clear the model by sending null
+    let resp = client
+        .patch(format!("{base}/api/config/model"))
+        .json(&serde_json::json!({ "model": null }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["model"].is_null());
 }
 
 // ── Feature route tests ──────────────────────────────────────────────
