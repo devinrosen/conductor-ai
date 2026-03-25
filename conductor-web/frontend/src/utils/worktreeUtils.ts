@@ -22,5 +22,6 @@ export function deriveWorktreeSlug(sourceId: string, title: string): string {
     truncated = lastDash > 0 ? titleSlug.slice(0, lastDash) : titleSlug.slice(0, budget);
   }
 
-  return `${sourceId}-${truncated}`;
+  const slug = `${sourceId}-${truncated}`;
+  return slug.replace(/-+$/, "");
 }

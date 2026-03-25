@@ -38,6 +38,14 @@ describe("deriveWorktreeSlug", () => {
     expect(slug).not.toMatch(/-$/);
   });
 
+  it("handles empty title", () => {
+    expect(deriveWorktreeSlug("123", "")).toBe("123");
+  });
+
+  it("handles all-special-character title", () => {
+    expect(deriveWorktreeSlug("123", "!!!")).toBe("123");
+  });
+
   it("handles dash-at-boundary edge case matching Rust behavior", () => {
     // Build a title where a dash falls exactly at the budget index
     // source_id = "10", budget = 40 - 2 - 1 = 37
