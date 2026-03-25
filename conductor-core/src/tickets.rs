@@ -1899,6 +1899,35 @@ mod tests {
     }
 
     #[test]
+    fn test_list_all_repos_sorts_by_issue_number_descending() {
+        let conn = setup_db();
+        // Register a second repo so we can test cross-repo listing
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r2', 'test-repo-2', '/tmp/repo2', 'https://github.com/test/repo2.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Insert tickets across two different repos with interleaved source_ids
+        let repo1_tickets = vec![
+            make_ticket("10", "Repo1 Issue 10"),
+            make_ticket("50", "Repo1 Issue 50"),
+        ];
+        let repo2_tickets = vec![
+            make_ticket("25", "Repo2 Issue 25"),
+            make_ticket("100", "Repo2 Issue 100"),
+        ];
+        syncer.upsert_tickets("r1", &repo1_tickets).unwrap();
+        syncer.upsert_tickets("r2", &repo2_tickets).unwrap();
+
+        // list(None) should return all tickets sorted by issue number descending
+        let result = syncer.list(None).unwrap();
+        let ids: Vec<&str> = result.iter().map(|t| t.source_id.as_str()).collect();
+        assert_eq!(ids, vec!["100", "50", "25", "10"]);
+    }
+
+    #[test]
     fn test_list_sorts_non_numeric_source_ids_to_end() {
         // Non-numeric source_ids (e.g. Jira keys) CAST to 0, so they sort
         // after all numeric IDs. Among themselves, they fall back to the
