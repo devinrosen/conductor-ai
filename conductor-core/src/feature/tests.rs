@@ -1813,3 +1813,54 @@ fn test_delete_with_git_branch() {
         .unwrap();
     assert_eq!(count, 0, "feature row should be gone");
 }
+
+#[test]
+fn test_delete_unmerged_branch_returns_git_error() {
+    // An unmerged branch causes `git branch -d` to fail with a message that
+    // does NOT contain "not found" or "no branch named", so the manager must
+    // propagate a ConductorError::Git instead of treating it as a no-op.
+    let (work, _bare) = setup_git_repo();
+    let conn = setup_db();
+    let repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+
+    // Create a branch with an unmerged commit so `git branch -d` will refuse.
+    std::process::Command::new("git")
+        .args(["checkout", "-b", "feat/unmerged-feat", "main"])
+        .current_dir(work.path())
+        .output()
+        .unwrap();
+    std::fs::write(work.path().join("unmerged.txt"), "unmerged work").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(work.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "-m", "unmerged commit"])
+        .current_dir(work.path())
+        .output()
+        .unwrap();
+    // Switch back to main so we can attempt to delete the feature branch.
+    std::process::Command::new("git")
+        .args(["checkout", "main"])
+        .current_dir(work.path())
+        .output()
+        .unwrap();
+
+    insert_feature(&conn, &repo_id, "unmerged-feat", "feat/unmerged-feat");
+    // Mark as closed so the active-feature guard doesn't fire.
+    conn.execute(
+        "UPDATE features SET status = 'closed' WHERE name = ?1",
+        params!["unmerged-feat"],
+    )
+    .unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let err = mgr.delete("test-repo", "unmerged-feat").unwrap_err();
+    assert!(
+        matches!(err, ConductorError::Git(_)),
+        "expected ConductorError::Git for unmerged branch, got: {err:?}"
+    );
+}
