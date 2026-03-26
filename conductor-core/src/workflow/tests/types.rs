@@ -342,7 +342,7 @@ fn test_metadata_fields_all_optional_fields() {
 fn test_workflow_exec_config_default() {
     let cfg = WorkflowExecConfig::default();
     assert_eq!(cfg.poll_interval, std::time::Duration::from_secs(5));
-    assert_eq!(cfg.step_timeout, std::time::Duration::from_secs(30 * 60));
+    assert_eq!(cfg.step_timeout, std::time::Duration::from_secs(12 * 60 * 60));
     assert!(cfg.fail_fast);
     assert!(!cfg.dry_run);
     assert!(cfg.shutdown.is_none());

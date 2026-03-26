@@ -242,7 +242,7 @@ impl Default for WorkflowExecConfig {
     fn default() -> Self {
         Self {
             poll_interval: Duration::from_secs(5),
-            step_timeout: Duration::from_secs(30 * 60),
+            step_timeout: Duration::from_secs(12 * 60 * 60),
             fail_fast: true,
             dry_run: false,
             shutdown: None,
