@@ -49,42 +49,51 @@ export function ActivityPage() {
     const repoSlugById: Record<string, string> = {};
     for (const r of repos) repoSlugById[r.id] = r.slug;
 
-    Promise.all([
-      api.listAllWorktrees(),
-      api.latestRunsByWorktree(),
-    ]).then(([allWorktrees, runs]) => {
+    const worktreesP = api.listAllWorktrees();
+
+    // Render worktrees as soon as they arrive (don't wait for runs)
+    worktreesP.then((allWorktrees) => {
       const counts: Record<string, number> = {};
       const active: (Worktree & WorktreeContext)[] = [];
-      const feedbackWorktrees: { worktreeId: string; ctx: WorktreeContext & { branch: string; worktreeId: string } }[] = [];
-
       for (const wt of allWorktrees) {
         const repoId = wt.repo_id;
         const slug = repoSlugById[repoId] ?? "";
         counts[repoId] = (counts[repoId] ?? 0) + 1;
         if (wt.status === "active") {
           active.push({ ...wt, repoId, repoSlug: slug });
-          const run = (runs as Record<string, AgentRun>)[wt.id];
-          if (run && run.status === "waiting_for_feedback") {
-            feedbackWorktrees.push({ worktreeId: wt.id, ctx: { repoId, repoSlug: slug, branch: wt.branch, worktreeId: wt.id } });
-          }
         }
       }
       setWorktreeCounts(counts);
       setActiveWorktrees(active);
+    });
+
+    // Runs + feedback: independent of worktree display
+    api.latestRunsByWorktree().then((runs) => {
       setLatestRuns(runs);
 
-      // Fetch pending feedback
-      if (feedbackWorktrees.length > 0) {
-        Promise.all(
-          feedbackWorktrees.map(({ worktreeId, ctx }) =>
-            api.getPendingFeedback(worktreeId).then((fb) => fb ? { feedback: fb, ctx } : null).catch(() => null)
-          )
-        ).then((results) => {
-          setPendingFeedback(results.filter(Boolean) as typeof pendingFeedback);
-        });
-      } else {
-        setPendingFeedback([]);
-      }
+      worktreesP.then((allWorktrees) => {
+        const feedbackWorktrees: { worktreeId: string; ctx: WorktreeContext & { branch: string; worktreeId: string } }[] = [];
+        for (const wt of allWorktrees) {
+          if (wt.status !== "active") continue;
+          const repoId = wt.repo_id;
+          const slug = repoSlugById[repoId] ?? "";
+          const run = runs[wt.id];
+          if (run && run.status === "waiting_for_feedback") {
+            feedbackWorktrees.push({ worktreeId: wt.id, ctx: { repoId, repoSlug: slug, branch: wt.branch, worktreeId: wt.id } });
+          }
+        }
+        if (feedbackWorktrees.length > 0) {
+          Promise.all(
+            feedbackWorktrees.map(({ worktreeId, ctx }) =>
+              api.getPendingFeedback(worktreeId).then((fb) => fb ? { feedback: fb, ctx } : null).catch(() => null)
+            )
+          ).then((results) => {
+            setPendingFeedback(results.filter(Boolean) as typeof pendingFeedback);
+          });
+        } else {
+          setPendingFeedback([]);
+        }
+      });
     });
   }, [repos, wtTick]);
 
