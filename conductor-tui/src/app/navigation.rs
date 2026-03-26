@@ -2,8 +2,8 @@ use ratatui::widgets::ListState;
 
 use crate::state::{
     info_row, repo_info_row, workflow_run_info_row, DashboardRow, FormField, Modal,
-    RepoDetailFocus, View, WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowsFocus,
-    WorktreeDetailFocus, WorkflowPickerItem,
+    RepoDetailFocus, View, WorkflowDefFocus, WorkflowPickerItem, WorkflowRunDetailFocus,
+    WorkflowsFocus, WorktreeDetailFocus,
 };
 
 use super::helpers::{clamp_increment, max_scroll, wrap_decrement, wrap_increment};
@@ -22,7 +22,11 @@ fn next_selectable(items: &[WorkflowPickerItem], start: usize, forward: bool) ->
         return start;
     }
     let mut idx = if forward {
-        if start + 1 >= len { 0 } else { start + 1 }
+        if start + 1 >= len {
+            0
+        } else {
+            start + 1
+        }
     } else {
         start.checked_sub(1).unwrap_or(len - 1)
     };
@@ -31,7 +35,11 @@ fn next_selectable(items: &[WorkflowPickerItem], start: usize, forward: bool) ->
             return idx;
         }
         idx = if forward {
-            if idx + 1 >= len { 0 } else { idx + 1 }
+            if idx + 1 >= len {
+                0
+            } else {
+                idx + 1
+            }
         } else {
             idx.checked_sub(1).unwrap_or(len - 1)
         };

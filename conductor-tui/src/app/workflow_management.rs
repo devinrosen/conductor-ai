@@ -569,7 +569,9 @@ impl App {
         self.state.modal = Modal::None;
 
         match item {
-            WorkflowPickerItem::Header(_) => unreachable!("Header items are non-selectable and guarded above"),
+            WorkflowPickerItem::Header(_) => {
+                unreachable!("Header items are non-selectable and guarded above")
+            }
             WorkflowPickerItem::Workflow(def) => {
                 let mut prefill = std::collections::HashMap::new();
                 match &target {
@@ -2055,14 +2057,13 @@ mod tests {
 
     #[test]
     fn insert_group_headers_all_ungrouped_no_headers() {
-        let defs = vec![
-            make_def("beta", None),
-            make_def("alpha", None),
-        ];
+        let defs = vec![make_def("beta", None), make_def("alpha", None)];
         let items = insert_group_headers(defs);
         // No headers — all items are Workflow variants, sorted alphabetically.
         assert_eq!(items.len(), 2);
-        assert!(items.iter().all(|i| matches!(i, WorkflowPickerItem::Workflow(_))));
+        assert!(items
+            .iter()
+            .all(|i| matches!(i, WorkflowPickerItem::Workflow(_))));
         assert!(matches!(&items[0], WorkflowPickerItem::Workflow(d) if d.name == "alpha"));
         assert!(matches!(&items[1], WorkflowPickerItem::Workflow(d) if d.name == "beta"));
     }
