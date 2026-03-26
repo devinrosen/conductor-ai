@@ -76,7 +76,10 @@ pub fn resolve_script_path(
             // intentional: .conductor/scripts/ entries are commonly symlinked
             // to external sources (e.g., fsm-engine/scripts/). We skip
             // canonicalization to avoid rejecting these valid symlinks.
-            if run.starts_with(".conductor/") {
+            // Check the candidate path (which includes the search prefix),
+            // not `run` (which may be a bare filename resolved via .conductor/scripts/).
+            let relative = candidate.strip_prefix(root).unwrap_or(candidate.as_path());
+            if relative.starts_with(".conductor") {
                 return Some(candidate.clone());
             }
             // For other relative paths (bare filenames in working_dir, repo,
