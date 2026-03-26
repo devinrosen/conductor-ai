@@ -1423,7 +1423,10 @@ fn test_reap_orphaned_workflow_runs_multiple_dead_parents() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(active_status, "waiting", "active-parent run must remain waiting");
+    assert_eq!(
+        active_status, "waiting",
+        "active-parent run must remain waiting"
+    );
 }
 
 #[test]
