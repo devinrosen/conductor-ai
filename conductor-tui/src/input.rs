@@ -1377,4 +1377,154 @@ mod tests {
             Action::PickTemplate
         ));
     }
+
+    // --- WorkflowPicker tests (Repo target variant) ---
+    // Key-mapping is target-agnostic (the WorkflowPicker arm in map_key does not
+    // inspect the target), so these tests confirm the same bindings hold.
+
+    fn workflow_picker_repo_state() -> AppState {
+        let mut state = AppState::new();
+        state.modal = Modal::WorkflowPicker {
+            target: crate::state::WorkflowPickerTarget::Repo {
+                repo_id: "r1".into(),
+                repo_path: "/tmp/repo".into(),
+                repo_name: "my-repo".into(),
+            },
+            items: vec![crate::state::WorkflowPickerItem::Workflow(
+                conductor_core::workflow::WorkflowDef {
+                    name: "deploy".into(),
+                    description: String::new(),
+                    trigger: conductor_core::workflow::WorkflowTrigger::Manual,
+                    targets: vec!["repo".into()],
+                    group: None,
+                    inputs: vec![],
+                    body: vec![],
+                    always: vec![],
+                    source_path: ".conductor/workflows/deploy.wf".into(),
+                },
+            )],
+            selected: 0,
+            scroll_offset: 0,
+        };
+        state
+    }
+
+    #[test]
+    fn workflow_picker_repo_esc_dismisses_modal() {
+        let state = workflow_picker_repo_state();
+        assert!(matches!(
+            map_key(key(KeyCode::Esc), &state),
+            Action::DismissModal
+        ));
+    }
+
+    #[test]
+    fn workflow_picker_repo_up_down_navigation() {
+        let state = workflow_picker_repo_state();
+        assert!(matches!(map_key(key(KeyCode::Up), &state), Action::MoveUp));
+        assert!(matches!(
+            map_key(key(KeyCode::Down), &state),
+            Action::MoveDown
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('k')), &state),
+            Action::MoveUp
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('j')), &state),
+            Action::MoveDown
+        ));
+    }
+
+    #[test]
+    fn workflow_picker_repo_enter_submits() {
+        let state = workflow_picker_repo_state();
+        assert!(matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::InputSubmit
+        ));
+    }
+
+    #[test]
+    fn workflow_picker_repo_unhandled_key_is_none() {
+        let state = workflow_picker_repo_state();
+        assert!(matches!(
+            map_key(key(KeyCode::Char('x')), &state),
+            Action::None
+        ));
+    }
+
+    // --- WorkflowPicker tests (standalone Worktree target variant) ---
+
+    fn workflow_picker_worktree_state() -> AppState {
+        let mut state = AppState::new();
+        state.modal = Modal::WorkflowPicker {
+            target: crate::state::WorkflowPickerTarget::Worktree {
+                worktree_id: "w1".into(),
+                worktree_path: "/tmp/ws/w1".into(),
+                repo_path: "/tmp/repo".into(),
+            },
+            items: vec![crate::state::WorkflowPickerItem::Workflow(
+                conductor_core::workflow::WorkflowDef {
+                    name: "build".into(),
+                    description: String::new(),
+                    trigger: conductor_core::workflow::WorkflowTrigger::Manual,
+                    targets: vec!["worktree".into()],
+                    group: None,
+                    inputs: vec![],
+                    body: vec![],
+                    always: vec![],
+                    source_path: ".conductor/workflows/build.wf".into(),
+                },
+            )],
+            selected: 0,
+            scroll_offset: 0,
+        };
+        state
+    }
+
+    #[test]
+    fn workflow_picker_worktree_esc_dismisses_modal() {
+        let state = workflow_picker_worktree_state();
+        assert!(matches!(
+            map_key(key(KeyCode::Esc), &state),
+            Action::DismissModal
+        ));
+    }
+
+    #[test]
+    fn workflow_picker_worktree_up_down_navigation() {
+        let state = workflow_picker_worktree_state();
+        assert!(matches!(map_key(key(KeyCode::Up), &state), Action::MoveUp));
+        assert!(matches!(
+            map_key(key(KeyCode::Down), &state),
+            Action::MoveDown
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('k')), &state),
+            Action::MoveUp
+        ));
+        assert!(matches!(
+            map_key(key(KeyCode::Char('j')), &state),
+            Action::MoveDown
+        ));
+    }
+
+    #[test]
+    fn workflow_picker_worktree_enter_submits() {
+        let state = workflow_picker_worktree_state();
+        assert!(matches!(
+            map_key(key(KeyCode::Enter), &state),
+            Action::InputSubmit
+        ));
+    }
+
+    #[test]
+    fn workflow_picker_worktree_unhandled_key_is_none() {
+        let state = workflow_picker_worktree_state();
+        assert!(matches!(
+            map_key(key(KeyCode::Char('x')), &state),
+            Action::None
+        ));
+    }
 }

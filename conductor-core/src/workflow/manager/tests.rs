@@ -1567,6 +1567,69 @@ fn test_cancel_run_marks_active_steps_failed() {
     );
 }
 
+// ── workflow def target filter predicate ─────────────────────────────────
+
+fn make_repo_workflow(name: &str) -> crate::workflow::WorkflowDef {
+    crate::workflow::WorkflowDef {
+        name: name.to_string(),
+        description: "repo-scoped workflow".to_string(),
+        trigger: crate::workflow::WorkflowTrigger::Manual,
+        targets: vec!["repo".to_string()],
+        group: None,
+        inputs: vec![],
+        body: vec![],
+        always: vec![],
+        source_path: format!(".conductor/workflows/{name}.wf"),
+    }
+}
+
+fn make_worktree_workflow(name: &str) -> crate::workflow::WorkflowDef {
+    crate::workflow::WorkflowDef {
+        name: name.to_string(),
+        description: "worktree-scoped workflow".to_string(),
+        trigger: crate::workflow::WorkflowTrigger::Manual,
+        targets: vec!["worktree".to_string()],
+        group: None,
+        inputs: vec![],
+        body: vec![],
+        always: vec![],
+        source_path: format!(".conductor/workflows/{name}.wf"),
+    }
+}
+
+#[test]
+fn test_filter_repo_target() {
+    // Mixed-target slice: only the repo workflow should survive the "repo" filter.
+    let defs = vec![
+        make_repo_workflow("repo-wf"),
+        make_worktree_workflow("wt-wf"),
+    ];
+    let filter = "repo";
+    let filtered: Vec<_> = defs
+        .iter()
+        .filter(|d| d.targets.iter().any(|t| t == filter))
+        .collect();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].name, "repo-wf");
+}
+
+#[test]
+fn test_filter_worktree_target() {
+    // Mixed-target slice: only the two worktree workflows should survive the "worktree" filter.
+    let defs = vec![
+        make_repo_workflow("repo-wf"),
+        make_worktree_workflow("wt-wf-1"),
+        make_worktree_workflow("wt-wf-2"),
+    ];
+    let filter = "worktree";
+    let filtered: Vec<_> = defs
+        .iter()
+        .filter(|d| d.targets.iter().any(|t| t == filter))
+        .collect();
+    assert_eq!(filtered.len(), 2);
+    assert!(filtered.iter().all(|d| d.name.starts_with("wt-wf")));
+}
+
 #[test]
 fn test_cancel_run_not_found() {
     let conn = setup_db();
