@@ -30,6 +30,18 @@ pub struct WorktreeListQuery {
     pub show_completed: bool,
 }
 
+pub async fn list_all_worktrees(
+    State(state): State<AppState>,
+    Query(params): Query<WorktreeListQuery>,
+) -> Result<Json<Vec<Worktree>>, ApiError> {
+    let db = state.db.lock().await;
+    let config = state.config.read().await;
+    let mgr = WorktreeManager::new(&db, &config);
+    let active_only = !params.show_completed;
+    let worktrees = mgr.list(None, active_only)?;
+    Ok(Json(worktrees))
+}
+
 pub async fn list_worktrees(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,

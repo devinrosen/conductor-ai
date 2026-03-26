@@ -300,6 +300,99 @@ async fn test_list_worktrees_show_completed_false_explicit_hides_completed() {
     assert_eq!(body[0]["slug"], "feat-active");
 }
 
+// --- Flat GET /api/worktrees tests ---
+
+fn seed_two_repos_with_worktrees(conn: &Connection) {
+    conn.execute(
+        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+         VALUES ('ra', 'repo-a', '/tmp/a', 'https://github.com/test/a.git', '/tmp/ws-a', '2024-01-01T00:00:00Z')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+         VALUES ('rb', 'repo-b', '/tmp/b', 'https://github.com/test/b.git', '/tmp/ws-b', '2024-01-01T00:00:00Z')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+         VALUES ('wa1', 'ra', 'feat-one', 'feat/one', '/tmp/ws-a/feat-one', 'active', '2024-01-01T00:00:00Z')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at) \
+         VALUES ('wb1', 'rb', 'feat-two', 'feat/two', '/tmp/ws-b/feat-two', 'active', '2024-01-01T00:00:00Z')",
+        [],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO worktrees (id, repo_id, slug, branch, path, status, created_at, completed_at) \
+         VALUES ('wb2', 'rb', 'feat-done', 'feat/done', '/tmp/ws-b/feat-done', 'merged', '2024-01-01T00:00:00Z', '2024-02-01T00:00:00Z')",
+        [],
+    ).unwrap();
+}
+
+#[tokio::test]
+async fn test_flat_list_worktrees_empty() {
+    let base = spawn_test_server().await;
+    let resp = reqwest::get(format!("{base}/api/worktrees")).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn test_flat_list_worktrees_with_data() {
+    let base = spawn_test_server_with_setup(seed_two_repos_with_worktrees).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/api/worktrees"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    // Only active worktrees by default (2 active, 1 merged)
+    assert_eq!(body.len(), 2);
+    let slugs: Vec<&str> = body.iter().map(|w| w["slug"].as_str().unwrap()).collect();
+    assert!(slugs.contains(&"feat-one"));
+    assert!(slugs.contains(&"feat-two"));
+    // repo_ids should differ — worktrees come from two different repos
+    let repo_ids: std::collections::HashSet<&str> =
+        body.iter().map(|w| w["repo_id"].as_str().unwrap()).collect();
+    assert_eq!(repo_ids.len(), 2);
+}
+
+#[tokio::test]
+async fn test_flat_list_worktrees_default_hides_completed() {
+    let base = spawn_test_server_with_setup(seed_worktrees_with_completed).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/api/worktrees"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0]["slug"], "feat-active");
+}
+
+#[tokio::test]
+async fn test_flat_list_worktrees_show_completed_true() {
+    let base = spawn_test_server_with_setup(seed_worktrees_with_completed).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .get(format!("{base}/api/worktrees?show_completed=true"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(body.len(), 3);
+}
+
 #[tokio::test]
 async fn test_list_tickets_empty() {
     let base = spawn_test_server().await;

@@ -22,15 +22,10 @@ export function ReposPage() {
   const refresh = useCallback(() => setTick((n) => n + 1), []);
 
   useEffect(() => {
-    if (repos.length === 0) return;
-    Promise.all(
-      repos.map((r) =>
-        api.listWorktrees(r.id).then((wts) => ({ repoId: r.id, count: wts.length })),
-      ),
-    ).then((results) => {
+    api.listAllWorktrees().then((allWorktrees) => {
       const counts: Record<string, number> = {};
-      for (const { repoId, count } of results) {
-        counts[repoId] = count;
+      for (const wt of allWorktrees) {
+        counts[wt.repo_id] = (counts[wt.repo_id] ?? 0) + 1;
       }
       setWorktreeCounts(counts);
     });
