@@ -9,6 +9,7 @@ use conductor_core::issue_source::{GitHubConfig, IssueSourceManager, JiraConfig}
 use conductor_core::jira_acli;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::TicketSyncer;
+use conductor_core::worktree::WorktreeManager;
 
 use crate::commands::TicketCommands;
 use crate::helpers::{sync_repo, truncate_str};
@@ -116,25 +117,22 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
             let repo_mgr = RepoManager::new(conn, config);
             let r = repo_mgr.get_by_slug(&repo)?;
 
-            let ticket_id: String = conn
-                .query_row(
-                    "SELECT id FROM tickets WHERE repo_id = ?1 AND source_id = ?2",
-                    rusqlite::params![r.id, ticket],
-                    |row| row.get(0),
-                )
+            let syncer = TicketSyncer::new(conn);
+            let t = syncer
+                .get_by_source_id(&r.id, &ticket)
                 .map_err(|_| anyhow::anyhow!("Ticket not found: #{ticket}"))?;
+            let ticket_id = t.id;
 
-            let (worktree_id, existing_ticket): (String, Option<String>) = conn
-                .query_row(
-                    "SELECT id, ticket_id FROM worktrees WHERE repo_id = ?1 AND slug = ?2",
-                    rusqlite::params![r.id, worktree],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
+            let wt_mgr = WorktreeManager::new(conn, config);
+            let wt = wt_mgr
+                .get_by_slug(&r.id, &worktree)
                 .map_err(|_| anyhow::anyhow!("Worktree not found: {worktree}"))?;
 
-            if existing_ticket.is_some() {
+            if wt.ticket_id.is_some() {
                 anyhow::bail!("Worktree '{worktree}' already has a linked ticket");
             }
+
+            let worktree_id = wt.id;
 
             let syncer = TicketSyncer::new(conn);
             syncer.link_to_worktree(&ticket_id, &worktree_id)?;

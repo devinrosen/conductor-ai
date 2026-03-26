@@ -11,7 +11,9 @@ use conductor_core::config::{load_config, Config};
 use conductor_core::github;
 use conductor_core::github_app;
 use conductor_core::orchestrator::{self, OrchestratorConfig};
+use conductor_core::repo::RepoManager;
 use conductor_core::workflow::WorkflowManager;
+use conductor_core::worktree::WorktreeManager;
 
 use crate::commands::{AgentCommands, CONDUCTOR_RUN_ID_ENV};
 use crate::helpers::{generate_plan, read_and_maybe_cleanup_prompt_file};
@@ -112,25 +114,19 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
                 )
             })?;
 
-            let (repo_id, remote_url): (String, String) = conn
-                .query_row(
-                    "SELECT r.id, r.remote_url \
-                 FROM worktrees w \
-                 JOIN repos r ON w.repo_id = r.id \
-                 WHERE w.id = ?1",
-                    rusqlite::params![worktree_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
+            let wt_mgr = WorktreeManager::new(conn, config);
+            let wt = wt_mgr
+                .get_by_id(worktree_id)
+                .map_err(|_| anyhow::anyhow!("Could not find worktree {worktree_id}"))?;
+
+            let repo_mgr = RepoManager::new(conn, config);
+            let repo_obj = repo_mgr
+                .get_by_id(&wt.repo_id)
                 .map_err(|_| anyhow::anyhow!("Could not find repo for worktree {worktree_id}"))?;
 
-            // Check per-repo opt-in
-            let allow: bool = conn
-                .query_row(
-                    "SELECT allow_agent_issue_creation FROM repos WHERE id = ?1",
-                    rusqlite::params![repo_id],
-                    |row| row.get::<_, i64>(0).map(|v| v != 0),
-                )
-                .unwrap_or(false);
+            let repo_id = &repo_obj.id;
+            let remote_url = &repo_obj.remote_url;
+            let allow = repo_obj.allow_agent_issue_creation;
 
             if !allow {
                 anyhow::bail!(
@@ -140,7 +136,7 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
             }
 
             // Determine GitHub owner/repo from remote URL
-            let (owner, repo_name) = github::parse_github_remote(&remote_url).ok_or_else(|| {
+            let (owner, repo_name) = github::parse_github_remote(remote_url).ok_or_else(|| {
                 anyhow::anyhow!("Cannot determine GitHub repo from remote URL: {remote_url}")
             })?;
 
@@ -149,8 +145,7 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
                 github::create_github_issue(&owner, &repo_name, &title, &body, &[], None)?;
 
             // Record in DB
-            agent_mgr
-                .record_created_issue(&run_id, &repo_id, "github", &source_id, &title, &url)?;
+            agent_mgr.record_created_issue(&run_id, repo_id, "github", &source_id, &title, &url)?;
 
             println!("Created issue #{source_id}: {url}");
         }

@@ -19,7 +19,9 @@ pub fn handle_worktree(
     // Reap stale worktrees before handling any worktree command.
     {
         let wt_mgr = WorktreeManager::new(conn, config);
-        let _ = wt_mgr.reap_stale_worktrees();
+        if let Err(e) = wt_mgr.reap_stale_worktrees() {
+            eprintln!("Warning: reap_stale_worktrees failed: {e}");
+        }
     }
     match command {
         WorktreeCommands::Create {

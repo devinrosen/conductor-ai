@@ -46,10 +46,11 @@ pub(crate) fn parse_ticket_ids(input: &str) -> Vec<String> {
 }
 
 pub(crate) fn truncate_str(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s.to_string()
     } else {
-        format!("{}...", &s[..max.saturating_sub(3)])
+        let truncated: String = s.chars().take(max.saturating_sub(3)).collect();
+        format!("{truncated}...")
     }
 }
 
@@ -189,7 +190,7 @@ pub(crate) fn sync_repo(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_ticket_ids, read_and_maybe_cleanup_prompt_file};
+    use super::{parse_ticket_ids, read_and_maybe_cleanup_prompt_file, truncate_str};
 
     #[test]
     fn internal_temp_file_is_deleted_after_read() {
@@ -253,5 +254,28 @@ mod tests {
     fn parse_ticket_ids_empty_string() {
         let result: Vec<String> = parse_ticket_ids("");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn truncate_str_ascii() {
+        assert_eq!(truncate_str("hello world", 11), "hello world");
+        assert_eq!(truncate_str("hello world", 8), "hello...");
+    }
+
+    #[test]
+    fn truncate_str_multibyte_no_panic() {
+        // 5 two-byte chars = 10 bytes; truncating at char boundary must not panic
+        let s = "ääääää"; // 6 chars, each 2 bytes
+        let result = truncate_str(s, 5);
+        assert!(result.ends_with("..."));
+        // Should have 2 'ä' chars + "..."
+        assert_eq!(result, "ää...");
+    }
+
+    #[test]
+    fn truncate_str_emoji() {
+        let s = "👋🌍🚀✨🎉";
+        let result = truncate_str(s, 4);
+        assert_eq!(result, "👋...");
     }
 }

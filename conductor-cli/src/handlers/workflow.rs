@@ -58,9 +58,15 @@ pub fn handle_workflow(
                 (dir.clone(), dir.clone())
             } else {
                 let repo_mgr = RepoManager::new(conn, config);
-                let r = repo_mgr.get_by_slug(repo.as_deref().unwrap())?;
+                let repo_slug = repo
+                    .as_deref()
+                    .context("--repo is required when --path is not used")?;
+                let r = repo_mgr.get_by_slug(repo_slug)?;
                 let wt_mgr = WorktreeManager::new(conn, config);
-                let wt = wt_mgr.get_by_slug(&r.id, worktree.as_deref().unwrap())?;
+                let wt_slug = worktree
+                    .as_deref()
+                    .context("--worktree is required when --path is not used")?;
+                let wt = wt_mgr.get_by_slug(&r.id, wt_slug)?;
                 (wt.path, r.local_path)
             };
 
@@ -192,36 +198,28 @@ pub fn handle_workflow(
                     workflow.name, node_count, repo_slug
                 );
 
-                match conductor_core::workflow::execute_workflow(
-                    &conductor_core::workflow::WorkflowExecInput {
-                        conn,
-                        config,
-                        workflow: &workflow,
-                        worktree_id: None,
-                        working_dir: &r.local_path,
-                        repo_path: &r.local_path,
-                        ticket_id: None,
-                        repo_id: Some(&r.id),
-                        model: model.as_deref(),
-                        exec_config: &exec_config,
-                        inputs: input_map,
-                        depth: 0,
-                        parent_workflow_run_id: None,
-                        target_label: Some(r.slug.as_str()),
-                        default_bot_name: None,
-                        feature_id: feature_id.as_deref(),
-                        iteration: 0,
-                        run_id_notify: None,
-                        triggered_by_hook: false,
-                        conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                    },
-                ) {
-                    Ok(result) => report_workflow_result(result),
-                    Err(e) => {
-                        eprintln!("Workflow execution failed: {e}");
-                        std::process::exit(1);
-                    }
-                }
+                run_and_report(&conductor_core::workflow::WorkflowExecInput {
+                    conn,
+                    config,
+                    workflow: &workflow,
+                    worktree_id: None,
+                    working_dir: &r.local_path,
+                    repo_path: &r.local_path,
+                    ticket_id: None,
+                    repo_id: Some(&r.id),
+                    model: model.as_deref(),
+                    exec_config: &exec_config,
+                    inputs: input_map,
+                    depth: 0,
+                    parent_workflow_run_id: None,
+                    target_label: Some(r.slug.as_str()),
+                    default_bot_name: None,
+                    feature_id: feature_id.as_deref(),
+                    iteration: 0,
+                    run_id_notify: None,
+                    triggered_by_hook: false,
+                    conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                });
             } else if let Some(run_id) = workflow_run {
                 // Workflow-run targeted run (e.g. postmortem workflows)
                 let wf_mgr = WorkflowManager::new(conn);
@@ -243,36 +241,28 @@ pub fn handle_workflow(
                     workflow.name, node_count, run_id
                 );
 
-                match conductor_core::workflow::execute_workflow(
-                    &conductor_core::workflow::WorkflowExecInput {
-                        conn,
-                        config,
-                        workflow: &workflow,
-                        worktree_id: ctx.worktree_id.as_deref(),
-                        working_dir: &ctx.working_dir,
-                        repo_path: &ctx.repo_path,
-                        ticket_id: None,
-                        repo_id: ctx.repo_id.as_deref(),
-                        model: model.as_deref(),
-                        exec_config: &exec_config,
-                        inputs: input_map,
-                        depth: 0,
-                        parent_workflow_run_id: None,
-                        target_label: Some(run_id.as_str()),
-                        default_bot_name: None,
-                        feature_id: feature_id.as_deref(),
-                        iteration: 0,
-                        run_id_notify: None,
-                        triggered_by_hook: false,
-                        conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                    },
-                ) {
-                    Ok(result) => report_workflow_result(result),
-                    Err(e) => {
-                        eprintln!("Workflow execution failed: {e}");
-                        std::process::exit(1);
-                    }
-                }
+                run_and_report(&conductor_core::workflow::WorkflowExecInput {
+                    conn,
+                    config,
+                    workflow: &workflow,
+                    worktree_id: ctx.worktree_id.as_deref(),
+                    working_dir: &ctx.working_dir,
+                    repo_path: &ctx.repo_path,
+                    ticket_id: None,
+                    repo_id: ctx.repo_id.as_deref(),
+                    model: model.as_deref(),
+                    exec_config: &exec_config,
+                    inputs: input_map,
+                    depth: 0,
+                    parent_workflow_run_id: None,
+                    target_label: Some(run_id.as_str()),
+                    default_bot_name: None,
+                    feature_id: feature_id.as_deref(),
+                    iteration: 0,
+                    run_id_notify: None,
+                    triggered_by_hook: false,
+                    conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                });
             } else if let Some(ticket_id) = ticket {
                 let syncer = TicketSyncer::new(conn);
                 let ticket = syncer.get_by_id(&ticket_id)?;
@@ -291,36 +281,28 @@ pub fn handle_workflow(
                     ticket_id
                 );
 
-                match conductor_core::workflow::execute_workflow(
-                    &conductor_core::workflow::WorkflowExecInput {
-                        conn,
-                        config,
-                        workflow: &workflow,
-                        worktree_id: None,
-                        working_dir: &repo.local_path,
-                        repo_path: &repo.local_path,
-                        ticket_id: Some(&ticket_id),
-                        repo_id: Some(&ticket.repo_id),
-                        model: model.as_deref(),
-                        exec_config: &exec_config,
-                        inputs: input_map,
-                        depth: 0,
-                        parent_workflow_run_id: None,
-                        target_label: Some(repo.slug.as_str()),
-                        default_bot_name: None,
-                        feature_id: feature_id.as_deref(),
-                        iteration: 0,
-                        run_id_notify: None,
-                        triggered_by_hook: false,
-                        conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                    },
-                ) {
-                    Ok(result) => report_workflow_result(result),
-                    Err(e) => {
-                        eprintln!("Workflow execution failed: {e}");
-                        std::process::exit(1);
-                    }
-                }
+                run_and_report(&conductor_core::workflow::WorkflowExecInput {
+                    conn,
+                    config,
+                    workflow: &workflow,
+                    worktree_id: None,
+                    working_dir: &repo.local_path,
+                    repo_path: &repo.local_path,
+                    ticket_id: Some(&ticket_id),
+                    repo_id: Some(&ticket.repo_id),
+                    model: model.as_deref(),
+                    exec_config: &exec_config,
+                    inputs: input_map,
+                    depth: 0,
+                    parent_workflow_run_id: None,
+                    target_label: Some(repo.slug.as_str()),
+                    default_bot_name: None,
+                    feature_id: feature_id.as_deref(),
+                    iteration: 0,
+                    run_id_notify: None,
+                    triggered_by_hook: false,
+                    conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                });
             } else {
                 // Normal registered repo/worktree run
                 let repo_slug = repo.expect("repo is required when --pr is not used");
@@ -343,36 +325,28 @@ pub fn handle_workflow(
                 );
 
                 let wt_label = format!("{repo_slug}/{worktree_slug}");
-                match conductor_core::workflow::execute_workflow(
-                    &conductor_core::workflow::WorkflowExecInput {
-                        conn,
-                        config,
-                        workflow: &workflow,
-                        worktree_id: Some(&wt.id),
-                        working_dir: &wt.path,
-                        repo_path: &r.local_path,
-                        ticket_id: wt.ticket_id.as_deref(),
-                        repo_id: None,
-                        model: model.as_deref(),
-                        exec_config: &exec_config,
-                        inputs: input_map,
-                        depth: 0,
-                        parent_workflow_run_id: None,
-                        target_label: Some(&wt_label),
-                        default_bot_name: None,
-                        feature_id: feature_id.as_deref(),
-                        iteration: 0,
-                        run_id_notify: None,
-                        triggered_by_hook: false,
-                        conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                    },
-                ) {
-                    Ok(result) => report_workflow_result(result),
-                    Err(e) => {
-                        eprintln!("Workflow execution failed: {e}");
-                        std::process::exit(1);
-                    }
-                }
+                run_and_report(&conductor_core::workflow::WorkflowExecInput {
+                    conn,
+                    config,
+                    workflow: &workflow,
+                    worktree_id: Some(&wt.id),
+                    working_dir: &wt.path,
+                    repo_path: &r.local_path,
+                    ticket_id: wt.ticket_id.as_deref(),
+                    repo_id: None,
+                    model: model.as_deref(),
+                    exec_config: &exec_config,
+                    inputs: input_map,
+                    depth: 0,
+                    parent_workflow_run_id: None,
+                    target_label: Some(&wt_label),
+                    default_bot_name: None,
+                    feature_id: feature_id.as_deref(),
+                    iteration: 0,
+                    run_id_notify: None,
+                    triggered_by_hook: false,
+                    conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
+                });
             }
         }
         WorkflowCommands::RunShow { id } => {
@@ -487,8 +461,10 @@ pub fn handle_workflow(
                 (dir.clone(), dir.clone())
             } else if repo.is_some() && worktree.is_some() {
                 let repo_mgr = RepoManager::new(conn, config);
+                // SAFETY: guarded by `repo.is_some()` above
                 let r = repo_mgr.get_by_slug(repo.as_deref().unwrap())?;
                 let wt_mgr = WorktreeManager::new(conn, config);
+                // SAFETY: guarded by `worktree.is_some()` above
                 let wt = wt_mgr.get_by_slug(&r.id, worktree.as_deref().unwrap())?;
                 (wt.path, r.local_path)
             } else if repo.is_some() || worktree.is_some() {
@@ -660,51 +636,33 @@ pub fn handle_workflow(
             }
         }
         WorkflowCommands::GateApprove { run_id } => {
-            let wf_mgr = WorkflowManager::new(conn);
-            match wf_mgr.find_waiting_gate(&run_id)? {
-                Some(step) => {
-                    let user = std::env::var("USER").unwrap_or_else(|_| "cli".to_string());
-                    wf_mgr.approve_gate(&step.id, &user, None)?;
-                    println!("Gate '{}' approved by {user}.", step.step_name);
-                }
-                None => {
-                    println!("No waiting gate found for workflow run: {run_id}");
-                }
-            }
+            with_waiting_gate(conn, &run_id, |wf_mgr, step, user| {
+                wf_mgr.approve_gate(&step.id, user, None)?;
+                println!("Gate '{}' approved by {user}.", step.step_name);
+                Ok(())
+            })?;
         }
         WorkflowCommands::GateReject { run_id } => {
-            let wf_mgr = WorkflowManager::new(conn);
-            match wf_mgr.find_waiting_gate(&run_id)? {
-                Some(step) => {
-                    let user = std::env::var("USER").unwrap_or_else(|_| "cli".to_string());
-                    wf_mgr.reject_gate(&step.id, &user, None)?;
-                    wf_mgr.update_workflow_status(
-                        &run_id,
-                        conductor_core::workflow::WorkflowRunStatus::Failed,
-                        Some(&format!("Gate '{}' rejected by {user}", step.step_name)),
-                    )?;
-                    println!("Gate '{}' rejected by {user}.", step.step_name);
-                }
-                None => {
-                    println!("No waiting gate found for workflow run: {run_id}");
-                }
-            }
+            with_waiting_gate(conn, &run_id, |wf_mgr, step, user| {
+                wf_mgr.reject_gate(&step.id, user, None)?;
+                wf_mgr.update_workflow_status(
+                    &run_id,
+                    conductor_core::workflow::WorkflowRunStatus::Failed,
+                    Some(&format!("Gate '{}' rejected by {user}", step.step_name)),
+                )?;
+                println!("Gate '{}' rejected by {user}.", step.step_name);
+                Ok(())
+            })?;
         }
         WorkflowCommands::GateFeedback { run_id, feedback } => {
-            let wf_mgr = WorkflowManager::new(conn);
-            match wf_mgr.find_waiting_gate(&run_id)? {
-                Some(step) => {
-                    let user = std::env::var("USER").unwrap_or_else(|_| "cli".to_string());
-                    wf_mgr.approve_gate(&step.id, &user, Some(&feedback))?;
-                    println!(
-                        "Gate '{}' approved with feedback by {user}.",
-                        step.step_name
-                    );
-                }
-                None => {
-                    println!("No waiting gate found for workflow run: {run_id}");
-                }
-            }
+            with_waiting_gate(conn, &run_id, |wf_mgr, step, user| {
+                wf_mgr.approve_gate(&step.id, user, Some(&feedback))?;
+                println!(
+                    "Gate '{}' approved with feedback by {user}.",
+                    step.step_name
+                );
+                Ok(())
+            })?;
         }
         WorkflowCommands::Purge {
             repo,
@@ -915,4 +873,39 @@ pub fn handle_workflow(
         }
     }
     Ok(())
+}
+
+/// Execute a workflow and report the result, exiting on failure.
+fn run_and_report(input: &conductor_core::workflow::WorkflowExecInput) {
+    match conductor_core::workflow::execute_workflow(input) {
+        Ok(result) => report_workflow_result(result),
+        Err(e) => {
+            eprintln!("Workflow execution failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Shared gate operation: find the waiting gate, resolve the current user,
+/// then call the provided action closure.
+fn with_waiting_gate(
+    conn: &Connection,
+    run_id: &str,
+    action: impl FnOnce(
+        &WorkflowManager,
+        &conductor_core::workflow::WorkflowRunStep,
+        &str,
+    ) -> Result<()>,
+) -> Result<()> {
+    let wf_mgr = WorkflowManager::new(conn);
+    match wf_mgr.find_waiting_gate(run_id)? {
+        Some(step) => {
+            let user = std::env::var("USER").unwrap_or_else(|_| "cli".to_string());
+            action(&wf_mgr, &step, &user)
+        }
+        None => {
+            println!("No waiting gate found for workflow run: {run_id}");
+            Ok(())
+        }
+    }
 }
