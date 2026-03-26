@@ -577,21 +577,7 @@ impl<'a> WorktreeManager<'a> {
         let repo_mgr = RepoManager::new(self.conn, self.config);
         let repo = repo_mgr.get_by_slug(repo_slug)?;
 
-        let worktree = self
-            .conn
-            .query_row(
-                &format!(
-                    "SELECT {WORKTREE_COLUMNS} FROM worktrees WHERE repo_id = ?1 AND slug = ?2"
-                ),
-                params![repo.id, wt_slug],
-                map_worktree_row,
-            )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => ConductorError::WorktreeNotFound {
-                    slug: wt_slug.to_string(),
-                },
-                _ => ConductorError::Database(e),
-            })?;
+        let worktree = self.get_by_slug(&repo.id, wt_slug)?;
 
         if !worktree.is_active() {
             return Err(ConductorError::Git(format!(
