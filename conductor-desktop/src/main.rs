@@ -110,8 +110,7 @@ fn main() {
                     ];
                     #[cfg(debug_assertions)]
                     allowed_origins.push(HeaderValue::from_static("http://localhost:5173"));
-                    let router = api_router_with_cors(allowed_origins)
-                    .with_state(web_state);
+                    let router = api_router_with_cors(allowed_origins).with_state(web_state);
 
                     if let Err(e) = axum::serve(listener, router).await {
                         eprintln!(
