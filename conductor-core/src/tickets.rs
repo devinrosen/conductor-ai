@@ -195,27 +195,19 @@ impl<'a> TicketSyncer<'a> {
         }
 
         let now = Utc::now().to_rfc3339();
-        let placeholders = crate::db::sql_placeholders_from(synced_source_ids.len(), 4);
-        let sql = format!(
-            "UPDATE tickets SET state = 'closed', synced_at = ?1
-             WHERE repo_id = ?2 AND source_type = ?3
-             AND state != 'closed'
-             AND source_id NOT IN ({placeholders})"
-        );
-
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        param_values.push(Box::new(now));
-        param_values.push(Box::new(repo_id.to_string()));
-        param_values.push(Box::new(source_type.to_string()));
-        for id in synced_source_ids {
-            param_values.push(Box::new(id.to_string()));
-        }
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            param_values.iter().map(|p| p.as_ref()).collect();
-        let count = stmt.execute(params.as_slice())?;
-
-        Ok(count)
+        let ids: Vec<String> = synced_source_ids.iter().map(|s| s.to_string()).collect();
+        crate::db::with_in_clause(
+            "UPDATE tickets SET state = 'closed', synced_at = ?1 \
+             WHERE repo_id = ?2 AND source_type = ?3 AND state != 'closed' \
+             AND source_id NOT IN",
+            &[
+                &now as &dyn rusqlite::types::ToSql,
+                &repo_id as &dyn rusqlite::types::ToSql,
+                &source_type as &dyn rusqlite::types::ToSql,
+            ],
+            &ids,
+            |sql, params| Ok(self.conn.prepare(sql)?.execute(params)?),
+        )
     }
 
     /// Return the most recent `synced_at` timestamp for tickets in a repo.

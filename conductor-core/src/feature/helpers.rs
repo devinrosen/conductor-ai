@@ -66,36 +66,6 @@ pub(super) fn map_feature_row(row: &rusqlite::Row) -> rusqlite::Result<Feature> 
     })
 }
 
-/// Build a parameterised IN-clause query and execute a closure with the
-/// prepared params slice.
-///
-/// `prefix` is everything before the `IN (...)` — e.g.
-/// `"SELECT id FROM tickets WHERE repo_id = ?1 AND source_id IN"`.
-/// `first_param` is bound to `?1`; `items` are bound to `?2`, `?3`, …
-///
-/// The closure receives `(&str, &[&dyn ToSql])` — the SQL string and a
-/// ready-to-use params slice — so callers never need to manually convert
-/// boxed params.
-pub(super) fn with_in_clause<T>(
-    prefix: &str,
-    first_param: &str,
-    items: &[String],
-    f: impl FnOnce(&str, &[&dyn rusqlite::types::ToSql]) -> T,
-) -> T {
-    debug_assert!(
-        !items.is_empty(),
-        "with_in_clause called with empty items — produces invalid SQL `IN ()`"
-    );
-    let placeholders = crate::db::sql_placeholders_from(items.len(), 2);
-    let sql = format!("{prefix} ({placeholders})");
-    let first = first_param.to_string();
-    let mut params: Vec<&dyn rusqlite::types::ToSql> = vec![&first];
-    for item in items {
-        params.push(item);
-    }
-    f(&sql, &params)
-}
-
 /// Derive a git branch name from a feature name.
 /// Names containing `/` are used as-is; otherwise `feat/` is prepended.
 pub(super) fn derive_branch_name(name: &str) -> String {
