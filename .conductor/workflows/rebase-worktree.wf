@@ -3,6 +3,7 @@ workflow rebase-worktree {
     description = "Fetch latest base branch, resolve any conflicts, and force-push the branch"
     trigger     = "manual"
     targets     = ["worktree"]
+    group       = "Development"
   }
 
   script check-mergeability {

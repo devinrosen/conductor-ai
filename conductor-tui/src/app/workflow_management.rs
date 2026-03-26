@@ -5,7 +5,44 @@ use std::sync::Arc;
 use conductor_core::worktree::WorktreeManager;
 
 use crate::action::Action;
-use crate::state::{ConfirmAction, Modal, View, WorkflowRunDetailFocus};
+use crate::state::{ConfirmAction, Modal, View, WorkflowPickerItem, WorkflowRunDetailFocus};
+
+/// Build the flat item list for the workflow picker, inserting non-selectable
+/// `Header` rows before each named group.  Groups are sorted alphabetically;
+/// workflows within each group are also sorted alphabetically by name.
+/// Ungrouped workflows appear after all named groups, with no header.
+pub(crate) fn insert_group_headers(
+    defs: Vec<conductor_core::workflow::WorkflowDef>,
+) -> Vec<WorkflowPickerItem> {
+    use std::collections::BTreeMap;
+
+    let mut grouped: BTreeMap<String, Vec<conductor_core::workflow::WorkflowDef>> = BTreeMap::new();
+    let mut ungrouped: Vec<conductor_core::workflow::WorkflowDef> = Vec::new();
+
+    for def in defs {
+        match def.group.clone() {
+            Some(g) => grouped.entry(g).or_default().push(def),
+            None => ungrouped.push(def),
+        }
+    }
+
+    let mut items: Vec<WorkflowPickerItem> = Vec::new();
+
+    for (group_name, mut group_defs) in grouped {
+        group_defs.sort_by(|a, b| a.name.cmp(&b.name));
+        items.push(WorkflowPickerItem::Header(group_name));
+        for def in group_defs {
+            items.push(WorkflowPickerItem::Workflow(def));
+        }
+    }
+
+    ungrouped.sort_by(|a, b| a.name.cmp(&b.name));
+    for def in ungrouped {
+        items.push(WorkflowPickerItem::Workflow(def));
+    }
+
+    items
+}
 
 /// Error type for [`App::resolve_workflow_target`].
 ///
@@ -400,10 +437,7 @@ impl App {
 
         self.state.modal = Modal::WorkflowPicker {
             target,
-            items: defs
-                .into_iter()
-                .map(crate::state::WorkflowPickerItem::Workflow)
-                .collect(),
+            items: insert_group_headers(defs),
             selected: 0,
         };
     }
@@ -486,10 +520,7 @@ impl App {
 
         self.state.modal = Modal::WorkflowPicker {
             target,
-            items: defs
-                .into_iter()
-                .map(crate::state::WorkflowPickerItem::Workflow)
-                .collect(),
+            items: insert_group_headers(defs),
             selected: 0,
         };
     }
@@ -526,9 +557,15 @@ impl App {
             return;
         };
 
+        // Headers are non-selectable: ignore Enter presses on them.
+        if matches!(item, WorkflowPickerItem::Header(_)) {
+            return;
+        }
+
         self.state.modal = Modal::None;
 
         match item {
+            WorkflowPickerItem::Header(_) => { /* unreachable — guarded above */ }
             WorkflowPickerItem::Workflow(def) => {
                 let mut prefill = std::collections::HashMap::new();
                 match &target {
@@ -1909,6 +1946,7 @@ mod tests {
             description: "test".into(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],
+            group: None,
             inputs: vec![InputDecl {
                 name: "workflow_run_id".into(),
                 required: false,

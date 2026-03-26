@@ -3,6 +3,7 @@ workflow roundtable-ui {
     description = "UX roundtable review"
     trigger     = "manual"
     targets     = ["pr", "worktree"]
+    group       = "Review"
   }
 
   parallel {

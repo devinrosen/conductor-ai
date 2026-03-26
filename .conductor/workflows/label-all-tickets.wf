@@ -3,6 +3,7 @@ workflow label-all-tickets {
     description = "Add appropriate labels to all unlabeled open GitHub issues in a repo"
     trigger     = "manual"
     targets     = ["repo"]
+    group       = "Analysis"
   }
 
   call label-all-tickets

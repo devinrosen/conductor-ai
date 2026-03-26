@@ -3,6 +3,7 @@ workflow debug-failed-run {
     description = "Diagnose a failed workflow run and file GitHub issues for fixes"
     trigger     = "manual"
     targets     = ["workflow_run"]
+    group       = "Release"
   }
 
   inputs {

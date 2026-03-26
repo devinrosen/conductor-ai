@@ -3,6 +3,7 @@ workflow analyze-repo-for-agents {
     description = "Analyze a repo for large files and produce AI-optimized refactor recommendations"
     trigger     = "manual"
     targets     = ["repo"]
+    group       = "Analysis"
   }
 
   inputs {

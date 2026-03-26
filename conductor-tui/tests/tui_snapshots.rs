@@ -394,6 +394,7 @@ fn snap_workflow_def_detail() {
         description: "Deploy pipeline workflow".into(),
         trigger: conductor_core::workflow::WorkflowTrigger::Manual,
         targets: vec!["worktree".into()],
+        group: None,
         body: vec![],
         inputs: vec![],
         always: vec![],

@@ -3,6 +3,7 @@ workflow qualify-ticket {
     description = "Critically assess a ticket for autonomous executability — surfaces open questions, ambiguities, and blockers before committing agent cycles"
     trigger     = "manual"
     targets     = ["worktree"]
+    group       = "Analysis"
   }
 
   inputs {

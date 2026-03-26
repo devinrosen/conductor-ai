@@ -274,9 +274,14 @@ impl App {
             Action::SelectBranch(index) => self.handle_branch_pick(index),
             Action::SelectListItem(index) => {
                 if let Modal::WorkflowPicker {
-                    ref mut selected, ..
+                    ref items,
+                    ref mut selected,
+                    ..
                 } = self.state.modal
                 {
+                    if !items.get(index).is_some_and(|i| i.is_selectable()) {
+                        return false;
+                    }
                     *selected = index;
                     self.handle_workflow_picker_confirm();
                 } else if let Modal::TemplatePicker {
@@ -557,7 +562,7 @@ impl App {
                     ref mut selected,
                     ..
                 } => {
-                    *selected = items.len().saturating_sub(1);
+                    *selected = items.iter().rposition(|i| i.is_selectable()).unwrap_or(0);
                 }
                 Modal::TemplatePicker {
                     ref items,

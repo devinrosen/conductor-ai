@@ -240,6 +240,8 @@ pub mod workflow_run_info_row {
 #[derive(Clone, Debug)]
 pub enum WorkflowPickerItem {
     Workflow(conductor_core::workflow::WorkflowDef),
+    /// Non-selectable section header row, grouping workflows by their `group` field.
+    Header(String),
     /// Post-create only: launch an AI agent on the new worktree.
     StartAgent,
     /// Post-create only: dismiss without running anything.
@@ -247,9 +249,14 @@ pub enum WorkflowPickerItem {
 }
 
 impl WorkflowPickerItem {
+    pub fn is_selectable(&self) -> bool {
+        !matches!(self, WorkflowPickerItem::Header(_))
+    }
+
     pub fn name(&self) -> &str {
         match self {
             WorkflowPickerItem::Workflow(def) => &def.name,
+            WorkflowPickerItem::Header(label) => label.as_str(),
             WorkflowPickerItem::StartAgent => "Start agent",
             WorkflowPickerItem::Skip => "Skip",
         }
@@ -258,6 +265,7 @@ impl WorkflowPickerItem {
     pub fn description(&self) -> &str {
         match self {
             WorkflowPickerItem::Workflow(def) => &def.description,
+            WorkflowPickerItem::Header(_) => "",
             WorkflowPickerItem::StartAgent => "Launch an AI agent to work on this ticket",
             WorkflowPickerItem::Skip => "Dismiss and do nothing",
         }

@@ -3,6 +3,7 @@ workflow create-gh-issue {
     description = "Create a GitHub issue through an agentic conversation — gathers requirements, suggests labels/assignees, and creates a well-structured issue"
     trigger     = "manual"
     targets     = ["repo"]
+    group       = "Release"
   }
 
   inputs {

@@ -1131,6 +1131,7 @@ fn minimal_workflow(name: &str) -> crate::workflow_dsl::WorkflowDef {
         description: "test workflow".to_string(),
         trigger: crate::workflow_dsl::WorkflowTrigger::Manual,
         targets: vec![],
+        group: None,
         inputs: vec![],
         body: vec![],
         always: vec![],

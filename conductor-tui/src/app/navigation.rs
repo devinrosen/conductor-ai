@@ -397,7 +397,15 @@ impl App {
                 ref mut selected,
                 ..
             } => {
-                wrap_decrement(selected, items.len());
+                let len = items.len();
+                if len == 0 {
+                    return;
+                }
+                let mut idx = selected.checked_sub(1).unwrap_or(len - 1);
+                while !items[idx].is_selectable() {
+                    idx = idx.checked_sub(1).unwrap_or(len - 1);
+                }
+                *selected = idx;
                 return;
             }
             Modal::TemplatePicker {
@@ -550,7 +558,19 @@ impl App {
                 ref mut selected,
                 ..
             } => {
-                wrap_increment(selected, items.len());
+                let len = items.len();
+                if len == 0 {
+                    return;
+                }
+                let mut idx = if *selected + 1 >= len {
+                    0
+                } else {
+                    *selected + 1
+                };
+                while !items[idx].is_selectable() {
+                    idx = if idx + 1 >= len { 0 } else { idx + 1 };
+                }
+                *selected = idx;
                 return;
             }
             Modal::TemplatePicker {
@@ -1085,6 +1105,7 @@ mod tests {
             description: String::new(),
             trigger: conductor_core::workflow::WorkflowTrigger::Manual,
             targets: vec![],
+            group: None,
             inputs: vec![],
             body: vec![],
             always: vec![],

@@ -10,6 +10,7 @@ fn make_script_def(run: &str) -> WorkflowDef {
         description: String::new(),
         trigger: WorkflowTrigger::Manual,
         targets: vec![],
+        group: None,
         inputs: vec![],
         body: vec![WorkflowNode::Script(ScriptNode {
             name: "my-step".to_string(),
@@ -31,6 +32,7 @@ fn make_always_script_def(run: &str) -> WorkflowDef {
         description: String::new(),
         trigger: WorkflowTrigger::Manual,
         targets: vec![],
+        group: None,
         inputs: vec![],
         body: vec![],
         always: vec![WorkflowNode::Script(ScriptNode {
@@ -501,6 +503,7 @@ fn test_validate_script_steps_nested_in_if_block() {
         description: String::new(),
         trigger: WorkflowTrigger::Manual,
         targets: vec![],
+        group: None,
         inputs: vec![],
         body: vec![WorkflowNode::If(IfNode {
             condition: Condition::StepMarker {
@@ -911,6 +914,7 @@ workflow parent {
                 description: String::new(),
                 trigger: WorkflowTrigger::Manual,
                 targets: vec![],
+                group: None,
                 inputs: vec![],
                 body: vec![WorkflowNode::Script(ScriptNode {
                     name: "run-checks".to_string(),
