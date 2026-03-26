@@ -374,10 +374,21 @@ impl App {
                             if features.is_empty() && orphans.is_empty() {
                                 return Ok(Vec::new());
                             }
-                            let stale_days = config.defaults.stale_feature_days;
+                            let stale_threshold = config.defaults.stale_feature_days;
+                            let features_with_stale: Vec<(conductor_core::feature::FeatureRow, Option<u64>)> = features
+                                .into_iter()
+                                .map(|f| {
+                                    let sd = if FeatureManager::is_stale(&f, stale_threshold) {
+                                        FeatureManager::stale_days(&f)
+                                    } else {
+                                        None
+                                    };
+                                    (f, sd)
+                                })
+                                .collect();
                             Ok::<Vec<BranchPickerItem>, String>(
                                 BranchPickerItem::from_features_and_orphans_with_stale(
-                                    &features, &orphans, stale_days,
+                                    &features_with_stale, &orphans,
                                 ),
                             )
                         })();
@@ -839,10 +850,21 @@ impl App {
                         .list_unregistered_branches(&repo.id, &repo.default_branch)
                         .map_err(|e| format!("Failed to list unregistered branches: {e}"))?;
 
-                    let stale_days = config.defaults.stale_feature_days;
+                    let stale_threshold = config.defaults.stale_feature_days;
+                    let features_with_stale: Vec<(conductor_core::feature::FeatureRow, Option<u64>)> = features
+                        .into_iter()
+                        .map(|f| {
+                            let sd = if FeatureManager::is_stale(&f, stale_threshold) {
+                                FeatureManager::stale_days(&f)
+                            } else {
+                                None
+                            };
+                            (f, sd)
+                        })
+                        .collect();
                     Ok::<Vec<BranchPickerItem>, String>(
                         BranchPickerItem::from_features_and_orphans_with_stale(
-                            &features, &orphans, stale_days,
+                            &features_with_stale, &orphans,
                         ),
                     )
                 })();

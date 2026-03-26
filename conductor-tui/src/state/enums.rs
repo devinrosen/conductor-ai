@@ -288,16 +288,13 @@ pub struct BranchPickerItem {
 }
 
 impl BranchPickerItem {
-    /// Build the picker list from features and unregistered (orphan) branches.
+    /// Build the picker list from features (each paired with its pre-computed stale days)
+    /// and unregistered (orphan) branches.
     /// The first entry is always `None` (repo default branch sentinel).
-    /// When `stale_threshold_days > 0`, computes staleness badges for features.
     pub fn from_features_and_orphans_with_stale(
-        features: &[conductor_core::feature::FeatureRow],
+        features: &[(conductor_core::feature::FeatureRow, Option<u64>)],
         orphans: &[conductor_core::feature::UnregisteredBranch],
-        stale_threshold_days: u32,
     ) -> Vec<Self> {
-        use conductor_core::feature::FeatureManager;
-
         let mut items = vec![Self {
             branch: None,
             worktree_count: 0,
@@ -305,18 +302,13 @@ impl BranchPickerItem {
             base_branch: None,
             stale_days: None,
         }];
-        for f in features {
-            let sd = if FeatureManager::is_stale(f, stale_threshold_days) {
-                FeatureManager::stale_days(f)
-            } else {
-                None
-            };
+        for (f, sd) in features {
             items.push(Self {
                 branch: Some(f.branch.clone()),
                 worktree_count: f.worktree_count,
                 ticket_count: f.ticket_count,
                 base_branch: Some(f.base_branch.clone()),
-                stale_days: sd,
+                stale_days: *sd,
             });
         }
         for orphan in orphans {
