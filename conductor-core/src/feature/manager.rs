@@ -448,10 +448,8 @@ impl<'a> FeatureManager<'a> {
             "DELETE FROM feature_tickets WHERE feature_id = ?1",
             params![feature.id],
         )?;
-        self.conn.execute(
-            "DELETE FROM features WHERE id = ?1",
-            params![feature.id],
-        )?;
+        self.conn
+            .execute("DELETE FROM features WHERE id = ?1", params![feature.id])?;
 
         Ok(())
     }
