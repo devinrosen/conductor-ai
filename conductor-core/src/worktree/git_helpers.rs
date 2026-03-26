@@ -279,6 +279,8 @@ pub(super) fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String
     let raw = String::from_utf8_lossy(&output.stdout);
     let (head_branch, base_branch, head_repo, is_fork) = parse_pr_view_output(&raw)?;
 
+    validate_branch_name(&head_branch)?;
+
     if is_fork {
         // For fork PRs: add the fork as a named remote (using the owner login)
         // and fetch from it.
@@ -339,6 +341,41 @@ pub(super) fn validate_remote_name(name: &str) -> Result<()> {
     if let Some(c) = name.chars().find(|c| unsafe_chars.contains(c)) {
         return Err(ConductorError::InvalidInput(format!(
             "fork owner name {name:?} contains unsafe character {c:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate that `name` is safe to use as a git branch name in a refspec.
+///
+/// Rejects names that are empty, start with `-` (would be parsed as a git flag),
+/// contain `..` (special refspec separator) or `@{` (reflog syntax), or contain
+/// other characters that are unsafe in git branch names.
+pub(super) fn validate_branch_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(ConductorError::InvalidInput(
+            "branch name is empty".to_string(),
+        ));
+    }
+    if name.starts_with('-') {
+        return Err(ConductorError::InvalidInput(format!(
+            "branch name {name:?} starts with '-' and would be interpreted as a git flag"
+        )));
+    }
+    if name.contains("..") {
+        return Err(ConductorError::InvalidInput(format!(
+            "branch name {name:?} contains '..' which is unsafe in git refspecs"
+        )));
+    }
+    if name.contains("@{") {
+        return Err(ConductorError::InvalidInput(format!(
+            "branch name {name:?} contains '@{{' which is unsafe in git refspecs"
+        )));
+    }
+    let unsafe_chars: &[char] = &[' ', '\t', '\n', '\\', ':', '?', '*', '[', '^', '~', '\0'];
+    if let Some(c) = name.chars().find(|c| unsafe_chars.contains(c)) {
+        return Err(ConductorError::InvalidInput(format!(
+            "branch name {name:?} contains unsafe character {c:?}"
         )));
     }
     Ok(())
