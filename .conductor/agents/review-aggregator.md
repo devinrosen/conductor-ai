@@ -27,6 +27,18 @@ Steps:
      - **Primary path**: If `entry.structured_output` is present (non-null), parse it as JSON and read `.off_diff_findings[]` from it. The reviewer schema uses `body` for the finding description — map `body` → `message` in your output.
      - **Fallback path**: If `entry.structured_output` is null or absent, attempt to parse the `context` string as JSON and extract the `off_diff_findings` array (if present).
    - Collect all off-diff findings across all reviewers into a single deduplicated list (deduplicate by `(file, line)`, keeping highest severity: `critical > warning`).
+   - Assign `labels` to each off-diff finding based on the reviewer step name and severity:
+     | Reviewer step name       | Label(s)        |
+     |--------------------------|-----------------|
+     | review-architecture      | `refactor`      |
+     | review-dry-abstraction   | `refactor`      |
+     | review-security          | `security`      |
+     | review-performance       | `enhancement`   |
+     | review-error-handling    | `bug`           |
+     | review-test-coverage     | `enhancement`   |
+     | review-db-migrations     | `bug`           |
+     Additionally, if the finding has severity `critical`, add `bug` to its labels (if not already present).
+     Each finding's `labels` field should be an array of strings (e.g. `["security", "bug"]`).
 
 2. Get the PR number:
    - If `{{pr_number}}` is set and does not contain `{{` (i.e. it was substituted), use it directly.
@@ -39,7 +51,7 @@ Steps:
    - Set `overall_approved: false` if **any** reviewer is classified as blocking in Phase 1 (i.e. has `has_review_issues` marker OR has critical/warning findings in `structured_output`). Set `overall_approved: true` only if no reviewer is blocking.
    - Populate `reviewed_by` with a comma-separated string of human-readable reviewer display names (e.g. "DB Migrations, Security, Performance") for each reviewer that ran and returned results.
    - Populate `blocking_findings` with every critical and warning finding collected across all reviewers. Include warnings here — use `severity: "warning"` for warning-level items and `severity: "critical"` for critical items. Leave the array empty if there are no blocking findings.
-   - Set `off_diff_findings` to the deduplicated list of off-diff findings collected in Phase 1 (each with `file`, `line`, `severity`, `title`, `message`, `reviewer` fields). Leave the array empty if there are none.
+   - Set `off_diff_findings` to the deduplicated list of off-diff findings collected in Phase 1 (each with `file`, `line`, `severity`, `title`, `message`, `reviewer`, `labels` fields). Leave the array empty if there are none.
 
    The script step will build the review body from `reviewed_by` and `blocking_findings`.
 
