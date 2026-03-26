@@ -1668,3 +1668,148 @@ fn test_last_worktree_activity_in_feature_row_query() {
     let f = features.iter().find(|f| f.name == "wt-activity").unwrap();
     assert_eq!(f.last_worktree_activity.as_deref(), Some(wt_created));
 }
+
+// ---------------------------------------------------------------------------
+// delete() tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_delete_active_feature_rejected() {
+    let conn = setup_db();
+    let repo_id = insert_repo(&conn);
+    insert_feature(&conn, &repo_id, "my-feat", "feat/my-feat");
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let err = mgr.delete("test-repo", "my-feat").unwrap_err();
+    assert!(
+        matches!(err, ConductorError::FeatureStillActive { .. }),
+        "expected FeatureStillActive, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_delete_nonexistent_feature() {
+    let conn = setup_db();
+    let _repo_id = insert_repo(&conn);
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    let err = mgr.delete("test-repo", "does-not-exist").unwrap_err();
+    assert!(
+        matches!(err, ConductorError::FeatureNotFound { .. }),
+        "expected FeatureNotFound, got: {err:?}"
+    );
+}
+
+#[test]
+fn test_delete_closed_feature_removes_row_and_tickets() {
+    // Use a real git repo so the git subprocess can run.
+    // The branch "feat/done-feat" is never created, so git outputs
+    // "error: branch 'feat/done-feat' not found" which is treated as a no-op.
+    let (work, _bare) = setup_git_repo();
+    let conn = setup_db();
+    let repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+    let feature_id = insert_feature(&conn, &repo_id, "done-feat", "feat/done-feat");
+
+    // Mark as closed
+    conn.execute(
+        "UPDATE features SET status = 'closed' WHERE id = ?1",
+        params![feature_id],
+    )
+    .unwrap();
+
+    // Link a ticket
+    let ticket_id = insert_ticket(&conn, &repo_id, "99");
+    conn.execute(
+        "INSERT INTO feature_tickets (feature_id, ticket_id) VALUES (?1, ?2)",
+        params![feature_id, ticket_id],
+    )
+    .unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+
+    // Branch doesn't exist locally → treated as no-op; DB deletions still happen.
+    mgr.delete("test-repo", "done-feat").unwrap();
+
+    // Feature row gone
+    let feature_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM features WHERE id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(feature_count, 0, "feature row should be deleted");
+
+    // feature_tickets rows gone
+    let ft_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM feature_tickets WHERE feature_id = ?1",
+            params![feature_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(ft_count, 0, "feature_tickets rows should be deleted");
+
+    // Underlying ticket row should still exist
+    let ticket_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM tickets WHERE id = ?1",
+            params![ticket_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(ticket_count, 1, "ticket row should be preserved");
+}
+
+#[test]
+fn test_delete_with_git_branch() {
+    let (work, _bare) = setup_git_repo();
+    let conn = setup_db();
+    let repo_id = insert_repo_at(&conn, work.path().to_str().unwrap());
+
+    // Create a local branch that is fully merged (so -d succeeds)
+    std::process::Command::new("git")
+        .args(["branch", "feat/del-feat", "main"])
+        .current_dir(work.path())
+        .output()
+        .unwrap();
+
+    insert_feature(&conn, &repo_id, "del-feat", "feat/del-feat");
+    // Mark as closed
+    conn.execute(
+        "UPDATE features SET status = 'closed' WHERE name = ?1",
+        params!["del-feat"],
+    )
+    .unwrap();
+
+    let config = Config::default();
+    let mgr = FeatureManager::new(&conn, &config);
+    mgr.delete("test-repo", "del-feat").unwrap();
+
+    // Verify branch is gone
+    let output = std::process::Command::new("git")
+        .args(["branch", "--list", "feat/del-feat"])
+        .current_dir(work.path())
+        .output()
+        .unwrap();
+    let branches = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !branches.contains("feat/del-feat"),
+        "branch should have been deleted"
+    );
+
+    // Verify DB record is gone
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM features WHERE name = 'del-feat'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0, "feature row should be gone");
+}

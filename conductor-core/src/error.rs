@@ -70,6 +70,9 @@ pub enum ConductorError {
 
     #[error("feature already exists: {name}")]
     FeatureAlreadyExists { name: String },
+
+    #[error("feature '{name}' is still active. Run `conductor feature close {repo} {name}` first")]
+    FeatureStillActive { repo: String, name: String },
 }
 
 pub type Result<T> = std::result::Result<T, ConductorError>;

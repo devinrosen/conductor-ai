@@ -87,6 +87,11 @@ pub fn handle_feature(command: FeatureCommands, conn: &Connection, config: &Conf
             mgr.close(&repo, &name)?;
             println!("Feature '{name}' closed.");
         }
+        FeatureCommands::Delete { repo, name } => {
+            let mgr = FeatureManager::new(conn, config);
+            mgr.delete(&repo, &name)?;
+            println!("Feature '{name}' deleted.");
+        }
     }
     Ok(())
 }

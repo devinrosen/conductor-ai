@@ -619,4 +619,11 @@ pub enum FeatureCommands {
         /// Feature name
         name: String,
     },
+    /// Permanently delete a closed feature (removes DB record, feature_tickets, and git branch)
+    Delete {
+        /// Repo slug
+        repo: String,
+        /// Feature name
+        name: String,
+    },
 }
