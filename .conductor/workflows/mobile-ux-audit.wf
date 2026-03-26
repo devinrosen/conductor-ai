@@ -2,7 +2,7 @@ workflow mobile-ux-audit {
   meta {
     description = "Capture mobile screenshots of all conductor-web views and run an AI-powered UX audit against 8 criteria"
     trigger     = "manual"
-    targets     = ["repo"]
+    targets     = ["repo", "worktree"]
   }
 
   script build-web {
