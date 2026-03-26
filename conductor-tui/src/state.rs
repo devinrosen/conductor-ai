@@ -2238,6 +2238,16 @@ impl AppState {
                     }
                 }
             }
+            // Fallback: resolve repo slug via worktree_id → repo_id (#1539)
+            if repo_slug == "unknown" {
+                if let Some(wt_id) = run.worktree_id.as_deref() {
+                    if let Some(wt) = self.data.worktrees.iter().find(|w| w.id == wt_id) {
+                        if let Some(&slug) = repo_slug_map.get(wt.repo_id.as_str()) {
+                            repo_slug = slug.to_string();
+                        }
+                    }
+                }
+            }
 
             groups.push((repo_slug, target_key, target_type, run));
         }
