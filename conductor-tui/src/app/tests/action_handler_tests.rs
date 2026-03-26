@@ -1222,7 +1222,12 @@ fn input_backspace_on_model_picker_non_custom_clears_model() {
     let mut app = make_app();
     let repo_mgr = conductor_core::repo::RepoManager::new(&app.conn, &app.config);
     repo_mgr
-        .register("test-repo", "/tmp/test-repo", "https://github.com/test/test-repo", None)
+        .register(
+            "test-repo",
+            "/tmp/test-repo",
+            "https://github.com/test/test-repo",
+            None,
+        )
         .expect("register repo");
 
     app.state.modal = Modal::ModelPicker {

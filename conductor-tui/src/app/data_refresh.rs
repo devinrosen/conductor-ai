@@ -178,7 +178,6 @@ impl App {
 
     /// Reload repo-scoped agent events for the currently selected repo.
     pub(super) fn reload_repo_agent_events(&mut self) {
-
         let Some(ref repo_id) = self.state.selected_repo_id else {
             self.state.data.repo_agent_events = Vec::new();
             self.state.data.repo_agent_run_info = std::collections::HashMap::new();
