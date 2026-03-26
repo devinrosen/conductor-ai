@@ -38,9 +38,7 @@ pub(super) fn build_variable_map<'a>(state: &'a ExecutionState<'_>) -> HashMap<&
     vars.insert("prior_context", prior_context);
     let prior_contexts_json = serde_json::to_string(&state.contexts).unwrap_or_default();
     vars.insert("prior_contexts", prior_contexts_json);
-    if let Some(ref feedback) = state.last_gate_feedback {
-        vars.insert("gate_feedback", feedback.clone());
-    }
+    vars.insert("gate_feedback", state.last_gate_feedback.clone().unwrap_or_default());
     // prior_output: raw JSON from the last step's structured output (if any)
     if let Some(last_output) = state
         .contexts
@@ -106,13 +104,13 @@ pub(super) fn build_agent_prompt(
         }
     }
 
-    // Template variables section
-    if !state.inputs.is_empty() {
+    // Template variables section — list ALL substituted variables, not just inputs
+    if !vars.is_empty() {
         prompt.push_str("\n\n## Template Variables\n\n");
         prompt.push_str(
             "The following template placeholders are available and have been substituted in this prompt:\n\n",
         );
-        for (key, value) in &state.inputs {
+        for (key, value) in &vars {
             prompt.push_str(&format!("- `{{{{{key}}}}}` = `{value}`\n"));
         }
     }
