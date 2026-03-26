@@ -117,12 +117,12 @@ pub fn handle_agent(command: AgentCommands, conn: &Connection, config: &Config) 
             let wt_mgr = WorktreeManager::new(conn, config);
             let wt = wt_mgr
                 .get_by_id(worktree_id)
-                .map_err(|_| anyhow::anyhow!("Could not find worktree {worktree_id}"))?;
+                .map_err(|e| anyhow::anyhow!("Could not find worktree {worktree_id}: {e}"))?;
 
             let repo_mgr = RepoManager::new(conn, config);
             let repo_obj = repo_mgr
                 .get_by_id(&wt.repo_id)
-                .map_err(|_| anyhow::anyhow!("Could not find repo for worktree {worktree_id}"))?;
+                .map_err(|e| anyhow::anyhow!("Could not find repo for worktree {worktree_id}: {e}"))?;
 
             let repo_id = &repo_obj.id;
             let remote_url = &repo_obj.remote_url;

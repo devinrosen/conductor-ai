@@ -120,13 +120,13 @@ pub fn handle_tickets(command: TicketCommands, conn: &Connection, config: &Confi
             let syncer = TicketSyncer::new(conn);
             let t = syncer
                 .get_by_source_id(&r.id, &ticket)
-                .map_err(|_| anyhow::anyhow!("Ticket not found: #{ticket}"))?;
+                .map_err(|e| anyhow::anyhow!("Ticket not found: #{ticket}: {e}"))?;
             let ticket_id = t.id;
 
             let wt_mgr = WorktreeManager::new(conn, config);
             let wt = wt_mgr
                 .get_by_slug(&r.id, &worktree)
-                .map_err(|_| anyhow::anyhow!("Worktree not found: {worktree}"))?;
+                .map_err(|e| anyhow::anyhow!("Worktree not found: {worktree}: {e}"))?;
 
             if wt.ticket_id.is_some() {
                 anyhow::bail!("Worktree '{worktree}' already has a linked ticket");

@@ -219,7 +219,7 @@ pub fn handle_workflow(
                     run_id_notify: None,
                     triggered_by_hook: false,
                     conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                });
+                })?;
             } else if let Some(run_id) = workflow_run {
                 // Workflow-run targeted run (e.g. postmortem workflows)
                 let wf_mgr = WorkflowManager::new(conn);
@@ -262,7 +262,7 @@ pub fn handle_workflow(
                     run_id_notify: None,
                     triggered_by_hook: false,
                     conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                });
+                })?;
             } else if let Some(ticket_id) = ticket {
                 let syncer = TicketSyncer::new(conn);
                 let ticket = syncer.get_by_id(&ticket_id)?;
@@ -302,7 +302,7 @@ pub fn handle_workflow(
                     run_id_notify: None,
                     triggered_by_hook: false,
                     conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                });
+                })?;
             } else {
                 // Normal registered repo/worktree run
                 let repo_slug = repo.expect("repo is required when --pr is not used");
@@ -346,7 +346,7 @@ pub fn handle_workflow(
                     run_id_notify: None,
                     triggered_by_hook: false,
                     conductor_bin_dir: conductor_core::workflow::resolve_conductor_bin_dir(),
-                });
+                })?;
             }
         }
         WorkflowCommands::RunShow { id } => {
@@ -875,15 +875,12 @@ pub fn handle_workflow(
     Ok(())
 }
 
-/// Execute a workflow and report the result, exiting on failure.
-fn run_and_report(input: &conductor_core::workflow::WorkflowExecInput) {
-    match conductor_core::workflow::execute_workflow(input) {
-        Ok(result) => report_workflow_result(result),
-        Err(e) => {
-            eprintln!("Workflow execution failed: {e}");
-            std::process::exit(1);
-        }
-    }
+/// Execute a workflow and report the result.
+fn run_and_report(input: &conductor_core::workflow::WorkflowExecInput) -> Result<()> {
+    let result = conductor_core::workflow::execute_workflow(input)
+        .map_err(|e| anyhow::anyhow!("Workflow execution failed: {e}"))?;
+    report_workflow_result(result);
+    Ok(())
 }
 
 /// Shared gate operation: find the waiting gate, resolve the current user,
