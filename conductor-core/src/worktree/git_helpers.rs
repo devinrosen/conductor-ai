@@ -284,6 +284,8 @@ pub(super) fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String
         // and fetch from it.
         let fork_owner = head_repo.split('/').next().unwrap_or(&head_repo);
 
+        validate_remote_name(fork_owner)?;
+
         // Look up the fork's clone URL via gh api
         let url_output = check_gh_output(
             Command::new("gh")
@@ -316,6 +318,30 @@ pub(super) fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String
     }
 
     Ok((head_branch, base_branch))
+}
+
+/// Validate that `name` is safe to use as a git remote name.
+///
+/// Rejects names that are empty, start with `-` (would be parsed as a git flag),
+/// or contain characters that are unsafe in git remote names.
+pub(super) fn validate_remote_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(ConductorError::GhCli(
+            "fork owner name is empty".to_string(),
+        ));
+    }
+    if name.starts_with('-') {
+        return Err(ConductorError::GhCli(format!(
+            "fork owner name {name:?} starts with '-' and would be interpreted as a git flag"
+        )));
+    }
+    let unsafe_chars: &[char] = &[' ', '\t', '\n', '\\', ':', '?', '*', '[', '^', '~', '\0'];
+    if let Some(c) = name.chars().find(|c| unsafe_chars.contains(c)) {
+        return Err(ConductorError::GhCli(format!(
+            "fork owner name {name:?} contains unsafe character {c:?}"
+        )));
+    }
+    Ok(())
 }
 
 /// Detect package manager and install dependencies if applicable.
