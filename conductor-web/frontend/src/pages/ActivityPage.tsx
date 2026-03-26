@@ -40,19 +40,23 @@ export function ActivityPage() {
   const [registerRepoOpen, setRegisterRepoOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const [feedbackText, setFeedbackText] = useState<Record<string, string>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const refreshWorktrees = useCallback(() => setWtTick((n) => n + 1), []);
 
   useEffect(() => {
     if (repos.length === 0) return;
-    const repoSlugById: Record<string, string> = {};
-    for (const r of repos) repoSlugById[r.id] = r.slug;
 
-    const worktreesP = api.listAllWorktrees();
+    const fetchData = async () => {
+      const repoSlugById: Record<string, string> = {};
+      for (const r of repos) repoSlugById[r.id] = r.slug;
 
-    // Render worktrees as soon as they arrive (don't wait for runs)
-    worktreesP.then((allWorktrees) => {
+      const [allWorktrees, runs] = await Promise.all([
+        api.listAllWorktrees(),
+        api.latestRunsByWorktree(),
+      ]);
+
       const counts: Record<string, number> = {};
       const active: (Worktree & WorktreeContext)[] = [];
       for (const wt of allWorktrees) {
@@ -65,35 +69,35 @@ export function ActivityPage() {
       }
       setWorktreeCounts(counts);
       setActiveWorktrees(active);
-    });
-
-    // Runs + feedback: independent of worktree display
-    api.latestRunsByWorktree().then((runs) => {
       setLatestRuns(runs);
 
-      worktreesP.then((allWorktrees) => {
-        const feedbackWorktrees: { worktreeId: string; ctx: WorktreeContext & { branch: string; worktreeId: string } }[] = [];
-        for (const wt of allWorktrees) {
-          if (wt.status !== "active") continue;
-          const repoId = wt.repo_id;
-          const slug = repoSlugById[repoId] ?? "";
-          const run = runs[wt.id];
-          if (run && run.status === "waiting_for_feedback") {
-            feedbackWorktrees.push({ worktreeId: wt.id, ctx: { repoId, repoSlug: slug, branch: wt.branch, worktreeId: wt.id } });
-          }
+      const feedbackWorktrees: { worktreeId: string; ctx: WorktreeContext & { branch: string; worktreeId: string } }[] = [];
+      for (const wt of allWorktrees) {
+        if (wt.status !== "active") continue;
+        const repoId = wt.repo_id;
+        const slug = repoSlugById[repoId] ?? "";
+        const run = runs[wt.id];
+        if (run && run.status === "waiting_for_feedback") {
+          feedbackWorktrees.push({ worktreeId: wt.id, ctx: { repoId, repoSlug: slug, branch: wt.branch, worktreeId: wt.id } });
         }
-        if (feedbackWorktrees.length > 0) {
-          Promise.all(
-            feedbackWorktrees.map(({ worktreeId, ctx }) =>
-              api.getPendingFeedback(worktreeId).then((fb) => fb ? { feedback: fb, ctx } : null).catch(() => null)
-            )
-          ).then((results) => {
-            setPendingFeedback(results.filter(Boolean) as typeof pendingFeedback);
-          });
-        } else {
-          setPendingFeedback([]);
-        }
-      });
+      }
+
+      if (feedbackWorktrees.length > 0) {
+        const results = await Promise.all(
+          feedbackWorktrees.map(({ worktreeId, ctx }) =>
+            api.getPendingFeedback(worktreeId).then((fb) => fb ? { feedback: fb, ctx } : null).catch(() => null)
+          )
+        );
+        setPendingFeedback(results.filter(Boolean) as typeof pendingFeedback);
+      } else {
+        setPendingFeedback([]);
+      }
+
+      setLoadError(null);
+    };
+
+    fetchData().catch((err: unknown) => {
+      setLoadError(err instanceof Error ? err.message : "Failed to load activity data");
     });
   }, [repos, wtTick]);
 
@@ -183,6 +187,10 @@ export function ActivityPage() {
           <RegisterRepoForm onCreated={refreshRepos} open={registerRepoOpen} onOpenChange={setRegisterRepoOpen} />
         </div>
       </div>
+
+      {loadError && (
+        <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{loadError}</div>
+      )}
 
       {actionError && (
         <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{actionError}</div>

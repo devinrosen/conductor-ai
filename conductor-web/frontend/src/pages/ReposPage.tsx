@@ -16,18 +16,25 @@ export function ReposPage() {
   const { repos, loading: reposLoading, refreshRepos } = useRepos();
   const [worktreeCounts, setWorktreeCounts] = useState<Record<string, number>>({});
   const [tick, setTick] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [registerRepoOpen, setRegisterRepoOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
 
   const refresh = useCallback(() => setTick((n) => n + 1), []);
 
   useEffect(() => {
-    api.listAllWorktrees().then((allWorktrees) => {
+    const fetchData = async () => {
+      const allWorktrees = await api.listAllWorktrees();
       const counts: Record<string, number> = {};
       for (const wt of allWorktrees) {
         counts[wt.repo_id] = (counts[wt.repo_id] ?? 0) + 1;
       }
       setWorktreeCounts(counts);
+      setLoadError(null);
+    };
+
+    fetchData().catch((err: unknown) => {
+      setLoadError(err instanceof Error ? err.message : "Failed to load repos data");
     });
   }, [repos, tick]);
 
@@ -68,6 +75,10 @@ export function ReposPage() {
         onClose={() => setDiscoverOpen(false)}
         onImported={refreshRepos}
       />
+
+      {loadError && (
+        <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{loadError}</div>
+      )}
 
       {repos.length === 0 ? (
         <EmptyState message="The station is quiet. Register a repo to get the trains running." />
