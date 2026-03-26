@@ -100,6 +100,20 @@ pub(super) struct ExecutionState<'a> {
     pub conductor_bin_dir: Option<std::path::PathBuf>,
 }
 
+impl ExecutionState<'_> {
+    /// Returns the prefix used for tmux window names: the worktree slug when
+    /// available, or the first 8 characters of the workflow run ID otherwise.
+    pub(super) fn window_prefix(&self) -> &str {
+        if self.worktree_slug.is_empty() {
+            self.workflow_run_id
+                .get(..8)
+                .unwrap_or(&self.workflow_run_id)
+        } else {
+            self.worktree_slug.as_str()
+        }
+    }
+}
+
 /// Resolve a schema by name using the standard search order.
 pub(super) fn resolve_schema(state: &ExecutionState<'_>, name: &str) -> Result<OutputSchema> {
     let schema_ref = crate::schema_config::SchemaRef::from_str_value(name);

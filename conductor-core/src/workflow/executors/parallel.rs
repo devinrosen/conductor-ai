@@ -141,14 +141,7 @@ pub fn execute_parallel(
         )?;
         state.wf_mgr.set_step_parallel_group(&step_id, &group_id)?;
 
-        let window_prefix = if state.worktree_slug.is_empty() {
-            state
-                .workflow_run_id
-                .get(..8)
-                .unwrap_or(&state.workflow_run_id)
-        } else {
-            state.worktree_slug.as_str()
-        };
+        let window_prefix = state.window_prefix();
         let window_name =
             sanitize_tmux_name(&format!("{}-wf-{}-{}", window_prefix, agent_label, i));
         let child_run = state.agent_mgr.create_child_run(
