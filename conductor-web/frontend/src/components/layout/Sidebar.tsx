@@ -22,8 +22,8 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       className={`
         fixed inset-y-0 left-0 z-40 w-60 shrink-0 border-r border-gray-200 bg-white flex flex-col
         transform transition-transform duration-200 ease-in-out
-        ${open ? "translate-x-0" : "-translate-x-full"}
-        md:static md:translate-x-0 md:inset-auto
+        ${open ? "translate-x-0 pointer-events-auto" : "-translate-x-full pointer-events-none"}
+        md:static md:translate-x-0 md:inset-auto md:pointer-events-auto
       `}
     >
       <div className="px-4 py-4 border-b border-gray-200 flex items-center justify-between">
