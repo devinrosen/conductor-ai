@@ -360,10 +360,10 @@ fn target_filter_post_create_maps_to_worktree() {
 
 #[test]
 fn branch_picker_item_populates_stale_days() {
-    use conductor_core::feature::{FeatureRow, FeatureStatus};
+    use conductor_core::feature::{FeatureManager, FeatureRow, FeatureStatus};
 
     let old_ts = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
-    let features = vec![FeatureRow {
+    let feature = FeatureRow {
         id: "f1".to_string(),
         name: "old-feature".to_string(),
         branch: "feat/old".to_string(),
@@ -374,9 +374,16 @@ fn branch_picker_item_populates_stale_days() {
         ticket_count: 0,
         last_commit_at: Some(old_ts),
         last_worktree_activity: None,
-    }];
+    };
+    let stale_threshold: u32 = 14;
+    let sd = if FeatureManager::is_stale(&feature, stale_threshold) {
+        FeatureManager::stale_days(&feature)
+    } else {
+        None
+    };
+    let features_with_stale = vec![(feature, sd)];
 
-    let items = BranchPickerItem::from_features_and_orphans_with_stale(&features, &[], 14);
+    let items = BranchPickerItem::from_features_and_orphans_with_stale(&features_with_stale, &[]);
     assert!(items[0].stale_days.is_none());
     let sd = items[1].stale_days.expect("should be stale");
     assert!(sd >= 29, "expected ~30 stale days, got {sd}");
