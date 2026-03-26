@@ -100,12 +100,17 @@ fn main() {
                     // Restrict to Tauri webview origins only.
                     // - tauri://localhost  → macOS / Linux (Tauri custom protocol)
                     // - http://tauri.localhost → Windows (localhost-mapped protocol)
+                    // In debug builds, also allow the Vite dev server origin.
                     // The server only binds on 127.0.0.1, but a browser tab on any
                     // origin could still reach it without this restriction.
-                    let router = api_router_with_cors(vec![
+                    #[allow(unused_mut)]
+                    let mut allowed_origins = vec![
                         HeaderValue::from_static("tauri://localhost"),
                         HeaderValue::from_static("http://tauri.localhost"),
-                    ])
+                    ];
+                    #[cfg(debug_assertions)]
+                    allowed_origins.push(HeaderValue::from_static("http://localhost:5173"));
+                    let router = api_router_with_cors(allowed_origins)
                     .with_state(web_state);
 
                     if let Err(e) = axum::serve(listener, router).await {
