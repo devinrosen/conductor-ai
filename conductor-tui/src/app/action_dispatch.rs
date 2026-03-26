@@ -896,31 +896,8 @@ impl App {
                     }
                 }
             }
-            Action::RepoAgentLaunched { result } => {
-                self.state.modal = Modal::None;
-                match result {
-                    Ok(msg) => {
-                        self.state.status_message = Some(msg);
-                        self.refresh_data();
-                        self.reload_repo_agent_events();
-                    }
-                    Err(e) => {
-                        self.state.modal = Modal::Error { message: e };
-                    }
-                }
-            }
-            Action::RepoAgentStopComplete { result } => {
-                self.state.modal = Modal::None;
-                match result {
-                    Ok(msg) => {
-                        self.state.status_message = Some(msg);
-                        self.refresh_data();
-                        self.reload_repo_agent_events();
-                    }
-                    Err(e) => {
-                        self.state.modal = Modal::Error { message: e };
-                    }
-                }
+            Action::RepoAgentLaunched { result } | Action::RepoAgentStopComplete { result } => {
+                self.handle_repo_agent_result(result);
             }
             Action::AgentStopComplete { result } => {
                 self.state.modal = Modal::None;
@@ -1046,5 +1023,20 @@ impl App {
             }
         }
         true
+    }
+
+    /// Handle the result of a repo-scoped agent launch or stop operation.
+    fn handle_repo_agent_result(&mut self, result: Result<String, String>) {
+        self.state.modal = Modal::None;
+        match result {
+            Ok(msg) => {
+                self.state.status_message = Some(msg);
+                self.refresh_data();
+                self.reload_repo_agent_events();
+            }
+            Err(e) => {
+                self.state.modal = Modal::Error { message: e };
+            }
+        }
     }
 }

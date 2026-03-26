@@ -1213,3 +1213,37 @@ fn action_move_up_dispatches() {
     app.handle_action(Action::MoveUp);
     assert_eq!(app.state.dashboard_index, 0);
 }
+
+#[test]
+fn input_backspace_on_model_picker_non_custom_clears_model() {
+    use crate::state::InputAction;
+
+    // Set up a repo so SetRepoModel has something to work with
+    let mut app = make_app();
+    let repo_mgr = conductor_core::repo::RepoManager::new(&app.conn, &app.config);
+    repo_mgr
+        .register("test-repo", "/tmp/test-repo", "https://github.com/test/test-repo", None)
+        .expect("register repo");
+
+    app.state.modal = Modal::ModelPicker {
+        context_label: "test".into(),
+        effective_default: Some("claude-sonnet-4-5-20250514".into()),
+        effective_source: "global config".into(),
+        selected: 0,
+        custom_input: String::new(),
+        custom_active: false,
+        suggested: None,
+        on_submit: InputAction::SetRepoModel {
+            slug: "test-repo".into(),
+        },
+        allow_default: false,
+    };
+
+    app.handle_action(Action::InputBackspace);
+
+    // Modal should be dismissed (not ModelPicker anymore)
+    assert!(
+        !matches!(app.state.modal, Modal::ModelPicker { .. }),
+        "ModelPicker should be dismissed after Backspace in non-custom mode"
+    );
+}

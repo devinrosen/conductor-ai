@@ -1,9 +1,33 @@
-use conductor_core::agent::AgentManager;
+use conductor_core::agent::{AgentManager, AgentRun, AgentRunEvent};
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::TicketSyncer;
 use conductor_core::worktree::WorktreeManager;
 
 use super::App;
+
+/// Build fallback `AgentRunEvent`s by parsing log files for runs that lack DB event records.
+fn build_fallback_events(runs: &[AgentRun]) -> Vec<AgentRunEvent> {
+    use conductor_core::agent::parse_agent_log;
+
+    let mut fallback = Vec::new();
+    for run in runs {
+        if let Some(ref path) = run.log_file {
+            let events = parse_agent_log(path);
+            for ev in events {
+                fallback.push(AgentRunEvent {
+                    id: conductor_core::new_id(),
+                    run_id: run.id.clone(),
+                    kind: ev.kind,
+                    summary: ev.summary,
+                    started_at: run.started_at.clone(),
+                    ended_at: None,
+                    metadata: None,
+                });
+            }
+        }
+    }
+    fallback
+}
 
 impl App {
     pub(super) fn refresh_data(&mut self) {
@@ -58,8 +82,6 @@ impl App {
     }
 
     pub(super) fn reload_agent_events(&mut self) {
-        use conductor_core::agent::{parse_agent_log, AgentManager, AgentRunEvent};
-
         use crate::state::AgentTotals;
 
         let Some(ref wt_id) = self.state.selected_worktree_id else {
@@ -105,25 +127,7 @@ impl App {
         let all_events = if !db_events.is_empty() {
             db_events
         } else {
-            // Backward compat: parse log files and wrap as AgentRunEvent without timing
-            let mut fallback = Vec::new();
-            for run in &runs {
-                if let Some(ref path) = run.log_file {
-                    let events = parse_agent_log(path);
-                    for ev in events {
-                        fallback.push(AgentRunEvent {
-                            id: conductor_core::new_id(),
-                            run_id: run.id.clone(),
-                            kind: ev.kind,
-                            summary: ev.summary,
-                            started_at: run.started_at.clone(),
-                            ended_at: None,
-                            metadata: None,
-                        });
-                    }
-                }
-            }
-            fallback
+            build_fallback_events(&runs)
         };
 
         // Build run_id -> (run_number, model, started_at) map for boundary headers
@@ -174,7 +178,6 @@ impl App {
 
     /// Reload repo-scoped agent events for the currently selected repo.
     pub(super) fn reload_repo_agent_events(&mut self) {
-        use conductor_core::agent::{AgentManager, AgentRunEvent};
 
         let Some(ref repo_id) = self.state.selected_repo_id else {
             self.state.data.repo_agent_events = Vec::new();
@@ -192,24 +195,7 @@ impl App {
         let all_events = if !db_events.is_empty() {
             db_events
         } else {
-            let mut fallback = Vec::new();
-            for run in &runs {
-                if let Some(ref path) = run.log_file {
-                    let events = conductor_core::agent::parse_agent_log(path);
-                    for ev in events {
-                        fallback.push(AgentRunEvent {
-                            id: conductor_core::new_id(),
-                            run_id: run.id.clone(),
-                            kind: ev.kind,
-                            summary: ev.summary,
-                            started_at: run.started_at.clone(),
-                            ended_at: None,
-                            metadata: None,
-                        });
-                    }
-                }
-            }
-            fallback
+            build_fallback_events(&runs)
         };
 
         // Build run_id -> (run_number, model, started_at) map for boundary headers
@@ -248,8 +234,15 @@ impl App {
         };
 
         let mgr = AgentManager::new(&self.conn);
-        let latest = mgr.latest_repo_scoped(repo_id).ok().flatten();
-        self.state.data.pending_repo_feedback =
-            latest.and_then(|run| mgr.pending_feedback_for_run(&run.id).ok().flatten());
+        let latest = mgr.latest_repo_scoped(repo_id).unwrap_or_else(|e| {
+            tracing::warn!("failed to load latest repo-scoped run for {repo_id}: {e}");
+            None
+        });
+        self.state.data.pending_repo_feedback = latest.and_then(|run| {
+            mgr.pending_feedback_for_run(&run.id).unwrap_or_else(|e| {
+                tracing::warn!("failed to load pending repo feedback for {}: {e}", run.id);
+                None
+            })
+        });
     }
 }
