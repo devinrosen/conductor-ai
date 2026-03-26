@@ -754,8 +754,7 @@ impl<'a> WorktreeManager<'a> {
 
         let now = Utc::now().to_rfc3339();
         let mut cleaned = 0usize;
-        let mut pruned_repos: std::collections::HashSet<&str> =
-            std::collections::HashSet::new();
+        let mut pruned_repos: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
         for row in &rows {
             let [wt_id, branch, wt_path, repo_path, _remote_url, repo_id, base_branch] = row;
