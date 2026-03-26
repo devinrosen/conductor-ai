@@ -46,27 +46,26 @@ export function ActivityPage() {
 
   useEffect(() => {
     if (repos.length === 0) return;
+    const repoSlugById: Record<string, string> = {};
+    for (const r of repos) repoSlugById[r.id] = r.slug;
+
     Promise.all([
-      Promise.all(
-        repos.map((r) =>
-          api.listWorktrees(r.id).then((wts) => ({ repoId: r.id, slug: r.slug, wts })),
-        ),
-      ),
+      api.listAllWorktrees(),
       api.latestRunsByWorktree(),
-    ]).then(([results, runs]) => {
+    ]).then(([allWorktrees, runs]) => {
       const counts: Record<string, number> = {};
       const active: (Worktree & WorktreeContext)[] = [];
       const feedbackWorktrees: { worktreeId: string; ctx: WorktreeContext & { branch: string; worktreeId: string } }[] = [];
 
-      for (const { repoId, slug, wts } of results) {
-        counts[repoId] = wts.length;
-        for (const wt of wts) {
-          if (wt.status === "active") {
-            active.push({ ...wt, repoId, repoSlug: slug });
-            const run = (runs as Record<string, AgentRun>)[wt.id];
-            if (run && run.status === "waiting_for_feedback") {
-              feedbackWorktrees.push({ worktreeId: wt.id, ctx: { repoId, repoSlug: slug, branch: wt.branch, worktreeId: wt.id } });
-            }
+      for (const wt of allWorktrees) {
+        const repoId = wt.repo_id;
+        const slug = repoSlugById[repoId] ?? "";
+        counts[repoId] = (counts[repoId] ?? 0) + 1;
+        if (wt.status === "active") {
+          active.push({ ...wt, repoId, repoSlug: slug });
+          const run = (runs as Record<string, AgentRun>)[wt.id];
+          if (run && run.status === "waiting_for_feedback") {
+            feedbackWorktrees.push({ worktreeId: wt.id, ctx: { repoId, repoSlug: slug, branch: wt.branch, worktreeId: wt.id } });
           }
         }
       }
