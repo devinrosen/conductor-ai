@@ -1,6 +1,7 @@
 import { test } from "@playwright/test";
 import * as path from "path";
 import * as fs from "fs";
+import { fileURLToPath } from "url";
 
 /**
  * Screenshot capture harness for mobile UX audits.
@@ -11,6 +12,9 @@ import * as fs from "fs";
  *
  * Screenshots are saved to SCREENSHOT_OUTPUT_DIR (env) or a default location.
  */
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const SCREENSHOT_DIR =
   process.env.SCREENSHOT_OUTPUT_DIR ||

@@ -182,7 +182,7 @@ export function IssueSourcesSection({
       {loading ? (
         <LoadingSpinner />
       ) : sources.length === 0 ? (
-        <EmptyState message="No issue sources configured" />
+        <EmptyState message="No ticket windows open. Configure an issue source to start boarding." />
       ) : (
         <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
           <table className="w-full text-sm">
