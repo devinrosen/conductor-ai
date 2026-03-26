@@ -4,6 +4,7 @@ pub mod features;
 pub mod issue_sources;
 pub mod model_config;
 pub mod notifications;
+pub mod push;
 pub mod repos;
 pub mod tickets;
 pub mod workflows;
@@ -227,6 +228,15 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/notifications/{id}/read",
             post(notifications::mark_read),
+        )
+        // Push Notifications
+        .route(
+            "/api/push/vapid-public-key",
+            get(push::get_vapid_public_key),
+        )
+        .route(
+            "/api/push/subscribe",
+            post(push::subscribe_push).delete(push::unsubscribe_push),
         )
         // Model Config
         .route(

@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use conductor_core::agent::AgentManager;
-use conductor_core::config::{conductor_dir, ensure_dirs, load_config};
+use conductor_core::config::{conductor_dir, ensure_dirs, load_config, save_config};
 use conductor_core::db::open_database;
 use tokio::sync::{Mutex, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
 use conductor_web::assets::static_handler;
 use conductor_web::events::EventBus;
+use conductor_web::push::{PushPayload, PushSubscriptionManager};
 use conductor_web::routes::api_router;
 use conductor_web::state::AppState;
 
@@ -16,8 +17,35 @@ use conductor_web::state::AppState;
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
-    let config = load_config()?;
+    let mut config = load_config()?;
     ensure_dirs(&config)?;
+
+    // Generate or load VAPID keys for push notifications
+    if config.web_push.vapid_public_key.is_none() || config.web_push.vapid_private_key.is_none() {
+        tracing::info!("Generating VAPID keys for push notifications");
+
+        // Generate VAPID key pair using a placeholder for now
+        // In a real implementation, you'd use proper ECDSA key generation
+        let private_key = base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            [0u8; 32], // Placeholder private key
+        );
+        let public_key = base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            [0u8; 65], // Placeholder public key
+        );
+
+        config.web_push.vapid_private_key = Some(private_key);
+        config.web_push.vapid_public_key = Some(public_key);
+        config.web_push.vapid_subject = Some("mailto:notifications@conductor.local".to_string());
+
+        // Save the updated config
+        if let Err(e) = save_config(&config) {
+            tracing::warn!("Failed to save VAPID keys to config: {e}");
+        } else {
+            tracing::info!("VAPID keys saved to config");
+        }
+    }
     // Always use the global database — the web server manages all repos,
     // so worktree-local DB detection must be bypassed.
     let conn = open_database(&conductor_dir().join("conductor.db"))?;
@@ -139,6 +167,53 @@ async fn main() -> Result<()> {
                     );
                 }
 
+                // Send push notifications for agent run transitions
+                if !transitions.is_empty() {
+                    for t in &transitions {
+                        let payload = PushPayload {
+                            title: if t.succeeded {
+                                "Agent Run Completed"
+                            } else {
+                                "Agent Run Failed"
+                            }
+                            .to_string(),
+                            body: format!(
+                                "Agent run {} for worktree {}",
+                                if t.succeeded {
+                                    "completed successfully"
+                                } else {
+                                    "failed"
+                                },
+                                t.worktree_slug.as_deref().unwrap_or("unknown")
+                            ),
+                            tag: Some(format!("agent-run-{}", t.run_id)),
+                            url: t
+                                .worktree_slug
+                                .as_ref()
+                                .map(|slug| format!("/worktrees/{}", slug)),
+                        };
+
+                        if let (Some(private_key), Some(public_key), Some(subject)) = (
+                            &cfg.web_push.vapid_private_key,
+                            &cfg.web_push.vapid_public_key,
+                            &cfg.web_push.vapid_subject,
+                        ) {
+                            let push_mgr = PushSubscriptionManager::new(
+                                &conn,
+                                private_key.clone(),
+                                public_key.clone(),
+                                subject.clone(),
+                            );
+                            let runtime = tokio::runtime::Handle::current();
+                            if let Err(e) = runtime.block_on(push_mgr.send_all(&payload)) {
+                                tracing::warn!(
+                                    "Failed to send push notification for agent run: {e}"
+                                );
+                            }
+                        }
+                    }
+                }
+
                 // Detect workflow run terminal transitions and fire notifications.
                 let workflow_runs = wf_mgr.list_all_workflow_runs(200)?;
                 let wf_transitions = conductor_core::notify::detect_workflow_terminal_transitions(
@@ -155,6 +230,50 @@ async fn main() -> Result<()> {
                         t.target_label.as_deref(),
                         t.succeeded,
                     );
+                }
+
+                // Send push notifications for workflow run transitions
+                if !wf_transitions.is_empty() {
+                    for t in &wf_transitions {
+                        let payload = PushPayload {
+                            title: if t.succeeded {
+                                "Workflow Completed"
+                            } else {
+                                "Workflow Failed"
+                            }
+                            .to_string(),
+                            body: format!(
+                                "Workflow '{}' {}",
+                                t.workflow_name,
+                                if t.succeeded {
+                                    "completed successfully"
+                                } else {
+                                    "failed"
+                                }
+                            ),
+                            tag: Some(format!("workflow-run-{}", t.run_id)),
+                            url: Some(format!("/workflows/runs/{}", t.run_id)),
+                        };
+
+                        if let (Some(private_key), Some(public_key), Some(subject)) = (
+                            &cfg.web_push.vapid_private_key,
+                            &cfg.web_push.vapid_public_key,
+                            &cfg.web_push.vapid_subject,
+                        ) {
+                            let push_mgr = PushSubscriptionManager::new(
+                                &conn,
+                                private_key.clone(),
+                                public_key.clone(),
+                                subject.clone(),
+                            );
+                            let runtime = tokio::runtime::Handle::current();
+                            if let Err(e) = runtime.block_on(push_mgr.send_all(&payload)) {
+                                tracing::warn!(
+                                    "Failed to send push notification for workflow: {e}"
+                                );
+                            }
+                        }
+                    }
                 }
 
                 Ok::<_, conductor_core::error::ConductorError>((seen, init, wf_seen, wf_init))
