@@ -8,7 +8,7 @@ use crate::workflow::engine::{
 };
 use crate::workflow::helpers::find_max_completed_while_iteration;
 
-pub(crate) fn eval_condition(state: &ExecutionState<'_>, condition: &Condition) -> bool {
+pub fn eval_condition(state: &ExecutionState<'_>, condition: &Condition) -> bool {
     match condition {
         Condition::StepMarker { step, marker } => state
             .step_results
@@ -23,7 +23,7 @@ pub(crate) fn eval_condition(state: &ExecutionState<'_>, condition: &Condition) 
     }
 }
 
-pub(crate) fn execute_if(state: &mut ExecutionState<'_>, node: &IfNode) -> Result<()> {
+pub fn execute_if(state: &mut ExecutionState<'_>, node: &IfNode) -> Result<()> {
     let condition_met = eval_condition(state, &node.condition);
 
     if condition_met {
@@ -36,7 +36,7 @@ pub(crate) fn execute_if(state: &mut ExecutionState<'_>, node: &IfNode) -> Resul
     Ok(())
 }
 
-pub(crate) fn execute_unless(state: &mut ExecutionState<'_>, node: &UnlessNode) -> Result<()> {
+pub fn execute_unless(state: &mut ExecutionState<'_>, node: &UnlessNode) -> Result<()> {
     let condition_met = eval_condition(state, &node.condition);
 
     if !condition_met {
@@ -49,7 +49,7 @@ pub(crate) fn execute_unless(state: &mut ExecutionState<'_>, node: &UnlessNode) 
     Ok(())
 }
 
-pub(crate) fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) -> Result<()> {
+pub fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) -> Result<()> {
     // On resume, determine the last completed iteration so we can fast-forward
     let start_iteration = if state.resume_ctx.is_some() {
         find_max_completed_while_iteration(state, node)
@@ -124,7 +124,7 @@ pub(crate) fn execute_while(state: &mut ExecutionState<'_>, node: &WhileNode) ->
     Ok(())
 }
 
-pub(crate) fn execute_do_while(state: &mut ExecutionState<'_>, node: &DoWhileNode) -> Result<()> {
+pub fn execute_do_while(state: &mut ExecutionState<'_>, node: &DoWhileNode) -> Result<()> {
     let mut iteration = 0u32;
     let mut prev_marker_sets: Vec<HashSet<String>> = Vec::new();
 
@@ -193,7 +193,7 @@ pub(crate) fn execute_do_while(state: &mut ExecutionState<'_>, node: &DoWhileNod
     Ok(())
 }
 
-pub(crate) fn execute_do(state: &mut ExecutionState<'_>, node: &DoNode) -> Result<()> {
+pub fn execute_do(state: &mut ExecutionState<'_>, node: &DoNode) -> Result<()> {
     tracing::info!(
         "do block: executing {} body nodes sequentially",
         node.body.len()

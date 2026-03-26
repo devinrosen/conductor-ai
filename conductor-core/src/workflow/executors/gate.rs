@@ -8,11 +8,7 @@ use crate::workflow_dsl::{ApprovalMode, GateNode, GateType, OnFailAction, OnTime
 use crate::workflow::engine::{restore_step, should_skip, ExecutionState};
 use crate::workflow::status::{WorkflowRunStatus, WorkflowStepStatus};
 
-pub(crate) fn execute_gate(
-    state: &mut ExecutionState<'_>,
-    node: &GateNode,
-    iteration: u32,
-) -> Result<()> {
+pub fn execute_gate(state: &mut ExecutionState<'_>, node: &GateNode, iteration: u32) -> Result<()> {
     let pos = state.position;
     state.position += 1;
 
@@ -387,7 +383,7 @@ pub(crate) fn execute_gate(
 /// Quality gates are non-blocking: they evaluate immediately by reading the
 /// `structured_output` from `step_results` for the configured `source` step,
 /// parsing the JSON, and comparing the `confidence` field against `threshold`.
-pub(crate) fn execute_quality_gate(
+pub fn execute_quality_gate(
     state: &mut ExecutionState<'_>,
     node: &GateNode,
     pos: i64,
@@ -514,7 +510,7 @@ pub(crate) fn execute_quality_gate(
     Ok(())
 }
 
-pub(crate) fn handle_gate_timeout(
+pub fn handle_gate_timeout(
     state: &mut ExecutionState<'_>,
     step_id: &str,
     node: &GateNode,

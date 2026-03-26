@@ -12,11 +12,7 @@ use crate::workflow::output::interpret_agent_output;
 use crate::workflow::prompt_builder::build_agent_prompt;
 use crate::workflow::status::WorkflowStepStatus;
 
-pub(crate) fn execute_call(
-    state: &mut ExecutionState<'_>,
-    node: &CallNode,
-    iteration: u32,
-) -> Result<()> {
+pub fn execute_call(state: &mut ExecutionState<'_>, node: &CallNode, iteration: u32) -> Result<()> {
     // Call-level output overrides block-level; if neither is set, use None.
     // We must clone into a local because execute_call_with_schema takes &mut state.
     let effective_output: Option<String> = match (&node.output, &state.block_output) {

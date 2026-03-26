@@ -13,7 +13,7 @@ use crate::workflow::prompt_builder::build_agent_prompt;
 use crate::workflow::status::WorkflowStepStatus;
 use crate::workflow::types::ContextEntry;
 
-pub(crate) fn execute_parallel(
+pub fn execute_parallel(
     state: &mut ExecutionState<'_>,
     node: &ParallelNode,
     iteration: u32,

@@ -8,7 +8,7 @@ use crate::workflow::engine::{
 use crate::workflow::prompt_builder::build_variable_map;
 use crate::workflow::status::WorkflowStepStatus;
 
-pub(crate) fn execute_call_workflow(
+pub fn execute_call_workflow(
     state: &mut ExecutionState<'_>,
     node: &CallWorkflowNode,
     iteration: u32,

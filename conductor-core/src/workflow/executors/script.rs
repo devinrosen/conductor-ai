@@ -24,7 +24,7 @@ const MAX_STDOUT_BYTES: usize = 100 * 1024; // 100 KB
 /// Read at most [`MAX_STDOUT_BYTES`] from `path`, returning a UTF-8 string.
 /// If the file is larger than the limit the content is truncated and a notice
 /// is appended so callers can see that truncation occurred.
-pub(crate) fn read_stdout_bounded(path: &str) -> std::io::Result<String> {
+pub fn read_stdout_bounded(path: &str) -> std::io::Result<String> {
     use std::io::Read;
     let mut f = std::fs::File::open(path)?;
     let mut buf = Vec::with_capacity(MAX_STDOUT_BYTES + 1);
@@ -43,7 +43,7 @@ pub(crate) fn read_stdout_bounded(path: &str) -> std::io::Result<String> {
 }
 
 /// Outcome of polling a spawned script child process.
-pub(crate) enum ScriptPollResult {
+pub enum ScriptPollResult {
     /// Process exited with success (exit code 0).
     Succeeded,
     /// Process exited with failure (non-zero exit code or wait error).
@@ -57,7 +57,7 @@ pub(crate) enum ScriptPollResult {
 /// Poll a child process until it exits, times out, or the shutdown signal fires.
 ///
 /// Checks the shutdown flag and elapsed time every 200 ms using `try_wait`.
-pub(crate) fn poll_script_child(
+pub fn poll_script_child(
     child: &mut std::process::Child,
     timeout_secs: Option<u64>,
     shutdown: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -102,7 +102,7 @@ pub(crate) fn poll_script_child(
     }
 }
 
-pub(crate) fn execute_script(
+pub fn execute_script(
     state: &mut ExecutionState<'_>,
     node: &ScriptNode,
     iteration: u32,
