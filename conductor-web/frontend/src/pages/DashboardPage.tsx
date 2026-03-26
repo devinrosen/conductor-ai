@@ -10,6 +10,7 @@ import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
+import { ErrorBanner } from "../components/shared/ErrorBanner";
 import { WelcomeAboard } from "../components/shared/WelcomeAboard";
 import { agentStatusColor } from "../utils/agentStats";
 import {
@@ -131,9 +132,7 @@ export function DashboardPage() {
         onImported={refreshRepos}
       />
 
-      {loadError && (
-        <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{loadError}</div>
-      )}
+      <ErrorBanner error={loadError} />
 
       {/* Repos */}
       <section>

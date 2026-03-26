@@ -6,6 +6,7 @@ import { RegisterRepoForm } from "../components/repos/RegisterRepoForm";
 import { GitHubDiscoverModal } from "../components/repos/GitHubDiscoverModal";
 import { EmptyState } from "../components/shared/EmptyState";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
+import { ErrorBanner } from "../components/shared/ErrorBanner";
 import {
   useConductorEvents,
   type ConductorEventType,
@@ -76,9 +77,7 @@ export function ReposPage() {
         onImported={refreshRepos}
       />
 
-      {loadError && (
-        <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{loadError}</div>
-      )}
+      <ErrorBanner error={loadError} />
 
       {repos.length === 0 ? (
         <EmptyState message="The station is quiet. Register a repo to get the trains running." />

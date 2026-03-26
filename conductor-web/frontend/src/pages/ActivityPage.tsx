@@ -14,6 +14,7 @@ import { StationHeader } from "../components/shared/StationHeader";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { WelcomeAboard } from "../components/shared/WelcomeAboard";
+import { ErrorBanner } from "../components/shared/ErrorBanner";
 import { agentStatusColor } from "../utils/agentStats";
 import {
   useConductorEvents,
@@ -188,13 +189,8 @@ export function ActivityPage() {
         </div>
       </div>
 
-      {loadError && (
-        <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{loadError}</div>
-      )}
-
-      {actionError && (
-        <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{actionError}</div>
-      )}
+      <ErrorBanner error={loadError} />
+      <ErrorBanner error={actionError} />
 
       {/* Attention Required — pending feedback */}
       {pendingFeedback.length > 0 && (
