@@ -754,6 +754,8 @@ impl<'a> WorktreeManager<'a> {
 
         let now = Utc::now().to_rfc3339();
         let mut cleaned = 0usize;
+        let mut pruned_repos: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
 
         for row in &rows {
             let [wt_id, branch, wt_path, repo_path, _remote_url, repo_id, base_branch] = row;
@@ -779,8 +781,7 @@ impl<'a> WorktreeManager<'a> {
             // Delete remote branch (best-effort)
             delete_remote_branch(repo_path, branch);
 
-            // Run git worktree prune
-            let _ = git_in(repo_path).args(["worktree", "prune"]).output();
+            pruned_repos.insert(repo_path.as_str());
 
             // Auto-close orphaned features
             let fm = crate::feature::FeatureManager::new(self.conn, self.config);
@@ -794,6 +795,11 @@ impl<'a> WorktreeManager<'a> {
             }
 
             cleaned += 1;
+        }
+
+        // Run git worktree prune once per unique repo path
+        for repo_path in &pruned_repos {
+            let _ = git_in(repo_path).args(["worktree", "prune"]).output();
         }
 
         Ok(cleaned)
