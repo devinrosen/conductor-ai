@@ -780,10 +780,7 @@ impl<'a> WorkflowManager<'a> {
                 continue;
             };
 
-            let child_chain = chains_map
-                .get(*root_id)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
+            let child_chain = chains_map.get(*root_id).map(Vec::as_slice).unwrap_or(&[]);
 
             let leaf_id = child_chain
                 .last()
