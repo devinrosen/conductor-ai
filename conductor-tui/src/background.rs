@@ -265,7 +265,9 @@ fn query_if_enabled<T>(enabled: bool, f: impl FnOnce() -> Vec<T>) -> Vec<T> {
 
 /// Build fallback `AgentRunEvent`s by parsing log files for runs that lack DB event records.
 /// Called on the background thread so file I/O never blocks the TUI main thread.
-fn build_fallback_events(runs: &[conductor_core::agent::AgentRun]) -> Vec<conductor_core::agent::AgentRunEvent> {
+fn build_fallback_events(
+    runs: &[conductor_core::agent::AgentRun],
+) -> Vec<conductor_core::agent::AgentRunEvent> {
     use conductor_core::agent::{parse_agent_log, AgentRunEvent};
 
     let mut fallback = Vec::new();
@@ -351,8 +353,11 @@ pub fn poll_data() -> Option<PollResult> {
     // Fetch all worktree-scoped agent events in a single batch query; fall back to log-file
     // parsing for worktrees whose runs pre-date DB-backed event storage.
     let mut worktree_agent_events = agent_mgr.list_all_events_by_worktree().unwrap_or_default();
-    for (wt_id, _run) in &latest_agent_runs {
-        if worktree_agent_events.get(wt_id).map_or(true, |v| v.is_empty()) {
+    for wt_id in latest_agent_runs.keys() {
+        if worktree_agent_events
+            .get(wt_id)
+            .is_none_or(|v| v.is_empty())
+        {
             let mut runs = agent_mgr.list_for_worktree(wt_id).unwrap_or_default();
             runs.reverse();
             let fallback = build_fallback_events(&runs);
@@ -364,8 +369,11 @@ pub fn poll_data() -> Option<PollResult> {
 
     // Same pattern for repo-scoped events.
     let mut repo_agent_events = agent_mgr.list_all_repo_events_by_repo().unwrap_or_default();
-    for (repo_id, _run) in &latest_repo_agent_runs {
-        if repo_agent_events.get(repo_id).map_or(true, |v| v.is_empty()) {
+    for repo_id in latest_repo_agent_runs.keys() {
+        if repo_agent_events
+            .get(repo_id)
+            .is_none_or(|v| v.is_empty())
+        {
             let mut runs = agent_mgr.list_repo_scoped(repo_id).unwrap_or_default();
             runs.reverse();
             let fallback = build_fallback_events(&runs);
