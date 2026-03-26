@@ -1,4 +1,11 @@
 mod agent_ref_tests;
 mod cycle_tests;
-mod parser_tests;
+mod parser_basic_tests;
+mod parser_call_tests;
+mod parser_control_flow_tests;
+mod parser_file_loading_tests;
+mod parser_gate_tests;
+mod parser_parallel_tests;
+mod parser_script_bot_schema_tests;
+mod parser_snippet_tests;
 mod validation_tests;
