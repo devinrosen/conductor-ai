@@ -2,10 +2,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use conductor_core::{
-    error::Result,
-    new_id,
-};
+use conductor_core::{error::Result, new_id};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushSubscription {

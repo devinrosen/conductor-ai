@@ -175,14 +175,22 @@ async fn main() -> Result<()> {
                                 "Agent Run Completed"
                             } else {
                                 "Agent Run Failed"
-                            }.to_string(),
+                            }
+                            .to_string(),
                             body: format!(
                                 "Agent run {} for worktree {}",
-                                if t.succeeded { "completed successfully" } else { "failed" },
+                                if t.succeeded {
+                                    "completed successfully"
+                                } else {
+                                    "failed"
+                                },
                                 t.worktree_slug.as_deref().unwrap_or("unknown")
                             ),
                             tag: Some(format!("agent-run-{}", t.run_id)),
-                            url: t.worktree_slug.as_ref().map(|slug| format!("/worktrees/{}", slug)),
+                            url: t
+                                .worktree_slug
+                                .as_ref()
+                                .map(|slug| format!("/worktrees/{}", slug)),
                         };
 
                         if let (Some(private_key), Some(public_key), Some(subject)) = (
@@ -198,7 +206,9 @@ async fn main() -> Result<()> {
                             );
                             let runtime = tokio::runtime::Handle::current();
                             if let Err(e) = runtime.block_on(push_mgr.send_all(&payload)) {
-                                tracing::warn!("Failed to send push notification for agent run: {e}");
+                                tracing::warn!(
+                                    "Failed to send push notification for agent run: {e}"
+                                );
                             }
                         }
                     }
@@ -230,11 +240,16 @@ async fn main() -> Result<()> {
                                 "Workflow Completed"
                             } else {
                                 "Workflow Failed"
-                            }.to_string(),
+                            }
+                            .to_string(),
                             body: format!(
                                 "Workflow '{}' {}",
                                 t.workflow_name,
-                                if t.succeeded { "completed successfully" } else { "failed" }
+                                if t.succeeded {
+                                    "completed successfully"
+                                } else {
+                                    "failed"
+                                }
                             ),
                             tag: Some(format!("workflow-run-{}", t.run_id)),
                             url: Some(format!("/workflows/runs/{}", t.run_id)),
@@ -253,7 +268,9 @@ async fn main() -> Result<()> {
                             );
                             let runtime = tokio::runtime::Handle::current();
                             if let Err(e) = runtime.block_on(push_mgr.send_all(&payload)) {
-                                tracing::warn!("Failed to send push notification for workflow: {e}");
+                                tracing::warn!(
+                                    "Failed to send push notification for workflow: {e}"
+                                );
                             }
                         }
                     }

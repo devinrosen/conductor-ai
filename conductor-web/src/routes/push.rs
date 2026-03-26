@@ -73,18 +73,10 @@ pub async fn subscribe_push(
         }
     };
 
-    let manager = PushSubscriptionManager::new(
-        &db,
-        vapid_private_key,
-        vapid_public_key,
-        vapid_subject,
-    );
+    let manager =
+        PushSubscriptionManager::new(&db, vapid_private_key, vapid_public_key, vapid_subject);
 
-    match manager.upsert_subscription(
-        &request.endpoint,
-        &request.keys.p256dh,
-        &request.keys.auth,
-    ) {
+    match manager.upsert_subscription(&request.endpoint, &request.keys.p256dh, &request.keys.auth) {
         Ok(_) => Ok(Json(PushSubscribeResponse {
             success: true,
             message: "Successfully subscribed to push notifications".to_string(),
@@ -122,12 +114,8 @@ pub async fn unsubscribe_push(
         }
     };
 
-    let manager = PushSubscriptionManager::new(
-        &db,
-        vapid_private_key,
-        vapid_public_key,
-        vapid_subject,
-    );
+    let manager =
+        PushSubscriptionManager::new(&db, vapid_private_key, vapid_public_key, vapid_subject);
 
     match manager.delete_subscription(&request.endpoint) {
         Ok(deleted) => {

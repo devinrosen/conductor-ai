@@ -230,7 +230,10 @@ pub fn api_router() -> Router<AppState> {
             post(notifications::mark_read),
         )
         // Push Notifications
-        .route("/api/push/vapid-public-key", get(push::get_vapid_public_key))
+        .route(
+            "/api/push/vapid-public-key",
+            get(push::get_vapid_public_key),
+        )
         .route(
             "/api/push/subscribe",
             post(push::subscribe_push).delete(push::unsubscribe_push),
