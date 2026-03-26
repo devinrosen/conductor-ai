@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use serde::Deserialize;
-
 // ---------------------------------------------------------------------------
 // Schema types
 // ---------------------------------------------------------------------------
@@ -63,52 +61,6 @@ pub enum ArrayItems {
     Object(Vec<FieldDef>),
     /// Untyped / empty array — no item schema specified.
     Untyped,
-}
-
-// ---------------------------------------------------------------------------
-// YAML deserialization (intermediate)
-// ---------------------------------------------------------------------------
-
-/// Raw YAML representation of a schema file.
-#[derive(Debug, Deserialize)]
-pub(super) struct RawSchema {
-    pub(super) fields: HashMap<String, RawFieldDef>,
-    #[serde(default)]
-    pub(super) markers: Option<HashMap<String, String>>,
-}
-
-/// A field definition can be either a short form (just the type string) or
-/// an object form with `type`, `desc`, `examples`, `items`, etc.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub(super) enum RawFieldDef {
-    /// Short form: `field_name: string`
-    Short(String),
-    /// Object form: `{ type: string, desc: "...", examples: [...] }`
-    Object(RawFieldObject),
-}
-
-/// Array `items` can be either a scalar type string (`items: string`) or an
-/// object map of named sub-fields (existing behaviour).
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub(super) enum RawArrayItems {
-    /// Scalar type string, e.g. `"string"`, `"number"`, `"enum(a,b)"`.
-    Scalar(String),
-    /// Object map of named sub-fields.
-    Object(HashMap<String, RawFieldDef>),
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct RawFieldObject {
-    #[serde(rename = "type")]
-    pub(super) field_type: Option<String>,
-    pub(super) desc: Option<String>,
-    pub(super) examples: Option<Vec<String>>,
-    /// Sub-fields (or scalar type) for `array` items.
-    pub(super) items: Option<RawArrayItems>,
-    /// Sub-fields for `object` type.
-    pub(super) fields: Option<HashMap<String, RawFieldDef>>,
 }
 
 // ---------------------------------------------------------------------------

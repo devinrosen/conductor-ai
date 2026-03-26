@@ -64,20 +64,9 @@ pub fn extract_output_block(text: &str) -> Option<String> {
 /// Parse the `<<<CONDUCTOR_OUTPUT>>>` block as structured JSON, validate against
 /// the schema, and derive markers.
 pub fn parse_structured_output(text: &str, schema: &OutputSchema) -> Result<StructuredOutput> {
-    let start_marker = "<<<CONDUCTOR_OUTPUT>>>";
-    let end_marker = "<<<END_CONDUCTOR_OUTPUT>>>";
-
-    let start = find_conductor_output_start(text, start_marker).ok_or_else(|| {
+    let cleaned = extract_output_block(text).ok_or_else(|| {
         ConductorError::Schema("No <<<CONDUCTOR_OUTPUT>>> block found in agent output".to_string())
     })?;
-    let json_start = start + start_marker.len();
-    let end = text[json_start..].find(end_marker).ok_or_else(|| {
-        ConductorError::Schema(
-            "No <<<END_CONDUCTOR_OUTPUT>>> end marker found in agent output".to_string(),
-        )
-    })?;
-    let raw = text[json_start..json_start + end].trim();
-    let cleaned = strip_code_fences(raw);
 
     // Strip trailing commas (common LLM artifact)
     let cleaned = strip_trailing_commas(&cleaned);

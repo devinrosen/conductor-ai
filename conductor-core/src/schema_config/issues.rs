@@ -85,21 +85,38 @@ pub fn check_schemas(
                         return Some(SchemaIssue::Missing(name.clone()));
                     }
                     // Enforce the same path-traversal guard as load_schema_by_path
-                    if let (Ok(canonical), Ok(canonical_repo)) =
-                        (joined.canonicalize(), repo_root.canonicalize())
-                    {
-                        if !canonical.starts_with(&canonical_repo) {
+                    let canonical = match joined.canonicalize() {
+                        Ok(c) => c,
+                        Err(e) => {
                             return Some(SchemaIssue::Invalid {
                                 name: name.clone(),
                                 error: format!(
-                                    "Schema path '{rel}' escapes the repository root — path traversal is not allowed"
+                                    "Failed to canonicalize schema path '{rel}': {e}"
                                 ),
                             });
                         }
-                        canonical
-                    } else {
-                        joined
+                    };
+                    let canonical_repo = match repo_root.canonicalize() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return Some(SchemaIssue::Invalid {
+                                name: name.clone(),
+                                error: format!(
+                                    "Failed to canonicalize repo root '{}': {e}",
+                                    repo_root.display()
+                                ),
+                            });
+                        }
+                    };
+                    if !canonical.starts_with(&canonical_repo) {
+                        return Some(SchemaIssue::Invalid {
+                            name: name.clone(),
+                            error: format!(
+                                "Schema path '{rel}' escapes the repository root — path traversal is not allowed"
+                            ),
+                        });
                     }
+                    canonical
                 }
             };
             match parse_schema_file(&path) {
