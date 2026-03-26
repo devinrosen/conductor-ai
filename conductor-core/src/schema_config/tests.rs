@@ -528,10 +528,7 @@ fn test_parse_structured_output_missing_end_marker() {
         &schema,
     );
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("CONDUCTOR_OUTPUT"));
+    assert!(result.unwrap_err().to_string().contains("CONDUCTOR_OUTPUT"));
 }
 
 #[test]
