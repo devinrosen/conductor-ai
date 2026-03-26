@@ -298,12 +298,6 @@ export function WorktreeDetailPage() {
           </h2>
           <p className="text-sm text-gray-500 mt-1">{worktree.slug}</p>
         </div>
-        <button
-          onClick={() => setDeleteConfirm(true)}
-          className="px-3 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50 sm:self-auto"
-        >
-          Delete Worktree
-        </button>
       </div>
 
       <div className="rounded-lg border border-gray-200 bg-white p-4">
@@ -565,6 +559,25 @@ export function WorktreeDetailPage() {
           )}
         </>
       )}
+
+      {/* Danger Zone */}
+      <section>
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-red-400 mb-3">
+          Danger Zone
+        </h3>
+        <div className="rounded-lg border border-red-200 bg-white p-4 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-900">Delete this worktree</p>
+            <p className="text-xs text-gray-500 mt-0.5">Remove the worktree and its git branch. This cannot be undone.</p>
+          </div>
+          <button
+            onClick={() => setDeleteConfirm(true)}
+            className="px-3 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
+          >
+            Delete Worktree
+          </button>
+        </div>
+      </section>
 
       <AgentPromptModal
         open={promptModalOpen}

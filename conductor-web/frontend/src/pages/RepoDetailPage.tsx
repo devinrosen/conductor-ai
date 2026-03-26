@@ -244,12 +244,6 @@ export function RepoDetailPage() {
       <div>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <h2 className="text-xl font-bold text-gray-900">{repo.slug}</h2>
-          <button
-            onClick={() => setUnregisterRepoConfirm(true)}
-            className="sm:self-auto px-3 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
-          >
-            Delete Repo
-          </button>
         </div>
         <dl className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm text-gray-600">
           <dt className="font-medium text-gray-500">Remote</dt>
@@ -551,6 +545,25 @@ export function RepoDetailPage() {
             </table>
           </div>
         )}
+      </section>
+
+      {/* Danger Zone */}
+      <section>
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-red-400 mb-3">
+          Danger Zone
+        </h3>
+        <div className="rounded-lg border border-red-200 bg-white p-4 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-900">Delete this repo</p>
+            <p className="text-xs text-gray-500 mt-0.5">Unregister this repo from Conductor. This cannot be undone.</p>
+          </div>
+          <button
+            onClick={() => setUnregisterRepoConfirm(true)}
+            className="px-3 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
+          >
+            Delete Repo
+          </button>
+        </div>
       </section>
 
       {/* Dialogs */}
