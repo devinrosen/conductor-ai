@@ -205,11 +205,19 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     all_agents.dedup();
 
     let specs: Vec<AgentSpec> = all_agents.iter().map(AgentSpec::from).collect();
+    // Combine CLI extra_plugin_dirs with per-call plugin_dirs from the .wf file.
+    let mut all_plugin_dirs = input.extra_plugin_dirs.clone();
+    for dir in workflow.collect_all_plugin_dirs() {
+        if !all_plugin_dirs.contains(&dir) {
+            all_plugin_dirs.push(dir);
+        }
+    }
     let missing_agents = crate::agent_config::find_missing_agents(
         input.working_dir,
         input.repo_path,
         &specs,
         Some(&workflow.name),
+        &all_plugin_dirs,
     );
     if !missing_agents.is_empty() {
         return Err(ConductorError::Workflow(format!(
@@ -1128,6 +1136,7 @@ pub(super) fn run_on_fail_agent(
         output: None,
         with: Vec::new(),
         bot_name: None,
+        plugin_dirs: Vec::new(),
     };
     if let Err(e) = super::executors::execute_call(state, &on_fail_node, iteration) {
         tracing::warn!("on_fail agent '{}' also failed: {e}", on_fail_agent.label(),);

@@ -166,6 +166,14 @@ fn execute_call_with_schema(
             child_window,
         );
 
+        // Merge per-step plugin_dirs (from .wf) with repo-level extra_plugin_dirs.
+        let mut merged_plugin_dirs = state.extra_plugin_dirs.clone();
+        for dir in &node.plugin_dirs {
+            if !merged_plugin_dirs.contains(dir) {
+                merged_plugin_dirs.push(dir.clone());
+            }
+        }
+
         // Spawn in tmux
         if let Err(e) = crate::agent_runtime::spawn_child_tmux(
             &child_run.id,
@@ -174,7 +182,7 @@ fn execute_call_with_schema(
             step_model,
             &child_window,
             effective_bot_name,
-            &state.extra_plugin_dirs,
+            &merged_plugin_dirs,
         ) {
             tracing::warn!("Failed to spawn child: {e}");
             let _ = state

@@ -425,6 +425,7 @@ impl Parser {
         let mut output = None;
         let mut with = Vec::new();
         let mut bot_name = None;
+        let mut plugin_dirs = Vec::new();
 
         if self.peek() == &Token::LBrace {
             self.advance();
@@ -438,6 +439,9 @@ impl Parser {
             if let Some(w) = kvs.remove("with") {
                 with = w.into_string_array();
             }
+            if let Some(pd) = kvs.remove("plugin_dirs") {
+                plugin_dirs = pd.into_string_array();
+            }
         }
 
         Ok(CallNode {
@@ -447,6 +451,7 @@ impl Parser {
             output,
             with,
             bot_name,
+            plugin_dirs,
         })
     }
 

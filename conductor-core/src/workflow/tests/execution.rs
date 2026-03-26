@@ -1182,6 +1182,7 @@ fn test_execute_do_restores_state_on_error() {
             output: None,
             with: vec![],
             bot_name: None,
+            plugin_dirs: vec![],
         })],
     };
 
@@ -1332,6 +1333,7 @@ fn test_execute_call_merges_block_state() {
         output: None,
         with: vec!["call-snippet".into()],
         bot_name: None,
+        plugin_dirs: vec![],
     };
 
     // Call will error on load_agent, but the merging logic should execute
@@ -1363,6 +1365,7 @@ fn test_execute_call_node_output_overrides_block_output() {
         output: Some("call-schema".into()),
         with: vec![],
         bot_name: None,
+        plugin_dirs: vec![],
     };
 
     let result = execute_call(&mut state, &node, 0);
@@ -1721,6 +1724,7 @@ fn test_find_max_completed_while_iteration_none_completed() {
             output: None,
             with: vec![],
             bot_name: None,
+            plugin_dirs: vec![],
         })],
     };
 
@@ -1755,6 +1759,7 @@ fn test_find_max_completed_while_iteration_two_completed() {
             output: None,
             with: vec![],
             bot_name: None,
+            plugin_dirs: vec![],
         })],
     };
 
@@ -1814,6 +1819,7 @@ fn test_find_max_completed_while_iteration_partial_body() {
                 output: None,
                 with: vec![],
                 bot_name: None,
+                plugin_dirs: vec![],
             }),
             WorkflowNode::Call(CallNode {
                 agent: crate::workflow_dsl::AgentRef::Name("step-b".to_string()),
@@ -1822,6 +1828,7 @@ fn test_find_max_completed_while_iteration_partial_body() {
                 output: None,
                 with: vec![],
                 bot_name: None,
+                plugin_dirs: vec![],
             }),
         ],
     };
@@ -2726,6 +2733,7 @@ fn test_execute_workflow_fails_on_invalid_schema() {
         output: Some("broken".into()),
         with: vec![],
         bot_name: None,
+        plugin_dirs: vec![],
     }));
 
     let input = WorkflowExecInput {
@@ -2802,6 +2810,7 @@ fn test_execute_workflow_fails_on_invalid_schema_parse() {
         output: Some("bad-schema".into()),
         with: vec![],
         bot_name: None,
+        plugin_dirs: vec![],
     }));
 
     let input = WorkflowExecInput {
@@ -2882,6 +2891,7 @@ fn test_execute_workflow_passes_preflight_with_valid_schema() {
         output: Some("good-schema".into()),
         with: vec![],
         bot_name: None,
+        plugin_dirs: vec![],
     }));
 
     let input = WorkflowExecInput {

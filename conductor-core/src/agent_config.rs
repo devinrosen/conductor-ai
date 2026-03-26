@@ -272,15 +272,35 @@ fn load_agent_by_path(repo_path: &str, rel_path: &str) -> Result<AgentDef> {
 ///
 /// This is used by both the CLI `workflow validate` command and the workflow
 /// executor to check agent availability before starting a run.
+///
+/// `extra_plugin_dirs` are additional directories (from `.wf` `plugin_dirs` and
+/// CLI `--plugin-dir`) to search for agent definitions. Each directory is probed
+/// as `{dir}/agents/{name}.md`.
 pub fn find_missing_agents(
     worktree_path: &str,
     repo_path: &str,
     specs: &[AgentSpec],
     workflow_name: Option<&str>,
+    extra_plugin_dirs: &[String],
 ) -> Vec<String> {
     specs
         .iter()
-        .filter(|spec| load_agent(worktree_path, repo_path, spec, workflow_name).is_err())
+        .filter(|spec| {
+            if load_agent(worktree_path, repo_path, spec, workflow_name).is_ok() {
+                return false;
+            }
+            // Check extra plugin dirs: {dir}/agents/{name}.md
+            if let AgentSpec::Name(name) = spec {
+                let filename = format!("{name}.md");
+                for dir in extra_plugin_dirs {
+                    let path = std::path::Path::new(dir).join("agents").join(&filename);
+                    if path.is_file() {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
         .map(|spec| spec.label().to_string())
         .collect()
 }
