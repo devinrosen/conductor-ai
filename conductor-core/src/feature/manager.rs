@@ -143,19 +143,7 @@ impl<'a> FeatureManager<'a> {
             merged_at: None,
         };
 
-        if let Err(e) = self.conn.execute(
-            "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                feature.id,
-                feature.repo_id,
-                feature.name,
-                feature.branch,
-                feature.base_branch,
-                feature.status,
-                feature.created_at,
-            ],
-        ) {
+        if let Err(e) = self.insert_feature_record(&feature) {
             // Best-effort cleanup of branches created above so the command is retriable
             let _ = git_in(&repo.local_path)
                 .args(["push", "origin", "--delete", "--", &feature.branch])
@@ -163,7 +151,7 @@ impl<'a> FeatureManager<'a> {
             let _ = git_in(&repo.local_path)
                 .args(["branch", "-D", "--", &feature.branch])
                 .output();
-            return Err(e.into());
+            return Err(e);
         }
 
         // Link tickets if provided (already resolved to internal IDs)
@@ -624,19 +612,7 @@ impl<'a> FeatureManager<'a> {
             merged_at: None,
         };
 
-        self.conn.execute(
-            "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                feature.id,
-                feature.repo_id,
-                feature.name,
-                feature.branch,
-                feature.base_branch,
-                feature.status,
-                feature.created_at,
-            ],
-        )?;
+        self.insert_feature_record(&feature)?;
 
         Ok(Some(feature))
     }
@@ -828,6 +804,23 @@ impl<'a> FeatureManager<'a> {
         for tid in ticket_ids {
             stmt.execute(params![feature_id, tid])?;
         }
+        Ok(())
+    }
+
+    fn insert_feature_record(&self, feature: &Feature) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO features (id, repo_id, name, branch, base_branch, status, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                feature.id,
+                feature.repo_id,
+                feature.name,
+                feature.branch,
+                feature.base_branch,
+                feature.status,
+                feature.created_at,
+            ],
+        )?;
         Ok(())
     }
 
