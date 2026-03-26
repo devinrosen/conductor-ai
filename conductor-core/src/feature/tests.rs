@@ -1,11 +1,11 @@
 use chrono::Utc;
 use rusqlite::{params, Connection};
 
-use crate::db::with_in_clause;
 use super::helpers::derive_branch_name;
 use super::*;
 use crate::config::Config;
 use crate::db::migrations;
+use crate::db::with_in_clause;
 use crate::error::ConductorError;
 
 fn setup_db() -> Connection {
