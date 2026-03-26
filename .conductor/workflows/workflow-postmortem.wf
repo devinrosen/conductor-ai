@@ -3,6 +3,7 @@ workflow workflow-postmortem {
     description = "Analyze a completed workflow run and produce a markdown postmortem report"
     trigger     = "manual"
     targets     = ["workflow_run"]
+    group       = "Release"
   }
 
   inputs {

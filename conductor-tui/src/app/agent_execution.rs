@@ -511,9 +511,9 @@ impl App {
             };
 
             let mut items = vec![WorkflowPickerItem::StartAgent];
-            for def in manual_defs {
-                items.push(WorkflowPickerItem::Workflow(def));
-            }
+            items.extend(crate::app::workflow_management::insert_group_headers(
+                manual_defs,
+            ));
             items.push(WorkflowPickerItem::Skip);
 
             if let Some(ref tx) = bg_tx {

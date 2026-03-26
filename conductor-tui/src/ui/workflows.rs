@@ -1999,6 +1999,7 @@ mod tests {
             description: String::new(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],
+            group: None,
             inputs: vec![],
             body,
             always: vec![],

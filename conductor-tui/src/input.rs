@@ -276,7 +276,7 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
-        Modal::WorkflowPicker { ref items, .. } => {
+        Modal::WorkflowPicker { .. } => {
             return match key.code {
                 KeyCode::Esc => Action::DismissModal,
                 KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
@@ -284,14 +284,6 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Enter => Action::InputSubmit,
                 KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
                 KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
-                KeyCode::Char(c) if c.is_ascii_digit() => {
-                    let n = c.to_digit(10).unwrap() as usize;
-                    if n >= 1 && n <= items.len() {
-                        Action::SelectListItem(n - 1)
-                    } else {
-                        Action::None
-                    }
-                }
                 _ => Action::None,
             };
         }
@@ -689,6 +681,7 @@ mod tests {
                     description: String::new(),
                     trigger: conductor_core::workflow::WorkflowTrigger::Manual,
                     targets: vec![],
+                    group: None,
                     inputs: vec![],
                     body: vec![],
                     always: vec![],
@@ -747,39 +740,6 @@ mod tests {
         assert!(matches!(
             map_key(key(KeyCode::Enter), &state),
             Action::InputSubmit
-        ));
-    }
-
-    #[test]
-    fn workflow_picker_valid_digit_selects_item() {
-        let state = workflow_picker_state(3); // items: [StartAgent, workflow-0, Skip]
-        assert!(matches!(
-            map_key(key(KeyCode::Char('1')), &state),
-            Action::SelectListItem(0)
-        ));
-        assert!(matches!(
-            map_key(key(KeyCode::Char('3')), &state),
-            Action::SelectListItem(2)
-        ));
-    }
-
-    #[test]
-    fn workflow_picker_out_of_range_digit_is_none() {
-        let state = workflow_picker_state(3);
-        // '0' is out of range (valid is 1..=3)
-        assert!(matches!(
-            map_key(key(KeyCode::Char('0')), &state),
-            Action::None
-        ));
-        // '4' exceeds item count
-        assert!(matches!(
-            map_key(key(KeyCode::Char('4')), &state),
-            Action::None
-        ));
-        // '9' exceeds item count
-        assert!(matches!(
-            map_key(key(KeyCode::Char('9')), &state),
-            Action::None
         ));
     }
 
