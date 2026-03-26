@@ -622,11 +622,7 @@ impl<'a> WorktreeManager<'a> {
             if !Path::new(wt_path).exists() {
                 // Backfill completed_at if missing even when path is already gone
                 if completed_at.is_none() {
-                    let now = Utc::now().to_rfc3339();
-                    self.conn.execute(
-                        "UPDATE worktrees SET completed_at = ?1 WHERE id = ?2 AND completed_at IS NULL",
-                        params![now, wt_id],
-                    )?;
+                    self.backfill_completed_at(wt_id)?;
                     reaped += 1;
                 }
                 continue;
@@ -637,11 +633,7 @@ impl<'a> WorktreeManager<'a> {
 
             // Backfill completed_at if NULL
             if completed_at.is_none() {
-                let now = Utc::now().to_rfc3339();
-                self.conn.execute(
-                    "UPDATE worktrees SET completed_at = ?1 WHERE id = ?2 AND completed_at IS NULL",
-                    params![now, wt_id],
-                )?;
+                self.backfill_completed_at(wt_id)?;
             }
 
             reaped += 1;
@@ -653,6 +645,15 @@ impl<'a> WorktreeManager<'a> {
         }
 
         Ok(reaped)
+    }
+
+    fn backfill_completed_at(&self, wt_id: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE worktrees SET completed_at = ?1 WHERE id = ?2 AND completed_at IS NULL",
+            params![now, wt_id],
+        )?;
+        Ok(())
     }
 
     /// Permanently delete completed (merged/abandoned) worktree records from the database.
