@@ -1385,6 +1385,48 @@ fn test_reap_orphaned_workflow_runs_purged_parent() {
 }
 
 #[test]
+fn test_reap_orphaned_workflow_runs_multiple_dead_parents() {
+    // 3 waiting runs with dead (failed) parents + 1 with an active parent.
+    // Only the 3 dead-parent runs should be reaped.
+    let conn = setup_db();
+
+    insert_waiting_run_with_gate(&conn, "run-dead-1", "failed", Some("86400s"), None);
+    insert_waiting_run_with_gate(&conn, "run-dead-2", "failed", Some("86400s"), None);
+    insert_waiting_run_with_gate(&conn, "run-dead-3", "cancelled", Some("86400s"), None);
+    insert_waiting_run_with_gate(
+        &conn,
+        "run-active",
+        "running",
+        Some("999999999s"),
+        Some("2099-01-01T00:00:00Z"),
+    );
+
+    let mgr = WorkflowManager::new(&conn);
+    let reaped = mgr.reap_orphaned_workflow_runs().unwrap();
+    assert_eq!(reaped, 3, "exactly the 3 dead-parent runs should be reaped");
+
+    for dead_id in &["run-dead-1", "run-dead-2", "run-dead-3"] {
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM workflow_runs WHERE id = ?1",
+                params![dead_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "cancelled", "{dead_id} should be cancelled");
+    }
+
+    let active_status: String = conn
+        .query_row(
+            "SELECT status FROM workflow_runs WHERE id = ?1",
+            params!["run-active"],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(active_status, "waiting", "active-parent run must remain waiting");
+}
+
+#[test]
 fn test_list_workflow_runs_paginated_limit_and_offset() {
     let conn = setup_db();
     let agent_mgr = AgentManager::new(&conn);
