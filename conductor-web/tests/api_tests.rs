@@ -357,8 +357,10 @@ async fn test_flat_list_worktrees_with_data() {
     assert!(slugs.contains(&"feat-one"));
     assert!(slugs.contains(&"feat-two"));
     // repo_ids should differ — worktrees come from two different repos
-    let repo_ids: std::collections::HashSet<&str> =
-        body.iter().map(|w| w["repo_id"].as_str().unwrap()).collect();
+    let repo_ids: std::collections::HashSet<&str> = body
+        .iter()
+        .map(|w| w["repo_id"].as_str().unwrap())
+        .collect();
     assert_eq!(repo_ids.len(), 2);
 }
 
