@@ -64,57 +64,52 @@ impl TreePosition {
     }
 }
 
-/// Tree-order worktrees by `base_branch` parent-child relationships, returning
-/// indices into the input and parallel `TreePosition`s — no cloning.
+/// Core DFS tree ordering used by both `build_worktree_tree_indices` and
+/// `build_branch_picker_tree`.
 ///
-/// Accepts anything deref-able to `Worktree` so callers with `&[Worktree]` or
-/// `&[&Worktree]` can both use it.
-pub fn build_worktree_tree_indices<W: std::borrow::Borrow<Worktree>>(
-    worktrees: &[W],
+/// `get_branch(i)` → branch name for item `i`
+/// `get_parent(i)` → already-resolved parent branch (empty string = root)
+/// `default_branch` → treat this value as "root parent"
+///
+/// Returns `(indices, positions)` in DFS order with cycle-fallback appended.
+fn dfs_tree_order<'a>(
+    n: usize,
+    get_branch: impl Fn(usize) -> &'a str,
+    get_parent: impl Fn(usize) -> &'a str,
     default_branch: &str,
 ) -> (Vec<usize>, Vec<TreePosition>) {
-    if worktrees.is_empty() {
+    if n == 0 {
         return (Vec::new(), Vec::new());
     }
 
-    let borrow = |i: usize| -> &Worktree { worktrees[i].borrow() };
-
-    // Map branch name → indices of worktrees whose base_branch matches that branch (children).
+    let branch_set: HashSet<&str> = (0..n).map(&get_branch).collect();
     let mut children_of: HashMap<&str, Vec<usize>> = HashMap::new();
-    let branch_set: HashSet<&str> = worktrees
-        .iter()
-        .map(|wt| wt.borrow().branch.as_str())
-        .collect();
 
-    for (i, wt) in worktrees.iter().enumerate() {
-        let parent_branch = wt.borrow().base_branch.as_deref().unwrap_or(default_branch);
-        children_of.entry(parent_branch).or_default().push(i);
+    for i in 0..n {
+        let parent = get_parent(i);
+        children_of.entry(parent).or_default().push(i);
     }
 
-    // Identify roots: worktrees whose base_branch is None, equals default_branch,
-    // or doesn't match any other worktree's branch in the list.
     let mut roots: Vec<usize> = Vec::new();
-    for (i, wt) in worktrees.iter().enumerate() {
-        let parent = wt.borrow().base_branch.as_deref().unwrap_or(default_branch);
+    for i in 0..n {
+        let parent = get_parent(i);
         if parent == default_branch || !branch_set.contains(parent) {
             roots.push(i);
         }
     }
-    roots.sort_by(|a, b| borrow(*a).branch.cmp(&borrow(*b).branch));
+    roots.sort_by(|a, b| get_branch(*a).cmp(get_branch(*b)));
 
-    // Sort each child group by branch name.
     for children in children_of.values_mut() {
-        children.sort_by(|a, b| borrow(*a).branch.cmp(&borrow(*b).branch));
+        children.sort_by(|a, b| get_branch(*a).cmp(get_branch(*b)));
     }
 
-    let mut indices: Vec<usize> = Vec::with_capacity(worktrees.len());
-    let mut positions: Vec<TreePosition> = Vec::with_capacity(worktrees.len());
+    let mut indices: Vec<usize> = Vec::with_capacity(n);
+    let mut positions: Vec<TreePosition> = Vec::with_capacity(n);
     let mut visited: HashSet<usize> = HashSet::new();
 
     // DFS via explicit stack: (index, depth, is_last_sibling, ancestors_are_last)
     let mut stack: Vec<(usize, usize, bool, Vec<bool>)> = Vec::new();
 
-    // Push roots in reverse so they come out in sorted order.
     let root_count = roots.len();
     for (ri, &root_idx) in roots.iter().enumerate().rev() {
         stack.push((root_idx, 0, ri == root_count - 1, Vec::new()));
@@ -131,7 +126,7 @@ pub fn build_worktree_tree_indices<W: std::borrow::Borrow<Worktree>>(
         });
         indices.push(idx);
 
-        let branch = borrow(idx).branch.as_str();
+        let branch = get_branch(idx);
         if let Some(children) = children_of.get(branch) {
             let len = children.len();
             let mut child_ancestors = ancestors_are_last;
@@ -143,8 +138,8 @@ pub fn build_worktree_tree_indices<W: std::borrow::Borrow<Worktree>>(
         }
     }
 
-    // Append any unvisited worktrees (cycle members) as roots.
-    for i in 0..worktrees.len() {
+    // Append any unvisited items (cycle members) as depth-0 roots.
+    for i in 0..n {
         if !visited.contains(&i) {
             positions.push(TreePosition {
                 depth: 0,
@@ -157,6 +152,26 @@ pub fn build_worktree_tree_indices<W: std::borrow::Borrow<Worktree>>(
     }
 
     (indices, positions)
+}
+
+/// Tree-order worktrees by `base_branch` parent-child relationships, returning
+/// indices into the input and parallel `TreePosition`s — no cloning.
+///
+/// Accepts anything deref-able to `Worktree` so callers with `&[Worktree]` or
+/// `&[&Worktree]` can both use it.
+pub fn build_worktree_tree_indices<W: std::borrow::Borrow<Worktree>>(
+    worktrees: &[W],
+    default_branch: &str,
+) -> (Vec<usize>, Vec<TreePosition>) {
+    let get_branch = |i: usize| worktrees[i].borrow().branch.as_str();
+    let get_parent = |i: usize| {
+        worktrees[i]
+            .borrow()
+            .base_branch
+            .as_deref()
+            .unwrap_or(default_branch)
+    };
+    dfs_tree_order(worktrees.len(), get_branch, get_parent, default_branch)
 }
 
 /// Reorder worktrees into tree order based on `base_branch` parent-child relationships.
@@ -197,85 +212,13 @@ pub fn build_branch_picker_tree(
         return (result, positions);
     }
 
-    // Map branch name → indices (within `rest`) whose base_branch matches that branch.
-    let mut children_of: HashMap<&str, Vec<usize>> = HashMap::new();
-    let branch_set: HashSet<&str> = rest
-        .iter()
-        .filter_map(|item| item.branch.as_deref())
-        .collect();
+    let get_branch = |i: usize| rest[i].branch.as_deref().unwrap_or("");
+    let get_parent = |i: usize| rest[i].base_branch.as_deref().unwrap_or("");
+    let (rest_indices, rest_positions) = dfs_tree_order(rest.len(), get_branch, get_parent, "");
 
-    for (i, item) in rest.iter().enumerate() {
-        let parent = item.base_branch.as_deref().unwrap_or("");
-        children_of.entry(parent).or_default().push(i);
-    }
-
-    // Identify roots: items whose base_branch is empty, absent, or doesn't match any
-    // other item's branch in the list.
-    let mut roots: Vec<usize> = Vec::new();
-    for (i, item) in rest.iter().enumerate() {
-        let parent = item.base_branch.as_deref().unwrap_or("");
-        if parent.is_empty() || !branch_set.contains(parent) {
-            roots.push(i);
-        }
-    }
-    roots.sort_by(|a, b| {
-        rest[*a]
-            .branch
-            .as_deref()
-            .unwrap_or("")
-            .cmp(rest[*b].branch.as_deref().unwrap_or(""))
-    });
-
-    // Sort each child group by branch name.
-    for children in children_of.values_mut() {
-        children.sort_by(|a, b| {
-            rest[*a]
-                .branch
-                .as_deref()
-                .unwrap_or("")
-                .cmp(rest[*b].branch.as_deref().unwrap_or(""))
-        });
-    }
-
-    let mut visited: HashSet<usize> = HashSet::new();
-
-    // DFS via explicit stack: (index_in_rest, depth, is_last_sibling, ancestors_are_last)
-    let mut stack: Vec<(usize, usize, bool, Vec<bool>)> = Vec::new();
-
-    let root_count = roots.len();
-    for (ri, &root_idx) in roots.iter().enumerate().rev() {
-        stack.push((root_idx, 0, ri == root_count - 1, Vec::new()));
-    }
-
-    while let Some((idx, depth, is_last, ancestors_are_last)) = stack.pop() {
-        if !visited.insert(idx) {
-            continue;
-        }
-        positions.push(TreePosition {
-            depth,
-            is_last_sibling: is_last,
-            ancestors_are_last: ancestors_are_last.clone(),
-        });
+    for (idx, pos) in rest_indices.into_iter().zip(rest_positions.into_iter()) {
         result.push(rest[idx].clone());
-
-        let branch = rest[idx].branch.as_deref().unwrap_or("");
-        if let Some(children) = children_of.get(branch) {
-            let len = children.len();
-            let mut child_ancestors = ancestors_are_last;
-            child_ancestors.push(is_last);
-            for (ci, &child_idx) in children.iter().enumerate().rev() {
-                stack.push((child_idx, depth + 1, ci == len - 1, child_ancestors.clone()));
-            }
-        }
-    }
-
-    // Append any unvisited items (cycle members) as roots.
-    for (i, item) in rest.iter().enumerate() {
-        if !visited.contains(&i) {
-            positions.push(TreePosition::default());
-            result.push(item.clone());
-            visited.insert(i);
-        }
+        positions.push(pos);
     }
 
     (result, positions)
