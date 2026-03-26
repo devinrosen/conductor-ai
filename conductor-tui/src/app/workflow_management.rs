@@ -441,6 +441,7 @@ impl App {
             target,
             items,
             selected,
+            scroll_offset: 0,
         };
     }
 
@@ -526,6 +527,7 @@ impl App {
             target,
             items,
             selected,
+            scroll_offset: 0,
         };
     }
 
@@ -1299,6 +1301,7 @@ impl App {
                     .map(crate::state::WorkflowPickerItem::Workflow)
                     .collect(),
                 selected: 0,
+                scroll_offset: 0,
             };
         }
     }

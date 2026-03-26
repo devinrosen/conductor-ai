@@ -124,6 +124,7 @@ pub enum Modal {
         target: WorkflowPickerTarget,
         items: Vec<WorkflowPickerItem>,
         selected: usize,
+        scroll_offset: u16,
     },
     /// Template picker: browse and select a built-in workflow template for instantiation.
     TemplatePicker {

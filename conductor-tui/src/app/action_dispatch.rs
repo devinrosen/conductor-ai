@@ -320,6 +320,7 @@ impl App {
                     },
                     items,
                     selected: 0,
+                    scroll_offset: 0,
                 };
             }
             Action::ManageIssueSources => self.handle_manage_issue_sources(),
@@ -493,9 +494,6 @@ impl App {
                 | Modal::BaseBranchPicker {
                     ref mut selected, ..
                 }
-                | Modal::WorkflowPicker {
-                    ref mut selected, ..
-                }
                 | Modal::TemplatePicker {
                     ref mut selected, ..
                 }
@@ -506,6 +504,14 @@ impl App {
                     ref mut selected, ..
                 } => {
                     *selected = 0;
+                }
+                Modal::WorkflowPicker {
+                    ref mut selected,
+                    ref mut scroll_offset,
+                    ..
+                } => {
+                    *selected = 0;
+                    *scroll_offset = 0;
                 }
                 _ => {
                     self.state.set_focused_index(0);
@@ -560,9 +566,11 @@ impl App {
                 Modal::WorkflowPicker {
                     ref items,
                     ref mut selected,
+                    ref mut scroll_offset,
                     ..
                 } => {
                     *selected = items.iter().rposition(|i| i.is_selectable()).unwrap_or(0);
+                    *scroll_offset = u16::MAX;
                 }
                 Modal::TemplatePicker {
                     ref items,

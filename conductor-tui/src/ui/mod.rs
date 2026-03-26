@@ -207,6 +207,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
             target,
             items,
             selected,
+            scroll_offset,
         } => {
             let ticket_source_id = if let crate::state::WorkflowPickerTarget::PostCreate {
                 ref ticket_id,
@@ -227,6 +228,7 @@ pub fn render(frame: &mut Frame, state: &AppState) {
                 target,
                 items,
                 *selected,
+                *scroll_offset,
                 ticket_source_id,
                 &state.theme,
             )

@@ -703,6 +703,7 @@ mod tests {
             },
             items,
             selected: 0,
+            scroll_offset: 0,
         };
         state
     }

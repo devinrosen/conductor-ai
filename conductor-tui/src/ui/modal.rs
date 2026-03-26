@@ -672,12 +672,14 @@ pub fn render_branch_picker(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_workflow_picker(
     frame: &mut Frame,
     area: Rect,
     target: &crate::state::WorkflowPickerTarget,
     items: &[crate::state::WorkflowPickerItem],
     selected: usize,
+    scroll_offset: u16,
     ticket_source_id: Option<&str>,
     theme: &Theme,
 ) {
@@ -734,7 +736,7 @@ pub fn render_workflow_picker(
         .iter()
         .filter(|i| matches!(i, crate::state::WorkflowPickerItem::Header(_)))
         .count() as u16;
-    let height = (items.len() as u16 + header_count + 7).min(25);
+    let height = (items.len() as u16 + header_count + 7).min(area.height.saturating_sub(4));
     let percent_y = ((height as f32 / area.height as f32) * 100.0) as u16;
     let popup = centered_rect(60, percent_y.max(25), area);
     frame.render_widget(Clear, popup);
@@ -795,12 +797,14 @@ pub fn render_workflow_picker(
         Style::default().fg(theme.label_secondary),
     )));
 
-    let content = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.border_focused))
-            .title(title),
-    );
+    let content = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_focused))
+                .title(title),
+        )
+        .scroll((scroll_offset, 0));
 
     frame.render_widget(content, popup);
 }

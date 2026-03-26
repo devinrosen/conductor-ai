@@ -48,6 +48,25 @@ fn next_selectable(items: &[WorkflowPickerItem], start: usize, forward: bool) ->
     start
 }
 
+/// Count the rendered visual line index of the item at `selected` in the
+/// workflow picker, matching the exact layout emitted by `render_workflow_picker`:
+/// - 3 top-chrome lines (blank + subtitle + blank)
+/// - each `Header` item emits 2 lines (blank + label)
+/// - every other item emits 1 line
+fn workflow_picker_visual_line(items: &[WorkflowPickerItem], selected: usize) -> u16 {
+    let mut line: u16 = 3; // top chrome
+    for (i, item) in items.iter().enumerate() {
+        if i == selected {
+            return line;
+        }
+        match item {
+            WorkflowPickerItem::Header(_) => line = line.saturating_add(2),
+            _ => line = line.saturating_add(1),
+        }
+    }
+    line
+}
+
 impl App {
     pub(super) fn half_page_size(&self) -> usize {
         let (_, height) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -434,10 +453,13 @@ impl App {
             Modal::WorkflowPicker {
                 ref items,
                 ref mut selected,
+                ref mut scroll_offset,
                 ..
             } => {
                 if !items.is_empty() {
                     *selected = next_selectable(items, *selected, false);
+                    let visual = workflow_picker_visual_line(items, *selected);
+                    *scroll_offset = visual.saturating_sub(10);
                 }
                 return;
             }
@@ -589,10 +611,13 @@ impl App {
             Modal::WorkflowPicker {
                 ref items,
                 ref mut selected,
+                ref mut scroll_offset,
                 ..
             } => {
                 if !items.is_empty() {
                     *selected = next_selectable(items, *selected, true);
+                    let visual = workflow_picker_visual_line(items, *selected);
+                    *scroll_offset = visual.saturating_sub(10);
                 }
                 return;
             }
