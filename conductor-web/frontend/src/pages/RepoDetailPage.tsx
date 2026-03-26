@@ -11,6 +11,7 @@ import { TicketCard } from "../components/tickets/TicketCard";
 import { RepoAgentRunCard } from "../components/agents/RepoAgentRunCard";
 import { TicketDetailModal } from "../components/tickets/TicketDetailModal";
 import { IssueSourcesSection } from "../components/issue-sources/IssueSourcesSection";
+import { StatusBadge } from "../components/shared/StatusBadge";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
@@ -352,14 +353,7 @@ export function RepoDetailPage() {
                     <tr key={run.id}>
                       <td className="px-4 py-2 truncate max-w-xs">{run.prompt.slice(0, 80)}</td>
                       <td className="px-4 py-2">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                          run.status === "completed" ? "bg-green-100 text-green-800" :
-                          run.status === "failed" ? "bg-red-100 text-red-800" :
-                          run.status === "cancelled" ? "bg-gray-100 text-gray-800" :
-                          "bg-yellow-100 text-yellow-800"
-                        }`}>
-                          {run.status}
-                        </span>
+                        <StatusBadge status={run.status} />
                       </td>
                       <td className="px-4 py-2 text-gray-500">{run.cost_usd != null ? `$${run.cost_usd.toFixed(2)}` : "-"}</td>
                       <td className="px-4 py-2 text-gray-500">{new Date(run.started_at).toLocaleString()}</td>
