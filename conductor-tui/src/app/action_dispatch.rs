@@ -833,6 +833,8 @@ impl App {
                 self.state.data.live_turns_by_worktree = payload.live_turns_by_worktree;
                 self.state.data.features_by_repo = payload.features_by_repo;
                 self.state.data.latest_repo_agent_runs = payload.latest_repo_agent_runs;
+                self.state.data.all_worktree_agent_events = payload.worktree_agent_events;
+                self.state.data.all_repo_agent_events = payload.repo_agent_events;
                 self.state.unread_notification_count = payload.unread_notification_count;
                 self.refresh_pending_feedback();
                 self.refresh_pending_repo_feedback();

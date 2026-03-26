@@ -263,6 +263,31 @@ fn query_if_enabled<T>(enabled: bool, f: impl FnOnce() -> Vec<T>) -> Vec<T> {
     }
 }
 
+/// Build fallback `AgentRunEvent`s by parsing log files for runs that lack DB event records.
+/// Called on the background thread so file I/O never blocks the TUI main thread.
+fn build_fallback_events(runs: &[conductor_core::agent::AgentRun]) -> Vec<conductor_core::agent::AgentRunEvent> {
+    use conductor_core::agent::{parse_agent_log, AgentRunEvent};
+
+    let mut fallback = Vec::new();
+    for run in runs {
+        if let Some(ref path) = run.log_file {
+            let events = parse_agent_log(path);
+            for ev in events {
+                fallback.push(AgentRunEvent {
+                    id: conductor_core::new_id(),
+                    run_id: run.id.clone(),
+                    kind: ev.kind,
+                    summary: ev.summary,
+                    started_at: run.started_at.clone(),
+                    ended_at: None,
+                    metadata: None,
+                });
+            }
+        }
+    }
+    fallback
+}
+
 /// Poll all data from the database. Returns a DataRefreshed action, the loaded config, and the
 /// open DB connection so the caller can reuse it (e.g. for notification claims) without opening
 /// a second connection on the same tick.
@@ -322,6 +347,33 @@ pub fn poll_data() -> Option<PollResult> {
     let latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
     let latest_repo_agent_runs = agent_mgr.latest_repo_scoped_runs_all().unwrap_or_default();
     let ticket_agent_totals = agent_mgr.totals_by_ticket_all().unwrap_or_default();
+
+    // Fetch all worktree-scoped agent events in a single batch query; fall back to log-file
+    // parsing for worktrees whose runs pre-date DB-backed event storage.
+    let mut worktree_agent_events = agent_mgr.list_all_events_by_worktree().unwrap_or_default();
+    for (wt_id, _run) in &latest_agent_runs {
+        if worktree_agent_events.get(wt_id).map_or(true, |v| v.is_empty()) {
+            let mut runs = agent_mgr.list_for_worktree(wt_id).unwrap_or_default();
+            runs.reverse();
+            let fallback = build_fallback_events(&runs);
+            if !fallback.is_empty() {
+                worktree_agent_events.insert(wt_id.clone(), fallback);
+            }
+        }
+    }
+
+    // Same pattern for repo-scoped events.
+    let mut repo_agent_events = agent_mgr.list_all_repo_events_by_repo().unwrap_or_default();
+    for (repo_id, _run) in &latest_repo_agent_runs {
+        if repo_agent_events.get(repo_id).map_or(true, |v| v.is_empty()) {
+            let mut runs = agent_mgr.list_repo_scoped(repo_id).unwrap_or_default();
+            runs.reverse();
+            let fallback = build_fallback_events(&runs);
+            if !fallback.is_empty() {
+                repo_agent_events.insert(repo_id.clone(), fallback);
+            }
+        }
+    }
 
     use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
     let wf_mgr = WorkflowManager::new(&conn);
@@ -434,6 +486,8 @@ pub fn poll_data() -> Option<PollResult> {
         features_by_repo,
         unread_notification_count,
         latest_repo_agent_runs,
+        worktree_agent_events,
+        repo_agent_events,
     }));
     Some(PollResult {
         action,

@@ -1,33 +1,9 @@
-use conductor_core::agent::{AgentManager, AgentRun, AgentRunEvent};
+use conductor_core::agent::AgentManager;
 use conductor_core::repo::RepoManager;
 use conductor_core::tickets::TicketSyncer;
 use conductor_core::worktree::WorktreeManager;
 
 use super::App;
-
-/// Build fallback `AgentRunEvent`s by parsing log files for runs that lack DB event records.
-fn build_fallback_events(runs: &[AgentRun]) -> Vec<AgentRunEvent> {
-    use conductor_core::agent::parse_agent_log;
-
-    let mut fallback = Vec::new();
-    for run in runs {
-        if let Some(ref path) = run.log_file {
-            let events = parse_agent_log(path);
-            for ev in events {
-                fallback.push(AgentRunEvent {
-                    id: conductor_core::new_id(),
-                    run_id: run.id.clone(),
-                    kind: ev.kind,
-                    summary: ev.summary,
-                    started_at: run.started_at.clone(),
-                    ended_at: None,
-                    metadata: None,
-                });
-            }
-        }
-    }
-    fallback
-}
 
 impl App {
     pub(super) fn refresh_data(&mut self) {
@@ -122,13 +98,14 @@ impl App {
 
         self.state.data.agent_totals = totals;
 
-        // Load events: prefer DB records, fall back to log file parsing for older runs
-        let db_events = mgr.list_events_for_worktree(wt_id).unwrap_or_default();
-        let all_events = if !db_events.is_empty() {
-            db_events
-        } else {
-            build_fallback_events(&runs)
-        };
+        // Load events from the background-polled cache (no I/O on the main thread).
+        let all_events = self
+            .state
+            .data
+            .all_worktree_agent_events
+            .get(wt_id.as_str())
+            .cloned()
+            .unwrap_or_default();
 
         // Build run_id -> (run_number, model, started_at) map for boundary headers
         let mut run_info = std::collections::HashMap::new();
@@ -189,13 +166,14 @@ impl App {
         let mut runs = mgr.list_repo_scoped(repo_id).unwrap_or_default();
         runs.reverse();
 
-        // Load events: single query for all repo-scoped runs (avoids N+1)
-        let db_events = mgr.list_events_for_repo(repo_id).unwrap_or_default();
-        let all_events = if !db_events.is_empty() {
-            db_events
-        } else {
-            build_fallback_events(&runs)
-        };
+        // Load events from the background-polled cache (no I/O on the main thread).
+        let all_events = self
+            .state
+            .data
+            .all_repo_agent_events
+            .get(repo_id.as_str())
+            .cloned()
+            .unwrap_or_default();
 
         // Build run_id -> (run_number, model, started_at) map for boundary headers
         let mut run_info = std::collections::HashMap::new();

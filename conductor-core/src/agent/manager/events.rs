@@ -80,6 +80,54 @@ impl<'a> AgentManager<'a> {
         )
     }
 
+    /// Return all worktree-scoped agent events, grouped by `worktree_id`.
+    /// Single SQL JOIN — no per-worktree round trips.
+    pub fn list_all_events_by_worktree(&self) -> Result<std::collections::HashMap<String, Vec<AgentRunEvent>>> {
+        let rows = query_collect(
+            self.conn,
+            "SELECT e.id, e.run_id, e.kind, e.summary, e.started_at, e.ended_at, e.metadata, r.worktree_id \
+             FROM agent_run_events e \
+             JOIN agent_runs r ON e.run_id = r.id \
+             WHERE r.worktree_id IS NOT NULL \
+             ORDER BY r.worktree_id, e.started_at ASC",
+            [],
+            |row| {
+                let event = row_to_agent_run_event(row)?;
+                let wt_id: String = row.get(7)?;
+                Ok((wt_id, event))
+            },
+        )?;
+        let mut map: std::collections::HashMap<String, Vec<AgentRunEvent>> = std::collections::HashMap::new();
+        for (wt_id, event) in rows {
+            map.entry(wt_id).or_default().push(event);
+        }
+        Ok(map)
+    }
+
+    /// Return all repo-scoped agent events, grouped by `repo_id`.
+    /// Only includes runs where `worktree_id IS NULL` (repo-level agents).
+    pub fn list_all_repo_events_by_repo(&self) -> Result<std::collections::HashMap<String, Vec<AgentRunEvent>>> {
+        let rows = query_collect(
+            self.conn,
+            "SELECT e.id, e.run_id, e.kind, e.summary, e.started_at, e.ended_at, e.metadata, r.repo_id \
+             FROM agent_run_events e \
+             JOIN agent_runs r ON e.run_id = r.id \
+             WHERE r.worktree_id IS NULL \
+             ORDER BY r.repo_id, e.started_at ASC",
+            [],
+            |row| {
+                let event = row_to_agent_run_event(row)?;
+                let repo_id: String = row.get(7)?;
+                Ok((repo_id, event))
+            },
+        )?;
+        let mut map: std::collections::HashMap<String, Vec<AgentRunEvent>> = std::collections::HashMap::new();
+        for (repo_id, event) in rows {
+            map.entry(repo_id).or_default().push(event);
+        }
+        Ok(map)
+    }
+
     /// List all events across repo-scoped runs for a repo, in chronological order.
     /// Only includes runs where `worktree_id IS NULL` (repo-level agents).
     pub fn list_events_for_repo(&self, repo_id: &str) -> Result<Vec<AgentRunEvent>> {
