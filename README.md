@@ -95,6 +95,19 @@ conductor-web                        # After install
 cargo run --bin conductor-web        # Without installing
 ```
 
+### Desktop (macOS)
+
+Native Mac app powered by Tauri, embedding the same web UI. Still being refined but usable today.
+
+```bash
+# Dev mode (hot-reload frontend, run from workspace root)
+cd conductor-desktop && cargo tauri dev
+
+# Production build — outputs Conductor.app
+cd conductor-desktop && cargo tauri build
+# App bundle: target/release/bundle/macos/Conductor.app
+```
+
 ## Workflows
 
 Conductor includes a workflow engine that orchestrates multi-step AI agent pipelines. Workflows are defined in `.wf` files using a minimal custom DSL.
