@@ -255,7 +255,10 @@ pub fn execute_parallel(
             .filter(|(i, _)| !completed.contains(i))
             .map(|(_, c)| c.child_run_id.as_str())
             .collect();
-        let run_map = state.agent_mgr.get_runs_by_ids(&pending_ids).unwrap_or_default();
+        let run_map = state
+            .agent_mgr
+            .get_runs_by_ids(&pending_ids)
+            .unwrap_or_default();
 
         for (i, child) in children.iter().enumerate() {
             if completed.contains(&i) {
