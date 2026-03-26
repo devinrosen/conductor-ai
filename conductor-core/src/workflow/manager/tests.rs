@@ -1229,3 +1229,245 @@ fn test_validate_single_reports_errors_for_missing_agent() {
         "expected validation errors for missing agent"
     );
 }
+
+// ── get_step_summaries_for_runs — child-chain traversal ─────────────────
+
+#[test]
+fn test_get_step_summaries_for_runs_single_level_running_step() {
+    // A root run with a running step (no child chain) should return a summary
+    // with an empty workflow_chain.
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+    let step_id = mgr
+        .insert_step(&run.id, "build", "actor", false, 0, 0)
+        .unwrap();
+    set_step_status(&mgr, &step_id, WorkflowStepStatus::Running);
+
+    let summaries = mgr.get_step_summaries_for_runs(&[run.id.as_str()]).unwrap();
+    assert_eq!(summaries.len(), 1);
+    let summary = summaries.get(&run.id).expect("root run missing");
+    assert_eq!(summary.step_name, "build");
+    assert!(
+        summary.workflow_chain.is_empty(),
+        "single-level run should have empty workflow_chain"
+    );
+}
+
+#[test]
+fn test_get_step_summaries_for_runs_child_chain_traversal() {
+    // Root → child (running) with a running step.
+    // The summary should reflect the child's step and a workflow_chain containing
+    // the root workflow name (but not the child's own name).
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // Create root run and set it running.
+    let root = create_worktree_run(&conn, "w1");
+    mgr.update_workflow_status(&root.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+
+    // Create a child workflow run parented under the root.
+    let parent_agent_id = make_parent_id(&conn, "w1");
+    let child = mgr
+        .create_workflow_run_with_targets(
+            "child-wf",
+            Some("w1"),
+            None,
+            None,
+            &parent_agent_id,
+            false,
+            "manual",
+            None,
+            Some(&root.id), // parent_workflow_run_id
+            None,
+            None,
+        )
+        .unwrap();
+    mgr.update_workflow_status(&child.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+
+    // Add a running step on the child.
+    let child_step_id = mgr
+        .insert_step(&child.id, "deploy", "actor", false, 0, 0)
+        .unwrap();
+    set_step_status(&mgr, &child_step_id, WorkflowStepStatus::Running);
+
+    let summaries = mgr
+        .get_step_summaries_for_runs(&[root.id.as_str()])
+        .unwrap();
+    assert_eq!(summaries.len(), 1);
+    let summary = summaries.get(&root.id).expect("root run missing");
+    assert_eq!(summary.step_name, "deploy");
+    assert_eq!(
+        summary.workflow_chain,
+        vec!["wf"],
+        "chain should contain root name only (leaf excluded)"
+    );
+}
+
+#[test]
+fn test_get_step_summaries_for_runs_deep_chain() {
+    // Root → child → grandchild (running). Verifies multi-level chain traversal.
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let root = create_worktree_run(&conn, "w1");
+    mgr.update_workflow_status(&root.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+
+    let agent_id = make_parent_id(&conn, "w1");
+    let child = mgr
+        .create_workflow_run_with_targets(
+            "mid-wf",
+            Some("w1"),
+            None,
+            None,
+            &agent_id,
+            false,
+            "manual",
+            None,
+            Some(&root.id),
+            None,
+            None,
+        )
+        .unwrap();
+    mgr.update_workflow_status(&child.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+
+    let agent_id2 = make_parent_id(&conn, "w1");
+    let grandchild = mgr
+        .create_workflow_run_with_targets(
+            "leaf-wf",
+            Some("w1"),
+            None,
+            None,
+            &agent_id2,
+            false,
+            "manual",
+            None,
+            Some(&child.id),
+            None,
+            None,
+        )
+        .unwrap();
+    mgr.update_workflow_status(&grandchild.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+
+    let step_id = mgr
+        .insert_step(&grandchild.id, "test", "actor", false, 0, 0)
+        .unwrap();
+    set_step_status(&mgr, &step_id, WorkflowStepStatus::Running);
+
+    let summaries = mgr
+        .get_step_summaries_for_runs(&[root.id.as_str()])
+        .unwrap();
+    let summary = summaries.get(&root.id).expect("root run missing");
+    assert_eq!(summary.step_name, "test");
+    assert_eq!(
+        summary.workflow_chain,
+        vec!["wf", "mid-wf"],
+        "chain should contain root + middle names, excluding the leaf"
+    );
+}
+
+#[test]
+fn test_get_step_summaries_for_runs_no_running_step_omitted() {
+    // A run with no running step should not appear in the result map.
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+    // Insert a completed step — not running.
+    let step_id = mgr
+        .insert_step(&run.id, "done", "actor", false, 0, 0)
+        .unwrap();
+    set_step_status(&mgr, &step_id, WorkflowStepStatus::Completed);
+
+    let summaries = mgr.get_step_summaries_for_runs(&[run.id.as_str()]).unwrap();
+    assert!(
+        summaries.is_empty(),
+        "run with no running step should be absent from summaries"
+    );
+}
+
+// ── cancel_run ──────────────────────────────────────────────────────────
+
+#[test]
+fn test_cancel_run_marks_run_cancelled() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+
+    mgr.cancel_run(&run.id, "user requested").unwrap();
+
+    let updated = mgr.get_workflow_run(&run.id).unwrap().unwrap();
+    assert_eq!(updated.status, WorkflowRunStatus::Cancelled);
+    assert_eq!(updated.result_summary.as_deref(), Some("user requested"));
+}
+
+#[test]
+fn test_cancel_run_fails_on_terminal_state() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Completed, None)
+        .unwrap();
+
+    let result = mgr.cancel_run(&run.id, "too late");
+    assert!(result.is_err(), "cancelling a completed run should fail");
+}
+
+#[test]
+fn test_cancel_run_marks_active_steps_failed() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run = create_worktree_run(&conn, "w1");
+    mgr.update_workflow_status(&run.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+
+    // One running step and one completed step.
+    let running_step = mgr
+        .insert_step(&run.id, "step-a", "actor", false, 0, 0)
+        .unwrap();
+    set_step_status(&mgr, &running_step, WorkflowStepStatus::Running);
+    let completed_step = mgr
+        .insert_step(&run.id, "step-b", "actor", false, 1, 0)
+        .unwrap();
+    set_step_status(&mgr, &completed_step, WorkflowStepStatus::Completed);
+
+    mgr.cancel_run(&run.id, "abort").unwrap();
+
+    let steps = mgr.get_workflow_steps(&run.id).unwrap();
+    let running = steps.iter().find(|s| s.id == running_step).unwrap();
+    assert_eq!(
+        running.status,
+        WorkflowStepStatus::Failed,
+        "active step should be marked failed"
+    );
+    let completed = steps.iter().find(|s| s.id == completed_step).unwrap();
+    assert_eq!(
+        completed.status,
+        WorkflowStepStatus::Completed,
+        "completed step should remain completed"
+    );
+}
+
+#[test]
+fn test_cancel_run_not_found() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let result = mgr.cancel_run("nonexistent-id", "reason");
+    assert!(result.is_err(), "cancelling a nonexistent run should fail");
+}

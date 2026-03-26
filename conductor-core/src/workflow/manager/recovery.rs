@@ -174,23 +174,21 @@ impl<'a> WorkflowManager<'a> {
         parent_workflow_run_id: &str,
         child_workflow_name: &str,
     ) -> Result<Option<WorkflowRun>> {
-        let result = self.conn.query_row(
-            &format!(
-                "SELECT {RUN_COLUMNS} FROM workflow_runs \
-                 WHERE parent_workflow_run_id = ?1 \
-                   AND workflow_name = ?2 \
-                   AND status IN ('failed', 'pending', 'waiting', 'timed_out') \
-                 ORDER BY started_at DESC \
-                 LIMIT 1"
-            ),
-            params![parent_workflow_run_id, child_workflow_name],
-            row_to_workflow_run,
-        );
-        match result {
-            Ok(run) => Ok(Some(run)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        Ok(self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT {RUN_COLUMNS} FROM workflow_runs \
+                     WHERE parent_workflow_run_id = ?1 \
+                       AND workflow_name = ?2 \
+                       AND status IN ('failed', 'pending', 'waiting', 'timed_out') \
+                     ORDER BY started_at DESC \
+                     LIMIT 1"
+                ),
+                params![parent_workflow_run_id, child_workflow_name],
+                row_to_workflow_run,
+            )
+            .optional()?)
     }
 
     const SQL_RESET_FAILED: &'static str = "UPDATE workflow_run_steps \
@@ -246,6 +244,21 @@ impl<'a> WorkflowManager<'a> {
         Ok(crate::workflow::engine::completed_keys_from_steps(&steps))
     }
 
+    /// Build the purge where-clause and bind params, then pass them to a caller-provided
+    /// closure.  Deduplicates the empty-check, where-clause build, and `params_ref`
+    /// construction shared by `purge` and `purge_count`.
+    fn with_purge_params<T>(
+        &self,
+        repo_id: Option<&str>,
+        statuses: &[&str],
+        f: impl FnOnce(&str, &[&dyn rusqlite::ToSql]) -> Result<T>,
+    ) -> Result<T> {
+        let (where_clause, params) = purge_where_clause(statuses, repo_id);
+        let params_ref: Vec<&dyn rusqlite::ToSql> =
+            params.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        f(&where_clause, params_ref.as_slice())
+    }
+
     /// Delete workflow runs with the given statuses, optionally scoped to a repo.
     ///
     /// `statuses` should be a non-empty slice of terminal status strings
@@ -257,11 +270,10 @@ impl<'a> WorkflowManager<'a> {
         if statuses.is_empty() {
             return Ok(0);
         }
-        let (where_clause, params) = purge_where_clause(statuses, repo_id);
-        let sql = format!("DELETE FROM workflow_runs WHERE {where_clause}");
-        let params_ref: Vec<&dyn rusqlite::ToSql> =
-            params.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-        Ok(self.conn.execute(&sql, params_ref.as_slice())?)
+        self.with_purge_params(repo_id, statuses, |where_clause, params_ref| {
+            let sql = format!("DELETE FROM workflow_runs WHERE {where_clause}");
+            Ok(self.conn.execute(&sql, params_ref)?)
+        })
     }
 
     /// Count workflow runs that *would* be deleted by [`purge`] with the same arguments.
@@ -271,13 +283,10 @@ impl<'a> WorkflowManager<'a> {
         if statuses.is_empty() {
             return Ok(0);
         }
-        let (where_clause, params) = purge_where_clause(statuses, repo_id);
-        let sql = format!("SELECT COUNT(*) FROM workflow_runs WHERE {where_clause}");
-        let params_ref: Vec<&dyn rusqlite::ToSql> =
-            params.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-        let count: i64 = self
-            .conn
-            .query_row(&sql, params_ref.as_slice(), |row| row.get(0))?;
-        Ok(count as usize)
+        self.with_purge_params(repo_id, statuses, |where_clause, params_ref| {
+            let sql = format!("SELECT COUNT(*) FROM workflow_runs WHERE {where_clause}");
+            let count: i64 = self.conn.query_row(&sql, params_ref, |row| row.get(0))?;
+            Ok(count as usize)
+        })
     }
 }

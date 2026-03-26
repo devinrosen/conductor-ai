@@ -53,16 +53,14 @@ impl<'a> WorkflowManager<'a> {
     }
 
     pub fn get_workflow_run(&self, id: &str) -> Result<Option<WorkflowRun>> {
-        let result = self.conn.query_row(
-            &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE id = ?1"),
-            params![id],
-            row_to_workflow_run,
-        );
-        match result {
-            Ok(run) => Ok(Some(run)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        Ok(self
+            .conn
+            .query_row(
+                &format!("SELECT {RUN_COLUMNS} FROM workflow_runs WHERE id = ?1"),
+                params![id],
+                row_to_workflow_run,
+            )
+            .optional()?)
     }
 
     /// Resolve the execution context (working directory, repo path, and IDs) for
@@ -200,16 +198,14 @@ impl<'a> WorkflowManager<'a> {
         let mut all_params: Vec<rusqlite::types::Value> =
             vec![rusqlite::types::Value::Text(worktree_id.to_owned())];
         all_params.extend(active_strings.into_iter().map(rusqlite::types::Value::Text));
-        let result = self.conn.query_row(
-            &sql,
-            rusqlite::params_from_iter(all_params.iter()),
-            row_to_workflow_run,
-        );
-        match result {
-            Ok(run) => Ok(Some(run)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        Ok(self
+            .conn
+            .query_row(
+                &sql,
+                rusqlite::params_from_iter(all_params.iter()),
+                row_to_workflow_run,
+            )
+            .optional()?)
     }
 
     pub fn list_workflow_runs(&self, worktree_id: &str) -> Result<Vec<WorkflowRun>> {
@@ -570,21 +566,19 @@ impl<'a> WorkflowManager<'a> {
 
     /// Find the waiting gate step for a workflow run.
     pub fn find_waiting_gate(&self, workflow_run_id: &str) -> Result<Option<WorkflowRunStep>> {
-        let result = self.conn.query_row(
-            &format!(
-                "SELECT {STEP_COLUMNS} FROM workflow_run_steps \
-                 WHERE workflow_run_id = ?1 AND gate_type IS NOT NULL AND gate_approved_at IS NULL \
-                   AND status IN ('running', 'waiting') \
-                 ORDER BY position DESC LIMIT 1"
-            ),
-            params![workflow_run_id],
-            row_to_workflow_step,
-        );
-        match result {
-            Ok(step) => Ok(Some(step)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
+        Ok(self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT {STEP_COLUMNS} FROM workflow_run_steps \
+                     WHERE workflow_run_id = ?1 AND gate_type IS NOT NULL AND gate_approved_at IS NULL \
+                       AND status IN ('running', 'waiting') \
+                     ORDER BY position DESC LIMIT 1"
+                ),
+                params![workflow_run_id],
+                row_to_workflow_step,
+            )
+            .optional()?)
     }
 
     /// List all gate steps currently in `waiting` status across all workflow runs.
