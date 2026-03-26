@@ -637,6 +637,90 @@ impl<'a> WorkflowManager<'a> {
         )
     }
 
+    /// Batch-walk active child chains for all given root run IDs in a single recursive CTE query.
+    ///
+    /// Returns a map from `root_run_id` to the ordered list of `(child_id, child_workflow_name)`
+    /// pairs below that root (depth >= 1, ascending). Roots with no active children are absent
+    /// from the map. Depth is capped at 5 to match `get_active_chain_for_run`.
+    fn get_active_chains_for_runs_batch(
+        &self,
+        root_ids: &[&str],
+    ) -> Result<HashMap<String, Vec<(String, String)>>> {
+        if root_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = sql_placeholders(root_ids.len());
+        // Seed the CTE with the root runs themselves (depth = 0), then recursively
+        // follow active children up to depth 5 (= MAX_DEPTH in get_active_chain_for_run).
+        let sql = format!(
+            "WITH RECURSIVE chain(root_id, id, workflow_name, depth) AS (\
+               SELECT id, id, workflow_name, 0 \
+               FROM workflow_runs WHERE id IN ({placeholders}) \
+               UNION ALL \
+               SELECT c.root_id, r.id, r.workflow_name, c.depth + 1 \
+               FROM chain c \
+               JOIN workflow_runs r ON r.parent_workflow_run_id = c.id \
+               WHERE r.status IN ('running', 'waiting') \
+                 AND c.depth < 5 \
+             ) \
+             SELECT root_id, id, workflow_name, depth \
+             FROM chain \
+             WHERE depth >= 1 \
+             ORDER BY root_id, depth"
+        );
+        let params: Vec<rusqlite::types::Value> = root_ids
+            .iter()
+            .map(|s| rusqlite::types::Value::Text(s.to_string()))
+            .collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
+        let mut map: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        while let Some(row) = rows.next()? {
+            let root_id: String = row.get(0)?;
+            let child_id: String = row.get(1)?;
+            let child_name: String = row.get(2)?;
+            map.entry(root_id).or_default().push((child_id, child_name));
+        }
+        Ok(map)
+    }
+
+    /// Batch-fetch the first running step for each of the given leaf run IDs.
+    ///
+    /// Returns a map from `leaf_run_id` to `(step_name, iteration)`. The first running step
+    /// by ascending position is returned per run, matching the per-leaf `LIMIT 1` semantics.
+    fn get_running_steps_for_leaf_runs(
+        &self,
+        leaf_ids: &[String],
+    ) -> Result<HashMap<String, (String, i64)>> {
+        if leaf_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = sql_placeholders(leaf_ids.len());
+        let sql = format!(
+            "SELECT workflow_run_id, step_name, iteration \
+             FROM workflow_run_steps \
+             WHERE workflow_run_id IN ({placeholders}) AND status = 'running' \
+             ORDER BY workflow_run_id, position ASC"
+        );
+        let params: Vec<rusqlite::types::Value> = leaf_ids
+            .iter()
+            .map(|s| rusqlite::types::Value::Text(s.clone()))
+            .collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
+        let mut map: HashMap<String, (String, i64)> = HashMap::new();
+        while let Some(row) = rows.next()? {
+            let run_id: String = row.get(0)?;
+            // Take only the first (lowest-position) row per run_id.
+            map.entry(run_id).or_insert_with(|| {
+                let step_name: String = row.get(1).unwrap_or_default();
+                let iteration: i64 = row.get(2).unwrap_or(0);
+                (step_name, iteration)
+            });
+        }
+        Ok(map)
+    }
+
     /// Fetch the currently-running step for each of the given (root) workflow run IDs.
     /// Returns a map from root `workflow_run_id` to a `WorkflowStepSummary`.
     ///
@@ -647,6 +731,7 @@ impl<'a> WorkflowManager<'a> {
     /// the `workflow_name` field of the root's `WorkflowRun`.
     ///
     /// An empty `run_ids` slice returns an empty map without hitting the DB.
+    /// Uses batch queries (3 total) regardless of N to avoid N+1 round-trips.
     pub fn get_step_summaries_for_runs(
         &self,
         run_ids: &[&str],
@@ -655,7 +740,7 @@ impl<'a> WorkflowManager<'a> {
             return Ok(HashMap::new());
         }
 
-        // Fetch workflow names for the root runs.
+        // 1. Fetch workflow names for the root runs (single query).
         let placeholders = sql_placeholders(run_ids.len());
         let name_sql =
             format!("SELECT id, workflow_name FROM workflow_runs WHERE id IN ({placeholders})");
@@ -670,34 +755,42 @@ impl<'a> WorkflowManager<'a> {
             root_names.insert(id, name);
         }
 
-        let mut map: HashMap<String, WorkflowStepSummary> = HashMap::new();
+        // 2. Walk all active child chains for all roots in one recursive CTE query.
+        let chains_map = self.get_active_chains_for_runs_batch(run_ids)?;
 
+        // Derive the leaf run ID per root (deepest child, or root itself).
+        let leaf_ids: Vec<String> = run_ids
+            .iter()
+            .map(|root_id| {
+                chains_map
+                    .get(*root_id)
+                    .and_then(|chain| chain.last())
+                    .map(|(id, _)| id.clone())
+                    .unwrap_or_else(|| root_id.to_string())
+            })
+            .collect();
+
+        // 3. Batch-fetch the running step for all leaf runs (single query).
+        let steps_map = self.get_running_steps_for_leaf_runs(&leaf_ids)?;
+
+        // Re-assemble WorkflowStepSummary entries.
+        let mut map: HashMap<String, WorkflowStepSummary> = HashMap::new();
         for root_id in run_ids {
             let Some(root_name) = root_names.get(*root_id) else {
                 continue;
             };
 
-            // Walk the active sub-workflow chain from this root.
-            // Returns (id, name) pairs so we already have the leaf run ID.
-            let child_chain = self.get_active_chain_for_run(root_id)?;
+            let child_chain = chains_map
+                .get(*root_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
 
-            // The leaf run is the deepest active child, or the root itself.
             let leaf_id = child_chain
                 .last()
-                .map(|(id, _)| id.clone())
-                .unwrap_or_else(|| root_id.to_string());
+                .map(|(id, _)| id.as_str())
+                .unwrap_or(root_id);
 
-            // Find the running step on the leaf run.
-            let mut step_stmt = self.conn.prepare_cached(
-                "SELECT step_name, iteration FROM workflow_run_steps \
-                 WHERE workflow_run_id = ?1 AND status = 'running' \
-                 ORDER BY position ASC LIMIT 1",
-            )?;
-            let step: Option<(String, i64)> = step_stmt
-                .query_row(params![leaf_id], |row| Ok((row.get(0)?, row.get(1)?)))
-                .optional()?;
-
-            if let Some((step_name, iteration)) = step {
+            if let Some((step_name, iteration)) = steps_map.get(leaf_id) {
                 // For single-level (no children), expose an empty vec to keep
                 // existing rendering unchanged. Otherwise build:
                 // root_name + child names excluding the leaf (which owns the step).
@@ -717,8 +810,8 @@ impl<'a> WorkflowManager<'a> {
                 map.insert(
                     root_id.to_string(),
                     WorkflowStepSummary {
-                        step_name,
-                        iteration,
+                        step_name: step_name.clone(),
+                        iteration: *iteration,
                         workflow_chain,
                     },
                 );
