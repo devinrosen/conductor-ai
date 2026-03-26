@@ -775,8 +775,13 @@ fn poll_workflow_data(
         (None, None, Vec::new())
     } else if let Some(wt_path) = worktree_path {
         // Worktree-scoped: load defs from this worktree's filesystem path.
-        let (defs, warnings) =
+        let (mut defs, warnings) =
             WorkflowManager::list_defs(wt_path, repo_path.unwrap_or("")).unwrap_or_default();
+        defs.sort_by(|a, b| {
+            let ka = (if a.group.is_none() { 1u8 } else { 0u8 }, a.group.as_deref().unwrap_or(""), a.name.as_str());
+            let kb = (if b.group.is_none() { 1u8 } else { 0u8 }, b.group.as_deref().unwrap_or(""), b.name.as_str());
+            ka.cmp(&kb)
+        });
         (Some(defs), Some(Vec::new()), warnings)
     } else if let Some(rid) = repo_id {
         // Repo-scoped: scan all active worktrees of this repo, deduplicate by name.
@@ -811,6 +816,11 @@ fn poll_workflow_data(
                 all_defs.extend(repo_defs);
             }
         }
+        all_defs.sort_by(|a, b| {
+            let ka = (if a.group.is_none() { 1u8 } else { 0u8 }, a.group.as_deref().unwrap_or(""), a.name.as_str());
+            let kb = (if b.group.is_none() { 1u8 } else { 0u8 }, b.group.as_deref().unwrap_or(""), b.name.as_str());
+            ka.cmp(&kb)
+        });
         // def_slugs empty: all defs belong to the same repo, no slug labels needed.
         (Some(all_defs), Some(Vec::new()), all_warnings)
     } else {
@@ -862,8 +872,18 @@ fn poll_workflow_data(
                     tagged.push((repo_id.clone(), repo_slug.clone(), d));
                 }
             }
-            // Sort by repo_id so defs are contiguous per repo for grouping in the renderer.
-            tagged.sort_by(|a, b| a.0.cmp(&b.0));
+            // Sort by repo_id, then group (named first, ungrouped last), then name.
+            tagged.sort_by(|a, b| {
+                a.0.cmp(&b.0)
+                    .then_with(|| {
+                        let ga = a.2.group.as_deref().unwrap_or("");
+                        let gb = b.2.group.as_deref().unwrap_or("");
+                        let ka: (u8, &str) = (if a.2.group.is_none() { 1 } else { 0 }, ga);
+                        let kb: (u8, &str) = (if b.2.group.is_none() { 1 } else { 0 }, gb);
+                        ka.cmp(&kb)
+                    })
+                    .then_with(|| a.2.name.cmp(&b.2.name))
+            });
             for (_, slug, d) in tagged {
                 all_slugs.push(slug);
                 all_defs.push(d);
