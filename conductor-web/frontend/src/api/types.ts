@@ -85,7 +85,8 @@ export interface PlanStep {
 
 export interface AgentRun {
   id: string;
-  worktree_id: string;
+  worktree_id: string | null;
+  repo_id?: string | null;
   claude_session_id: string | null;
   prompt: string;
   status: "running" | "completed" | "failed" | "cancelled" | "waiting_for_feedback";
@@ -118,7 +119,7 @@ export interface RunTreeTotals {
 export interface AgentEvent {
   id: string;
   run_id: string;
-  kind: "text" | "tool" | "result" | "system" | "error" | "prompt";
+  kind: "text" | "tool" | "result" | "system" | "error" | "tool_error" | "prompt";
   summary: string;
   started_at: string;
   ended_at: string | null;
@@ -140,14 +141,6 @@ export interface AgentCreatedIssue {
   title: string;
   url: string;
   created_at: string;
-}
-
-export interface PushResult {
-  message: string;
-}
-
-export interface CreatePrResult {
-  url: string;
 }
 
 export interface TicketDetail {
@@ -292,6 +285,13 @@ export interface RunWorkflowRequest {
   inputs?: Record<string, string>;
 }
 
+export type FeedbackType = "text" | "confirm" | "single_select" | "multi_select";
+
+export interface FeedbackOption {
+  value: string;
+  label: string;
+}
+
 export interface FeedbackRequest {
   id: string;
   run_id: string;
@@ -299,6 +299,9 @@ export interface FeedbackRequest {
   response: string | null;
   status: "pending" | "responded" | "dismissed";
   created_at: string;
+  feedback_type: FeedbackType;
+  options?: FeedbackOption[];
+  timeout_secs?: number;
 }
 
 export interface Notification {

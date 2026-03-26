@@ -195,27 +195,19 @@ impl<'a> TicketSyncer<'a> {
         }
 
         let now = Utc::now().to_rfc3339();
-        let placeholders = crate::db::sql_placeholders_from(synced_source_ids.len(), 4);
-        let sql = format!(
-            "UPDATE tickets SET state = 'closed', synced_at = ?1
-             WHERE repo_id = ?2 AND source_type = ?3
-             AND state != 'closed'
-             AND source_id NOT IN ({placeholders})"
-        );
-
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        param_values.push(Box::new(now));
-        param_values.push(Box::new(repo_id.to_string()));
-        param_values.push(Box::new(source_type.to_string()));
-        for id in synced_source_ids {
-            param_values.push(Box::new(id.to_string()));
-        }
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            param_values.iter().map(|p| p.as_ref()).collect();
-        let count = stmt.execute(params.as_slice())?;
-
-        Ok(count)
+        let ids: Vec<String> = synced_source_ids.iter().map(|s| s.to_string()).collect();
+        crate::db::with_in_clause(
+            "UPDATE tickets SET state = 'closed', synced_at = ?1 \
+             WHERE repo_id = ?2 AND source_type = ?3 AND state != 'closed' \
+             AND source_id NOT IN",
+            &[
+                &now as &dyn rusqlite::types::ToSql,
+                &repo_id as &dyn rusqlite::types::ToSql,
+                &source_type as &dyn rusqlite::types::ToSql,
+            ],
+            &ids,
+            |sql, params| Ok(self.conn.prepare(sql)?.execute(params)?),
+        )
     }
 
     /// Return the most recent `synced_at` timestamp for tickets in a repo.
@@ -230,15 +222,19 @@ impl<'a> TicketSyncer<'a> {
     }
 
     /// List tickets, optionally filtered by repo.
+    ///
+    /// Results are sorted by issue number descending (highest first).
+    /// Non-numeric `source_id` values (e.g. Jira keys like `PROJ-123`) cast to 0
+    /// and sort after all numeric IDs, ordered among themselves by string comparison.
     pub fn list(&self, repo_id: Option<&str>) -> Result<Vec<Ticket>> {
         let query = match repo_id {
             Some(_) => {
                 "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json
-                 FROM tickets WHERE repo_id = ?1 ORDER BY synced_at DESC"
+                 FROM tickets WHERE repo_id = ?1 ORDER BY CAST(source_id AS INTEGER) DESC, source_id DESC"
             }
             None => {
                 "SELECT id, repo_id, source_type, source_id, title, body, state, labels, assignee, priority, url, synced_at, raw_json
-                 FROM tickets ORDER BY synced_at DESC"
+                 FROM tickets ORDER BY CAST(source_id AS INTEGER) DESC, source_id DESC"
             }
         };
 
@@ -294,10 +290,10 @@ impl<'a> TicketSyncer<'a> {
         }
 
         let sql = if conditions.is_empty() {
-            format!("{select} ORDER BY t.synced_at DESC")
+            format!("{select} ORDER BY CAST(t.source_id AS INTEGER) DESC, t.source_id DESC")
         } else {
             format!(
-                "{select} WHERE {} ORDER BY t.synced_at DESC",
+                "{select} WHERE {} ORDER BY CAST(t.source_id AS INTEGER) DESC, t.source_id DESC",
                 conditions.join(" AND ")
             )
         };
@@ -1851,5 +1847,97 @@ mod tests {
             result.unwrap_err(),
             ConductorError::TicketNotFound { .. }
         ));
+    }
+
+    #[test]
+    fn test_list_sorts_by_issue_number_descending() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Insert tickets with numeric source_ids in non-sequential order
+        let tickets = vec![
+            make_ticket("5", "Issue 5"),
+            make_ticket("123", "Issue 123"),
+            make_ticket("1", "Issue 1"),
+            make_ticket("42", "Issue 42"),
+        ];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+
+        let result = syncer.list(Some("r1")).unwrap();
+        let ids: Vec<&str> = result.iter().map(|t| t.source_id.as_str()).collect();
+        assert_eq!(ids, vec!["123", "42", "5", "1"]);
+    }
+
+    #[test]
+    fn test_list_filtered_sorts_by_issue_number_descending() {
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![
+            make_ticket("10", "Issue 10"),
+            make_ticket("200", "Issue 200"),
+            make_ticket("3", "Issue 3"),
+        ];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+
+        let filter = TicketFilter {
+            labels: vec![],
+            search: None,
+            include_closed: false,
+        };
+        let result = syncer.list_filtered(Some("r1"), &filter).unwrap();
+        let ids: Vec<&str> = result.iter().map(|t| t.source_id.as_str()).collect();
+        assert_eq!(ids, vec!["200", "10", "3"]);
+    }
+
+    #[test]
+    fn test_list_all_repos_sorts_by_issue_number_descending() {
+        let conn = setup_db();
+        // Register a second repo so we can test cross-repo listing
+        conn.execute(
+            "INSERT INTO repos (id, slug, local_path, remote_url, workspace_dir, created_at) \
+             VALUES ('r2', 'test-repo-2', '/tmp/repo2', 'https://github.com/test/repo2.git', '/tmp/ws2', '2024-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        let syncer = TicketSyncer::new(&conn);
+
+        // Insert tickets across two different repos with interleaved source_ids
+        let repo1_tickets = vec![
+            make_ticket("10", "Repo1 Issue 10"),
+            make_ticket("50", "Repo1 Issue 50"),
+        ];
+        let repo2_tickets = vec![
+            make_ticket("25", "Repo2 Issue 25"),
+            make_ticket("100", "Repo2 Issue 100"),
+        ];
+        syncer.upsert_tickets("r1", &repo1_tickets).unwrap();
+        syncer.upsert_tickets("r2", &repo2_tickets).unwrap();
+
+        // list(None) should return all tickets sorted by issue number descending
+        let result = syncer.list(None).unwrap();
+        let ids: Vec<&str> = result.iter().map(|t| t.source_id.as_str()).collect();
+        assert_eq!(ids, vec!["100", "50", "25", "10"]);
+    }
+
+    #[test]
+    fn test_list_sorts_non_numeric_source_ids_to_end() {
+        // Non-numeric source_ids (e.g. Jira keys) CAST to 0, so they sort
+        // after all numeric IDs. Among themselves, they fall back to the
+        // secondary `source_id DESC` (string) sort.
+        let conn = setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let tickets = vec![
+            make_ticket("PROJ-10", "Jira ticket 10"),
+            make_ticket("5", "GitHub issue 5"),
+            make_ticket("PROJ-3", "Jira ticket 3"),
+            make_ticket("100", "GitHub issue 100"),
+        ];
+        syncer.upsert_tickets("r1", &tickets).unwrap();
+
+        let result = syncer.list(Some("r1")).unwrap();
+        let ids: Vec<&str> = result.iter().map(|t| t.source_id.as_str()).collect();
+        // Numeric IDs first (descending), then non-numeric (string descending)
+        assert_eq!(ids, vec!["100", "5", "PROJ-3", "PROJ-10"]);
     }
 }

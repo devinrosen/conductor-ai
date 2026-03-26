@@ -1,0 +1,29 @@
+workflow mobile-ux-audit {
+  meta {
+    description = "Capture mobile screenshots of all conductor-web views and run an AI-powered UX audit against 8 criteria"
+    trigger     = "manual"
+    targets     = ["repo", "worktree"]
+  }
+
+  script build-web {
+    run = ".conductor/scripts/build-web.sh"
+    as  = "developer"
+  }
+
+  script capture-screenshots {
+    run = ".conductor/scripts/capture-screenshots.sh"
+    as  = "developer"
+  }
+
+  call analyze-mobile-ux
+
+  gate human_review {
+    prompt     = "Review the mobile UX audit report above. Approve to file GitHub issues for high-severity findings, or reject to skip issue creation."
+    timeout    = "48h"
+    on_timeout = continue
+  }
+
+  if analyze-mobile-ux.has_high_severity {
+    call file-ux-issues
+  }
+}

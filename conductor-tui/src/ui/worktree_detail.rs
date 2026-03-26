@@ -162,16 +162,38 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
 
         // Show pending feedback request prompt
         if let Some(ref fb) = state.data.pending_feedback {
+            let type_label = match fb.feedback_type {
+                conductor_core::agent::FeedbackType::Text => "",
+                conductor_core::agent::FeedbackType::Confirm => " [y/n]",
+                conductor_core::agent::FeedbackType::SingleSelect => " [select one]",
+                conductor_core::agent::FeedbackType::MultiSelect => " [select many]",
+            };
             lines.push(Line::from(vec![
                 Span::styled(
                     "  Feedback: ",
                     Style::default().fg(state.theme.status_waiting),
                 ),
                 Span::styled(
-                    fb.prompt.clone(),
+                    format!("{}{type_label}", fb.prompt),
                     Style::default().fg(state.theme.label_primary),
                 ),
             ]));
+            // Show options for select types
+            if let Some(ref opts) = fb.options {
+                for (i, opt) in opts.iter().enumerate() {
+                    lines.push(Line::from(Span::styled(
+                        format!("    {}. {}", i + 1, opt.label),
+                        Style::default().fg(state.theme.label_secondary),
+                    )));
+                }
+            }
+            // Show timeout info
+            if let Some(timeout) = fb.timeout_secs {
+                lines.push(Line::from(Span::styled(
+                    format!("    (auto-dismiss in {timeout}s)"),
+                    Style::default().fg(state.theme.label_secondary),
+                )));
+            }
         }
 
         // Show child runs if this is a parent (supervisor) run

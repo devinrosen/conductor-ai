@@ -7,16 +7,20 @@ export function CreateWorktreeForm({
   onCreated,
   open: controlledOpen,
   onOpenChange,
+  ticketId,
+  initialName,
 }: {
   repoId: string;
   onCreated: () => void;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  ticketId?: string;
+  initialName?: string;
 }) {
   const [internalOpen, setInternalOpen] = useState(false);
   const open = controlledOpen ?? internalOpen;
   const setOpen = onOpenChange ?? setInternalOpen;
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initialName ?? "");
   const [fromBranch, setFromBranch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -29,8 +33,9 @@ export function CreateWorktreeForm({
       await api.createWorktree(repoId, {
         name,
         from_branch: fromBranch || undefined,
+        ticket_id: ticketId,
       });
-      setName("");
+      setName(initialName ?? "");
       setFromBranch("");
       setOpen(false);
       onCreated();

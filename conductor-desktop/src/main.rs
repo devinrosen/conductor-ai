@@ -20,11 +20,20 @@
 mod commands;
 mod state;
 
+use axum::http::HeaderValue;
 use conductor_core::agent::AgentManager;
 use conductor_core::config::{conductor_dir, load_config};
 use conductor_core::db::open_database;
-use conductor_web::routes::api_router;
-use tower_http::cors::{Any, CorsLayer};
+use conductor_web::routes::api_router_with_cors;
+
+/// Log the result of a startup reap operation.
+fn log_reap(label: &str, result: conductor_core::error::Result<usize>) {
+    match result {
+        Ok(n) if n > 0 => tracing::info!("Reaped {n} {label}(s) on startup"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("Failed to reap {label}: {e}"),
+    }
+}
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -42,37 +51,19 @@ fn main() {
             let conn = open_database(&db_path_val).expect("Failed to open conductor database");
             let config = load_config().expect("Failed to load conductor config");
 
-            // Reap orphaned agent runs on startup.
-            let agent_mgr = AgentManager::new(&conn);
-            match agent_mgr.reap_orphaned_runs() {
-                Ok(n) if n > 0 => tracing::info!("Reaped {n} orphaned agent run(s) on startup"),
-                Ok(_) => {}
-                Err(e) => tracing::warn!("Failed to reap orphaned agent runs: {e}"),
-            }
-
-            // Reap stale worktrees on startup.
-            {
+            // Reap stale resources on startup.
+            log_reap(
+                "orphaned agent run",
+                AgentManager::new(&conn).reap_orphaned_runs(),
+            );
+            log_reap("stale worktree", {
                 use conductor_core::worktree::WorktreeManager;
-                let wt_mgr = WorktreeManager::new(&conn, &config);
-                match wt_mgr.reap_stale_worktrees() {
-                    Ok(n) if n > 0 => tracing::info!("Reaped {n} stale worktree(s) on startup"),
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("Failed to reap stale worktrees: {e}"),
-                }
-            }
-
-            // Reap orphaned workflow runs on startup.
-            {
+                WorktreeManager::new(&conn, &config).reap_stale_worktrees()
+            });
+            log_reap("orphaned workflow run", {
                 use conductor_core::workflow::WorkflowManager;
-                let wf_mgr = WorkflowManager::new(&conn);
-                match wf_mgr.reap_orphaned_workflow_runs() {
-                    Ok(n) if n > 0 => {
-                        tracing::info!("Reaped {n} orphaned workflow run(s) on startup")
-                    }
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("Failed to reap orphaned workflow runs: {e}"),
-                }
-            }
+                WorkflowManager::new(&conn).reap_orphaned_workflow_runs()
+            });
 
             // Build the conductor-web AppState for the embedded HTTP server.
             let web_state = conductor_web::state::AppState::new(conn, config, 64);
@@ -106,15 +97,16 @@ fn main() {
                         .port();
                     let _ = port_tx.send(Ok(port));
 
-                    // Allow any origin — the server only listens on 127.0.0.1 so
-                    // only local processes can reach it. The Tauri webview origin
-                    // varies by platform and isn't worth enumerating.
-                    let cors = CorsLayer::new()
-                        .allow_origin(Any)
-                        .allow_methods(Any)
-                        .allow_headers(Any);
-
-                    let router = api_router().layer(cors).with_state(web_state);
+                    // Restrict to Tauri webview origins only.
+                    // - tauri://localhost  → macOS / Linux (Tauri custom protocol)
+                    // - http://tauri.localhost → Windows (localhost-mapped protocol)
+                    // The server only binds on 127.0.0.1, but a browser tab on any
+                    // origin could still reach it without this restriction.
+                    let router = api_router_with_cors(vec![
+                        HeaderValue::from_static("tauri://localhost"),
+                        HeaderValue::from_static("http://tauri.localhost"),
+                    ])
+                    .with_state(web_state);
 
                     if let Err(e) = axum::serve(listener, router).await {
                         eprintln!(

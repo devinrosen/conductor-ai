@@ -1,10 +1,12 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { Ticket, TicketDetail } from "../../api/types";
 import { api } from "../../api/client";
 import { useApi } from "../../hooks/useApi";
 import { StatusBadge } from "../shared/StatusBadge";
 import { parseLabels, labelTextColor } from "../../utils/ticketUtils";
 import { formatDuration, formatTokens } from "../../utils/agentStats";
+import { deriveWorktreeSlug } from "../../utils/worktreeUtils";
+import { CreateWorktreeForm } from "../worktrees/CreateWorktreeForm";
 
 interface TicketDetailModalProps {
   ticket: Ticket;
@@ -16,6 +18,7 @@ export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDeta
   const {
     data: detail,
     loading,
+    refetch,
   } = useApi<TicketDetail>(
     () => api.getTicketDetail(ticket.id),
     [ticket.id],
@@ -28,6 +31,8 @@ export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDeta
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
+
+  const [showCreateForm, setShowCreateForm] = useState(false);
 
   const labels = parseLabels(ticket.labels);
   const totals = detail?.agent_totals;
@@ -158,9 +163,21 @@ export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDeta
 
           {/* Linked Worktrees */}
           <div>
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">
-              Linked Worktrees
-            </h4>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                Linked Worktrees
+              </h4>
+              {ticket.repo_id && (
+                <CreateWorktreeForm
+                  repoId={ticket.repo_id}
+                  ticketId={ticket.id}
+                  initialName={deriveWorktreeSlug(ticket.source_id, ticket.title)}
+                  open={showCreateForm}
+                  onOpenChange={setShowCreateForm}
+                  onCreated={refetch}
+                />
+              )}
+            </div>
             {loading ? (
               <p className="text-sm text-gray-400">Loading...</p>
             ) : worktrees.length > 0 ? (
@@ -188,6 +205,7 @@ export function TicketDetailModal({ ticket, onClose, labelColorMap }: TicketDeta
             ) : (
               <p className="text-sm text-gray-400">No linked worktrees</p>
             )}
+
           </div>
         </div>
 

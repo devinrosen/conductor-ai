@@ -13,8 +13,6 @@ import type {
   AgentPromptInfo,
   RunTreeTotals,
   AgentCreatedIssue,
-  PushResult,
-  CreatePrResult,
   IssueSource,
   CreateIssueSourceRequest,
   DiscoverableRepo,
@@ -71,13 +69,6 @@ export const api = {
     }),
   deleteWorktree: (id: string) =>
     request<Worktree>(`/worktrees/${id}`, { method: "DELETE" }),
-  pushWorktree: (id: string) =>
-    request<PushResult>(`/worktrees/${id}/push`, { method: "POST" }),
-  createPr: (id: string, draft = false) =>
-    request<CreatePrResult>(`/worktrees/${id}/pr`, {
-      method: "POST",
-      body: JSON.stringify({ draft }),
-    }),
   linkTicket: (id: string, ticketId: string) =>
     request<Worktree>(`/worktrees/${id}/link-ticket`, {
       method: "POST",
@@ -109,6 +100,25 @@ export const api = {
     request<Record<string, AgentRun>>("/agent/latest-runs"),
   ticketAgentTotals: () =>
     request<Record<string, TicketAgentTotals>>("/agent/ticket-totals"),
+  latestRunsByWorktreeForRepo: (repoId: string) =>
+    request<Record<string, AgentRun>>(`/repos/${repoId}/agent/latest-runs`),
+  ticketAgentTotalsForRepo: (repoId: string) =>
+    request<Record<string, TicketAgentTotals>>(`/repos/${repoId}/agent/ticket-totals`),
+
+  // Repo-scoped agents (read-only)
+  startRepoAgent: (repoId: string, prompt: string, newSession?: boolean) =>
+    request<AgentRun>(`/repos/${repoId}/agent/start`, {
+      method: "POST",
+      body: JSON.stringify({ prompt, new_session: newSession ?? false }),
+    }),
+  listRepoAgentRuns: (repoId: string) =>
+    request<AgentRun[]>(`/repos/${repoId}/agent/runs`),
+  stopRepoAgent: (repoId: string, runId: string) =>
+    request<AgentRun>(`/repos/${repoId}/agent/${runId}/stop`, {
+      method: "POST",
+    }),
+  getRepoAgentEvents: (repoId: string, runId: string) =>
+    request<AgentEvent[]>(`/repos/${repoId}/agent/${runId}/events`),
 
   // Agent orchestration
   listAgentRuns: (worktreeId: string) =>

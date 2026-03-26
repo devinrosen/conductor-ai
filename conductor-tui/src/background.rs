@@ -292,7 +292,15 @@ pub fn poll_data() -> Option<PollResult> {
         if now - LAST_REAP.load(Ordering::Relaxed) >= 30 {
             LAST_REAP.store(now, Ordering::Relaxed);
             let _ = agent_mgr.reap_orphaned_runs();
+            let _ = agent_mgr.dismiss_expired_feedback_requests();
             let _ = wt_mgr.reap_stale_worktrees();
+            if config.general.auto_cleanup_merged_branches {
+                match wt_mgr.cleanup_merged_worktrees(None) {
+                    Ok(n) if n > 0 => tracing::info!("Auto-cleaned {n} merged worktree(s)"),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("cleanup_merged_worktrees failed: {e}"),
+                }
+            }
             let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
             match wf_mgr.recover_stuck_steps() {
                 Ok(n) if n > 0 => tracing::debug!("Recovered {n} stuck workflow step(s)"),
@@ -312,6 +320,7 @@ pub fn poll_data() -> Option<PollResult> {
     let tickets = ticket_syncer.list(None).ok()?;
     let ticket_labels = ticket_syncer.get_all_labels().unwrap_or_default();
     let latest_agent_runs = agent_mgr.latest_runs_by_worktree().unwrap_or_default();
+    let latest_repo_agent_runs = agent_mgr.latest_repo_scoped_runs_all().unwrap_or_default();
     let ticket_agent_totals = agent_mgr.totals_by_ticket_all().unwrap_or_default();
 
     use conductor_core::workflow::{WorkflowManager, WorkflowRunStatus};
@@ -385,6 +394,25 @@ pub fn poll_data() -> Option<PollResult> {
 
     // Load active features for all repos in a single query.
     let feat_mgr = FeatureManager::new(&conn, &config);
+
+    // Refresh last_commit_at cache at most once per 60 seconds.
+    {
+        static LAST_REFRESH: AtomicI64 = AtomicI64::new(0);
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        if now_secs - LAST_REFRESH.load(Ordering::Relaxed) >= 60 {
+            LAST_REFRESH.store(now_secs, Ordering::Relaxed);
+            let repos_for_refresh = repo_mgr.list().unwrap_or_default();
+            for repo in &repos_for_refresh {
+                if let Err(e) = feat_mgr.refresh_last_commit_all(&repo.slug) {
+                    tracing::warn!("refresh_last_commit_all for {}: {e}", repo.slug);
+                }
+            }
+        }
+    }
+
     let features_by_repo = feat_mgr.list_all_active().unwrap_or_else(|e| {
         tracing::warn!("list_all_active features failed: {e}");
         std::collections::HashMap::new()
@@ -405,6 +433,7 @@ pub fn poll_data() -> Option<PollResult> {
         live_turns_by_worktree,
         features_by_repo,
         unread_notification_count,
+        latest_repo_agent_runs,
     }));
     Some(PollResult {
         action,
@@ -958,4 +987,151 @@ pub fn spawn_blocking(tx: BackgroundSender, f: impl FnOnce() -> Action + Send + 
         let action = f();
         let _ = tx.send(action);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    // ── query_if_enabled ──────────────────────────────────────────────
+
+    #[test]
+    fn query_if_enabled_returns_result_when_true() {
+        let result = query_if_enabled(true, || vec![1, 2, 3]);
+        assert_eq!(result, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn query_if_enabled_returns_empty_when_false() {
+        let result: Vec<i32> = query_if_enabled(false, || vec![1, 2, 3]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn query_if_enabled_closure_not_called_when_false() {
+        let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let called_clone = called.clone();
+        let _: Vec<i32> = query_if_enabled(false, move || {
+            called_clone.store(true, Ordering::SeqCst);
+            vec![1]
+        });
+        assert!(!called.load(Ordering::SeqCst));
+    }
+
+    // ── sync_repo ─────────────────────────────────────────────────────
+
+    #[test]
+    fn sync_repo_returns_ticket_sync_complete_on_success() {
+        let conn = conductor_core::test_helpers::setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let ticket = TicketInput {
+            source_type: "github".into(),
+            source_id: "42".into(),
+            title: "Test issue".into(),
+            body: "".into(),
+            state: "open".into(),
+            labels: vec![],
+            assignee: None,
+            priority: None,
+            url: "https://example.com".into(),
+            raw_json: "{}".into(),
+            label_details: vec![],
+        };
+
+        let action = sync_repo(&syncer, "r1", "test-repo", "github", || Ok(vec![ticket]));
+        match action {
+            Action::TicketSyncComplete { repo_slug, count } => {
+                assert_eq!(repo_slug, "test-repo");
+                assert_eq!(count, 1);
+            }
+            other => panic!("expected TicketSyncComplete, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_repo_returns_ticket_sync_failed_on_fetch_error() {
+        let conn = conductor_core::test_helpers::setup_db();
+        let syncer = TicketSyncer::new(&conn);
+
+        let action = sync_repo(&syncer, "r1", "test-repo", "github", || {
+            Err(ConductorError::TicketSync("fetch failed".into()))
+        });
+        match action {
+            Action::TicketSyncFailed { repo_slug, error } => {
+                assert_eq!(repo_slug, "test-repo");
+                assert!(error.contains("fetch failed"));
+            }
+            other => panic!("expected TicketSyncFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_repo_returns_ticket_sync_failed_on_upsert_error() {
+        // Use a connection with no repo registered — foreign key constraint will fail
+        let conn = conductor_core::test_helpers::create_test_conn();
+        let syncer = TicketSyncer::new(&conn);
+
+        let ticket = TicketInput {
+            source_type: "github".into(),
+            source_id: "1".into(),
+            title: "Test".into(),
+            body: "".into(),
+            state: "open".into(),
+            labels: vec![],
+            assignee: None,
+            priority: None,
+            url: "https://example.com".into(),
+            raw_json: "{}".into(),
+            label_details: vec![],
+        };
+
+        let action = sync_repo(&syncer, "nonexistent-repo", "test-repo", "github", || {
+            Ok(vec![ticket])
+        });
+        match action {
+            Action::TicketSyncFailed { repo_slug, .. } => {
+                assert_eq!(repo_slug, "test-repo");
+            }
+            other => panic!("expected TicketSyncFailed, got {other:?}"),
+        }
+    }
+
+    // ── TICKET_SYNC_STALE_SECS ────────────────────────────────────────
+
+    #[test]
+    fn ticket_sync_stale_secs_is_five_minutes() {
+        assert_eq!(TICKET_SYNC_STALE_SECS, 300);
+    }
+
+    // ── PR_FETCH_IN_FLIGHT guard ──────────────────────────────────────
+
+    #[test]
+    fn pr_fetch_guard_drop_clears_flag() {
+        PR_FETCH_IN_FLIGHT.store(true, Ordering::SeqCst);
+        {
+            let _guard = PrFetchGuard;
+            assert!(PR_FETCH_IN_FLIGHT.load(Ordering::SeqCst));
+        }
+        // After guard is dropped, flag should be cleared
+        assert!(!PR_FETCH_IN_FLIGHT.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn pr_fetch_in_flight_swap_prevents_concurrent() {
+        // Reset first
+        PR_FETCH_IN_FLIGHT.store(false, Ordering::SeqCst);
+
+        // First swap returns false (was not in flight)
+        let was_in_flight = PR_FETCH_IN_FLIGHT.swap(true, Ordering::SeqCst);
+        assert!(!was_in_flight, "first swap should return false");
+
+        // Second swap returns true (already in flight → skip)
+        let was_in_flight = PR_FETCH_IN_FLIGHT.swap(true, Ordering::SeqCst);
+        assert!(was_in_flight, "second swap should return true");
+
+        // Clean up
+        PR_FETCH_IN_FLIGHT.store(false, Ordering::SeqCst);
+    }
 }

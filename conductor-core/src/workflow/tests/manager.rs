@@ -1969,3 +1969,166 @@ fn test_backfill_migration_leaves_null_when_worktree_deleted() {
         "repo_id should remain NULL when worktree row is deleted"
     );
 }
+
+// ---------------------------------------------------------------------------
+// set_step_output_file
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_set_step_output_file() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "script-step", "actor", false, 0, 0)
+        .unwrap();
+
+    mgr.set_step_output_file(&step_id, "/tmp/output.txt")
+        .unwrap();
+
+    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert_eq!(step.output_file.as_deref(), Some("/tmp/output.txt"));
+}
+
+// ---------------------------------------------------------------------------
+// set_step_gate_info
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_set_step_gate_info_with_prompt() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "gate-step", "gate", false, 0, 0)
+        .unwrap();
+
+    mgr.set_step_gate_info(
+        &step_id,
+        GateType::PrApproval,
+        Some("Need 2 approvals"),
+        "24h",
+    )
+    .unwrap();
+
+    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert_eq!(step.gate_type, Some(GateType::PrApproval));
+    assert_eq!(step.gate_prompt.as_deref(), Some("Need 2 approvals"));
+    assert_eq!(step.gate_timeout.as_deref(), Some("24h"));
+}
+
+#[test]
+fn test_set_step_gate_info_no_prompt() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "gate-step", "gate", false, 0, 0)
+        .unwrap();
+
+    mgr.set_step_gate_info(&step_id, GateType::PrChecks, None, "1h")
+        .unwrap();
+
+    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert_eq!(step.gate_type, Some(GateType::PrChecks));
+    assert!(step.gate_prompt.is_none());
+    assert_eq!(step.gate_timeout.as_deref(), Some("1h"));
+}
+
+// ---------------------------------------------------------------------------
+// set_step_parallel_group
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_set_step_parallel_group() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+    let step_id = mgr
+        .insert_step(&run.id, "parallel-step", "actor", false, 0, 0)
+        .unwrap();
+
+    mgr.set_step_parallel_group(&step_id, "group-abc").unwrap();
+
+    let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
+    assert_eq!(step.parallel_group_id.as_deref(), Some("group-abc"));
+}
+
+// ---------------------------------------------------------------------------
+// get_steps_for_runs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_get_steps_for_runs_empty_ids() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let result = mgr.get_steps_for_runs(&[]).unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_get_steps_for_runs_multiple_runs() {
+    let conn = setup_db();
+    let (mgr, _p1, run1) = make_workflow_run(&conn);
+
+    let agent_mgr = AgentManager::new(&conn);
+    let p2 = agent_mgr
+        .create_run(Some("w1"), "workflow", None, None)
+        .unwrap();
+    let run2 = mgr
+        .create_workflow_run("wf2", Some("w1"), &p2.id, false, "manual", None)
+        .unwrap();
+
+    // Add steps to each run
+    mgr.insert_step(&run1.id, "s1", "actor", false, 0, 0)
+        .unwrap();
+    mgr.insert_step(&run1.id, "s2", "actor", false, 1, 0)
+        .unwrap();
+    mgr.insert_step(&run2.id, "s3", "actor", false, 0, 0)
+        .unwrap();
+
+    let result = mgr.get_steps_for_runs(&[&run1.id, &run2.id]).unwrap();
+    assert_eq!(result.get(&run1.id).unwrap().len(), 2);
+    assert_eq!(result.get(&run2.id).unwrap().len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// get_active_steps_for_runs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_get_active_steps_for_runs_filters_by_status() {
+    let conn = setup_db();
+    let (mgr, _parent, run) = make_workflow_run(&conn);
+
+    let s1 = mgr
+        .insert_step(&run.id, "completed-step", "actor", false, 0, 0)
+        .unwrap();
+    set_step_status(&mgr, &s1, WorkflowStepStatus::Completed);
+
+    let s2 = mgr
+        .insert_step(&run.id, "running-step", "actor", false, 1, 0)
+        .unwrap();
+    set_step_status(&mgr, &s2, WorkflowStepStatus::Running);
+
+    let s3 = mgr
+        .insert_step(&run.id, "waiting-step", "gate", false, 2, 0)
+        .unwrap();
+    set_step_status(&mgr, &s3, WorkflowStepStatus::Waiting);
+
+    let s4 = mgr
+        .insert_step(&run.id, "failed-step", "actor", false, 3, 0)
+        .unwrap();
+    set_step_status(&mgr, &s4, WorkflowStepStatus::Failed);
+
+    let result = mgr.get_active_steps_for_runs(&[&run.id]).unwrap();
+    let steps = result.get(&run.id).unwrap();
+    // Only running and waiting should be returned
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0].step_name, "running-step");
+    assert_eq!(steps[1].step_name, "waiting-step");
+}
+
+#[test]
+fn test_get_active_steps_for_runs_empty_ids() {
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+    let result = mgr.get_active_steps_for_runs(&[]).unwrap();
+    assert!(result.is_empty());
+}

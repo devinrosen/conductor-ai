@@ -64,6 +64,7 @@ pub mod workflow;
 pub mod workflow_config;
 pub(crate) mod workflow_dsl;
 pub mod workflow_ephemeral;
+pub mod workflow_template;
 pub mod worktree;
 
 /// Generate a new ULID-based unique ID string.

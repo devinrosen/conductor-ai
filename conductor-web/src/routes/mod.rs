@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod events;
+pub mod features;
 pub mod issue_sources;
 pub mod model_config;
 pub mod notifications;
@@ -8,10 +9,24 @@ pub mod tickets;
 pub mod workflows;
 pub mod worktrees;
 
+use axum::http::HeaderValue;
 use axum::routing::{delete, get, patch, post};
 use axum::Router;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::state::AppState;
+
+/// Build the API router with CORS restricted to the given origins.
+///
+/// This keeps CORS configuration inside conductor-web so that embedders
+/// (e.g. conductor-desktop) don't need to depend on axum/tower-http directly.
+pub fn api_router_with_cors(allowed_origins: Vec<HeaderValue>) -> Router<AppState> {
+    let cors = CorsLayer::new()
+        .allow_origin(allowed_origins)
+        .allow_methods(Any)
+        .allow_headers(Any);
+    api_router().layer(cors)
+}
 
 pub fn api_router() -> Router<AppState> {
     Router::new()
@@ -44,8 +59,6 @@ pub fn api_router() -> Router<AppState> {
             "/api/worktrees/{id}/model",
             patch(worktrees::patch_worktree_model),
         )
-        .route("/api/worktrees/{id}/push", post(worktrees::push_worktree))
-        .route("/api/worktrees/{id}/pr", post(worktrees::create_pr))
         .route(
             "/api/worktrees/{id}/link-ticket",
             post(worktrees::link_ticket),
@@ -59,6 +72,8 @@ pub fn api_router() -> Router<AppState> {
             "/api/tickets/{ticket_id}/detail",
             get(tickets::ticket_detail),
         )
+        // Features
+        .route("/api/repos/{slug}/features", get(features::list_features))
         // Agent stats (aggregates)
         .route(
             "/api/worktrees/{id}/agent-runs",
@@ -69,12 +84,41 @@ pub fn api_router() -> Router<AppState> {
             get(agents::latest_runs_by_worktree),
         )
         .route("/api/agent/ticket-totals", get(agents::ticket_totals))
+        .route(
+            "/api/repos/{id}/agent/latest-runs",
+            get(agents::latest_runs_by_worktree_for_repo),
+        )
+        .route(
+            "/api/repos/{id}/agent/ticket-totals",
+            get(agents::ticket_totals_for_repo),
+        )
+        // Repo-scoped agents (read-only)
+        .route(
+            "/api/repos/{id}/agent/start",
+            post(agents::start_repo_agent),
+        )
+        .route(
+            "/api/repos/{id}/agent/runs",
+            get(agents::list_repo_agent_runs),
+        )
+        .route(
+            "/api/repos/{id}/agent/{run_id}/stop",
+            post(agents::stop_repo_agent),
+        )
+        .route(
+            "/api/repos/{id}/agent/{run_id}/events",
+            get(agents::repo_agent_events),
+        )
         // Agent orchestration
         .route("/api/worktrees/{id}/agent/runs", get(agents::list_runs))
         .route("/api/worktrees/{id}/agent/latest", get(agents::latest_run))
         .route("/api/worktrees/{id}/agent/start", post(agents::start_agent))
         .route("/api/worktrees/{id}/agent/stop", post(agents::stop_agent))
         .route("/api/worktrees/{id}/agent/events", get(agents::get_events))
+        .route(
+            "/api/worktrees/{id}/agent/runs/{run_id}/restart",
+            post(agents::restart_agent),
+        )
         .route(
             "/api/worktrees/{id}/agent/runs/{run_id}/events",
             get(agents::get_run_events),
@@ -158,6 +202,12 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/workflows/runs/{id}/gate/reject",
             post(workflows::reject_gate),
+        )
+        // Workflow Templates
+        .route("/api/templates", get(workflows::list_templates))
+        .route(
+            "/api/templates/instantiate",
+            post(workflows::instantiate_template),
         )
         // Issue Sources
         .route(

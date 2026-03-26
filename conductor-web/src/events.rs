@@ -19,6 +19,16 @@ pub enum ConductorEvent {
     AgentStarted { run_id: String, worktree_id: String },
     #[serde(rename = "agent_stopped")]
     AgentStopped { run_id: String, worktree_id: String },
+    #[serde(rename = "repo_agent_started")]
+    RepoAgentStarted { run_id: String, repo_id: String },
+    #[serde(rename = "repo_agent_stopped")]
+    RepoAgentStopped { run_id: String, repo_id: String },
+    #[serde(rename = "agent_restarted")]
+    AgentRestarted {
+        run_id: String,
+        old_run_id: String,
+        worktree_id: String,
+    },
     #[serde(rename = "agent_event")]
     AgentEvent { run_id: String, worktree_id: String },
     #[serde(rename = "feedback_requested")]
@@ -70,6 +80,9 @@ impl ConductorEvent {
             Self::TicketsSynced { .. } => "tickets_synced",
             Self::AgentStarted { .. } => "agent_started",
             Self::AgentStopped { .. } => "agent_stopped",
+            Self::RepoAgentStarted { .. } => "repo_agent_started",
+            Self::RepoAgentStopped { .. } => "repo_agent_stopped",
+            Self::AgentRestarted { .. } => "agent_restarted",
             Self::AgentEvent { .. } => "agent_event",
             Self::FeedbackRequested { .. } => "feedback_requested",
             Self::FeedbackSubmitted { .. } => "feedback_submitted",
@@ -180,6 +193,28 @@ mod tests {
                     worktree_id: "".into(),
                 },
                 "agent_stopped",
+            ),
+            (
+                ConductorEvent::RepoAgentStarted {
+                    run_id: "".into(),
+                    repo_id: "".into(),
+                },
+                "repo_agent_started",
+            ),
+            (
+                ConductorEvent::RepoAgentStopped {
+                    run_id: "".into(),
+                    repo_id: "".into(),
+                },
+                "repo_agent_stopped",
+            ),
+            (
+                ConductorEvent::AgentRestarted {
+                    run_id: "".into(),
+                    old_run_id: "".into(),
+                    worktree_id: "".into(),
+                },
+                "agent_restarted",
             ),
             (
                 ConductorEvent::AgentEvent {

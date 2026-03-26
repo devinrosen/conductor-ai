@@ -19,6 +19,9 @@ fields:
       title: string
       message: string
       reviewer: string
+      labels:
+        type: array
+        items: string
 
 markers:
   has_review_issues: "overall_approved == false"

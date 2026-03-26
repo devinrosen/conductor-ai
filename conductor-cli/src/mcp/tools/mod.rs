@@ -8,6 +8,7 @@ use crate::mcp::helpers::{schema, tool_err};
 
 mod agents;
 mod gates;
+mod issues;
 mod prs;
 mod repos;
 mod runs;
@@ -354,6 +355,39 @@ pub(super) fn conductor_tools() -> Vec<Tool> {
         )
         .with_annotations(ToolAnnotations::new().destructive(true).read_only(false)),
         Tool::new(
+            "conductor_list_templates",
+            "List available workflow templates (built-in scaffolding). Returns template name, \
+             description, version, target types, and hints for each embedded template.",
+            schema(&[]),
+        ),
+        Tool::new(
+            "conductor_instantiate_template",
+            "Generate an agent prompt to instantiate a workflow template for a repo. \
+             Returns the full prompt that an agent should use to customize and write \
+             the workflow file. Use conductor_list_templates first to see available templates.",
+            schema(&[
+                ("template", "Template name (from conductor_list_templates)", true),
+                ("repo", "Repo slug", true),
+                (
+                    "worktree",
+                    "Worktree slug (optional; uses repo root if omitted)",
+                    false,
+                ),
+            ]),
+        ),
+        Tool::new(
+            "conductor_create_gh_issue",
+            "Create a GitHub issue in a registered repo. Returns the issue number and URL. \
+             Optionally links the created issue to an agent run for tracking.",
+            schema(&[
+                ("repo", "Repo slug (registered conductor repo)", true),
+                ("title", "Issue title", true),
+                ("body", "Issue body (markdown)", true),
+                ("labels", "Comma-separated label names (optional)", false),
+                ("run_id", "Agent run ID for tracking (optional)", false),
+            ]),
+        ),
+        Tool::new(
             "conductor_upsert_ticket",
             "Upsert a ticket from any external source into conductor. Idempotent on (repo, source_type, source_id). \
              Use this from a sync workflow to keep tickets current without modifying conductor-ai source code.",
@@ -404,6 +438,9 @@ pub(super) fn dispatch_tool(
         "conductor_unregister_repo" => repos::tool_unregister_repo(db_path, args),
         "conductor_delete_ticket" => tickets::tool_delete_ticket(db_path, args),
         "conductor_upsert_ticket" => tickets::tool_upsert_ticket(db_path, args),
+        "conductor_list_templates" => workflows::tool_list_templates(db_path, args),
+        "conductor_instantiate_template" => workflows::tool_instantiate_template(db_path, args),
+        "conductor_create_gh_issue" => issues::tool_create_gh_issue(db_path, args),
         _ => tool_err(format!("Unknown tool: {name}")),
     }
 }

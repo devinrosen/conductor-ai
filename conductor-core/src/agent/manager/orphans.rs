@@ -1,3 +1,5 @@
+use std::time::{Duration, SystemTime};
+
 use crate::db::query_collect;
 use crate::error::Result;
 
@@ -5,6 +7,36 @@ use super::super::db::{row_to_agent_run, AGENT_RUN_SELECT};
 use super::super::log_parsing::try_recover_from_log;
 use super::super::tmux::list_live_tmux_windows;
 use super::AgentManager;
+
+/// Remove stale `/tmp/conductor-agent-*.err` files older than 1 hour.
+///
+/// Best-effort: silently ignores any I/O errors (permissions, concurrent delete, etc.).
+fn cleanup_stale_stderr_files() {
+    let one_hour = Duration::from_secs(3600);
+    let Ok(entries) = std::fs::read_dir("/tmp") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if !name_str.starts_with("conductor-agent-") || !name_str.ends_with(".err") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if SystemTime::now()
+            .duration_since(modified)
+            .unwrap_or(Duration::ZERO)
+            > one_hour
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
 
 impl<'a> AgentManager<'a> {
     /// Reap orphaned agent runs whose tmux windows have disappeared.
@@ -14,6 +46,8 @@ impl<'a> AgentManager<'a> {
     /// 1. Attempts log-file recovery via `try_recover_from_log()` (the agent may
     ///    have completed but the handler didn't fire).
     /// 2. If no result is found in the log, marks the run as `failed`.
+    ///
+    /// Also cleans up stale stderr capture files older than 1 hour.
     ///
     /// Returns the number of orphaned runs that were reaped.
     pub fn reap_orphaned_runs(&self) -> Result<usize> {
@@ -46,6 +80,10 @@ impl<'a> AgentManager<'a> {
             )?;
             reaped += 1;
         }
+
+        // Best-effort cleanup of stale stderr capture files (older than 1 hour).
+        cleanup_stale_stderr_files();
+
         Ok(reaped)
     }
 }

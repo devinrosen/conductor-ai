@@ -110,6 +110,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
                 KeyCode::Enter => Action::InputSubmit,
                 KeyCode::Backspace => Action::InputBackspace,
+                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
                 _ => Action::None,
             };
         }
@@ -130,6 +132,13 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                     let new_idx = (selected + 1) % len;
                     return Action::ThemePreview(new_idx);
                 }
+                KeyCode::Char('g') | KeyCode::Home => {
+                    return Action::ThemePreview(0);
+                }
+                KeyCode::Char('G') | KeyCode::End => {
+                    let new_idx = len.saturating_sub(1);
+                    return Action::ThemePreview(new_idx);
+                }
                 KeyCode::Enter => return Action::InputSubmit,
                 KeyCode::Esc => return Action::DismissModal,
                 _ => return Action::None,
@@ -142,6 +151,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
                 KeyCode::Char('a') => Action::IssueSourceAdd,
                 KeyCode::Char('d') => Action::IssueSourceDelete,
+                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
                 _ => Action::None,
             };
         }
@@ -203,6 +214,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
                 KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
                 KeyCode::Enter => Action::SelectBranch(None),
+                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
                 KeyCode::Char(c) if c.is_ascii_digit() => {
                     let n = c.to_digit(10).unwrap() as usize;
                     if n >= 1 && n <= items.len() {
@@ -220,6 +233,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
                 KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
                 KeyCode::Enter => Action::SelectBaseBranch(None),
+                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
                 KeyCode::Char(c) if c.is_ascii_digit() => {
                     let n = c.to_digit(10).unwrap() as usize;
                     if n >= 1 && n <= items.len() {
@@ -241,16 +256,38 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => Action::None,
             };
         }
+        Modal::TemplatePicker { ref items, .. } => {
+            return match key.code {
+                KeyCode::Esc => Action::DismissModal,
+                KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
+                KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
+                KeyCode::Enter => Action::InputSubmit,
+                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
+                KeyCode::Char(c) if c.is_ascii_digit() => {
+                    let n = c.to_digit(10).unwrap() as usize;
+                    if n >= 1 && n <= items.len() {
+                        // Jump to the selected item
+                        Action::SelectListItem(n - 1)
+                    } else {
+                        Action::None
+                    }
+                }
+                _ => Action::None,
+            };
+        }
         Modal::WorkflowPicker { ref items, .. } => {
             return match key.code {
                 KeyCode::Esc => Action::DismissModal,
                 KeyCode::Up | KeyCode::Char('k') => Action::MoveUp,
                 KeyCode::Down | KeyCode::Char('j') => Action::MoveDown,
                 KeyCode::Enter => Action::InputSubmit,
+                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
                 KeyCode::Char(c) if c.is_ascii_digit() => {
                     let n = c.to_digit(10).unwrap() as usize;
                     if n >= 1 && n <= items.len() {
-                        Action::SelectWorkflowItem(n - 1)
+                        Action::SelectListItem(n - 1)
                     } else {
                         Action::None
                     }
@@ -267,6 +304,8 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 KeyCode::Esc | KeyCode::Char('q') => Action::DismissModal,
                 KeyCode::Char('j') | KeyCode::Down => Action::MoveDown,
                 KeyCode::Char('k') | KeyCode::Up => Action::MoveUp,
+                KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+                KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
                 _ => Action::None,
             };
         }
@@ -324,6 +363,9 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('w') if state.workflows_focus == crate::state::WorkflowsFocus::Runs => {
                 return Action::PickWorkflow;
             }
+            KeyCode::Char('t') if state.workflows_focus == crate::state::WorkflowsFocus::Runs => {
+                return Action::PickTemplate;
+            }
             // Right / l: enter or exit the step tree pane when viewing defs.
             KeyCode::Right | KeyCode::Char('l')
                 if state.workflows_focus == crate::state::WorkflowsFocus::Defs =>
@@ -366,6 +408,13 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
 
         let is_active = agent_run.is_some_and(|run| run.is_active());
         let is_waiting_for_feedback = agent_run.is_some_and(|run| run.is_waiting_for_feedback());
+        let is_failed = agent_run.is_some_and(|run| {
+            matches!(
+                run.status,
+                conductor_core::agent::AgentRunStatus::Failed
+                    | conductor_core::agent::AgentRunStatus::Cancelled
+            )
+        });
 
         let focus = state.worktree_detail_focus;
 
@@ -373,10 +422,12 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
             KeyCode::Char('p') => return Action::LaunchAgent,
             KeyCode::Char('O') if !is_active => return Action::OrchestrateAgent,
             KeyCode::Char('x') if is_active => return Action::StopAgent,
+            KeyCode::Char('R') if is_failed => return Action::RestartAgent,
             KeyCode::Char('f') if is_waiting_for_feedback => return Action::SubmitFeedback,
             KeyCode::Char('F') if is_waiting_for_feedback => return Action::DismissFeedback,
             KeyCode::Char('r') => return Action::ResumeWorktreeWorkflow,
             KeyCode::Char('w') => return Action::PickWorkflow,
+            KeyCode::Char('t') => return Action::PickTemplate,
             KeyCode::Char('y') => return Action::WorktreeDetailCopy,
             KeyCode::Char('o') => return Action::WorktreeDetailOpen,
             KeyCode::Char('j')
@@ -505,6 +556,28 @@ pub fn map_key(key: KeyEvent, state: &AppState) -> Action {
                 _ => {}
             }
         }
+        if state.repo_detail_focus == crate::state::RepoDetailFocus::RepoAgent {
+            let latest_run = state
+                .selected_repo_id
+                .as_ref()
+                .and_then(|id| state.data.latest_repo_agent_runs.get(id));
+            let is_active = latest_run.map(|r| r.is_active()).unwrap_or(false);
+            let is_waiting = latest_run
+                .map(|r| r.is_waiting_for_feedback())
+                .unwrap_or(false);
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => return Action::AgentActivityDown,
+                KeyCode::Char('k') | KeyCode::Up => return Action::AgentActivityUp,
+                KeyCode::Char('x') if is_active => return Action::StopAgent,
+                KeyCode::Char('f') if is_waiting => return Action::SubmitFeedback,
+                KeyCode::Char('F') if is_waiting => return Action::DismissFeedback,
+                KeyCode::Enter => return Action::ExpandAgentEvent,
+                _ => {}
+            }
+        }
+        if let KeyCode::Char('p') = key.code {
+            return Action::PromptRepoAgent;
+        }
         if let KeyCode::Char('I') = key.code {
             return Action::ToggleAgentIssues;
         }
@@ -569,6 +642,7 @@ mod tests {
         AgentRun {
             id: "run-1".into(),
             worktree_id: Some(worktree_id.to_string()),
+            repo_id: None,
             claude_session_id: None,
             prompt: "do stuff".into(),
             status,
@@ -681,11 +755,11 @@ mod tests {
         let state = workflow_picker_state(3); // items: [StartAgent, workflow-0, Skip]
         assert!(matches!(
             map_key(key(KeyCode::Char('1')), &state),
-            Action::SelectWorkflowItem(0)
+            Action::SelectListItem(0)
         ));
         assert!(matches!(
             map_key(key(KeyCode::Char('3')), &state),
-            Action::SelectWorkflowItem(2)
+            Action::SelectListItem(2)
         ));
     }
 
@@ -731,6 +805,7 @@ mod tests {
                 worktree_count: 0,
                 ticket_count: 0,
                 base_branch: None,
+                stale_days: None,
             });
         }
         for i in 1..item_count {
@@ -739,6 +814,7 @@ mod tests {
                 worktree_count: 0,
                 ticket_count: 0,
                 base_branch: Some("main".into()),
+                stale_days: None,
             });
         }
         let (ordered, tree_positions) = crate::state::build_branch_picker_tree(&items);
@@ -964,7 +1040,7 @@ mod tests {
         let state = dashboard_state();
         // All of these were removed in the keybinding cleanup (#515)
         // Note: 'w' was re-added as PickWorkflow
-        for ch in ['p', 'P', 't', 'D'] {
+        for ch in ['p', 'P', 'D'] {
             assert!(
                 matches!(map_key(key(KeyCode::Char(ch)), &state), Action::None),
                 "key '{ch}' should map to Action::None after removal but did not"
@@ -1305,6 +1381,39 @@ mod tests {
         assert!(matches!(
             map_key(key(KeyCode::Char('w')), &state),
             Action::PickWorkflow
+        ));
+    }
+
+    // --- `t` key: PickTemplate binding ---
+
+    #[test]
+    fn t_maps_to_pick_template_in_workflow_column_runs() {
+        let mut state = AppState::new();
+        state.column_focus = crate::state::ColumnFocus::Workflow;
+        state.workflows_focus = crate::state::WorkflowsFocus::Runs;
+        assert!(matches!(
+            map_key(key(KeyCode::Char('t')), &state),
+            Action::PickTemplate
+        ));
+    }
+
+    #[test]
+    fn t_maps_to_pick_template_in_worktree_detail() {
+        let state = worktree_detail_state_with_focus(WorktreeDetailFocus::InfoPanel);
+        assert!(matches!(
+            map_key(key(KeyCode::Char('t')), &state),
+            Action::PickTemplate
+        ));
+    }
+
+    #[test]
+    fn t_does_not_map_to_pick_template_in_workflow_column_defs() {
+        let mut state = AppState::new();
+        state.column_focus = crate::state::ColumnFocus::Workflow;
+        state.workflows_focus = crate::state::WorkflowsFocus::Defs;
+        assert!(!matches!(
+            map_key(key(KeyCode::Char('t')), &state),
+            Action::PickTemplate
         ));
     }
 }

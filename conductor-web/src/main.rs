@@ -39,6 +39,15 @@ async fn main() -> Result<()> {
             Ok(_) => {}
             Err(e) => tracing::warn!("reap_stale_worktrees failed on startup: {e}"),
         }
+        if config.general.auto_cleanup_merged_branches {
+            match wt_mgr.cleanup_merged_worktrees(None) {
+                Ok(n) if n > 0 => {
+                    tracing::info!("Auto-cleaned {n} merged worktree(s) on startup")
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("cleanup_merged_worktrees failed on startup: {e}"),
+            }
+        }
     }
 
     // Reap orphaned workflow runs on startup.
@@ -89,9 +98,19 @@ async fn main() -> Result<()> {
                 let conn = db.blocking_lock();
                 let mgr = AgentManager::new(&conn);
                 mgr.reap_orphaned_runs()?;
+                mgr.dismiss_expired_feedback_requests()?;
                 let cfg = cfg.blocking_read();
                 let wt_mgr = conductor_core::worktree::WorktreeManager::new(&conn, &cfg);
                 wt_mgr.reap_stale_worktrees()?;
+                if cfg.general.auto_cleanup_merged_branches {
+                    match wt_mgr.cleanup_merged_worktrees(None) {
+                        Ok(n) if n > 0 => {
+                            tracing::info!("Auto-cleaned {n} merged worktree(s)")
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!("cleanup_merged_worktrees failed: {e}"),
+                    }
+                }
                 let wf_mgr = conductor_core::workflow::WorkflowManager::new(&conn);
                 wf_mgr.reap_orphaned_workflow_runs()?;
 
@@ -164,7 +183,15 @@ async fn main() -> Result<()> {
         .layer(cors)
         .with_state(state);
 
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));
+    let host: std::net::IpAddr = std::env::var("CONDUCTOR_HOST")
+        .unwrap_or_else(|_| "127.0.0.1".to_string())
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid CONDUCTOR_HOST: {e}"))?;
+    let port: u16 = std::env::var("CONDUCTOR_PORT")
+        .unwrap_or_else(|_| "3000".to_string())
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid CONDUCTOR_PORT: {e}"))?;
+    let addr = std::net::SocketAddr::from((host, port));
     tracing::info!("Listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

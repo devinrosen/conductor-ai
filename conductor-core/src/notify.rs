@@ -1825,6 +1825,7 @@ mod tests {
         AgentRun {
             id: id.to_string(),
             worktree_id: None,
+            repo_id: None,
             claude_session_id: None,
             prompt: String::new(),
             status,

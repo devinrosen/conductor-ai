@@ -80,6 +80,21 @@ impl<'a> AgentManager<'a> {
         )
     }
 
+    /// List all events across repo-scoped runs for a repo, in chronological order.
+    /// Only includes runs where `worktree_id IS NULL` (repo-level agents).
+    pub fn list_events_for_repo(&self, repo_id: &str) -> Result<Vec<AgentRunEvent>> {
+        query_collect(
+            self.conn,
+            "SELECT e.id, e.run_id, e.kind, e.summary, e.started_at, e.ended_at, e.metadata \
+             FROM agent_run_events e \
+             JOIN agent_runs r ON e.run_id = r.id \
+             WHERE r.repo_id = ?1 AND r.worktree_id IS NULL \
+             ORDER BY e.started_at ASC",
+            params![repo_id],
+            row_to_agent_run_event,
+        )
+    }
+
     /// Record a GitHub issue created by an agent run.
     pub fn record_created_issue(
         &self,
@@ -352,5 +367,35 @@ mod tests {
         let w2_issues = mgr.list_created_issues_for_worktree("w2").unwrap();
         assert_eq!(w2_issues.len(), 1);
         assert_eq!(w2_issues[0].source_id, "103");
+    }
+
+    #[test]
+    fn test_list_events_for_repo() {
+        let conn = setup_db();
+        let mgr = AgentManager::new(&conn);
+        let t = "2024-01-01T00:00:00Z";
+
+        // Create repo-scoped runs for r1
+        let repo_run1 = mgr
+            .create_repo_run("r1", "Repo task 1", None, None)
+            .unwrap();
+        let repo_run2 = mgr
+            .create_repo_run("r1", "Repo task 2", None, None)
+            .unwrap();
+
+        // Create a worktree-scoped run for the same repo — should be excluded
+        let wt_run = mgr.create_run(Some("w1"), "WT task", None, None).unwrap();
+
+        mgr.create_event(&repo_run1.id, "text", "Planning repo", t, None)
+            .unwrap();
+        mgr.create_event(&repo_run2.id, "tool", "[Read] file.rs", t, None)
+            .unwrap();
+        mgr.create_event(&wt_run.id, "text", "WT event", t, None)
+            .unwrap();
+
+        let events = mgr.list_events_for_repo("r1").unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].summary, "Planning repo");
+        assert_eq!(events[1].summary, "[Read] file.rs");
     }
 }

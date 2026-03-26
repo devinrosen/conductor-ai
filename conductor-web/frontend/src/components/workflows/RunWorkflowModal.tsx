@@ -5,6 +5,7 @@ import type { WorkflowDefSummary } from "../../api/types";
 interface RunWorkflowModalProps {
   def: WorkflowDefSummary;
   worktreeId: string;
+  ticketId?: string;
   onClose: () => void;
   onStarted: () => void;
 }
@@ -12,6 +13,7 @@ interface RunWorkflowModalProps {
 export function RunWorkflowModal({
   def,
   worktreeId,
+  ticketId,
   onClose,
   onStarted,
 }: RunWorkflowModalProps) {
@@ -22,6 +24,8 @@ export function RunWorkflowModal({
     for (const input of def.inputs) {
       if (input.input_type === "boolean") {
         initial[input.name] = input.default ?? "false";
+      } else if (input.name === "ticket_id" && ticketId) {
+        initial[input.name] = ticketId;
       }
     }
     return initial;

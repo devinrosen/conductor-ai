@@ -156,7 +156,11 @@ pub(super) fn derive_worktree_slug(source_id: &str, title: &str) -> String {
         }
     };
 
-    format!("{}-{}", source_id, truncated)
+    if truncated.is_empty() {
+        source_id.to_string()
+    } else {
+        format!("{}-{}", source_id, truncated)
+    }
 }
 
 /// Send a workflow execution result through the background channel.
@@ -231,4 +235,219 @@ pub(super) fn collapse_loop_iterations(
     let max_iter = crate::state::max_iter_by_step_name(&steps);
     steps.retain(|s| s.iteration == *max_iter.get(&s.step_name).unwrap_or(&0));
     steps
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use conductor_core::workflow::{InputDecl, InputType, MetadataEntry, WorkflowWarning};
+
+    // ── max_scroll ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn max_scroll_zero_lines() {
+        assert_eq!(max_scroll(0), 0);
+    }
+
+    #[test]
+    fn max_scroll_one_line() {
+        assert_eq!(max_scroll(1), 0);
+    }
+
+    #[test]
+    fn max_scroll_many_lines() {
+        assert_eq!(max_scroll(100), 99);
+    }
+
+    // ── workflow_parse_warning_message ───────────────────────────────────────
+
+    #[test]
+    fn warning_message_empty() {
+        assert!(workflow_parse_warning_message(&[]).is_none());
+    }
+
+    #[test]
+    fn warning_message_single() {
+        let warnings = vec![WorkflowWarning {
+            file: "bad.wf".into(),
+            message: "syntax error".into(),
+        }];
+        let msg = workflow_parse_warning_message(&warnings).unwrap();
+        assert!(msg.contains("1 workflow file(s)"));
+        assert!(msg.contains("bad.wf"));
+    }
+
+    #[test]
+    fn warning_message_multiple() {
+        let warnings = vec![
+            WorkflowWarning {
+                file: "a.wf".into(),
+                message: "err".into(),
+            },
+            WorkflowWarning {
+                file: "b.wf".into(),
+                message: "err".into(),
+            },
+        ];
+        let msg = workflow_parse_warning_message(&warnings).unwrap();
+        assert!(msg.contains("2 workflow file(s)"));
+        assert!(msg.contains("a.wf, b.wf"));
+    }
+
+    // ── format_metadata_entries ─────────────────────────────────────────────
+
+    #[test]
+    fn format_metadata_field_entries() {
+        let entries = vec![
+            MetadataEntry::Field {
+                label: "Status",
+                value: "completed".into(),
+            },
+            MetadataEntry::Field {
+                label: "ID",
+                value: "abc123".into(),
+            },
+        ];
+        let result = format_metadata_entries(&entries);
+        // "Status:" is padded to align with the longest label
+        assert!(result.contains("Status:"));
+        assert!(result.contains("completed"));
+        assert!(result.contains("ID:"));
+        assert!(result.contains("abc123"));
+    }
+
+    #[test]
+    fn format_metadata_section_entry() {
+        let entries = vec![MetadataEntry::Section {
+            heading: "Details",
+            body: "Some long text here".into(),
+        }];
+        let result = format_metadata_entries(&entries);
+        assert!(result.contains("── Details ──"));
+        assert!(result.contains("Some long text here"));
+    }
+
+    #[test]
+    fn format_metadata_mixed() {
+        let entries = vec![
+            MetadataEntry::Field {
+                label: "Name",
+                value: "test".into(),
+            },
+            MetadataEntry::Section {
+                heading: "Body",
+                body: "content".into(),
+            },
+        ];
+        let result = format_metadata_entries(&entries);
+        assert!(result.contains("Name:"));
+        assert!(result.contains("── Body ──"));
+    }
+
+    // ── derive_worktree_slug ────────────────────────────────────────────────
+
+    #[test]
+    fn derive_slug_normal() {
+        let slug = derive_worktree_slug("123", "Add login flow");
+        assert_eq!(slug, "123-add-login-flow");
+    }
+
+    #[test]
+    fn derive_slug_special_chars() {
+        let slug = derive_worktree_slug("42", "Fix: null-ptr crash!!");
+        assert_eq!(slug, "42-fix-null-ptr-crash");
+    }
+
+    #[test]
+    fn derive_slug_consecutive_dashes() {
+        let slug = derive_worktree_slug("7", "hello---world   test");
+        assert_eq!(slug, "7-hello-world-test");
+    }
+
+    #[test]
+    fn derive_slug_long_title_truncation() {
+        let long_title = "a".repeat(100);
+        let slug = derive_worktree_slug("99", &long_title);
+        // Total should be ≤ 40 chars
+        assert!(slug.len() <= 40, "slug too long: {} chars", slug.len());
+        assert!(slug.starts_with("99-"));
+    }
+
+    #[test]
+    fn derive_slug_empty_title() {
+        assert_eq!(derive_worktree_slug("123", ""), "123");
+    }
+
+    #[test]
+    fn derive_slug_all_special_chars() {
+        assert_eq!(derive_worktree_slug("42", "!!@@##"), "42");
+    }
+
+    #[test]
+    fn derive_slug_whitespace_only() {
+        assert_eq!(derive_worktree_slug("7", "   "), "7");
+    }
+
+    // ── build_form_fields ───────────────────────────────────────────────────
+
+    #[test]
+    fn build_form_fields_text_required() {
+        let inputs = vec![InputDecl {
+            name: "pr_url".into(),
+            required: true,
+            default: None,
+            description: None,
+            input_type: InputType::String,
+        }];
+        let fields = build_form_fields(&inputs);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].label, "pr_url");
+        assert_eq!(fields[0].placeholder, "(required)");
+        assert!(fields[0].required);
+        assert!(fields[0].value.is_empty());
+        assert!(matches!(fields[0].field_type, FormFieldType::Text));
+    }
+
+    #[test]
+    fn build_form_fields_boolean_with_default() {
+        let inputs = vec![InputDecl {
+            name: "dry_run".into(),
+            required: false,
+            default: Some("true".into()),
+            description: None,
+            input_type: InputType::Boolean,
+        }];
+        let fields = build_form_fields(&inputs);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].value, "true");
+        assert!(matches!(fields[0].field_type, FormFieldType::Boolean));
+        assert!(!fields[0].required);
+    }
+
+    #[test]
+    fn build_form_fields_boolean_no_default() {
+        let inputs = vec![InputDecl {
+            name: "verbose".into(),
+            required: false,
+            default: None,
+            description: None,
+            input_type: InputType::Boolean,
+        }];
+        let fields = build_form_fields(&inputs);
+        assert_eq!(fields[0].value, "false");
+    }
+
+    #[test]
+    fn build_form_fields_text_with_default() {
+        let inputs = vec![InputDecl {
+            name: "branch".into(),
+            required: false,
+            default: Some("main".into()),
+            description: None,
+            input_type: InputType::String,
+        }];
+        let fields = build_form_fields(&inputs);
+        assert_eq!(fields[0].value, "main");
+        assert!(fields[0].placeholder.is_empty());
+    }
 }

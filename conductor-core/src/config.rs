@@ -6,6 +6,54 @@ use std::sync::OnceLock;
 
 use crate::error::{ConductorError, Result};
 
+/// Controls which permission flag is passed to Claude Code when launching agent runs.
+///
+/// ```toml
+/// [general]
+/// agent_permission_mode = "skip-permissions" # default — uses --dangerously-skip-permissions
+/// agent_permission_mode = "auto-mode"        # uses --enable-auto-mode (may prompt in headless agents)
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentPermissionMode {
+    /// Use `--enable-auto-mode` (may prompt for permissions in headless agents).
+    AutoMode,
+    /// Use `--dangerously-skip-permissions` (default for headless agent runs).
+    #[default]
+    SkipPermissions,
+    /// Use `--permission-mode plan` (read-only mode for repo-scoped agents).
+    Plan,
+}
+
+impl AgentPermissionMode {
+    /// Returns the CLI flag string to pass to the `claude` command.
+    pub fn cli_flag(&self) -> &str {
+        match self {
+            Self::AutoMode => "--enable-auto-mode",
+            Self::SkipPermissions => "--dangerously-skip-permissions",
+            Self::Plan => "--permission-mode",
+        }
+    }
+
+    /// Returns the optional value argument that follows the flag (e.g. "plan" for `--permission-mode plan`).
+    pub fn cli_flag_value(&self) -> Option<&str> {
+        match self {
+            Self::Plan => Some("plan"),
+            _ => None,
+        }
+    }
+
+    /// Returns the `--allowedTools` glob pattern for this mode, if any.
+    ///
+    /// Plan mode restricts agents to conductor MCP tools only.
+    pub fn allowed_tools(&self) -> Option<&'static str> {
+        match self {
+            Self::Plan => Some("mcp__conductor__*"),
+            _ => None,
+        }
+    }
+}
+
 /// Controls whether an agent is auto-started after creating a worktree from a ticket.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -120,6 +168,10 @@ pub struct GeneralConfig {
     pub sync_interval_minutes: u32,
     #[serde(default)]
     pub auto_start_agent: AutoStartAgent,
+    /// Which permission flag to pass to Claude Code for agent runs.
+    /// Defaults to `auto-mode` (`--enable-auto-mode`).
+    #[serde(default)]
+    pub agent_permission_mode: AgentPermissionMode,
     /// Global default model for Claude agent runs (e.g. "sonnet", "claude-opus-4-6").
     /// Overridden by per-worktree and per-run model settings. Omit to use claude's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -132,6 +184,10 @@ pub struct GeneralConfig {
     /// or the stem of a file in `~/.conductor/themes/`. Omit to use the default conductor theme.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// Automatically detect merged PRs and clean up worktrees (delete local/remote branch,
+    /// remove worktree directory, auto-close orphaned features). Defaults to true.
+    #[serde(default = "default_true")]
+    pub auto_cleanup_merged_branches: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,6 +198,10 @@ pub struct DefaultsConfig {
     pub worktree_prefix_feat: String,
     #[serde(default = "default_fix_prefix")]
     pub worktree_prefix_fix: String,
+    /// Number of days after which an active feature with no recent activity is
+    /// considered stale. Set to 0 to disable stale detection.
+    #[serde(default = "default_stale_feature_days")]
+    pub stale_feature_days: u32,
 }
 
 fn default_workspace_root() -> PathBuf {
@@ -164,6 +224,10 @@ fn default_fix_prefix() -> String {
     "fix-".to_string()
 }
 
+fn default_stale_feature_days() -> u32 {
+    14
+}
+
 fn default_true() -> bool {
     true
 }
@@ -174,9 +238,11 @@ impl Default for GeneralConfig {
             workspace_root: default_workspace_root(),
             sync_interval_minutes: default_sync_interval(),
             auto_start_agent: AutoStartAgent::default(),
+            agent_permission_mode: AgentPermissionMode::default(),
             model: None,
             inject_startup_context: true,
             theme: None,
+            auto_cleanup_merged_branches: true,
         }
     }
 }
@@ -187,6 +253,7 @@ impl Default for DefaultsConfig {
             default_branch: default_branch(),
             worktree_prefix_feat: default_feat_prefix(),
             worktree_prefix_fix: default_fix_prefix(),
+            stale_feature_days: default_stale_feature_days(),
         }
     }
 }
@@ -496,6 +563,73 @@ mod tests {
     }
 
     #[test]
+    fn test_agent_permission_mode_default() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(
+            config.general.agent_permission_mode,
+            AgentPermissionMode::SkipPermissions
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_auto_mode() {
+        let config: Config = toml::from_str(
+            r#"
+            [general]
+            agent_permission_mode = "auto-mode"
+        "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.general.agent_permission_mode,
+            AgentPermissionMode::AutoMode
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_skip_permissions() {
+        let config: Config = toml::from_str(
+            r#"
+            [general]
+            agent_permission_mode = "skip-permissions"
+        "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.general.agent_permission_mode,
+            AgentPermissionMode::SkipPermissions
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_cli_flag_auto() {
+        assert_eq!(
+            AgentPermissionMode::AutoMode.cli_flag(),
+            "--enable-auto-mode"
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_cli_flag_skip() {
+        assert_eq!(
+            AgentPermissionMode::SkipPermissions.cli_flag(),
+            "--dangerously-skip-permissions"
+        );
+    }
+
+    #[test]
+    fn test_agent_permission_mode_cli_flag_plan() {
+        assert_eq!(AgentPermissionMode::Plan.cli_flag(), "--permission-mode");
+    }
+
+    #[test]
+    fn test_agent_permission_mode_cli_flag_value() {
+        assert_eq!(AgentPermissionMode::AutoMode.cli_flag_value(), None);
+        assert_eq!(AgentPermissionMode::SkipPermissions.cli_flag_value(), None);
+        assert_eq!(AgentPermissionMode::Plan.cli_flag_value(), Some("plan"));
+    }
+
+    #[test]
     fn test_model_default_is_none() {
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(config.general.model, None);
@@ -529,6 +663,24 @@ mod tests {
     fn test_inject_startup_context_default_true() {
         let config: Config = toml::from_str("").unwrap();
         assert!(config.general.inject_startup_context);
+    }
+
+    #[test]
+    fn test_auto_cleanup_merged_branches_default_true() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.general.auto_cleanup_merged_branches);
+    }
+
+    #[test]
+    fn test_auto_cleanup_merged_branches_opt_out() {
+        let config: Config = toml::from_str(
+            r#"
+            [general]
+            auto_cleanup_merged_branches = false
+        "#,
+        )
+        .unwrap();
+        assert!(!config.general.auto_cleanup_merged_branches);
     }
 
     #[test]

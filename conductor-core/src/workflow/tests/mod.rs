@@ -1,11 +1,18 @@
 #![allow(unused_imports)]
 
 mod common;
-mod execution;
+mod execution_loops;
+mod execution_misc;
+mod execution_recovery;
+mod execution_steps;
+mod execution_variables;
+mod execution_workflow;
 mod gates;
+mod helpers;
 mod manager;
 mod output;
 mod resumption;
+mod types;
 
 pub(super) use super::engine::{
     bubble_up_child_step_results, completed_keys_from_steps, fetch_child_final_output,

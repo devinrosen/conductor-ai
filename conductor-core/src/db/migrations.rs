@@ -5,7 +5,7 @@ use crate::error::{ConductorError, Result};
 
 /// The highest migration version this binary knows about.
 /// **When adding a new migration, update this constant to match the new version.**
-pub const LATEST_SCHEMA_VERSION: u32 = 50;
+pub const LATEST_SCHEMA_VERSION: u32 = 51;
 
 /// Legacy plan step shape used only for migrating JSON data from agent_runs.plan.
 #[derive(Deserialize)]
@@ -887,20 +887,36 @@ pub fn run(conn: &Connection) -> Result<()> {
         bump_version(conn, 48)?;
     }
 
-    // Wave 2: Agent communication tables (7 tables)
-    // Part of: structured-handoff-protocol@1.1.0, decision-log-as-shared-memory@1.0.0,
-    // threaded-blocker-comments@1.1.0, cross-agent-delegation-protocol@1.0.0,
-    // council-decision-architecture@1.0.0
     if version < 49 {
-        conn.execute_batch(include_str!("migrations/049_agent_communication.sql"))?;
+        conn.execute_batch(include_str!("migrations/049_feature_last_commit_at.sql"))?;
         bump_version(conn, 49)?;
     }
 
-    // Wave 2: Agent identity tables (templates + artifacts)
-    // Part of: agent-template-standardization@1.2.0, artifact-mediated-agent-communication@1.0.0
     if version < 50 {
-        conn.execute_batch(include_str!("migrations/050_agent_identity.sql"))?;
+        // Only ALTER if feedback_requests table exists (created in migration 18).
+        let has_table: bool = conn
+            .prepare("SELECT 1 FROM feedback_requests LIMIT 0")
+            .is_ok();
+        if has_table {
+            let has_col: bool = conn
+                .prepare("SELECT feedback_type FROM feedback_requests LIMIT 0")
+                .is_ok();
+            if !has_col {
+                conn.execute_batch(include_str!("migrations/050_feedback_type_and_timeout.sql"))?;
+            }
+        }
         bump_version(conn, 50)?;
+    }
+
+    // Migration 051: add repo_id column to agent_runs for repo-scoped agents.
+    if version < 51 {
+        let has_repo_id: bool = conn
+            .prepare("SELECT repo_id FROM agent_runs LIMIT 0")
+            .is_ok();
+        if !has_repo_id {
+            conn.execute_batch(include_str!("migrations/051_agent_run_repo_id.sql"))?;
+        }
+        bump_version(conn, 51)?;
     }
 
     Ok(())

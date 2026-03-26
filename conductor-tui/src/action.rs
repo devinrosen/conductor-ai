@@ -66,6 +66,8 @@ pub struct DataRefreshedPayload {
     pub features_by_repo: HashMap<String, Vec<FeatureRow>>,
     /// Number of unread in-app notifications.
     pub unread_notification_count: usize,
+    /// repo_id -> latest repo-scoped AgentRun (populated by DB poller)
+    pub latest_repo_agent_runs: HashMap<String, AgentRun>,
 }
 
 /// Every user intent or background result flows through this enum.
@@ -166,8 +168,10 @@ pub enum Action {
 
     // Agent triggers (tmux-based)
     LaunchAgent,
+    PromptRepoAgent,
     OrchestrateAgent,
     StopAgent,
+    RestartAgent,
     #[allow(dead_code)]
     CopyLastCodeBlock,
     ExpandAgentEvent,
@@ -264,6 +268,31 @@ pub enum Action {
         message: String,
     },
 
+    // Background result for repo agent launch
+    RepoAgentLaunched {
+        result: Result<String, String>,
+    },
+    // Background result for repo agent stop
+    RepoAgentStopComplete {
+        result: Result<String, String>,
+    },
+    // Background result for worktree agent launch
+    AgentLaunchComplete {
+        result: Result<String, String>,
+    },
+    // Background result for orchestrate agent launch
+    OrchestrateLaunchComplete {
+        result: Result<String, String>,
+    },
+    // Background result for worktree agent stop
+    AgentStopComplete {
+        result: Result<String, String>,
+    },
+    // Background result for agent restart
+    AgentRestartComplete {
+        result: Result<String, String>,
+    },
+
     // Background result for worktree delete readiness check
     DeleteWorktreeReady {
         repo_slug: String,
@@ -312,8 +341,9 @@ pub enum Action {
     },
     SelectBranch(Option<usize>),
 
-    /// Select a workflow picker item by number-key shortcut (0-indexed).
-    SelectWorkflowItem(usize),
+    /// Select a list-picker item by number-key shortcut (0-indexed).
+    /// Used by both WorkflowPicker and TemplatePicker modals.
+    SelectListItem(usize),
     /// Background result: workflow items loaded, ready to show post-create workflow picker.
     PostCreatePickerReady {
         items: Vec<crate::state::WorkflowPickerItem>,
@@ -331,6 +361,14 @@ pub enum Action {
     ToggleWorkflowDefsCollapse,
     /// Open a workflow picker for the current context (worktree, PR, etc.)
     PickWorkflow,
+    /// Open the template picker for the current context (scaffold a new workflow from a template).
+    PickTemplate,
+    /// Background result: template instantiation prompt was built successfully.
+    TemplateInstantiateReady {
+        template_name: String,
+        prompt: String,
+        suggested_filename: String,
+    },
     RunWorkflow,
     RunPrWorkflow,
     ResumeWorkflow,

@@ -3,12 +3,15 @@ import { useParams, Link, useNavigate } from "react-router";
 import { useRepos } from "../components/layout/AppShell";
 import { useApi } from "../hooks/useApi";
 import { api } from "../api/client";
-import type { Ticket } from "../api/types";
+import type { AgentRun, Ticket } from "../api/types";
 import { WorktreeRow } from "../components/worktrees/WorktreeRow";
 import { CreateWorktreeForm } from "../components/worktrees/CreateWorktreeForm";
 import { TicketRow } from "../components/tickets/TicketRow";
+import { TicketCard } from "../components/tickets/TicketCard";
+import { RepoAgentRunCard } from "../components/agents/RepoAgentRunCard";
 import { TicketDetailModal } from "../components/tickets/TicketDetailModal";
 import { IssueSourcesSection } from "../components/issue-sources/IssueSourcesSection";
+import { StatusBadge } from "../components/shared/StatusBadge";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { EmptyState } from "../components/shared/EmptyState";
@@ -28,14 +31,6 @@ export function RepoDetailPage() {
 
   const [showClosedTickets, setShowClosedTickets] = useState(false);
   const [showCompletedWorktrees, setShowCompletedWorktrees] = useState(false);
-  const [ticketSearch, setTicketSearch] = useState("");
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [sortCol, setSortCol] = useState<string | null>(null);
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const [stateFilter, setStateFilter] = useState<Set<string>>(new Set());
-  const [labelFilter, setLabelFilter] = useState<Set<string>>(new Set());
-  const [assigneeFilter, setAssigneeFilter] = useState<Set<string>>(new Set());
-  const [openFilterCol, setOpenFilterCol] = useState<string | null>(null);
 
   const {
     data: worktrees,
@@ -50,12 +45,12 @@ export function RepoDetailPage() {
   } = useApi(() => api.listTickets(repoId!, showClosedTickets), [repoId, showClosedTickets]);
 
   const { data: latestRuns, refetch: refetchRuns } = useApi(
-    () => api.latestRunsByWorktree(),
-    [],
+    () => api.latestRunsByWorktreeForRepo(repoId!),
+    [repoId],
   );
   const { data: ticketTotals, refetch: refetchTotals } = useApi(
-    () => api.ticketAgentTotals(),
-    [],
+    () => api.ticketAgentTotalsForRepo(repoId!),
+    [repoId],
   );
 
   const {
@@ -63,6 +58,45 @@ export function RepoDetailPage() {
     loading: sourcesLoading,
     refetch: refetchSources,
   } = useApi(() => api.listIssueSources(repoId!), [repoId]);
+
+  const {
+    data: repoAgentRuns,
+    refetch: refetchRepoAgentRuns,
+  } = useApi(() => api.listRepoAgentRuns(repoId!), [repoId]);
+
+  const [repoAgentPrompt, setRepoAgentPrompt] = useState("");
+  const [showAgentPrompt, setShowAgentPrompt] = useState(false);
+  const [startingRepoAgent, setStartingRepoAgent] = useState(false);
+  const [newRepoAgentSession, setNewRepoAgentSession] = useState(false);
+
+  const activeRepoAgent: AgentRun | undefined = repoAgentRuns?.find(
+    (r) => r.status === "running" || r.status === "waiting_for_feedback",
+  );
+
+  async function handleStartRepoAgent() {
+    if (!repoAgentPrompt.trim()) return;
+    setStartingRepoAgent(true);
+    try {
+      await api.startRepoAgent(repoId!, repoAgentPrompt.trim(), newRepoAgentSession);
+      setRepoAgentPrompt("");
+      setShowAgentPrompt(false);
+      setNewRepoAgentSession(false);
+      refetchRepoAgentRuns();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to start agent");
+    } finally {
+      setStartingRepoAgent(false);
+    }
+  }
+
+  async function handleStopRepoAgent(runId: string) {
+    try {
+      await api.stopRepoAgent(repoId!, runId);
+      refetchRepoAgentRuns();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to stop agent");
+    }
+  }
 
   const sseHandlers = useMemo(() => {
     const handleWorktreeChange = (ev: ConductorEventData) => {
@@ -83,12 +117,18 @@ export function RepoDetailPage() {
       tickets_synced: handleTicketsChange,
       agent_started: handleAgentChange,
       agent_stopped: handleAgentChange,
+      repo_agent_started: (_ev: ConductorEventData) => {
+        refetchRepoAgentRuns();
+      },
+      repo_agent_stopped: (_ev: ConductorEventData) => {
+        refetchRepoAgentRuns();
+      },
       issue_sources_changed: (ev: ConductorEventData) => {
         if (!ev.data || ev.data.repo_id === repoId) refetchSources();
       },
     };
     return map;
-  }, [repoId, refetchWorktrees, refetchTickets, refetchRuns, refetchTotals, refetchSources]);
+  }, [repoId, refetchWorktrees, refetchTickets, refetchRuns, refetchTotals, refetchSources, refetchRepoAgentRuns]);
 
   useConductorEvents(sseHandlers);
 
@@ -156,95 +196,6 @@ export function RepoDetailPage() {
     }
   }
 
-  // Unique values for column filter dropdowns
-  const uniqueStates = useMemo(() => {
-    if (!tickets) return [];
-    return [...new Set(tickets.map((t) => t.state))].sort();
-  }, [tickets]);
-
-  const uniqueLabels = useMemo(() => {
-    if (!tickets) return [];
-    const all = new Set<string>();
-    for (const t of tickets) {
-      if (t.labels) t.labels.split(",").forEach((l) => { const trimmed = l.trim(); if (trimmed) all.add(trimmed); });
-    }
-    return [...all].sort();
-  }, [tickets]);
-
-  const uniqueAssignees = useMemo(() => {
-    if (!tickets) return [];
-    return [...new Set(tickets.map((t) => t.assignee).filter(Boolean) as string[])].sort();
-  }, [tickets]);
-
-  // Filter + sort tickets
-  const filteredTickets = useMemo(() => {
-    if (!tickets) return [];
-    let result = tickets;
-
-    // Text search
-    const q = ticketSearch.toLowerCase().trim();
-    if (q) {
-      result = result.filter((t) =>
-        t.title.toLowerCase().includes(q) ||
-        t.source_id.toLowerCase().includes(q) ||
-        (t.labels && t.labels.toLowerCase().includes(q)) ||
-        (t.assignee && t.assignee.toLowerCase().includes(q))
-      );
-    }
-
-    // Column filters
-    if (stateFilter.size > 0) {
-      result = result.filter((t) => stateFilter.has(t.state));
-    }
-    if (labelFilter.size > 0) {
-      result = result.filter((t) => {
-        if (!t.labels) return false;
-        const tLabels = t.labels.split(",").map((l) => l.trim());
-        return tLabels.some((l) => labelFilter.has(l));
-      });
-    }
-    if (assigneeFilter.size > 0) {
-      result = result.filter((t) => t.assignee && assigneeFilter.has(t.assignee));
-    }
-
-    // Sort
-    if (sortCol) {
-      result = [...result].sort((a, b) => {
-        let va = "", vb = "";
-        switch (sortCol) {
-          case "#": va = a.source_id; vb = b.source_id; break;
-          case "title": va = a.title; vb = b.title; break;
-          case "state": va = a.state; vb = b.state; break;
-          case "labels": va = a.labels ?? ""; vb = b.labels ?? ""; break;
-          case "assignee": va = a.assignee ?? ""; vb = b.assignee ?? ""; break;
-        }
-        const cmp = va.localeCompare(vb);
-        return sortDir === "asc" ? cmp : -cmp;
-      });
-    }
-
-    return result;
-  }, [tickets, ticketSearch, stateFilter, labelFilter, assigneeFilter, sortCol, sortDir]);
-
-  const toggleSort = useCallback((col: string) => {
-    if (sortCol === col) {
-      setSortDir((d) => d === "asc" ? "desc" : "asc");
-    } else {
-      setSortCol(col);
-      setSortDir("asc");
-    }
-  }, [sortCol]);
-
-  const toggleFilterValue = useCallback((setter: React.Dispatch<React.SetStateAction<Set<string>>>, value: string) => {
-    setter((prev) => {
-      const next = new Set(prev);
-      if (next.has(value)) next.delete(value); else next.add(value);
-      return next;
-    });
-  }, []);
-
-  const activeFilterCount = stateFilter.size + labelFilter.size + assigneeFilter.size + (ticketSearch ? 1 : 0);
-
   const wtCount = worktrees?.length ?? 0;
   const { selectedIndex, moveDown, moveUp, reset } = useListNav(wtCount);
 
@@ -291,134 +242,209 @@ export function RepoDetailPage() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden gap-3">
-      {/* Compact header: slug + branch + settings toggle */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <h2 className="text-lg font-bold text-gray-900 truncate">{repo.slug}</h2>
-          <span className="text-xs font-mono text-gray-500 shrink-0">{repo.default_branch}</span>
-          {repo.model && (
-            <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 font-mono shrink-0">
-              {repo.model}
-            </span>
-          )}
+    <div className="space-y-8">
+      {/* Header */}
+      <div>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <h2 className="text-xl font-bold text-gray-900">{repo.slug}</h2>
         </div>
-        <button
-          onClick={() => setSettingsOpen((v) => !v)}
-          className="px-2.5 py-1.5 text-sm rounded-md border border-gray-300 text-gray-600 hover:bg-gray-100 shrink-0"
-          title="Repo settings"
-        >
-          {settingsOpen ? "Close Settings" : "\u2699 Settings"}
-        </button>
-      </div>
-
-      {/* Collapsible settings panel */}
-      {settingsOpen && (
-        <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-5">
-          {/* Repo info (read-only) */}
-          <div>
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">
-              Repository Info
-            </h4>
-            <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm text-gray-600">
-              <dt className="font-medium text-gray-500">Remote</dt>
-              <dd className="truncate">{repo.remote_url}</dd>
-              <dt className="font-medium text-gray-500">Local Path</dt>
-              <dd className="truncate">{repo.local_path}</dd>
-              <dt className="font-medium text-gray-500">Default Branch</dt>
-              <dd>{repo.default_branch}</dd>
-            </dl>
-          </div>
-
-          {/* Configuration (editable) */}
-          <div>
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">
-              Configuration
-            </h4>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">Model</span>
-                {editingModel ? (
-                  <div className="flex items-center gap-2">
-                    <ModelPicker
-                      value={repo.model}
-                      onChange={(m) => { handleModelChange(m); setEditingModel(false); }}
-                      effectiveDefault={repo.model}
-                      effectiveSource="repo"
-                    />
-                    <button
-                      onClick={() => setEditingModel(false)}
-                      className="px-2 py-0.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setEditingModel(true)}
-                    className="text-sm text-gray-700 hover:text-gray-900"
-                  >
-                    {repo.model ?? <span className="text-gray-400">Not set</span>} &middot; <span className="text-indigo-600">Edit</span>
-                  </button>
-                )}
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">Agent Issue Creation</span>
+        <dl className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm text-gray-600">
+          <dt className="font-medium text-gray-500">Remote</dt>
+          <dd className="truncate">{repo.remote_url}</dd>
+          <dt className="font-medium text-gray-500">Local Path</dt>
+          <dd className="truncate">{repo.local_path}</dd>
+          <dt className="font-medium text-gray-500">Default Branch</dt>
+          <dd>{repo.default_branch}</dd>
+          <dt className="font-medium text-gray-500">Model</dt>
+          <dd>
+            {editingModel ? (
+              <div className="mt-1">
+                <ModelPicker
+                  value={repo.model}
+                  onChange={(m) => { handleModelChange(m); setEditingModel(false); }}
+                  effectiveDefault={repo.model}
+                  effectiveSource="repo"
+                />
                 <button
-                  onClick={handleToggleAgentIssues}
-                  disabled={togglingAgentIssues}
-                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                    repo.allow_agent_issue_creation ? "bg-green-500" : "bg-gray-300"
-                  } disabled:opacity-50`}
+                  onClick={() => setEditingModel(false)}
+                  className="mt-2 px-2 py-0.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
                 >
-                  <span
-                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                      repo.allow_agent_issue_creation ? "translate-x-4.5" : "translate-x-0.5"
-                    }`}
-                  />
+                  Cancel
                 </button>
               </div>
+            ) : (
+              <span className="flex items-center gap-2">
+                <span className={repo.model ? "" : "text-gray-400"}>
+                  {repo.model ?? "Not set"}
+                </span>
+                <button
+                  onClick={() => setEditingModel(true)}
+                  className="px-2 py-0.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                >
+                  Edit
+                </button>
+              </span>
+            )}
+          </dd>
+          <dt className="font-medium text-gray-500">Agent Issue Creation</dt>
+          <dd>
+            <button
+              onClick={handleToggleAgentIssues}
+              disabled={togglingAgentIssues}
+              className={`px-2 py-0.5 text-xs rounded border ${
+                repo.allow_agent_issue_creation
+                  ? "border-green-300 text-green-700 bg-green-50 hover:bg-green-100"
+                  : "border-gray-300 text-gray-600 hover:bg-gray-50"
+              } disabled:opacity-50`}
+            >
+              {repo.allow_agent_issue_creation ? "Enabled" : "Disabled"}
+            </button>
+          </dd>
+        </dl>
+      </div>
+
+      {/* Repo Agent */}
+      <section>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
+            Repo Agent
+            <span className="ml-2 text-xs font-normal normal-case text-gray-400">(read-only)</span>
+          </h3>
+          <div className="flex items-center gap-2">
+            {activeRepoAgent && (
+              <button
+                onClick={() => handleStopRepoAgent(activeRepoAgent.id)}
+                className="px-3 py-1.5 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
+              >
+                Stop Agent
+              </button>
+            )}
+            <button
+              onClick={() => setShowAgentPrompt(true)}
+              className="px-3 py-1.5 text-sm rounded-md border border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+            >
+              Ask Agent
+            </button>
+          </div>
+        </div>
+        {activeRepoAgent && (
+          <div className="mb-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+              <span className="font-medium text-green-800">Agent running</span>
+              <span className="text-green-600 truncate">{activeRepoAgent.prompt.slice(0, 100)}</span>
             </div>
           </div>
+        )}
+        {repoAgentRuns && repoAgentRuns.length > 0 && !activeRepoAgent && (
+          <>
+            <div className="hidden md:block rounded-lg border border-gray-200 bg-white overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
+                  <tr>
+                    <th className="px-4 py-2">Prompt</th>
+                    <th className="px-4 py-2">Status</th>
+                    <th className="px-4 py-2">Cost</th>
+                    <th className="px-4 py-2">Started</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {repoAgentRuns.slice(0, 5).map((run) => (
+                    <tr key={run.id}>
+                      <td className="px-4 py-2 truncate max-w-xs">{run.prompt.slice(0, 80)}</td>
+                      <td className="px-4 py-2">
+                        <StatusBadge status={run.status} />
+                      </td>
+                      <td className="px-4 py-2 text-gray-500">{run.cost_usd != null ? `$${run.cost_usd.toFixed(2)}` : "-"}</td>
+                      <td className="px-4 py-2 text-gray-500">{new Date(run.started_at).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="md:hidden space-y-2">
+              {repoAgentRuns.slice(0, 5).map((run) => (
+                <RepoAgentRunCard key={run.id} run={run} />
+              ))}
+            </div>
+          </>
+        )}
+      </section>
 
-          {/* Issue Sources */}
-          <IssueSourcesSection
-            repoId={repoId!}
-            remoteUrl={repo.remote_url}
-            sources={issueSources ?? []}
-            loading={sourcesLoading}
-            onChanged={refetchSources}
-          />
-
-          {/* Danger Zone */}
-          <div className="pt-3">
-            <div className="hazard-stripe h-px mb-3" />
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-red-400 mb-2">
-              Danger Zone
-            </h4>
-            <button
-              onClick={() => setUnregisterRepoConfirm(true)}
-              className="px-3 py-1.5 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
-            >
-              Delete Repo
-            </button>
+      {/* Agent Prompt Modal */}
+      {showAgentPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4">
+            <div className="px-6 py-4 border-b">
+              <h3 className="text-lg font-semibold">Ask Repo Agent</h3>
+              <p className="text-sm text-gray-500 mt-1">
+                The agent runs in read-only mode and can explore code, answer questions, and triage issues.
+              </p>
+            </div>
+            <div className="px-6 py-4">
+              <textarea
+                value={repoAgentPrompt}
+                onChange={(e) => setRepoAgentPrompt(e.target.value)}
+                placeholder="What would you like the agent to investigate?"
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 min-h-[100px] resize-y"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    handleStartRepoAgent();
+                  }
+                }}
+              />
+              {repoAgentRuns?.some((r) => r.claude_session_id) && (
+                <label className="flex items-center gap-2 mt-2 text-sm text-gray-600">
+                  <input
+                    type="checkbox"
+                    checked={newRepoAgentSession}
+                    onChange={(e) => setNewRepoAgentSession(e.target.checked)}
+                    className="rounded border-gray-300"
+                  />
+                  New session (ignore prior context)
+                </label>
+              )}
+            </div>
+            <div className="px-6 py-3 border-t flex justify-end gap-2">
+              <button
+                onClick={() => { setShowAgentPrompt(false); setRepoAgentPrompt(""); setNewRepoAgentSession(false); }}
+                className="px-4 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleStartRepoAgent}
+                disabled={startingRepoAgent || !repoAgentPrompt.trim()}
+                className="px-4 py-2 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {startingRepoAgent ? "Starting..." : "Start Agent"}
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Content area — splits remaining space between worktrees and tickets */}
-      <div className="flex-1 flex flex-col gap-3 min-h-0 overflow-hidden">
+      {/* Issue Sources */}
+      <IssueSourcesSection
+        repoId={repoId!}
+        remoteUrl={repo.remote_url}
+        sources={issueSources ?? []}
+        loading={sourcesLoading}
+        onChanged={refetchSources}
+      />
 
       {/* Worktrees */}
-      <section className="flex flex-col min-h-0">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
+      <section>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
-            Worktrees {worktrees ? `(${worktrees.length})` : ""}
+            Worktrees
           </h3>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
             <button
               onClick={() => setShowCompletedWorktrees((v) => !v)}
-              className={`px-3 py-1.5 text-sm rounded-md border ${
+              className={`px-3 py-2 text-sm rounded-md border ${
                 showCompletedWorktrees
                   ? "border-indigo-300 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
                   : "border-gray-300 text-gray-600 hover:bg-gray-50"
@@ -434,16 +460,16 @@ export function RepoDetailPage() {
         ) : !worktrees || worktrees.length === 0 ? (
           <EmptyState message="No platforms active. Create a worktree to lay some track." />
         ) : (
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-y-auto overflow-x-auto flex-1 min-h-0 max-h-[30vh]">
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
             <table className="w-full text-sm min-w-[520px]">
-              <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase sticky top-0 z-10">
+              <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
                 <tr>
-                  <th className="px-3 py-1.5">Branch</th>
-                  <th className="px-3 py-1.5">Status</th>
-                  <th className="px-3 py-1.5">Agent</th>
-                  <th className="px-3 py-1.5">Path</th>
-                  <th className="px-3 py-1.5">Created</th>
-                  <th className="px-3 py-1.5"></th>
+                  <th className="px-4 py-2">Branch</th>
+                  <th className="px-4 py-2">Status</th>
+                  <th className="px-4 py-2">Agent</th>
+                  <th className="px-4 py-2">Path</th>
+                  <th className="px-4 py-2">Created</th>
+                  <th className="px-4 py-2"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -464,12 +490,12 @@ export function RepoDetailPage() {
       </section>
 
       {/* Tickets */}
-      <section className="flex flex-col flex-1 min-h-0">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
+      <section>
+        <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
-            Tickets {tickets ? `(${filteredTickets.length}${activeFilterCount > 0 ? ` of ${tickets.length}` : ""})` : ""}
+            Tickets
           </h3>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             {syncResult && (
               <span className="text-xs text-gray-500">{syncResult}</span>
             )}
@@ -492,152 +518,68 @@ export function RepoDetailPage() {
             </button>
           </div>
         </div>
-
-        {/* Search bar */}
-        {tickets && tickets.length > 0 && (
-          <div className="mb-2 flex items-center gap-2">
-            <input
-              type="text"
-              value={ticketSearch}
-              onChange={(e) => setTicketSearch(e.target.value)}
-              placeholder="Search tickets..."
-              className="flex-1 px-3 py-1.5 text-sm rounded-md border border-gray-200 bg-white placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-            {activeFilterCount > 0 && (
-              <button
-                onClick={() => { setTicketSearch(""); setStateFilter(new Set()); setLabelFilter(new Set()); setAssigneeFilter(new Set()); }}
-                className="px-2 py-1.5 text-xs rounded-md text-gray-400 hover:text-gray-600"
-              >
-                Clear all filters
-              </button>
-            )}
-          </div>
-        )}
-
         {ticketsLoading ? (
           <LoadingSpinner />
         ) : !tickets || tickets.length === 0 ? (
           <EmptyState message="No tickets issued. Sync your issues to start the journey." />
-        ) : filteredTickets.length === 0 ? (
-          <EmptyState message="No tickets match your filter." />
         ) : (
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-y-auto flex-1 min-h-0">
-            <table className="w-full text-sm min-w-[480px]">
-              <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase sticky top-0 z-10">
-                <tr>
-                  <th className="px-3 py-1.5">
-                    <button onClick={() => toggleSort("#")} className="hover:text-gray-800 flex items-center gap-1">
-                      # {sortCol === "#" && <span>{sortDir === "asc" ? "\u25B2" : "\u25BC"}</span>}
-                    </button>
-                  </th>
-                  <th className="px-3 py-1.5">
-                    <button onClick={() => toggleSort("title")} className="hover:text-gray-800 flex items-center gap-1">
-                      Title {sortCol === "title" && <span>{sortDir === "asc" ? "\u25B2" : "\u25BC"}</span>}
-                    </button>
-                  </th>
-                  <th className="px-3 py-1.5">
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => toggleSort("state")} className="hover:text-gray-800 flex items-center gap-1">
-                        State {sortCol === "state" && <span>{sortDir === "asc" ? "\u25B2" : "\u25BC"}</span>}
-                      </button>
-                      <div className="relative">
-                        <button
-                          onClick={() => setOpenFilterCol(openFilterCol === "state" ? null : "state")}
-                          className={`text-[10px] px-1 rounded ${stateFilter.size > 0 ? "text-indigo-500" : "text-gray-400 hover:text-gray-600"}`}
-                        >
-                          {stateFilter.size > 0 ? `(${stateFilter.size})` : "\u25BE"}
-                        </button>
-                        {openFilterCol === "state" && (
-                          <div className="absolute left-0 top-6 w-36 p-2 rounded-lg border border-gray-200 bg-white shadow-lg z-30 space-y-1">
-                            {uniqueStates.map((v) => (
-                              <label key={v} className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer hover:bg-gray-50 px-1 py-0.5 rounded">
-                                <input type="checkbox" checked={stateFilter.has(v)} onChange={() => toggleFilterValue(setStateFilter, v)} className="rounded" />
-                                {v}
-                              </label>
-                            ))}
-                            {stateFilter.size > 0 && (
-                              <button onClick={() => setStateFilter(new Set())} className="text-[10px] text-gray-400 hover:text-gray-600 w-full text-left px-1">Clear</button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </th>
-                  <th className="px-3 py-1.5">
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => toggleSort("labels")} className="hover:text-gray-800 flex items-center gap-1">
-                        Labels {sortCol === "labels" && <span>{sortDir === "asc" ? "\u25B2" : "\u25BC"}</span>}
-                      </button>
-                      <div className="relative">
-                        <button
-                          onClick={() => setOpenFilterCol(openFilterCol === "labels" ? null : "labels")}
-                          className={`text-[10px] px-1 rounded ${labelFilter.size > 0 ? "text-indigo-500" : "text-gray-400 hover:text-gray-600"}`}
-                        >
-                          {labelFilter.size > 0 ? `(${labelFilter.size})` : "\u25BE"}
-                        </button>
-                        {openFilterCol === "labels" && (
-                          <div className="absolute left-0 top-6 w-44 max-h-48 overflow-y-auto p-2 rounded-lg border border-gray-200 bg-white shadow-lg z-30 space-y-1">
-                            {uniqueLabels.map((v) => (
-                              <label key={v} className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer hover:bg-gray-50 px-1 py-0.5 rounded">
-                                <input type="checkbox" checked={labelFilter.has(v)} onChange={() => toggleFilterValue(setLabelFilter, v)} className="rounded" />
-                                {v}
-                              </label>
-                            ))}
-                            {labelFilter.size > 0 && (
-                              <button onClick={() => setLabelFilter(new Set())} className="text-[10px] text-gray-400 hover:text-gray-600 w-full text-left px-1">Clear</button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </th>
-                  <th className="px-3 py-1.5">
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => toggleSort("assignee")} className="hover:text-gray-800 flex items-center gap-1">
-                        Assignee {sortCol === "assignee" && <span>{sortDir === "asc" ? "\u25B2" : "\u25BC"}</span>}
-                      </button>
-                      <div className="relative">
-                        <button
-                          onClick={() => setOpenFilterCol(openFilterCol === "assignee" ? null : "assignee")}
-                          className={`text-[10px] px-1 rounded ${assigneeFilter.size > 0 ? "text-indigo-500" : "text-gray-400 hover:text-gray-600"}`}
-                        >
-                          {assigneeFilter.size > 0 ? `(${assigneeFilter.size})` : "\u25BE"}
-                        </button>
-                        {openFilterCol === "assignee" && (
-                          <div className="absolute right-0 top-6 w-40 max-h-48 overflow-y-auto p-2 rounded-lg border border-gray-200 bg-white shadow-lg z-30 space-y-1">
-                            {uniqueAssignees.map((v) => (
-                              <label key={v} className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer hover:bg-gray-50 px-1 py-0.5 rounded">
-                                <input type="checkbox" checked={assigneeFilter.has(v)} onChange={() => toggleFilterValue(setAssigneeFilter, v)} className="rounded" />
-                                {v}
-                              </label>
-                            ))}
-                            {assigneeFilter.size > 0 && (
-                              <button onClick={() => setAssigneeFilter(new Set())} className="text-[10px] text-gray-400 hover:text-gray-600 w-full text-left px-1">Clear</button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </th>
-                  <th className="px-3 py-1.5">Agent</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {filteredTickets.map((t) => (
-                  <TicketRow
-                    key={t.id}
-                    ticket={t}
-                    agentTotals={ticketTotals?.[t.id]}
-                    onClick={setSelectedTicket}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div className="hidden md:block rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
+              <table className="w-full text-sm min-w-[480px]">
+                <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
+                  <tr>
+                    <th className="px-4 py-2">#</th>
+                    <th className="px-4 py-2">Title</th>
+                    <th className="px-4 py-2">State</th>
+                    <th className="px-4 py-2">Labels</th>
+                    <th className="px-4 py-2">Assignee</th>
+                    <th className="px-4 py-2">Agent</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {tickets.map((t) => (
+                    <TicketRow
+                      key={t.id}
+                      ticket={t}
+                      agentTotals={ticketTotals?.[t.id]}
+                      onClick={setSelectedTicket}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="md:hidden space-y-2">
+              {tickets.map((t) => (
+                <TicketCard
+                  key={t.id}
+                  ticket={t}
+                  agentTotals={ticketTotals?.[t.id]}
+                  onClick={setSelectedTicket}
+                />
+              ))}
+            </div>
+          </>
         )}
       </section>
 
-      </div>{/* end content area */}
+      {/* Danger Zone */}
+      <section>
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-red-400 mb-3">
+          Danger Zone
+        </h3>
+        <div className="rounded-lg border border-red-200 bg-white p-4 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-900">Delete this repo</p>
+            <p className="text-xs text-gray-500 mt-0.5">Unregister this repo from Conductor. This cannot be undone.</p>
+          </div>
+          <button
+            onClick={() => setUnregisterRepoConfirm(true)}
+            className="px-3 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50"
+          >
+            Delete Repo
+          </button>
+        </div>
+      </section>
 
       {/* Dialogs */}
       {selectedTicket && (

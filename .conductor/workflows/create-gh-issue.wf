@@ -1,0 +1,21 @@
+workflow create-gh-issue {
+  meta {
+    description = "Create a GitHub issue through an agentic conversation — gathers requirements, suggests labels/assignees, and creates a well-structured issue"
+    trigger     = "manual"
+    targets     = ["repo"]
+  }
+
+  inputs {
+    rough_idea required
+  }
+
+  call draft-gh-issue
+
+  gate human_review {
+    prompt     = "Review the drafted issue above. Approve to create it, or reject with feedback to revise."
+    timeout    = "24h"
+    on_timeout = fail
+  }
+
+  call create-gh-issue
+}
