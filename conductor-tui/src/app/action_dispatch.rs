@@ -784,7 +784,7 @@ impl App {
                     _ => {}
                 }
                 // Clamp index after visibility change.
-                let new_len = self.state.visible_workflow_run_rows().len();
+                let new_len = self.state.visible_workflow_run_rows_len();
                 if new_len > 0 && self.state.workflow_run_index >= new_len {
                     self.state.workflow_run_index = new_len - 1;
                 }

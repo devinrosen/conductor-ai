@@ -239,7 +239,7 @@ impl App {
                 );
             }
             WorkflowsFocus::Runs => {
-                let visible_len = self.state.visible_workflow_run_rows().len();
+                let visible_len = self.state.visible_workflow_run_rows_len();
                 clamp_increment(&mut self.state.workflow_run_index, visible_len);
             }
         }

@@ -9,7 +9,7 @@ use conductor_core::workflow::{PendingGateRow, WorkflowRunStatus};
 use conductor_core::worktree::Worktree;
 use ratatui::widgets::ListState;
 
-use super::workflow_rows::max_iteration_for_run;
+use super::workflow_rows::{count_children_rows, count_steps_for_run, max_iteration_for_run};
 use super::{
     build_worktree_tree, build_worktree_tree_indices, parse_target_label, push_children,
     push_steps_for_run, ColumnFocus, DashboardRow, DataCache, FilterState, Modal, RepoDetailFocus,
@@ -336,7 +336,7 @@ impl AppState {
                 WorkflowsFocus::Gates => (self.detail_gate_index, self.detail_gates.len()),
                 WorkflowsFocus::Runs => (
                     self.workflow_run_index,
-                    self.visible_workflow_run_rows().len(),
+                    self.visible_workflow_run_rows_len(),
                 ),
             };
         }
@@ -606,13 +606,23 @@ impl AppState {
             }
         }
 
+        // Pre-compute run counts per repo and per (repo, target) to avoid O(R·N + R·T·N) scans.
+        let mut run_counts_by_repo: HashMap<&str, usize> = HashMap::new();
+        let mut run_counts_by_target: HashMap<(&str, &str), usize> = HashMap::new();
+        for (repo_slug, target_key, _, _) in &groups {
+            *run_counts_by_repo.entry(repo_slug.as_str()).or_insert(0) += 1;
+            *run_counts_by_target
+                .entry((repo_slug.as_str(), target_key.as_str()))
+                .or_insert(0) += 1;
+        }
+
         // Build the final visible row list.
         let mut result = Vec::new();
         for repo_slug in &repo_order {
-            let run_count = groups
-                .iter()
-                .filter(|(rs, _, _, _)| rs == repo_slug)
-                .count();
+            let run_count = run_counts_by_repo
+                .get(repo_slug.as_str())
+                .copied()
+                .unwrap_or(0);
             let repo_collapsed = self.collapsed_repo_headers.contains(repo_slug.as_str());
 
             result.push(WorkflowRunRow::RepoHeader {
@@ -632,10 +642,10 @@ impl AppState {
 
             for (target_key, target_type) in repo_targets {
                 let composite_key = format!("{}/{}", repo_slug, target_key);
-                let target_run_count = groups
-                    .iter()
-                    .filter(|(rs, tk, _, _)| rs == repo_slug && tk == target_key)
-                    .count();
+                let target_run_count = run_counts_by_target
+                    .get(&(repo_slug.as_str(), target_key.as_str()))
+                    .copied()
+                    .unwrap_or(0);
                 let target_collapsed = self.collapsed_target_headers.contains(&composite_key);
 
                 let label = if target_key.is_empty() {
@@ -695,6 +705,196 @@ impl AppState {
             }
         }
         result
+    }
+
+    /// Returns the number of rows `visible_workflow_run_rows()` would produce,
+    /// without allocating the full `Vec<WorkflowRunRow>`.
+    pub fn visible_workflow_run_rows_len(&self) -> usize {
+        let runs = &self.data.workflow_runs;
+        let known_ids: HashSet<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+
+        let mut children_map: HashMap<&str, Vec<&conductor_core::workflow::WorkflowRun>> =
+            HashMap::new();
+        for run in runs {
+            if let Some(ref parent_id) = run.parent_workflow_run_id {
+                if known_ids.contains(parent_id.as_str()) {
+                    children_map.entry(parent_id.as_str()).or_default().push(run);
+                }
+            }
+        }
+
+        let child_ids: HashSet<&str> = children_map
+            .values()
+            .flat_map(|v| v.iter().map(|r| r.id.as_str()))
+            .collect();
+
+        let global_mode = self.selected_worktree_id.is_none() && self.selected_repo_id.is_none();
+
+        if !global_mode {
+            let repo_detail_mode =
+                self.selected_repo_id.is_some() && self.selected_worktree_id.is_none();
+            let mut count = 0;
+            let mut last_slug: Option<String> = None;
+            for run in runs {
+                if child_ids.contains(run.id.as_str()) {
+                    continue;
+                }
+                if !self.show_completed_workflow_runs
+                    && matches!(
+                        run.status,
+                        WorkflowRunStatus::Completed | WorkflowRunStatus::Cancelled
+                    )
+                {
+                    continue;
+                }
+                if repo_detail_mode {
+                    let slug: Option<String> = run
+                        .target_label
+                        .as_deref()
+                        .map(parse_target_label)
+                        .and_then(|(_, target_key, target_type)| {
+                            if target_type == TargetType::Worktree && !target_key.is_empty() {
+                                Some(target_key)
+                            } else {
+                                None
+                            }
+                        });
+                    if let Some(ref s) = slug {
+                        if last_slug.as_deref() != Some(s.as_str()) {
+                            count += 1; // SlugLabel row
+                            last_slug = Some(s.clone());
+                        }
+                    }
+                }
+                let child_count = children_map.get(run.id.as_str()).map_or(0, |v| v.len());
+                let collapsed = self.collapsed_workflow_run_ids.contains(&run.id);
+                count += 1; // Parent row
+                if !collapsed {
+                    if child_count == 0 {
+                        count += count_steps_for_run(
+                            &run.id,
+                            &self.expanded_step_run_ids,
+                            &self.data.workflow_run_steps,
+                        );
+                    } else {
+                        count += count_children_rows(
+                            &run.id,
+                            &children_map,
+                            &self.collapsed_workflow_run_ids,
+                            &self.expanded_step_run_ids,
+                            &self.data.workflow_run_steps,
+                        );
+                    }
+                }
+            }
+            return count;
+        }
+
+        // Global mode: count repo headers + target headers + run rows.
+        let repo_slug_map: HashMap<&str, &str> = self
+            .data
+            .repos
+            .iter()
+            .map(|r| (r.id.as_str(), r.slug.as_str()))
+            .collect();
+
+        let mut groups: Vec<(
+            String,
+            String,
+            TargetType,
+            &conductor_core::workflow::WorkflowRun,
+        )> = Vec::new();
+        for run in runs {
+            if child_ids.contains(run.id.as_str()) {
+                continue;
+            }
+            if !self.show_completed_workflow_runs
+                && matches!(
+                    run.status,
+                    WorkflowRunStatus::Completed | WorkflowRunStatus::Cancelled
+                )
+            {
+                continue;
+            }
+            let (mut repo_slug, target_key, target_type) = run
+                .target_label
+                .as_deref()
+                .map(parse_target_label)
+                .unwrap_or_else(|| ("unknown".to_string(), String::new(), TargetType::Worktree));
+            if repo_slug == "unknown" {
+                if let Some(rid) = run.repo_id.as_deref() {
+                    if let Some(&slug) = repo_slug_map.get(rid) {
+                        repo_slug = slug.to_string();
+                    }
+                }
+            }
+            groups.push((repo_slug, target_key, target_type, run));
+        }
+
+        let mut seen_repos: HashSet<String> = HashSet::new();
+        let mut repo_order: Vec<String> = Vec::new();
+        let mut seen_targets: HashSet<String> = HashSet::new();
+        let mut target_order: HashMap<String, Vec<(String, TargetType)>> = HashMap::new();
+        for (repo_slug, target_key, target_type, _) in &groups {
+            if seen_repos.insert(repo_slug.clone()) {
+                repo_order.push(repo_slug.clone());
+            }
+            let composite = format!("{}/{}", repo_slug, target_key);
+            if seen_targets.insert(composite) {
+                target_order
+                    .entry(repo_slug.clone())
+                    .or_default()
+                    .push((target_key.clone(), target_type.clone()));
+            }
+        }
+
+        let mut count = 0;
+        for repo_slug in &repo_order {
+            count += 1; // RepoHeader row
+            let repo_collapsed = self.collapsed_repo_headers.contains(repo_slug.as_str());
+            if repo_collapsed {
+                continue;
+            }
+            let repo_targets = target_order
+                .get(repo_slug)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            for (target_key, _) in repo_targets {
+                count += 1; // TargetHeader row
+                let composite_key = format!("{}/{}", repo_slug, target_key);
+                let target_collapsed = self.collapsed_target_headers.contains(&composite_key);
+                if target_collapsed {
+                    continue;
+                }
+                for (rs, tk, _, run) in &groups {
+                    if rs != repo_slug || tk != target_key {
+                        continue;
+                    }
+                    let child_count =
+                        children_map.get(run.id.as_str()).map_or(0, |v| v.len());
+                    let collapsed = self.collapsed_workflow_run_ids.contains(&run.id);
+                    count += 1; // Parent row
+                    if !collapsed {
+                        if child_count == 0 {
+                            count += count_steps_for_run(
+                                &run.id,
+                                &self.expanded_step_run_ids,
+                                &self.data.workflow_run_steps,
+                            );
+                        } else {
+                            count += count_children_rows(
+                                &run.id,
+                                &children_map,
+                                &self.collapsed_workflow_run_ids,
+                                &self.expanded_step_run_ids,
+                                &self.data.workflow_run_steps,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        count
     }
 
     /// Auto-initialize collapse state for newly-seen terminal-status parent runs.

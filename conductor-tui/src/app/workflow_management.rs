@@ -176,7 +176,7 @@ impl App {
         if def_len > 0 && self.state.workflow_def_index >= def_len {
             self.state.workflow_def_index = def_len - 1;
         }
-        let run_len = self.state.visible_workflow_run_rows().len();
+        let run_len = self.state.visible_workflow_run_rows_len();
         if run_len > 0 && self.state.workflow_run_index >= run_len {
             self.state.workflow_run_index = run_len - 1;
         }
