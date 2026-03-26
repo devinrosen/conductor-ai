@@ -1511,7 +1511,12 @@ mod tests {
         ];
         app.state.modal = make_workflow_picker_modal(items, 0, 0);
         app.move_down();
-        if let Modal::WorkflowPicker { selected, scroll_offset, .. } = app.state.modal {
+        if let Modal::WorkflowPicker {
+            selected,
+            scroll_offset,
+            ..
+        } = app.state.modal
+        {
             assert_eq!(selected, 1, "should advance to index 1");
             // visual line of index 1 = 3 + 1 = 4; saturating_sub(10) = 0
             assert_eq!(scroll_offset, 0);
@@ -1530,7 +1535,12 @@ mod tests {
         ];
         app.state.modal = make_workflow_picker_modal(items, 1, 0);
         app.move_up();
-        if let Modal::WorkflowPicker { selected, scroll_offset, .. } = app.state.modal {
+        if let Modal::WorkflowPicker {
+            selected,
+            scroll_offset,
+            ..
+        } = app.state.modal
+        {
             assert_eq!(selected, 0, "should retreat to index 0");
             // visual line of index 0 = 3; saturating_sub(10) = 0
             assert_eq!(scroll_offset, 0);
@@ -1551,7 +1561,12 @@ mod tests {
         // Start at index 9, move down to index 10
         app.state.modal = make_workflow_picker_modal(items, 9, 0);
         app.move_down();
-        if let Modal::WorkflowPicker { selected, scroll_offset, .. } = app.state.modal {
+        if let Modal::WorkflowPicker {
+            selected,
+            scroll_offset,
+            ..
+        } = app.state.modal
+        {
             assert_eq!(selected, 10);
             // visual line = 3 + 10 = 13; 13 - 10 = 3
             assert_eq!(scroll_offset, 3);
