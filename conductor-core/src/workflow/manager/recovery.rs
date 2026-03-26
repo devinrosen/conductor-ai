@@ -1,9 +1,9 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use rusqlite::{params, OptionalExtension};
 
-use crate::db::query_collect;
+use crate::db::{query_collect, with_in_clause};
 use crate::error::Result;
 
 use super::helpers::{purge_where_clause, row_to_workflow_run};
@@ -78,24 +78,42 @@ impl<'a> WorkflowManager<'a> {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
 
+        if waiting_runs.is_empty() {
+            return Ok(0);
+        }
+
+        // Batch-fetch all parent agent run statuses in a single IN-clause query
+        // to avoid N+1 per-run lookups.
+        let parent_ids: Vec<String> = waiting_runs
+            .iter()
+            .map(|(_, parent_run_id)| parent_run_id.clone())
+            .collect();
+
+        let parent_statuses: HashMap<String, String> = with_in_clause(
+            "SELECT id, status FROM agent_runs WHERE id IN",
+            &[],
+            &parent_ids,
+            |sql, params| -> Result<HashMap<String, String>> {
+                let mut stmt = self.conn.prepare(sql)?;
+                let mut rows = stmt.query(params)?;
+                let mut map = HashMap::new();
+                while let Some(row) = rows.next()? {
+                    let id: String = row.get(0)?;
+                    let status: String = row.get(1)?;
+                    map.insert(id, status);
+                }
+                Ok(map)
+            },
+        )?;
+
         let mut reaped = 0usize;
         let now = Utc::now();
 
         for (run_id, parent_run_id) in waiting_runs {
-            // Check if the parent agent run is in a terminal state.
-            let parent_status: Option<String> = self
-                .conn
-                .query_row(
-                    "SELECT status FROM agent_runs WHERE id = ?1",
-                    params![parent_run_id],
-                    |row| row.get(0),
-                )
-                .optional()?;
-
             // A missing parent (None) is also treated as dead — if the agent run
             // has been purged from the DB its executor is certainly gone.
             let dead_parent = !matches!(
-                parent_status.as_deref(),
+                parent_statuses.get(&parent_run_id).map(String::as_str),
                 Some("running") | Some("waiting_for_feedback")
             );
 

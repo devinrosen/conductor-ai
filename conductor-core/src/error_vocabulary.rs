@@ -135,6 +135,7 @@ pub fn classify(err: &ConductorError) -> ErrorCode {
         ConductorError::FeatureAlreadyExists { .. } => {
             ErrorCode::new(ErrorCategory::Validation, 12)
         }
+        ConductorError::FeatureStillActive { .. } => ErrorCode::new(ErrorCategory::State, 5),
     }
 }
 

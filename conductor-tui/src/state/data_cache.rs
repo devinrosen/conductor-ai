@@ -82,6 +82,10 @@ pub struct DataCache {
     pub repo_agent_run_info: HashMap<String, (usize, Option<String>, String)>,
     /// Pending feedback request for the currently viewed repo's repo agent (if any)
     pub pending_repo_feedback: Option<FeedbackRequest>,
+    /// All worktree-scoped agent events keyed by worktree_id; populated by background poller.
+    pub all_worktree_agent_events: HashMap<String, Vec<AgentRunEvent>>,
+    /// All repo-scoped agent events keyed by repo_id; populated by background poller.
+    pub all_repo_agent_events: HashMap<String, Vec<AgentRunEvent>>,
 }
 
 /// Aggregated stats across all agent runs for a worktree.

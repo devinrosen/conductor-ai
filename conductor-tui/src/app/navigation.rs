@@ -2,12 +2,83 @@ use ratatui::widgets::ListState;
 
 use crate::state::{
     info_row, repo_info_row, workflow_run_info_row, DashboardRow, FormField, Modal,
-    RepoDetailFocus, View, WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowsFocus,
-    WorktreeDetailFocus,
+    RepoDetailFocus, View, WorkflowDefFocus, WorkflowPickerItem, WorkflowRunDetailFocus,
+    WorkflowsFocus, WorktreeDetailFocus,
 };
 
 use super::helpers::{clamp_increment, max_scroll, wrap_decrement, wrap_increment};
 use super::App;
+
+/// Return the nearest selectable index in `items` when navigating in a given
+/// direction, wrapping at the boundaries.  Iterates at most `items.len()`
+/// steps so the loop always terminates even if every item is a Header.
+///
+/// `forward = true` increments the index; `forward = false` decrements it.
+/// Returns `start` unchanged when the slice is empty or contains no selectable
+/// item.
+fn next_selectable(items: &[WorkflowPickerItem], start: usize, forward: bool) -> usize {
+    let len = items.len();
+    if len == 0 {
+        return start;
+    }
+    let mut idx = if forward {
+        if start + 1 >= len {
+            0
+        } else {
+            start + 1
+        }
+    } else {
+        start.checked_sub(1).unwrap_or(len - 1)
+    };
+    for _ in 0..len {
+        if items[idx].is_selectable() {
+            return idx;
+        }
+        idx = if forward {
+            if idx + 1 >= len {
+                0
+            } else {
+                idx + 1
+            }
+        } else {
+            idx.checked_sub(1).unwrap_or(len - 1)
+        };
+    }
+    // No selectable item found — leave selection unchanged.
+    start
+}
+
+/// Half the visible content height used for scroll-centering the workflow picker.
+///
+/// The popup renders up to ~22 content lines (height cap from `modal.rs` minus borders
+/// and chrome). Half of that is ~10 lines, which keeps the selected item roughly
+/// centred without requiring a runtime terminal-height query during key handling.
+/// If the popup height formula in `modal.rs` changes significantly, update this constant.
+const WORKFLOW_PICKER_HALF_VISIBLE_LINES: u16 = 10;
+
+/// Count the rendered visual line index of the item at `selected` in the
+/// workflow picker, matching the exact layout emitted by `render_workflow_picker`
+/// in `conductor-tui/src/ui/modal.rs`:
+/// - 3 top-chrome lines (blank + subtitle + blank)
+/// - each `Header` item emits 2 lines (blank + label)
+/// - every other item emits 1 line
+///
+/// NOTE: This function intentionally mirrors the rendering geometry from `modal.rs`
+/// so that navigation can compute the correct scroll offset without a runtime
+/// layout query. Keep it in sync with the `render_workflow_picker` layout there.
+fn workflow_picker_visual_line(items: &[WorkflowPickerItem], selected: usize) -> u16 {
+    let mut line: u16 = 3; // top chrome
+    for (i, item) in items.iter().enumerate() {
+        if i == selected {
+            return line;
+        }
+        match item {
+            WorkflowPickerItem::Header(_) => line = line.saturating_add(2),
+            _ => line = line.saturating_add(1),
+        }
+    }
+    line
+}
 
 impl App {
     pub(super) fn half_page_size(&self) -> usize {
@@ -395,9 +466,14 @@ impl App {
             Modal::WorkflowPicker {
                 ref items,
                 ref mut selected,
+                ref mut scroll_offset,
                 ..
             } => {
-                wrap_decrement(selected, items.len());
+                if !items.is_empty() {
+                    *selected = next_selectable(items, *selected, false);
+                    let visual = workflow_picker_visual_line(items, *selected);
+                    *scroll_offset = visual.saturating_sub(WORKFLOW_PICKER_HALF_VISIBLE_LINES);
+                }
                 return;
             }
             Modal::TemplatePicker {
@@ -548,9 +624,14 @@ impl App {
             Modal::WorkflowPicker {
                 ref items,
                 ref mut selected,
+                ref mut scroll_offset,
                 ..
             } => {
-                wrap_increment(selected, items.len());
+                if !items.is_empty() {
+                    *selected = next_selectable(items, *selected, true);
+                    let visual = workflow_picker_visual_line(items, *selected);
+                    *scroll_offset = visual.saturating_sub(WORKFLOW_PICKER_HALF_VISIBLE_LINES);
+                }
                 return;
             }
             Modal::TemplatePicker {
@@ -878,7 +959,7 @@ const _: Option<FormField> = None;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{ColumnFocus, View, WorkflowDefFocus, WorkflowsFocus};
+    use crate::state::{ColumnFocus, View, WorkflowDefFocus, WorkflowPickerTarget, WorkflowsFocus};
 
     fn make_test_app() -> App {
         let conn = conductor_core::test_helpers::create_test_conn();
@@ -1085,6 +1166,7 @@ mod tests {
             description: String::new(),
             trigger: conductor_core::workflow::WorkflowTrigger::Manual,
             targets: vec![],
+            group: None,
             inputs: vec![],
             body: vec![],
             always: vec![],
@@ -1365,5 +1447,131 @@ mod tests {
         // No runs → select is a no-op
         app.select();
         assert_eq!(app.state.view, View::Dashboard);
+    }
+
+    // ── workflow_picker_visual_line ────────────────────────────────────
+
+    fn make_wf_def(name: &str) -> conductor_core::workflow::WorkflowDef {
+        conductor_core::workflow::WorkflowDef {
+            name: name.into(),
+            description: String::new(),
+            trigger: conductor_core::workflow::WorkflowTrigger::Manual,
+            targets: vec![],
+            group: None,
+            inputs: vec![],
+            body: vec![],
+            always: vec![],
+            source_path: String::new(),
+        }
+    }
+
+    #[test]
+    fn workflow_picker_visual_line_first_workflow_item() {
+        // 3 top-chrome lines, no headers before index 0 → visual line = 3
+        let items = vec![WorkflowPickerItem::Workflow(make_wf_def("wf-a"))];
+        assert_eq!(workflow_picker_visual_line(&items, 0), 3);
+    }
+
+    #[test]
+    fn workflow_picker_visual_line_after_header() {
+        // Header at index 0 emits 2 lines; item at index 1 is at visual line 3+2=5
+        let items = vec![
+            WorkflowPickerItem::Header("Group".into()),
+            WorkflowPickerItem::Workflow(make_wf_def("wf-a")),
+        ];
+        assert_eq!(workflow_picker_visual_line(&items, 1), 5);
+    }
+
+    // ── WorkflowPicker scroll_offset on move_up / move_down ───────────
+
+    fn make_workflow_picker_modal(
+        items: Vec<WorkflowPickerItem>,
+        selected: usize,
+        scroll_offset: u16,
+    ) -> Modal {
+        Modal::WorkflowPicker {
+            target: WorkflowPickerTarget::Repo {
+                repo_id: "r1".into(),
+                repo_path: "/tmp/r1".into(),
+                repo_name: "repo-a".into(),
+            },
+            items,
+            selected,
+            scroll_offset,
+        }
+    }
+
+    #[test]
+    fn move_down_workflow_picker_updates_scroll_offset() {
+        let mut app = make_test_app();
+        // Two selectable items; start at index 0
+        let items = vec![
+            WorkflowPickerItem::Workflow(make_wf_def("wf-a")),
+            WorkflowPickerItem::Workflow(make_wf_def("wf-b")),
+        ];
+        app.state.modal = make_workflow_picker_modal(items, 0, 0);
+        app.move_down();
+        if let Modal::WorkflowPicker {
+            selected,
+            scroll_offset,
+            ..
+        } = app.state.modal
+        {
+            assert_eq!(selected, 1, "should advance to index 1");
+            // visual line of index 1 = 3 + 1 = 4; saturating_sub(10) = 0
+            assert_eq!(scroll_offset, 0);
+        } else {
+            panic!("expected WorkflowPicker modal");
+        }
+    }
+
+    #[test]
+    fn move_up_workflow_picker_updates_scroll_offset() {
+        let mut app = make_test_app();
+        // Two selectable items; start at index 1, move up to index 0
+        let items = vec![
+            WorkflowPickerItem::Workflow(make_wf_def("wf-a")),
+            WorkflowPickerItem::Workflow(make_wf_def("wf-b")),
+        ];
+        app.state.modal = make_workflow_picker_modal(items, 1, 0);
+        app.move_up();
+        if let Modal::WorkflowPicker {
+            selected,
+            scroll_offset,
+            ..
+        } = app.state.modal
+        {
+            assert_eq!(selected, 0, "should retreat to index 0");
+            // visual line of index 0 = 3; saturating_sub(10) = 0
+            assert_eq!(scroll_offset, 0);
+        } else {
+            panic!("expected WorkflowPicker modal");
+        }
+    }
+
+    #[test]
+    fn move_down_workflow_picker_scroll_offset_nonzero_past_half_visible() {
+        let mut app = make_test_app();
+        // Build enough items that visual line > WORKFLOW_PICKER_HALF_VISIBLE_LINES.
+        // 3 top-chrome + 11 prior workflow items → item at index 10 is at visual line 13.
+        // 13.saturating_sub(10) = 3
+        let items: Vec<WorkflowPickerItem> = (0..12)
+            .map(|i| WorkflowPickerItem::Workflow(make_wf_def(&format!("wf-{i}"))))
+            .collect();
+        // Start at index 9, move down to index 10
+        app.state.modal = make_workflow_picker_modal(items, 9, 0);
+        app.move_down();
+        if let Modal::WorkflowPicker {
+            selected,
+            scroll_offset,
+            ..
+        } = app.state.modal
+        {
+            assert_eq!(selected, 10);
+            // visual line = 3 + 10 = 13; 13 - 10 = 3
+            assert_eq!(scroll_offset, 3);
+        } else {
+            panic!("expected WorkflowPicker modal");
+        }
     }
 }

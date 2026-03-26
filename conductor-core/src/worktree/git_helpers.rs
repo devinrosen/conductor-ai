@@ -280,6 +280,8 @@ pub(super) fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String
     let raw = String::from_utf8_lossy(&output.stdout);
     let (head_branch, base_branch, head_repo, is_fork) = parse_pr_view_output(&raw)?;
 
+    validate_branch_name(&head_branch)?;
+
     if is_fork {
         // For fork PRs: add the fork as a named remote (using the owner login)
         // and fetch from it.
@@ -321,25 +323,51 @@ pub(super) fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String
     Ok((head_branch, base_branch))
 }
 
-/// Validate that `name` is safe to use as a git remote name.
-///
-/// Rejects names that are empty, start with `-` (would be parsed as a git flag),
-/// or contain characters that are unsafe in git remote names.
-pub(super) fn validate_remote_name(name: &str) -> Result<()> {
+/// Shared base validation for git names: rejects empty names, names starting with `-`
+/// (would be parsed as a git flag), and names containing characters unsafe in git contexts.
+fn validate_git_name_base(kind: &str, name: &str) -> Result<()> {
     if name.is_empty() {
-        return Err(ConductorError::InvalidInput(
-            "fork owner name is empty".to_string(),
-        ));
+        return Err(ConductorError::InvalidInput(format!(
+            "{kind} name is empty"
+        )));
     }
     if name.starts_with('-') {
         return Err(ConductorError::InvalidInput(format!(
-            "fork owner name {name:?} starts with '-' and would be interpreted as a git flag"
+            "{kind} name {name:?} starts with '-' and would be interpreted as a git flag"
         )));
     }
     let unsafe_chars: &[char] = &[' ', '\t', '\n', '\\', ':', '?', '*', '[', '^', '~', '\0'];
     if let Some(c) = name.chars().find(|c| unsafe_chars.contains(c)) {
         return Err(ConductorError::InvalidInput(format!(
-            "fork owner name {name:?} contains unsafe character {c:?}"
+            "{kind} name {name:?} contains unsafe character {c:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate that `name` is safe to use as a git remote name.
+///
+/// Rejects names that are empty, start with `-` (would be parsed as a git flag),
+/// or contain characters that are unsafe in git remote names.
+pub(super) fn validate_remote_name(name: &str) -> Result<()> {
+    validate_git_name_base("fork owner", name)
+}
+
+/// Validate that `name` is safe to use as a git branch name in a refspec.
+///
+/// Rejects names that are empty, start with `-` (would be parsed as a git flag),
+/// contain `..` (special refspec separator) or `@{` (reflog syntax), or contain
+/// other characters that are unsafe in git branch names.
+pub(super) fn validate_branch_name(name: &str) -> Result<()> {
+    validate_git_name_base("branch", name)?;
+    if name.contains("..") {
+        return Err(ConductorError::InvalidInput(format!(
+            "branch name {name:?} contains '..' which is unsafe in git refspecs"
+        )));
+    }
+    if name.contains("@{") {
+        return Err(ConductorError::InvalidInput(format!(
+            "branch name {name:?} contains '@{{' which is unsafe in git refspecs"
         )));
     }
     Ok(())

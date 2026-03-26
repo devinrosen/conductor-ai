@@ -68,6 +68,10 @@ pub struct DataRefreshedPayload {
     pub unread_notification_count: usize,
     /// repo_id -> latest repo-scoped AgentRun (populated by DB poller)
     pub latest_repo_agent_runs: HashMap<String, AgentRun>,
+    /// All worktree-scoped agent events keyed by worktree_id (populated by background poller).
+    pub worktree_agent_events: HashMap<String, Vec<AgentRunEvent>>,
+    /// All repo-scoped agent events keyed by repo_id (populated by background poller).
+    pub repo_agent_events: HashMap<String, Vec<AgentRunEvent>>,
 }
 
 /// Every user intent or background result flows through this enum.

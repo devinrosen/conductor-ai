@@ -1452,3 +1452,85 @@ fn test_validate_remote_name_null_byte() {
     );
     assert!(err.to_string().contains("unsafe character"));
 }
+
+#[test]
+fn test_validate_branch_name_valid() {
+    assert!(git_helpers::validate_branch_name("main").is_ok());
+    assert!(git_helpers::validate_branch_name("feat/foo").is_ok());
+    assert!(git_helpers::validate_branch_name("fix-123").is_ok());
+    assert!(git_helpers::validate_branch_name("v1.2").is_ok());
+}
+
+#[test]
+fn test_validate_branch_name_empty() {
+    let err = git_helpers::validate_branch_name("").unwrap_err();
+    assert!(
+        matches!(err, ConductorError::InvalidInput(_)),
+        "expected InvalidInput error, got: {err:?}"
+    );
+    assert!(err.to_string().contains("empty"));
+}
+
+#[test]
+fn test_validate_branch_name_starts_with_dash() {
+    let err = git_helpers::validate_branch_name("-q").unwrap_err();
+    assert!(
+        matches!(err, ConductorError::InvalidInput(_)),
+        "expected InvalidInput error, got: {err:?}"
+    );
+    assert!(err.to_string().contains("'-'"));
+    let err2 = git_helpers::validate_branch_name("--upload-pack=evil").unwrap_err();
+    assert!(matches!(err2, ConductorError::InvalidInput(_)));
+}
+
+#[test]
+fn test_validate_branch_name_double_dot() {
+    let err = git_helpers::validate_branch_name("foo..bar").unwrap_err();
+    assert!(
+        matches!(err, ConductorError::InvalidInput(_)),
+        "expected InvalidInput error, got: {err:?}"
+    );
+    assert!(err.to_string().contains("'..'"));
+}
+
+#[test]
+fn test_validate_branch_name_at_brace() {
+    let err = git_helpers::validate_branch_name("foo@{1}").unwrap_err();
+    assert!(
+        matches!(err, ConductorError::InvalidInput(_)),
+        "expected InvalidInput error, got: {err:?}"
+    );
+    assert!(err.to_string().contains("'@{'"));
+}
+
+#[test]
+fn test_validate_branch_name_space() {
+    let err = git_helpers::validate_branch_name("my branch").unwrap_err();
+    assert!(
+        matches!(err, ConductorError::InvalidInput(_)),
+        "expected InvalidInput error, got: {err:?}"
+    );
+    assert!(err.to_string().contains("unsafe character"));
+}
+
+#[test]
+fn test_validate_branch_name_null_byte() {
+    let err = git_helpers::validate_branch_name("a\0b").unwrap_err();
+    assert!(
+        matches!(err, ConductorError::InvalidInput(_)),
+        "expected InvalidInput error, got: {err:?}"
+    );
+    assert!(err.to_string().contains("unsafe character"));
+}
+
+#[test]
+fn test_validate_branch_name_caret() {
+    let err = git_helpers::validate_branch_name("a^b").unwrap_err();
+    assert!(matches!(err, ConductorError::InvalidInput(_)));
+}
+
+#[test]
+fn test_validate_branch_name_colon() {
+    let err = git_helpers::validate_branch_name("a:b").unwrap_err();
+    assert!(matches!(err, ConductorError::InvalidInput(_)));
+}

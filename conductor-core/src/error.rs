@@ -110,6 +110,9 @@ pub enum ConductorError {
 
     #[error("feature already exists: {name}")]
     FeatureAlreadyExists { name: String },
+
+    #[error("feature '{name}' is still active. Run `conductor feature close {repo} {name}` first")]
+    FeatureStillActive { repo: String, name: String },
 }
 
 impl ConductorError {
@@ -140,6 +143,7 @@ impl ConductorError {
             Self::InvalidInput(_) => 27,
             Self::FeatureNotFound { .. } => 28,
             Self::FeatureAlreadyExists { .. } => 29,
+            Self::FeatureStillActive { .. } => 29,
             Self::Git(_) => 30,
             Self::GhCli(_) => 31,
             Self::TicketSync(_) => 32,

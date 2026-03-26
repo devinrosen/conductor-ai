@@ -1131,6 +1131,7 @@ fn minimal_workflow(name: &str) -> crate::workflow_dsl::WorkflowDef {
         description: "test workflow".to_string(),
         trigger: crate::workflow_dsl::WorkflowTrigger::Manual,
         targets: vec![],
+        group: None,
         inputs: vec![],
         body: vec![],
         always: vec![],
@@ -1393,6 +1394,109 @@ fn test_get_step_summaries_for_runs_no_running_step_omitted() {
     assert!(
         summaries.is_empty(),
         "run with no running step should be absent from summaries"
+    );
+}
+
+#[test]
+fn test_get_step_summaries_for_runs_multiple_roots() {
+    // Two independent root runs, each with a running step. Verifies the batch path
+    // returns correct summaries for both roots in a single call.
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    let run1 = create_worktree_run(&conn, "w1");
+    mgr.update_workflow_status(&run1.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+    let step1_id = mgr
+        .insert_step(&run1.id, "compile", "actor", false, 0, 0)
+        .unwrap();
+    set_step_status(&mgr, &step1_id, WorkflowStepStatus::Running);
+
+    let run2 = create_worktree_run(&conn, "w2");
+    mgr.update_workflow_status(&run2.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+    let step2_id = mgr
+        .insert_step(&run2.id, "lint", "actor", false, 0, 0)
+        .unwrap();
+    set_step_status(&mgr, &step2_id, WorkflowStepStatus::Running);
+
+    let summaries = mgr
+        .get_step_summaries_for_runs(&[run1.id.as_str(), run2.id.as_str()])
+        .unwrap();
+
+    assert_eq!(summaries.len(), 2);
+    let s1 = summaries.get(&run1.id).expect("run1 missing");
+    assert_eq!(s1.step_name, "compile");
+    assert!(s1.workflow_chain.is_empty());
+
+    let s2 = summaries.get(&run2.id).expect("run2 missing");
+    assert_eq!(s2.step_name, "lint");
+    assert!(s2.workflow_chain.is_empty());
+}
+
+#[test]
+fn test_get_step_summaries_for_runs_multiple_roots_with_chains() {
+    // Two root runs: one with a child chain (leaf has the running step),
+    // one flat (root itself has the running step). Verifies workflow_chain is
+    // populated correctly per root using the batch path.
+    let conn = setup_db();
+    let mgr = WorkflowManager::new(&conn);
+
+    // Root A: has an active child with a running step.
+    let root_a = create_worktree_run(&conn, "w1");
+    mgr.update_workflow_status(&root_a.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+    let agent_id_a = make_parent_id(&conn, "w1");
+    let child_a = mgr
+        .create_workflow_run_with_targets(
+            "child-wf-a",
+            Some("w1"),
+            None,
+            None,
+            &agent_id_a,
+            false,
+            "manual",
+            None,
+            Some(&root_a.id),
+            None,
+            None,
+        )
+        .unwrap();
+    mgr.update_workflow_status(&child_a.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+    let step_a_id = mgr
+        .insert_step(&child_a.id, "deploy", "actor", false, 0, 0)
+        .unwrap();
+    set_step_status(&mgr, &step_a_id, WorkflowStepStatus::Running);
+
+    // Root B: no children, running step directly on root.
+    let root_b = create_worktree_run(&conn, "w2");
+    mgr.update_workflow_status(&root_b.id, WorkflowRunStatus::Running, None)
+        .unwrap();
+    let step_b_id = mgr
+        .insert_step(&root_b.id, "test", "actor", false, 0, 0)
+        .unwrap();
+    set_step_status(&mgr, &step_b_id, WorkflowStepStatus::Running);
+
+    let summaries = mgr
+        .get_step_summaries_for_runs(&[root_a.id.as_str(), root_b.id.as_str()])
+        .unwrap();
+
+    assert_eq!(summaries.len(), 2);
+
+    let sa = summaries.get(&root_a.id).expect("root_a missing");
+    assert_eq!(sa.step_name, "deploy");
+    assert_eq!(
+        sa.workflow_chain,
+        vec!["wf"],
+        "root_a chain should contain root name only (child excluded as leaf)"
+    );
+
+    let sb = summaries.get(&root_b.id).expect("root_b missing");
+    assert_eq!(sb.step_name, "test");
+    assert!(
+        sb.workflow_chain.is_empty(),
+        "root_b has no children so chain should be empty"
     );
 }
 

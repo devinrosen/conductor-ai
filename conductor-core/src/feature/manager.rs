@@ -424,6 +424,56 @@ impl<'a> FeatureManager<'a> {
         Ok(url)
     }
 
+    /// Permanently delete a closed or merged feature: removes the local git branch
+    /// (safe `-d`, not `-D`), cascade-deletes `feature_tickets` rows, and deletes
+    /// the `features` record. Active features are rejected with `FeatureStillActive`.
+    pub fn delete(&self, repo_slug: &str, name: &str) -> Result<()> {
+        let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;
+        let feature = self.get_feature_by_repo_id(&repo.id, name)?;
+
+        if feature.status == FeatureStatus::Active {
+            return Err(ConductorError::FeatureStillActive {
+                repo: repo_slug.to_string(),
+                name: name.to_string(),
+            });
+        }
+
+        // Delete local branch (safe -d). If the branch doesn't exist locally,
+        // treat it as a no-op so the command remains retryable.
+        let branch_output = git_in(&repo.local_path)
+            .args(["branch", "-d", "--", &feature.branch])
+            .output()
+            .map_err(|e| {
+                ConductorError::Git(SubprocessFailure::from_message(
+                    "git branch -d",
+                    format!("failed to run git: {e}"),
+                ))
+            })?;
+        if !branch_output.status.success() {
+            let stderr = String::from_utf8_lossy(&branch_output.stderr);
+            // Branch already gone — that's fine.
+            if !stderr.contains("not found") && !stderr.contains("no branch named") {
+                return Err(ConductorError::Git(SubprocessFailure {
+                    command: "git branch -d".to_string(),
+                    exit_code: branch_output.status.code(),
+                    stderr: stderr.trim().to_string(),
+                    stdout: String::from_utf8_lossy(&branch_output.stdout)
+                        .trim()
+                        .to_string(),
+                }));
+            }
+        }
+
+        self.conn.execute(
+            "DELETE FROM feature_tickets WHERE feature_id = ?1",
+            params![feature.id],
+        )?;
+        self.conn
+            .execute("DELETE FROM features WHERE id = ?1", params![feature.id])?;
+
+        Ok(())
+    }
+
     /// Close a feature (set status to closed, or merged if the branch was merged).
     pub fn close(&self, repo_slug: &str, feature_name: &str) -> Result<()> {
         let repo = RepoManager::new(self.conn, self.config).get_by_slug(repo_slug)?;

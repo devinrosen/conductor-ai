@@ -672,12 +672,14 @@ pub fn render_branch_picker(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_workflow_picker(
     frame: &mut Frame,
     area: Rect,
     target: &crate::state::WorkflowPickerTarget,
     items: &[crate::state::WorkflowPickerItem],
     selected: usize,
+    scroll_offset: u16,
     ticket_source_id: Option<&str>,
     theme: &Theme,
 ) {
@@ -730,7 +732,11 @@ pub fn render_workflow_picker(
         }
     };
 
-    let height = (items.len() as u16 + 7).min(25);
+    let header_count = items
+        .iter()
+        .filter(|i| matches!(i, crate::state::WorkflowPickerItem::Header(_)))
+        .count() as u16;
+    let height = (items.len() as u16 + header_count + 7).min(area.height.saturating_sub(4));
     let percent_y = ((height as f32 / area.height as f32) * 100.0) as u16;
     let popup = centered_rect(60, percent_y.max(25), area);
     frame.render_widget(Clear, popup);
@@ -745,49 +751,60 @@ pub fn render_workflow_picker(
     ];
 
     for (i, item) in items.iter().enumerate() {
-        let is_selected = i == selected;
-        let prefix = if is_selected { "▸ " } else { "  " };
-        let num = if i < 9 {
-            format!("{} ", i + 1)
-        } else {
-            "  ".to_string()
-        };
+        use crate::state::WorkflowPickerItem;
+        match item {
+            WorkflowPickerItem::Header(label) => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!("  {label}"),
+                    Style::default()
+                        .fg(theme.label_accent)
+                        .add_modifier(Modifier::BOLD),
+                )));
+            }
+            _ => {
+                let is_selected = i == selected;
+                let prefix = if is_selected { "▸ " } else { "  " };
 
-        let style = if is_selected {
-            Style::default()
-                .fg(theme.label_warning)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.label_primary)
-        };
+                let style = if is_selected {
+                    Style::default()
+                        .fg(theme.label_warning)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.label_primary)
+                };
 
-        let name = item.name();
-        let description = item.description();
-        let mut row = vec![
-            Span::styled(format!("  {prefix}{num}"), style),
-            Span::styled(name, style),
-        ];
-        if !description.is_empty() {
-            row.push(Span::styled(
-                format!("  — {description}"),
-                Style::default().fg(theme.label_secondary),
-            ));
+                let name = item.name();
+                let description = item.description();
+                let mut row = vec![
+                    Span::styled(format!("  {prefix}"), style),
+                    Span::styled(name, style),
+                ];
+                if !description.is_empty() {
+                    row.push(Span::styled(
+                        format!("  — {description}"),
+                        Style::default().fg(theme.label_secondary),
+                    ));
+                }
+                lines.push(Line::from(row));
+            }
         }
-        lines.push(Line::from(row));
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  1-9 select  Enter confirm  Esc cancel",
+        "  j/k navigate  Enter confirm  Esc cancel",
         Style::default().fg(theme.label_secondary),
     )));
 
-    let content = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.border_focused))
-            .title(title),
-    );
+    let content = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.border_focused))
+                .title(title),
+        )
+        .scroll((scroll_offset, 0));
 
     frame.render_widget(content, popup);
 }

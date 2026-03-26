@@ -1545,6 +1545,7 @@ mod tests {
             description: String::new(),
             trigger: WorkflowTrigger::Manual,
             targets: vec![],
+            group: None,
             inputs: vec![InputDecl {
                 name: input_name.to_string(),
                 input_type: InputType::Boolean,

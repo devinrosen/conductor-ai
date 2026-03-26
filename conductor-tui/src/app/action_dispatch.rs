@@ -274,9 +274,14 @@ impl App {
             Action::SelectBranch(index) => self.handle_branch_pick(index),
             Action::SelectListItem(index) => {
                 if let Modal::WorkflowPicker {
-                    ref mut selected, ..
+                    ref items,
+                    ref mut selected,
+                    ..
                 } = self.state.modal
                 {
+                    if !items.get(index).is_some_and(|i| i.is_selectable()) {
+                        return false;
+                    }
                     *selected = index;
                     self.handle_workflow_picker_confirm();
                 } else if let Modal::TemplatePicker {
@@ -315,6 +320,7 @@ impl App {
                     },
                     items,
                     selected: 0,
+                    scroll_offset: 0,
                 };
             }
             Action::ManageIssueSources => self.handle_manage_issue_sources(),
@@ -488,9 +494,6 @@ impl App {
                 | Modal::BaseBranchPicker {
                     ref mut selected, ..
                 }
-                | Modal::WorkflowPicker {
-                    ref mut selected, ..
-                }
                 | Modal::TemplatePicker {
                     ref mut selected, ..
                 }
@@ -501,6 +504,14 @@ impl App {
                     ref mut selected, ..
                 } => {
                     *selected = 0;
+                }
+                Modal::WorkflowPicker {
+                    ref mut selected,
+                    ref mut scroll_offset,
+                    ..
+                } => {
+                    *selected = 0;
+                    *scroll_offset = 0;
                 }
                 _ => {
                     self.state.set_focused_index(0);
@@ -555,9 +566,11 @@ impl App {
                 Modal::WorkflowPicker {
                     ref items,
                     ref mut selected,
+                    ref mut scroll_offset,
                     ..
                 } => {
-                    *selected = items.len().saturating_sub(1);
+                    *selected = items.iter().rposition(|i| i.is_selectable()).unwrap_or(0);
+                    *scroll_offset = u16::MAX;
                 }
                 Modal::TemplatePicker {
                     ref items,
@@ -828,6 +841,8 @@ impl App {
                 self.state.data.live_turns_by_worktree = payload.live_turns_by_worktree;
                 self.state.data.features_by_repo = payload.features_by_repo;
                 self.state.data.latest_repo_agent_runs = payload.latest_repo_agent_runs;
+                self.state.data.all_worktree_agent_events = payload.worktree_agent_events;
+                self.state.data.all_repo_agent_events = payload.repo_agent_events;
                 self.state.unread_notification_count = payload.unread_notification_count;
                 self.refresh_pending_feedback();
                 self.refresh_pending_repo_feedback();

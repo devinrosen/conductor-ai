@@ -3,6 +3,7 @@ workflow rebase-and-fix {
     description = "Fetch latest base branch, resolve conflicts, fix lint, and push — leaves the PR CI-green and ready for next steps"
     trigger     = "manual"
     targets     = ["worktree"]
+    group       = "Development"
   }
 
   call workflow rebase-worktree

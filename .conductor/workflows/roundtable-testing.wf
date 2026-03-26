@@ -3,6 +3,7 @@ workflow roundtable-testing {
     description = "Testing roundtable review"
     trigger     = "manual"
     targets     = ["pr", "worktree"]
+    group       = "Review"
   }
 
   parallel {
