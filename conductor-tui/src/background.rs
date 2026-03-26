@@ -370,10 +370,7 @@ pub fn poll_data() -> Option<PollResult> {
     // Same pattern for repo-scoped events.
     let mut repo_agent_events = agent_mgr.list_all_repo_events_by_repo().unwrap_or_default();
     for repo_id in latest_repo_agent_runs.keys() {
-        if repo_agent_events
-            .get(repo_id)
-            .is_none_or(|v| v.is_empty())
-        {
+        if repo_agent_events.get(repo_id).is_none_or(|v| v.is_empty()) {
             let mut runs = agent_mgr.list_repo_scoped(repo_id).unwrap_or_default();
             runs.reverse();
             let fallback = build_fallback_events(&runs);

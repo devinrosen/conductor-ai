@@ -82,7 +82,9 @@ impl<'a> AgentManager<'a> {
 
     /// Return all worktree-scoped agent events, grouped by `worktree_id`.
     /// Single SQL JOIN — no per-worktree round trips.
-    pub fn list_all_events_by_worktree(&self) -> Result<std::collections::HashMap<String, Vec<AgentRunEvent>>> {
+    pub fn list_all_events_by_worktree(
+        &self,
+    ) -> Result<std::collections::HashMap<String, Vec<AgentRunEvent>>> {
         let rows = query_collect(
             self.conn,
             "SELECT e.id, e.run_id, e.kind, e.summary, e.started_at, e.ended_at, e.metadata, r.worktree_id \
@@ -97,7 +99,8 @@ impl<'a> AgentManager<'a> {
                 Ok((wt_id, event))
             },
         )?;
-        let mut map: std::collections::HashMap<String, Vec<AgentRunEvent>> = std::collections::HashMap::new();
+        let mut map: std::collections::HashMap<String, Vec<AgentRunEvent>> =
+            std::collections::HashMap::new();
         for (wt_id, event) in rows {
             map.entry(wt_id).or_default().push(event);
         }
@@ -106,7 +109,9 @@ impl<'a> AgentManager<'a> {
 
     /// Return all repo-scoped agent events, grouped by `repo_id`.
     /// Only includes runs where `worktree_id IS NULL` (repo-level agents).
-    pub fn list_all_repo_events_by_repo(&self) -> Result<std::collections::HashMap<String, Vec<AgentRunEvent>>> {
+    pub fn list_all_repo_events_by_repo(
+        &self,
+    ) -> Result<std::collections::HashMap<String, Vec<AgentRunEvent>>> {
         let rows = query_collect(
             self.conn,
             "SELECT e.id, e.run_id, e.kind, e.summary, e.started_at, e.ended_at, e.metadata, r.repo_id \
@@ -121,7 +126,8 @@ impl<'a> AgentManager<'a> {
                 Ok((repo_id, event))
             },
         )?;
-        let mut map: std::collections::HashMap<String, Vec<AgentRunEvent>> = std::collections::HashMap::new();
+        let mut map: std::collections::HashMap<String, Vec<AgentRunEvent>> =
+            std::collections::HashMap::new();
         for (repo_id, event) in rows {
             map.entry(repo_id).or_default().push(event);
         }
