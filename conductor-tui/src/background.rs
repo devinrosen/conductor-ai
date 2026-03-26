@@ -778,8 +778,16 @@ fn poll_workflow_data(
         let (mut defs, warnings) =
             WorkflowManager::list_defs(wt_path, repo_path.unwrap_or("")).unwrap_or_default();
         defs.sort_by(|a, b| {
-            let ka = (if a.group.is_none() { 1u8 } else { 0u8 }, a.group.as_deref().unwrap_or(""), a.name.as_str());
-            let kb = (if b.group.is_none() { 1u8 } else { 0u8 }, b.group.as_deref().unwrap_or(""), b.name.as_str());
+            let ka = (
+                if a.group.is_none() { 1u8 } else { 0u8 },
+                a.group.as_deref().unwrap_or(""),
+                a.name.as_str(),
+            );
+            let kb = (
+                if b.group.is_none() { 1u8 } else { 0u8 },
+                b.group.as_deref().unwrap_or(""),
+                b.name.as_str(),
+            );
             ka.cmp(&kb)
         });
         (Some(defs), Some(Vec::new()), warnings)
@@ -817,8 +825,16 @@ fn poll_workflow_data(
             }
         }
         all_defs.sort_by(|a, b| {
-            let ka = (if a.group.is_none() { 1u8 } else { 0u8 }, a.group.as_deref().unwrap_or(""), a.name.as_str());
-            let kb = (if b.group.is_none() { 1u8 } else { 0u8 }, b.group.as_deref().unwrap_or(""), b.name.as_str());
+            let ka = (
+                if a.group.is_none() { 1u8 } else { 0u8 },
+                a.group.as_deref().unwrap_or(""),
+                a.name.as_str(),
+            );
+            let kb = (
+                if b.group.is_none() { 1u8 } else { 0u8 },
+                b.group.as_deref().unwrap_or(""),
+                b.name.as_str(),
+            );
             ka.cmp(&kb)
         });
         // def_slugs empty: all defs belong to the same repo, no slug labels needed.
