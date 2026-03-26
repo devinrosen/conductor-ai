@@ -22,6 +22,11 @@ const statusColor: Record<string, string> = {
 
 const trackColor = "#232D42";
 
+/** Strip common prefixes like "workflow:" from step names for display */
+function displayName(name: string): string {
+  return name.replace(/^workflow:/, "");
+}
+
 export function TrainProgress({ steps }: { steps: StepInfo[] }) {
   if (steps.length === 0) return null;
 
@@ -31,50 +36,58 @@ export function TrainProgress({ steps }: { steps: StepInfo[] }) {
 
   return (
     <div className="overflow-x-auto py-3">
-      <div className="flex items-center min-w-fit gap-0">
+      <div className="flex items-start min-w-fit">
         {steps.map((step, i) => {
           const color = statusColor[step.status] ?? statusColor.pending;
           const isActive = i === activeIndex;
+          const trackDone = step.status === "completed" || step.status === "skipped";
 
           return (
-            <div key={i} className="flex items-center">
-              {/* Track segment before station (except first) */}
-              {i > 0 && (
+            <div key={i} className="flex flex-col items-center" style={{ minWidth: 0 }}>
+              {/* Track + dot row */}
+              <div className="flex items-center w-full">
+                {/* Left track segment */}
                 <div
-                  className="h-0.5 w-8 sm:w-12"
+                  className="h-0.5 flex-1"
                   style={{
-                    backgroundColor:
-                      step.status === "completed" || step.status === "skipped"
+                    backgroundColor: i === 0 ? "transparent" : trackDone ? statusColor.completed : trackColor,
+                  }}
+                />
+                {/* Station dot */}
+                <div className="relative shrink-0">
+                  {isActive && (
+                    <span className="absolute -top-5 left-1/2 -translate-x-1/2 text-sm" aria-label="Current step">
+                      🚂
+                    </span>
+                  )}
+                  <div
+                    className="w-3.5 h-3.5 rounded-full border-2 shrink-0"
+                    style={{
+                      borderColor: color,
+                      backgroundColor: step.status === "completed" ? color : "transparent",
+                    }}
+                  />
+                </div>
+                {/* Right track segment */}
+                <div
+                  className="h-0.5 flex-1"
+                  style={{
+                    backgroundColor: i === steps.length - 1 ? "transparent" : (
+                      (steps[i + 1]?.status === "completed" || steps[i + 1]?.status === "skipped")
                         ? statusColor.completed
-                        : trackColor,
+                        : trackColor
+                    ),
                   }}
                 />
-              )}
-
-              {/* Station */}
-              <div className="flex flex-col items-center gap-1 relative">
-                {/* Train icon above active station */}
-                {isActive && (
-                  <span className="absolute -top-5 text-sm" aria-label="Current step">
-                    🚂
-                  </span>
-                )}
-                <div
-                  className="w-3.5 h-3.5 rounded-full border-2 shrink-0"
-                  style={{
-                    borderColor: color,
-                    backgroundColor:
-                      step.status === "completed" ? color : "transparent",
-                  }}
-                />
-                <span
-                  className="text-[10px] max-w-16 truncate text-center"
-                  style={{ color }}
-                  title={step.name}
-                >
-                  {step.name}
-                </span>
               </div>
+              {/* Label */}
+              <span
+                className="text-[10px] max-w-24 sm:max-w-32 text-center leading-tight break-words mt-1 px-1"
+                style={{ color }}
+                title={step.name}
+              >
+                {displayName(step.name)}
+              </span>
             </div>
           );
         })}

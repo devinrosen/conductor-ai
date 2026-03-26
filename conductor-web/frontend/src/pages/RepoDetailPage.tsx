@@ -137,6 +137,7 @@ export function RepoDetailPage() {
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [togglingAgentIssues, setTogglingAgentIssues] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [unregisterRepoConfirm, setUnregisterRepoConfirm] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [createWtOpen, setCreateWtOpen] = useState(false);
@@ -160,9 +161,16 @@ export function RepoDetailPage() {
 
   async function handleDeleteWorktree() {
     if (!deleteTarget) return;
-    await api.deleteWorktree(deleteTarget);
-    setDeleteTarget(null);
-    refetchWorktrees();
+    setDeleting(true);
+    try {
+      await api.deleteWorktree(deleteTarget);
+      setDeleteTarget(null);
+      refetchWorktrees();
+    } catch {
+      setDeleteTarget(null);
+    } finally {
+      setDeleting(false);
+    }
   }
 
   async function handleDeleteRepo() {
@@ -594,6 +602,7 @@ export function RepoDetailPage() {
         message="Are you sure? This will remove the worktree and its git branch."
         onConfirm={handleDeleteWorktree}
         onCancel={() => setDeleteTarget(null)}
+        loading={deleting}
       />
       <ConfirmDialog
         open={unregisterRepoConfirm}

@@ -102,11 +102,15 @@ fn main() {
                     // - http://tauri.localhost → Windows (localhost-mapped protocol)
                     // The server only binds on 127.0.0.1, but a browser tab on any
                     // origin could still reach it without this restriction.
-                    let router = api_router_with_cors(vec![
+                    let mut origins = vec![
                         HeaderValue::from_static("tauri://localhost"),
                         HeaderValue::from_static("http://tauri.localhost"),
-                    ])
-                    .with_state(web_state);
+                    ];
+                    // In dev mode, the Vite dev server runs on localhost:5173.
+                    if cfg!(debug_assertions) {
+                        origins.push(HeaderValue::from_static("http://localhost:5173"));
+                    }
+                    let router = api_router_with_cors(origins).with_state(web_state);
 
                     if let Err(e) = axum::serve(listener, router).await {
                         eprintln!(

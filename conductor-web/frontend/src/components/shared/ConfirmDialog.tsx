@@ -6,6 +6,7 @@ interface ConfirmDialogProps {
   message: string;
   onConfirm: () => void;
   onCancel: () => void;
+  loading?: boolean;
 }
 
 export function ConfirmDialog({
@@ -14,6 +15,7 @@ export function ConfirmDialog({
   message,
   onConfirm,
   onCancel,
+  loading = false,
 }: ConfirmDialogProps) {
   useEffect(() => {
     if (!open) return;
@@ -34,15 +36,17 @@ export function ConfirmDialog({
         <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onCancel}
-            className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
+            disabled={loading}
+            className="px-3 py-1.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             onClick={onConfirm}
-            className="px-3 py-1.5 text-sm rounded-md bg-red-600 text-white hover:bg-red-700"
+            disabled={loading}
+            className="px-3 py-1.5 text-sm rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
           >
-            Confirm
+            {loading ? "Deleting..." : "Confirm"}
           </button>
         </div>
       </div>

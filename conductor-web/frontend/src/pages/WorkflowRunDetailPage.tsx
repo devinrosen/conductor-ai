@@ -2,13 +2,49 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams, Link } from "react-router";
 import { api } from "../api/client";
 import type { WorkflowRun, WorkflowRunStep } from "../api/types";
-import { StatusBadge } from "../components/shared/StatusBadge";
 import { TimeAgo } from "../components/shared/TimeAgo";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { TrainProgress } from "../components/shared/TrainProgress";
 import { TransitBreadcrumb } from "../components/shared/TransitBreadcrumb";
 import { formatDuration, liveElapsedMs } from "../utils/agentStats";
 import { StepDetailPanel } from "../components/workflows/StepDetailPanel";
+import { StatusBadge } from "../components/shared/StatusBadge";
+
+function StepStatusIcon({ status }: { status: string }) {
+  if (status === "completed") {
+    return (
+      <svg className="w-4 h-4 text-green-500 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
+      </svg>
+    );
+  }
+  if (status === "failed" || status === "cancelled") {
+    return (
+      <svg className="w-4 h-4 text-red-500 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
+      </svg>
+    );
+  }
+  if (status === "running" || status === "waiting") {
+    return (
+      <span className="relative flex w-4 h-4 shrink-0">
+        <span className="absolute inset-0.5 rounded-full bg-amber-400/30 animate-ping" style={{ animationDuration: "2s" }} />
+        <span className="relative inline-flex w-4 h-4 items-center justify-center">
+          <span className="w-2 h-2 rounded-full bg-amber-500" />
+        </span>
+      </span>
+    );
+  }
+  if (status === "skipped") {
+    return (
+      <svg className="w-4 h-4 text-gray-400 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M1.5 4.5a.75.75 0 0 1 1.28-.53l4.72 4.72 4.72-4.72a.75.75 0 1 1 1.06 1.06l-5.25 5.25a.75.75 0 0 1-1.06 0L1.72 5.03a.75.75 0 0 1-.22-.53Z" />
+      </svg>
+    );
+  }
+  // pending
+  return <span className="w-4 h-4 rounded-full border-2 border-gray-300 shrink-0" />;
+}
 
 export function WorkflowRunDetailPage() {
   const { repoId, worktreeId, runId } = useParams<{
@@ -29,6 +65,8 @@ export function WorkflowRunDetailPage() {
   const [gateError, setGateError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  const [childSteps, setChildSteps] = useState<Map<string, WorkflowRunStep[]>>(new Map());
+  const [expandedChildren, setExpandedChildren] = useState<Set<string>>(new Set());
 
   const fetchData = useCallback(async () => {
     if (!runId) return;
@@ -38,8 +76,24 @@ export function WorkflowRunDetailPage() {
         api.getWorkflowSteps(runId),
       ]);
       setRun(runData);
-      setSteps(stepsData.slice().sort((a, b) => a.position - b.position));
+      const sorted = stepsData.slice().sort((a, b) => a.position - b.position);
+      setSteps(sorted);
       setFetchError(null);
+
+      // Fetch child workflow steps for any step that spawned a sub-workflow
+      const childRunIds = sorted
+        .filter((s) => s.child_run_id)
+        .map((s) => s.child_run_id!);
+      if (childRunIds.length > 0) {
+        const childResults = await Promise.all(
+          childRunIds.map((id) => api.getWorkflowSteps(id).catch(() => [] as WorkflowRunStep[])),
+        );
+        const map = new Map<string, WorkflowRunStep[]>();
+        for (let i = 0; i < childRunIds.length; i++) {
+          map.set(childRunIds[i], childResults[i].slice().sort((a, b) => a.position - b.position));
+        }
+        setChildSteps(map);
+      }
     } catch (err) {
       setFetchError(err instanceof Error ? err.message : "Failed to load workflow run");
     } finally {
@@ -112,6 +166,14 @@ export function WorkflowRunDetailPage() {
     setGateFeedback("");
     setGateError(null);
     setGateModalOpen(true);
+  }
+
+  function toggleChildExpand(childRunId: string) {
+    setExpandedChildren((prev) => {
+      const next = new Set(prev);
+      if (next.has(childRunId)) next.delete(childRunId); else next.add(childRunId);
+      return next;
+    });
   }
 
   function handleStepKeyDown(e: React.KeyboardEvent, stepId: string) {
@@ -206,9 +268,6 @@ export function WorkflowRunDetailPage() {
 
       <div className="text-sm text-gray-500">
         Started <TimeAgo date={run.started_at} />
-        {run.ended_at && (
-          <> · Ended <TimeAgo date={run.ended_at} /></>
-        )}
         {(() => {
           const ms = run.ended_at
             ? new Date(run.ended_at).getTime() - new Date(run.started_at).getTime()
@@ -217,10 +276,10 @@ export function WorkflowRunDetailPage() {
         })()}
       </div>
 
-      {/* Train progress overview */}
-      {steps.length > 0 && (
+      {/* Train progress overview — only worth showing for 4+ steps */}
+      {steps.length >= 4 && (
         <TrainProgress
-          steps={steps.map((s) => ({ name: s.step_name, status: s.status }))}
+          steps={steps.map((s) => ({ name: s.step_name.replace(/^workflow:/, ""), status: s.status }))}
         />
       )}
 
@@ -235,7 +294,11 @@ export function WorkflowRunDetailPage() {
         ) : (
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
             <div className="divide-y divide-gray-100">
-              {steps.map((step) => {
+              {(() => {
+                // Hide role badge if every step has the same role
+                const roles = new Set(steps.map((s) => s.role).filter(Boolean));
+                const showRole = roles.size > 1;
+                return steps.map((step) => {
                 const parsedMarkers: string[] = (() => {
                   if (!step.markers_out) return [];
                   try { return JSON.parse(step.markers_out); } catch { return []; }
@@ -251,15 +314,12 @@ export function WorkflowRunDetailPage() {
                   onKeyDown={(e) => handleStepKeyDown(e, step.id)}
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <span className="text-gray-400 text-xs font-mono w-6 text-right shrink-0">
-                        {step.position}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <StepStatusIcon status={step.status} />
+                      <span className="text-sm">
+                        {step.step_name.replace(/^workflow:/, "")}
                       </span>
-                      <span className="text-gray-900 text-sm font-medium">
-                        {step.step_name}
-                      </span>
-                      <StatusBadge status={step.status} />
-                      {step.role && (
+                      {showRole && step.role && (
                         <span className="text-xs px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded">
                           {step.role}
                         </span>
@@ -311,19 +371,69 @@ export function WorkflowRunDetailPage() {
 
                   {/* Gate feedback — always visible inline */}
                   {step.gate_feedback && (
-                    <div className="ml-9 mt-2 px-3 py-2 text-xs bg-amber-50 border border-amber-200 rounded-md text-amber-700">
+                    <div className="ml-6 mt-2 px-3 py-2 text-xs bg-amber-50 border border-amber-200 rounded-md text-amber-700">
                       <span className="font-medium">Gate feedback:</span> {step.gate_feedback}
                     </div>
                   )}
+
+                  {/* Child workflow steps — expandable */}
+                  {step.child_run_id && childSteps.has(step.child_run_id) && (() => {
+                    const children = childSteps.get(step.child_run_id!)!;
+                    if (children.length === 0) return null;
+                    const isOpen = expandedChildren.has(step.child_run_id!);
+                    const childRoles = new Set(children.map((s) => s.role).filter(Boolean));
+                    const showChildRole = childRoles.size > 1;
+                    return (
+                      <div className="ml-6 mt-2">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); toggleChildExpand(step.child_run_id!); }}
+                          className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 py-0.5"
+                        >
+                          <svg
+                            className={`w-3 h-3 transition-transform duration-150 ${isOpen ? "rotate-90" : ""}`}
+                            viewBox="0 0 16 16" fill="currentColor"
+                          >
+                            <path d="M6.22 4.22a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.75.75 0 0 1-1.06-1.06L8.94 8 6.22 5.28a.75.75 0 0 1 0-1.06Z" />
+                          </svg>
+                          <span>{children.length} steps</span>
+                        </button>
+                        {isOpen && (
+                          <div className="mt-1 space-y-0.5 border-l-2 border-gray-200 ml-1.5 pl-3">
+                            {children.map((child) => {
+                              const childMs = child.ended_at && child.started_at
+                                ? new Date(child.ended_at).getTime() - new Date(child.started_at).getTime()
+                                : (child.status === "running" || child.status === "waiting") && child.started_at
+                                  ? liveElapsedMs(child.started_at) : null;
+                              return (
+                                <div key={child.id} className="flex items-center justify-between gap-2 py-0.5">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <StepStatusIcon status={child.status} />
+                                    <span className="text-xs text-gray-700">{child.step_name.replace(/^workflow:/, "")}</span>
+                                    {showChildRole && child.role && (
+                                      <span className="text-[10px] px-1 py-0.5 bg-gray-100 text-gray-500 rounded">{child.role}</span>
+                                    )}
+                                  </div>
+                                  {childMs != null && (
+                                    <span className="text-xs text-gray-400 font-mono tabular-nums shrink-0">{formatDuration(childMs)}</span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
                 );
-              })}
+              });
+              })()}
             </div>
           </div>
         )}
 
-        {/* Result summary */}
-        {run.result_summary && (
+        {/* Result summary — only show for failed runs where the error is useful */}
+        {run.result_summary && run.status === "failed" && (
           <div className="mt-4">
             <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">
               Result
