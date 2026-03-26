@@ -978,3 +978,49 @@ fn test_execute_workflow_worktree_fallback_base_branch() {
         "feature_base_branch should equal the worktree's custom base_branch, not default 'main'"
     );
 }
+
+/// Regression test for #1539: when `repo_id` is `None` but `worktree_id` is provided,
+/// `execute_workflow` should derive `repo_id` from the worktree's parent repo.
+#[test]
+fn test_execute_workflow_derives_repo_id_from_worktree() {
+    let conn = setup_db();
+    let config = Config::default();
+    let exec_config = WorkflowExecConfig::default();
+    let workflow = make_empty_workflow();
+
+    let input = WorkflowExecInput {
+        conn: &conn,
+        config: &config,
+        workflow: &workflow,
+        worktree_id: Some("w1"),
+        working_dir: "/tmp/ws/feat-test",
+        repo_path: "/tmp/repo",
+        ticket_id: None,
+        repo_id: None,
+        model: None,
+        exec_config: &exec_config,
+        inputs: HashMap::new(),
+        depth: 0,
+        parent_workflow_run_id: None,
+        target_label: None,
+        default_bot_name: None,
+        feature_id: None,
+        iteration: 0,
+        run_id_notify: None,
+        triggered_by_hook: false,
+        conductor_bin_dir: None,
+    };
+
+    let result = execute_workflow(&input).unwrap();
+
+    let wf_mgr = WorkflowManager::new(&conn);
+    let run = wf_mgr
+        .get_workflow_run(&result.workflow_run_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        run.repo_id.as_deref(),
+        Some("r1"),
+        "repo_id should be derived from worktree w1's parent repo r1"
+    );
+}

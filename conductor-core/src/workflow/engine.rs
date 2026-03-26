@@ -294,11 +294,25 @@ pub fn execute_workflow(input: &WorkflowExecInput<'_>) -> Result<WorkflowResult>
     } else {
         workflow.trigger.to_string()
     };
+
+    // Derive repo_id from worktree if not provided (#1539)
+    let derived_repo_id = match (&input.repo_id, &input.worktree_id) {
+        (None, Some(wt_id)) => match WorktreeManager::new(conn, config).get_by_id(wt_id) {
+            Ok(wt) => Some(wt.repo_id),
+            Err(e) => {
+                tracing::warn!("Failed to look up worktree '{wt_id}' for repo_id derivation: {e}");
+                None
+            }
+        },
+        _ => None,
+    };
+    let effective_repo_id = input.repo_id.or(derived_repo_id.as_deref());
+
     let wf_run = wf_mgr.create_workflow_run_with_targets(
         &workflow.name,
         input.worktree_id,
         input.ticket_id,
-        input.repo_id,
+        effective_repo_id,
         &parent_run.id,
         input.exec_config.dry_run,
         &trigger_str,
