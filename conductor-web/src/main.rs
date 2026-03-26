@@ -5,6 +5,7 @@ use conductor_core::agent::AgentManager;
 use conductor_core::config::{conductor_dir, ensure_dirs, load_config, save_config};
 use conductor_core::db::open_database;
 use tokio::sync::{Mutex, RwLock};
+use http::HeaderValue;
 use tower_http::cors::{Any, CorsLayer};
 
 use conductor_web::assets::static_handler;
@@ -292,16 +293,6 @@ async fn main() -> Result<()> {
         }
     });
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
-
-    let app = api_router()
-        .fallback(static_handler)
-        .layer(cors)
-        .with_state(state);
-
     let host: std::net::IpAddr = std::env::var("CONDUCTOR_HOST")
         .unwrap_or_else(|_| "127.0.0.1".to_string())
         .parse()
@@ -310,6 +301,27 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "3000".to_string())
         .parse()
         .map_err(|e| anyhow::anyhow!("invalid CONDUCTOR_PORT: {e}"))?;
+
+    let mut origins: Vec<HeaderValue> = vec![
+        format!("http://localhost:{port}").parse().unwrap(),
+        format!("http://127.0.0.1:{port}").parse().unwrap(),
+    ];
+    if let Ok(v) = "http://localhost:5173".parse() {
+        origins.push(v);
+    }
+    if let Ok(v) = "http://127.0.0.1:5173".parse() {
+        origins.push(v);
+    }
+
+    let cors = CorsLayer::new()
+        .allow_origin(origins)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
+    let app = api_router()
+        .fallback(static_handler)
+        .layer(cors)
+        .with_state(state);
     let addr = std::net::SocketAddr::from((host, port));
     tracing::info!("Listening on http://{}", addr);
 
