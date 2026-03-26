@@ -51,6 +51,7 @@ pub fn api_router() -> Router<AppState> {
             get(repos::discover_github_repos_handler),
         )
         // Worktrees
+        .route("/api/worktrees", get(worktrees::list_all_worktrees))
         .route(
             "/api/repos/{id}/worktrees",
             get(worktrees::list_worktrees).post(worktrees::create_worktree),

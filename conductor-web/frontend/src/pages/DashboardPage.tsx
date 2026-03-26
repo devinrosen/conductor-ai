@@ -37,31 +37,22 @@ export function DashboardPage() {
   const refreshWorktrees = useCallback(() => setWtTick((n) => n + 1), []);
 
   useEffect(() => {
-    if (repos.length === 0) return;
-    Promise.all([
-      Promise.all(
-        repos.map((r) =>
-          api
-            .listWorktrees(r.id)
-            .then((wts) => ({ repoId: r.id, slug: r.slug, wts })),
-        ),
-      ),
-      api.latestRunsByWorktree(),
-    ]).then(([results, runs]) => {
+    api.listAllWorktrees().then((allWorktrees) => {
+      const repoSlugById: Record<string, string> = {};
+      for (const r of repos) repoSlugById[r.id] = r.slug;
+
       const counts: Record<string, number> = {};
       const active: (Worktree & { repoSlug: string })[] = [];
-      for (const { repoId, slug, wts } of results) {
-        counts[repoId] = wts.length;
-        for (const wt of wts) {
-          if (wt.status === "active") {
-            active.push({ ...wt, repoSlug: slug });
-          }
+      for (const wt of allWorktrees) {
+        counts[wt.repo_id] = (counts[wt.repo_id] ?? 0) + 1;
+        if (wt.status === "active") {
+          active.push({ ...wt, repoSlug: repoSlugById[wt.repo_id] ?? "" });
         }
       }
       setWorktreeCounts(counts);
       setActiveWorktrees(active);
-      setLatestRuns(runs);
     });
+    api.latestRunsByWorktree().then(setLatestRuns);
   }, [repos, wtTick]);
 
   const handlers = useMemo(() => {
