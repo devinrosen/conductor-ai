@@ -112,14 +112,7 @@ fn execute_call_with_schema(
             iteration as i64,
         )?;
 
-        let window_prefix = if state.worktree_slug.is_empty() {
-            state
-                .workflow_run_id
-                .get(..8)
-                .unwrap_or(&state.workflow_run_id)
-        } else {
-            state.worktree_slug.as_str()
-        };
+        let window_prefix = state.window_prefix();
         let child_window = sanitize_tmux_name(&format!("{}-wf-{}", window_prefix, agent_label));
         let effective_bot_name = node
             .bot_name
