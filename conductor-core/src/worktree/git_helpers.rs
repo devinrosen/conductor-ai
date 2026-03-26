@@ -326,18 +326,18 @@ pub(super) fn fetch_pr_branch(repo_path: &str, pr_number: u32) -> Result<(String
 /// or contain characters that are unsafe in git remote names.
 pub(super) fn validate_remote_name(name: &str) -> Result<()> {
     if name.is_empty() {
-        return Err(ConductorError::GhCli(
+        return Err(ConductorError::InvalidInput(
             "fork owner name is empty".to_string(),
         ));
     }
     if name.starts_with('-') {
-        return Err(ConductorError::GhCli(format!(
+        return Err(ConductorError::InvalidInput(format!(
             "fork owner name {name:?} starts with '-' and would be interpreted as a git flag"
         )));
     }
     let unsafe_chars: &[char] = &[' ', '\t', '\n', '\\', ':', '?', '*', '[', '^', '~', '\0'];
     if let Some(c) = name.chars().find(|c| unsafe_chars.contains(c)) {
-        return Err(ConductorError::GhCli(format!(
+        return Err(ConductorError::InvalidInput(format!(
             "fork owner name {name:?} contains unsafe character {c:?}"
         )));
     }

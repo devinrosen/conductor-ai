@@ -1408,8 +1408,8 @@ fn test_validate_remote_name_valid() {
 fn test_validate_remote_name_empty() {
     let err = git_helpers::validate_remote_name("").unwrap_err();
     assert!(
-        matches!(err, ConductorError::GhCli(_)),
-        "expected GhCli error, got: {err:?}"
+        matches!(err, ConductorError::InvalidInput(_)),
+        "expected InvalidInput error, got: {err:?}"
     );
     assert!(err.to_string().contains("empty"));
 }
@@ -1418,8 +1418,8 @@ fn test_validate_remote_name_empty() {
 fn test_validate_remote_name_starts_with_dash() {
     let err = git_helpers::validate_remote_name("-evil").unwrap_err();
     assert!(
-        matches!(err, ConductorError::GhCli(_)),
-        "expected GhCli error, got: {err:?}"
+        matches!(err, ConductorError::InvalidInput(_)),
+        "expected InvalidInput error, got: {err:?}"
     );
     assert!(err.to_string().contains("'-'"));
 }
@@ -1428,8 +1428,8 @@ fn test_validate_remote_name_starts_with_dash() {
 fn test_validate_remote_name_space() {
     let err = git_helpers::validate_remote_name("name with space").unwrap_err();
     assert!(
-        matches!(err, ConductorError::GhCli(_)),
-        "expected GhCli error, got: {err:?}"
+        matches!(err, ConductorError::InvalidInput(_)),
+        "expected InvalidInput error, got: {err:?}"
     );
     assert!(err.to_string().contains("unsafe character"));
 }
@@ -1438,17 +1438,17 @@ fn test_validate_remote_name_space() {
 fn test_validate_remote_name_path_chars() {
     // '..' is fine char-by-char, but backslash and colon are rejected
     let err = git_helpers::validate_remote_name("a\\b").unwrap_err();
-    assert!(matches!(err, ConductorError::GhCli(_)));
+    assert!(matches!(err, ConductorError::InvalidInput(_)));
     let err2 = git_helpers::validate_remote_name("a:b").unwrap_err();
-    assert!(matches!(err2, ConductorError::GhCli(_)));
+    assert!(matches!(err2, ConductorError::InvalidInput(_)));
 }
 
 #[test]
 fn test_validate_remote_name_null_byte() {
     let err = git_helpers::validate_remote_name("a\0b").unwrap_err();
     assert!(
-        matches!(err, ConductorError::GhCli(_)),
-        "expected GhCli error, got: {err:?}"
+        matches!(err, ConductorError::InvalidInput(_)),
+        "expected InvalidInput error, got: {err:?}"
     );
     assert!(err.to_string().contains("unsafe character"));
 }
