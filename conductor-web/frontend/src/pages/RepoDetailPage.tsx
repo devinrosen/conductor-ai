@@ -7,6 +7,8 @@ import type { AgentRun, Ticket } from "../api/types";
 import { WorktreeRow } from "../components/worktrees/WorktreeRow";
 import { CreateWorktreeForm } from "../components/worktrees/CreateWorktreeForm";
 import { TicketRow } from "../components/tickets/TicketRow";
+import { TicketCard } from "../components/tickets/TicketCard";
+import { RepoAgentRunCard } from "../components/agents/RepoAgentRunCard";
 import { TicketDetailModal } from "../components/tickets/TicketDetailModal";
 import { IssueSourcesSection } from "../components/issue-sources/IssueSourcesSection";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
@@ -334,37 +336,44 @@ export function RepoDetailPage() {
           </div>
         )}
         {repoAgentRuns && repoAgentRuns.length > 0 && !activeRepoAgent && (
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
-                <tr>
-                  <th className="px-4 py-2">Prompt</th>
-                  <th className="px-4 py-2">Status</th>
-                  <th className="px-4 py-2">Cost</th>
-                  <th className="px-4 py-2">Started</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {repoAgentRuns.slice(0, 5).map((run) => (
-                  <tr key={run.id}>
-                    <td className="px-4 py-2 truncate max-w-xs">{run.prompt.slice(0, 80)}</td>
-                    <td className="px-4 py-2">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                        run.status === "completed" ? "bg-green-100 text-green-800" :
-                        run.status === "failed" ? "bg-red-100 text-red-800" :
-                        run.status === "cancelled" ? "bg-gray-100 text-gray-800" :
-                        "bg-yellow-100 text-yellow-800"
-                      }`}>
-                        {run.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2 text-gray-500">{run.cost_usd != null ? `$${run.cost_usd.toFixed(2)}` : "-"}</td>
-                    <td className="px-4 py-2 text-gray-500">{new Date(run.started_at).toLocaleString()}</td>
+          <>
+            <div className="hidden md:block rounded-lg border border-gray-200 bg-white overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
+                  <tr>
+                    <th className="px-4 py-2">Prompt</th>
+                    <th className="px-4 py-2">Status</th>
+                    <th className="px-4 py-2">Cost</th>
+                    <th className="px-4 py-2">Started</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {repoAgentRuns.slice(0, 5).map((run) => (
+                    <tr key={run.id}>
+                      <td className="px-4 py-2 truncate max-w-xs">{run.prompt.slice(0, 80)}</td>
+                      <td className="px-4 py-2">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                          run.status === "completed" ? "bg-green-100 text-green-800" :
+                          run.status === "failed" ? "bg-red-100 text-red-800" :
+                          run.status === "cancelled" ? "bg-gray-100 text-gray-800" :
+                          "bg-yellow-100 text-yellow-800"
+                        }`}>
+                          {run.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-gray-500">{run.cost_usd != null ? `$${run.cost_usd.toFixed(2)}` : "-"}</td>
+                      <td className="px-4 py-2 text-gray-500">{new Date(run.started_at).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="md:hidden space-y-2">
+              {repoAgentRuns.slice(0, 5).map((run) => (
+                <RepoAgentRunCard key={run.id} run={run} />
+              ))}
+            </div>
+          </>
         )}
       </section>
 
@@ -520,30 +529,42 @@ export function RepoDetailPage() {
         ) : !tickets || tickets.length === 0 ? (
           <EmptyState message="No tickets synced yet" />
         ) : (
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
-            <table className="w-full text-sm min-w-[480px]">
-              <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
-                <tr>
-                  <th className="px-4 py-2">#</th>
-                  <th className="px-4 py-2">Title</th>
-                  <th className="px-4 py-2">State</th>
-                  <th className="px-4 py-2">Labels</th>
-                  <th className="px-4 py-2">Assignee</th>
-                  <th className="px-4 py-2">Agent</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {tickets.map((t) => (
-                  <TicketRow
-                    key={t.id}
-                    ticket={t}
-                    agentTotals={ticketTotals?.[t.id]}
-                    onClick={setSelectedTicket}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div className="hidden md:block rounded-lg border border-gray-200 bg-white overflow-hidden overflow-x-auto">
+              <table className="w-full text-sm min-w-[480px]">
+                <thead className="bg-gray-50 text-left text-xs text-gray-500 uppercase">
+                  <tr>
+                    <th className="px-4 py-2">#</th>
+                    <th className="px-4 py-2">Title</th>
+                    <th className="px-4 py-2">State</th>
+                    <th className="px-4 py-2">Labels</th>
+                    <th className="px-4 py-2">Assignee</th>
+                    <th className="px-4 py-2">Agent</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {tickets.map((t) => (
+                    <TicketRow
+                      key={t.id}
+                      ticket={t}
+                      agentTotals={ticketTotals?.[t.id]}
+                      onClick={setSelectedTicket}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="md:hidden space-y-2">
+              {tickets.map((t) => (
+                <TicketCard
+                  key={t.id}
+                  ticket={t}
+                  agentTotals={ticketTotals?.[t.id]}
+                  onClick={setSelectedTicket}
+                />
+              ))}
+            </div>
+          </>
         )}
       </section>
 
