@@ -435,10 +435,12 @@ impl App {
             return;
         }
 
+        let items = insert_group_headers(defs);
+        let selected = items.iter().position(|i| i.is_selectable()).unwrap_or(0);
         self.state.modal = Modal::WorkflowPicker {
             target,
-            items: insert_group_headers(defs),
-            selected: 0,
+            items,
+            selected,
         };
     }
 
@@ -518,10 +520,12 @@ impl App {
             return;
         }
 
+        let items = insert_group_headers(defs);
+        let selected = items.iter().position(|i| i.is_selectable()).unwrap_or(0);
         self.state.modal = Modal::WorkflowPicker {
             target,
-            items: insert_group_headers(defs),
-            selected: 0,
+            items,
+            selected,
         };
     }
 
@@ -565,7 +569,7 @@ impl App {
         self.state.modal = Modal::None;
 
         match item {
-            WorkflowPickerItem::Header(_) => { /* unreachable — guarded above */ }
+            WorkflowPickerItem::Header(_) => unreachable!("Header items are non-selectable and guarded above"),
             WorkflowPickerItem::Workflow(def) => {
                 let mut prefill = std::collections::HashMap::new();
                 match &target {
@@ -2025,5 +2029,87 @@ mod tests {
             }
             other => panic!("Expected Modal::Error, got {:?}", other),
         }
+    }
+
+    // ── insert_group_headers ──────────────────────────────────────────────────
+
+    fn make_def(name: &str, group: Option<&str>) -> conductor_core::workflow::WorkflowDef {
+        conductor_core::workflow::WorkflowDef {
+            name: name.to_string(),
+            description: String::new(),
+            trigger: conductor_core::workflow::WorkflowTrigger::Manual,
+            targets: vec![],
+            group: group.map(String::from),
+            inputs: vec![],
+            body: vec![],
+            always: vec![],
+            source_path: String::new(),
+        }
+    }
+
+    #[test]
+    fn insert_group_headers_empty_input_returns_empty() {
+        let items = insert_group_headers(vec![]);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn insert_group_headers_all_ungrouped_no_headers() {
+        let defs = vec![
+            make_def("beta", None),
+            make_def("alpha", None),
+        ];
+        let items = insert_group_headers(defs);
+        // No headers — all items are Workflow variants, sorted alphabetically.
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(|i| matches!(i, WorkflowPickerItem::Workflow(_))));
+        assert!(matches!(&items[0], WorkflowPickerItem::Workflow(d) if d.name == "alpha"));
+        assert!(matches!(&items[1], WorkflowPickerItem::Workflow(d) if d.name == "beta"));
+    }
+
+    #[test]
+    fn insert_group_headers_all_grouped_inserts_headers() {
+        let defs = vec![
+            make_def("b-wf", Some("GroupB")),
+            make_def("a-wf", Some("GroupA")),
+        ];
+        let items = insert_group_headers(defs);
+        // GroupA comes before GroupB (alphabetical). Each group gets a Header + Workflow.
+        assert_eq!(items.len(), 4);
+        assert!(matches!(&items[0], WorkflowPickerItem::Header(l) if l == "GroupA"));
+        assert!(matches!(&items[1], WorkflowPickerItem::Workflow(d) if d.name == "a-wf"));
+        assert!(matches!(&items[2], WorkflowPickerItem::Header(l) if l == "GroupB"));
+        assert!(matches!(&items[3], WorkflowPickerItem::Workflow(d) if d.name == "b-wf"));
+    }
+
+    #[test]
+    fn insert_group_headers_mixed_grouped_and_ungrouped() {
+        let defs = vec![
+            make_def("ungrouped-z", None),
+            make_def("grouped-a", Some("G")),
+            make_def("ungrouped-a", None),
+        ];
+        let items = insert_group_headers(defs);
+        // Group "G" first (header + workflow), then ungrouped sorted alphabetically.
+        assert_eq!(items.len(), 4);
+        assert!(matches!(&items[0], WorkflowPickerItem::Header(l) if l == "G"));
+        assert!(matches!(&items[1], WorkflowPickerItem::Workflow(d) if d.name == "grouped-a"));
+        assert!(matches!(&items[2], WorkflowPickerItem::Workflow(d) if d.name == "ungrouped-a"));
+        assert!(matches!(&items[3], WorkflowPickerItem::Workflow(d) if d.name == "ungrouped-z"));
+    }
+
+    #[test]
+    fn insert_group_headers_workflows_within_group_sorted() {
+        let defs = vec![
+            make_def("zzz", Some("G")),
+            make_def("aaa", Some("G")),
+            make_def("mmm", Some("G")),
+        ];
+        let items = insert_group_headers(defs);
+        assert_eq!(items.len(), 4);
+        assert!(matches!(&items[0], WorkflowPickerItem::Header(_)));
+        assert!(matches!(&items[1], WorkflowPickerItem::Workflow(d) if d.name == "aaa"));
+        assert!(matches!(&items[2], WorkflowPickerItem::Workflow(d) if d.name == "mmm"));
+        assert!(matches!(&items[3], WorkflowPickerItem::Workflow(d) if d.name == "zzz"));
     }
 }

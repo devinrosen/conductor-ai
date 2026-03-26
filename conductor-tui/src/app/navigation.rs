@@ -3,11 +3,42 @@ use ratatui::widgets::ListState;
 use crate::state::{
     info_row, repo_info_row, workflow_run_info_row, DashboardRow, FormField, Modal,
     RepoDetailFocus, View, WorkflowDefFocus, WorkflowRunDetailFocus, WorkflowsFocus,
-    WorktreeDetailFocus,
+    WorktreeDetailFocus, WorkflowPickerItem,
 };
 
 use super::helpers::{clamp_increment, max_scroll, wrap_decrement, wrap_increment};
 use super::App;
+
+/// Return the nearest selectable index in `items` when navigating in a given
+/// direction, wrapping at the boundaries.  Iterates at most `items.len()`
+/// steps so the loop always terminates even if every item is a Header.
+///
+/// `forward = true` increments the index; `forward = false` decrements it.
+/// Returns `start` unchanged when the slice is empty or contains no selectable
+/// item.
+fn next_selectable(items: &[WorkflowPickerItem], start: usize, forward: bool) -> usize {
+    let len = items.len();
+    if len == 0 {
+        return start;
+    }
+    let mut idx = if forward {
+        if start + 1 >= len { 0 } else { start + 1 }
+    } else {
+        start.checked_sub(1).unwrap_or(len - 1)
+    };
+    for _ in 0..len {
+        if items[idx].is_selectable() {
+            return idx;
+        }
+        idx = if forward {
+            if idx + 1 >= len { 0 } else { idx + 1 }
+        } else {
+            idx.checked_sub(1).unwrap_or(len - 1)
+        };
+    }
+    // No selectable item found — leave selection unchanged.
+    start
+}
 
 impl App {
     pub(super) fn half_page_size(&self) -> usize {
@@ -397,15 +428,9 @@ impl App {
                 ref mut selected,
                 ..
             } => {
-                let len = items.len();
-                if len == 0 {
-                    return;
+                if !items.is_empty() {
+                    *selected = next_selectable(items, *selected, false);
                 }
-                let mut idx = selected.checked_sub(1).unwrap_or(len - 1);
-                while !items[idx].is_selectable() {
-                    idx = idx.checked_sub(1).unwrap_or(len - 1);
-                }
-                *selected = idx;
                 return;
             }
             Modal::TemplatePicker {
@@ -558,19 +583,9 @@ impl App {
                 ref mut selected,
                 ..
             } => {
-                let len = items.len();
-                if len == 0 {
-                    return;
+                if !items.is_empty() {
+                    *selected = next_selectable(items, *selected, true);
                 }
-                let mut idx = if *selected + 1 >= len {
-                    0
-                } else {
-                    *selected + 1
-                };
-                while !items[idx].is_selectable() {
-                    idx = if idx + 1 >= len { 0 } else { idx + 1 };
-                }
-                *selected = idx;
                 return;
             }
             Modal::TemplatePicker {

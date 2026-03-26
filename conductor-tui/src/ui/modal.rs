@@ -734,7 +734,7 @@ pub fn render_workflow_picker(
         .iter()
         .filter(|i| matches!(i, crate::state::WorkflowPickerItem::Header(_)))
         .count() as u16;
-    let height = (items.len() as u16 + header_count * 2 + 7).min(25);
+    let height = (items.len() as u16 + header_count + 7).min(25);
     let percent_y = ((height as f32 / area.height as f32) * 100.0) as u16;
     let popup = centered_rect(60, percent_y.max(25), area);
     frame.render_widget(Clear, popup);
