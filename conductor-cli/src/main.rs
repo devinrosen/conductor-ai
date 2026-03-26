@@ -578,10 +578,13 @@ enum TicketCommands {
         #[arg(long)]
         agent_map: Option<String>,
     },
-    /// Update a ticket's workflow or agent_map routing fields
+    /// Update a ticket's state, workflow, or agent_map
     Update {
         /// Ticket ID (ULID from `conductor tickets list`)
         id: String,
+        /// Set state: open, in_progress, or closed
+        #[arg(long)]
+        state: Option<String>,
         /// Set workflow name (empty string clears)
         #[arg(long)]
         workflow: Option<String>,
@@ -1413,8 +1416,9 @@ fn main() -> Result<()> {
                 if workflow.is_some() || agent_map.is_some() {
                     // Look up the ticket by source_id to get the ULID
                     let ticket = syncer.get_by_source_id(&repo_obj.id, &source_id)?;
-                    syncer.update_ticket_routing(
+                    syncer.update_ticket(
                         &ticket.id,
+                        None,
                         workflow.as_deref(),
                         agent_map.as_deref(),
                     )?;
@@ -1427,11 +1431,12 @@ fn main() -> Result<()> {
             }
             TicketCommands::Update {
                 id,
+                state,
                 workflow,
                 agent_map,
             } => {
                 let syncer = TicketSyncer::new(&conn);
-                syncer.update_ticket_routing(&id, workflow.as_deref(), agent_map.as_deref())?;
+                syncer.update_ticket(&id, state.as_deref(), workflow.as_deref(), agent_map.as_deref())?;
                 println!("Updated ticket {id}.");
             }
             TicketCommands::Stats { repo } => {

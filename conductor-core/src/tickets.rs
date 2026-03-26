@@ -386,20 +386,39 @@ impl<'a> TicketSyncer<'a> {
             })
     }
 
-    /// Update the `workflow` and/or `agent_map` columns on a ticket.
+    /// Update the `state`, `workflow`, and/or `agent_map` columns on a ticket.
     ///
+    /// For `workflow` and `agent_map`:
     /// - `Some("")` clears the column to NULL.
     /// - `Some(value)` sets the column to `value`.
     /// - `None` leaves the column unchanged.
-    pub fn update_ticket_routing(
+    ///
+    /// For `state`:
+    /// - `Some(value)` sets the state (must be one of: open, in_progress, closed).
+    /// - `None` leaves the state unchanged.
+    /// - Empty string is NOT valid for state (state is NOT NULL).
+    pub fn update_ticket(
         &self,
         ticket_id: &str,
+        state: Option<&str>,
         workflow: Option<&str>,
         agent_map: Option<&str>,
     ) -> Result<()> {
         // Verify ticket exists
         let _ = self.get_by_id(ticket_id)?;
 
+        if let Some(s) = state {
+            if !VALID_TICKET_STATES.contains(&s) {
+                return Err(crate::error::ConductorError::InvalidInput(format!(
+                    "Invalid ticket state '{}'. Must be one of: open, in_progress, closed.",
+                    s
+                )));
+            }
+            self.conn.execute(
+                "UPDATE tickets SET state = ?1 WHERE id = ?2",
+                rusqlite::params![s, ticket_id],
+            )?;
+        }
         if let Some(w) = workflow {
             let val: Option<&str> = if w.is_empty() { None } else { Some(w) };
             self.conn.execute(
