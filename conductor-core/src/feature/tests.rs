@@ -1,7 +1,8 @@
 use chrono::Utc;
 use rusqlite::{params, Connection};
 
-use super::helpers::{derive_branch_name, with_in_clause};
+use crate::db::with_in_clause;
+use super::helpers::derive_branch_name;
 use super::*;
 use crate::config::Config;
 use crate::db::migrations;
@@ -608,9 +609,10 @@ fn test_close_feature_merged_when_remote_branch_deleted() {
 #[test]
 fn test_with_in_clause_generates_valid_sql() {
     // Single item
+    let repo1: &str = "repo1";
     let (sql, _) = with_in_clause(
         "SELECT id FROM t WHERE repo_id = ?1 AND source_id IN",
-        "repo1",
+        &[&repo1 as &dyn rusqlite::types::ToSql],
         &["a".to_string()],
         |sql, params| (sql.to_string(), params.len()),
     );
@@ -620,14 +622,15 @@ fn test_with_in_clause_generates_valid_sql() {
     );
 
     // Multiple items
+    let f1: &str = "f1";
     let (sql, param_count) = with_in_clause(
         "DELETE FROM ft WHERE fid = ?1 AND tid IN",
-        "f1",
+        &[&f1 as &dyn rusqlite::types::ToSql],
         &["a".to_string(), "b".to_string(), "c".to_string()],
         |sql, params| (sql.to_string(), params.len()),
     );
     assert_eq!(sql, "DELETE FROM ft WHERE fid = ?1 AND tid IN (?2, ?3, ?4)");
-    assert_eq!(param_count, 4); // first_param + 3 items
+    assert_eq!(param_count, 4); // leading_param + 3 items
 }
 
 #[test]

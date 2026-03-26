@@ -4,7 +4,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::config::Config;
-use crate::db::query_collect;
+use crate::db::{query_collect, with_in_clause};
 use crate::error::{ConductorError, Result};
 use crate::git::{check_output, git_in};
 use crate::repo::RepoManager;
@@ -13,7 +13,6 @@ use crate::worktree::WorktreeManager;
 
 use super::helpers::{
     batch_branch_timestamps, derive_branch_name, last_commit_timestamp, map_feature_row,
-    with_in_clause,
 };
 use super::types::{Feature, FeatureRow, FeatureStatus, UnregisteredBranch};
 
@@ -386,7 +385,7 @@ impl<'a> FeatureManager<'a> {
         if !ticket_ids.is_empty() {
             with_in_clause(
                 "DELETE FROM feature_tickets WHERE feature_id = ?1 AND ticket_id IN",
-                &feature.id,
+                &[&feature.id as &dyn rusqlite::types::ToSql],
                 &ticket_ids,
                 |sql, params| -> Result<()> {
                     self.conn.prepare(sql)?.execute(params)?;
@@ -788,7 +787,7 @@ impl<'a> FeatureManager<'a> {
 
         let map = with_in_clause(
             "SELECT id, source_id FROM tickets WHERE repo_id = ?1 AND source_id IN",
-            repo_id,
+            &[&repo_id as &dyn rusqlite::types::ToSql],
             source_ids,
             |sql, params| -> Result<std::collections::HashMap<String, String>> {
                 let mut stmt = self.conn.prepare(sql)?;
