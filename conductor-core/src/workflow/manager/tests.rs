@@ -1600,7 +1600,10 @@ fn make_worktree_workflow(name: &str) -> crate::workflow::WorkflowDef {
 #[test]
 fn test_filter_repo_target() {
     // Mixed-target slice: only the repo workflow should survive the "repo" filter.
-    let defs = [make_repo_workflow("repo-wf"), make_worktree_workflow("wt-wf")];
+    let defs = [
+        make_repo_workflow("repo-wf"),
+        make_worktree_workflow("wt-wf"),
+    ];
     let filter = "repo";
     let filtered: Vec<_> = defs
         .iter()
