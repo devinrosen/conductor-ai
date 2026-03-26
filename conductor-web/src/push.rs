@@ -27,8 +27,11 @@ pub struct PushPayload {
 
 pub struct PushSubscriptionManager<'a> {
     db: &'a Connection,
+    #[allow(dead_code)] // will be used when actual web-push sending is implemented
     vapid_private_key: String,
+    #[allow(dead_code)] // will be used when actual web-push sending is implemented
     vapid_public_key: String,
+    #[allow(dead_code)] // will be used when actual web-push sending is implemented
     vapid_subject: String,
 }
 

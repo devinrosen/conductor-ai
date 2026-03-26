@@ -177,11 +177,13 @@ mod tests {
         )
         .unwrap();
 
-        let mut config = Config::default();
-        config.web_push = WebPushConfig {
-            vapid_public_key: Some("test_public_key".to_string()),
-            vapid_private_key: Some("test_private_key".to_string()),
-            vapid_subject: Some("mailto:test@example.com".to_string()),
+        let config = Config {
+            web_push: WebPushConfig {
+                vapid_public_key: Some("test_public_key".to_string()),
+                vapid_private_key: Some("test_private_key".to_string()),
+                vapid_subject: Some("mailto:test@example.com".to_string()),
+            },
+            ..Default::default()
         };
 
         AppState::new(db, config, 100)

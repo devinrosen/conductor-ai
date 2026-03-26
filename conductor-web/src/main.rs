@@ -28,11 +28,11 @@ async fn main() -> Result<()> {
         // In a real implementation, you'd use proper ECDSA key generation
         let private_key = base64::Engine::encode(
             &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            &[0u8; 32], // Placeholder private key
+            [0u8; 32], // Placeholder private key
         );
         let public_key = base64::Engine::encode(
             &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            &[0u8; 65], // Placeholder public key
+            [0u8; 65], // Placeholder public key
         );
 
         config.web_push.vapid_private_key = Some(private_key);
