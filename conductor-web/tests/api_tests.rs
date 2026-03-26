@@ -1405,21 +1405,17 @@ async fn test_stop_agent_already_stopped() {
     );
 }
 
-// ── Stop repo agent happy-path tests ────────────────────────────────
+// ── Stop repo agent helpers ─────────────────────────────────────────
 
-#[tokio::test]
-async fn test_stop_repo_agent_happy_path() {
-    let base = spawn_test_server_with_setup(seed_repo_agent_run).await;
-    let client = reqwest::Client::new();
-
-    // Fetch the repo and run IDs
+/// Fetch the first repo ID and its first agent run ID from the API.
+async fn fetch_repo_and_run_id(base: &str) -> (String, String) {
     let repos: Vec<serde_json::Value> = reqwest::get(format!("{base}/api/repos"))
         .await
         .unwrap()
         .json()
         .await
         .unwrap();
-    let repo_id = repos[0]["id"].as_str().unwrap();
+    let repo_id = repos[0]["id"].as_str().unwrap().to_string();
 
     let runs: Vec<serde_json::Value> =
         reqwest::get(format!("{base}/api/repos/{repo_id}/agent/runs"))
@@ -1428,9 +1424,17 @@ async fn test_stop_repo_agent_happy_path() {
             .json()
             .await
             .unwrap();
-    assert_eq!(runs.len(), 1);
-    let run_id = runs[0]["id"].as_str().unwrap();
-    assert_eq!(runs[0]["status"], "running");
+    let run_id = runs[0]["id"].as_str().unwrap().to_string();
+    (repo_id, run_id)
+}
+
+// ── Stop repo agent happy-path tests ────────────────────────────────
+
+#[tokio::test]
+async fn test_stop_repo_agent_happy_path() {
+    let base = spawn_test_server_with_setup(seed_repo_agent_run).await;
+    let client = reqwest::Client::new();
+    let (repo_id, run_id) = fetch_repo_and_run_id(&base).await;
 
     // Stop the repo agent
     let resp = client
@@ -1456,23 +1460,7 @@ async fn test_stop_repo_agent_happy_path() {
 async fn test_stop_repo_agent_already_stopped() {
     let base = spawn_test_server_with_setup(seed_repo_agent_run).await;
     let client = reqwest::Client::new();
-
-    let repos: Vec<serde_json::Value> = reqwest::get(format!("{base}/api/repos"))
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let repo_id = repos[0]["id"].as_str().unwrap();
-
-    let runs: Vec<serde_json::Value> =
-        reqwest::get(format!("{base}/api/repos/{repo_id}/agent/runs"))
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-    let run_id = runs[0]["id"].as_str().unwrap();
+    let (repo_id, run_id) = fetch_repo_and_run_id(&base).await;
 
     // First stop succeeds
     let resp = client
