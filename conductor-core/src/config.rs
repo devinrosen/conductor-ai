@@ -281,31 +281,12 @@ pub fn conductor_dir() -> &'static PathBuf {
 
 /// Returns the path to the SQLite database.
 ///
-/// If the current working directory is inside a conductor worktree
-/// (`<workspace_root>/<repo>/<worktree>/…`), returns a worktree-local
-/// database at `<workspace_root>/<repo>/<worktree>/.conductor.db`.
-/// Otherwise returns the global `~/.conductor/conductor.db`.
+/// Always uses the global `~/.conductor/conductor.db`. Repos, tickets,
+/// and workflow runs are global resources that must be accessible
+/// regardless of the current working directory (including from within
+/// worktrees where scripts execute).
 pub fn db_path() -> PathBuf {
-    if let Some(wt_db) = worktree_db_path() {
-        return wt_db;
-    }
     conductor_dir().join("conductor.db")
-}
-
-/// Detect whether the CWD is inside a conductor worktree and, if so,
-/// return the path to the worktree-local database file.
-fn worktree_db_path() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    let ws_root = default_workspace_root();
-    let relative = cwd.strip_prefix(&ws_root).ok()?;
-
-    // We need at least two components: <repo-slug>/<worktree-slug>
-    let mut components = relative.components();
-    let repo = components.next()?;
-    let worktree = components.next()?;
-
-    let wt_dir = ws_root.join(repo.as_os_str()).join(worktree.as_os_str());
-    Some(wt_dir.join(".conductor.db"))
 }
 
 /// Returns the path to the config file.
