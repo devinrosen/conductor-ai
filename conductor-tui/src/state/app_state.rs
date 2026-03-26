@@ -718,7 +718,10 @@ impl AppState {
         for run in runs {
             if let Some(ref parent_id) = run.parent_workflow_run_id {
                 if known_ids.contains(parent_id.as_str()) {
-                    children_map.entry(parent_id.as_str()).or_default().push(run);
+                    children_map
+                        .entry(parent_id.as_str())
+                        .or_default()
+                        .push(run);
                 }
             }
         }
@@ -870,8 +873,7 @@ impl AppState {
                     if rs != repo_slug || tk != target_key {
                         continue;
                     }
-                    let child_count =
-                        children_map.get(run.id.as_str()).map_or(0, |v| v.len());
+                    let child_count = children_map.get(run.id.as_str()).map_or(0, |v| v.len());
                     let collapsed = self.collapsed_workflow_run_ids.contains(&run.id);
                     count += 1; // Parent row
                     if !collapsed {

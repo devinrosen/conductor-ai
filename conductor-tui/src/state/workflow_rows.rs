@@ -490,9 +490,7 @@ pub(super) fn count_children_rows(
         let global_max_iter = steps.iter().map(|s| s.iteration).max().unwrap_or(0);
         steps
             .iter()
-            .filter(|s| {
-                s.iteration == global_max_iter && !s.step_name.starts_with("workflow:")
-            })
+            .filter(|s| s.iteration == global_max_iter && !s.step_name.starts_with("workflow:"))
             .count()
     } else {
         0
@@ -502,17 +500,12 @@ pub(super) fn count_children_rows(
     let child_rows: usize = filtered_children
         .iter()
         .map(|child| {
-            let child_child_count =
-                children_map.get(child.id.as_str()).map_or(0, |v| v.len());
+            let child_child_count = children_map.get(child.id.as_str()).map_or(0, |v| v.len());
             let collapsed = collapsed_ids.contains(&child.id);
             let mut n = 1; // The Child row itself.
             if !collapsed {
                 if child_child_count == 0 {
-                    n += count_steps_for_run(
-                        &child.id,
-                        expanded_step_run_ids,
-                        workflow_run_steps,
-                    );
+                    n += count_steps_for_run(&child.id, expanded_step_run_ids, workflow_run_steps);
                 } else {
                     n += count_children_rows(
                         &child.id,
