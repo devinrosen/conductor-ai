@@ -269,3 +269,23 @@ export interface Notification {
   created_at: string;
   read_at: string | null;
 }
+
+// Push Notifications
+export interface PushSubscriptionKeys {
+  p256dh: string;
+  auth: string;
+}
+
+export interface PushSubscribeRequest {
+  endpoint: string;
+  keys: PushSubscriptionKeys;
+}
+
+export interface VapidPublicKeyResponse {
+  public_key: string;
+}
+
+export interface PushSubscribeResponse {
+  success: boolean;
+  message: string;
+}

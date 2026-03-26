@@ -110,6 +110,19 @@ impl Default for WorkflowNotificationConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WebPushConfig {
+    /// VAPID public key (base64url encoded)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vapid_public_key: Option<String>,
+    /// VAPID private key (base64url encoded)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vapid_private_key: Option<String>,
+    /// Subject for VAPID (typically a mailto: or https: URL)
+    #[serde(default)]
+    pub vapid_subject: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub general: GeneralConfig,
@@ -119,6 +132,8 @@ pub struct Config {
     pub github: GitHubSettings,
     #[serde(default)]
     pub notifications: NotificationConfig,
+    #[serde(default)]
+    pub web_push: WebPushConfig,
 }
 
 /// Top-level `[github]` section.
