@@ -249,11 +249,19 @@ pub fn execute_parallel(
             break;
         }
 
+        let pending_ids: Vec<&str> = children
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !completed.contains(i))
+            .map(|(_, c)| c.child_run_id.as_str())
+            .collect();
+        let run_map = state.agent_mgr.get_runs_by_ids(&pending_ids).unwrap_or_default();
+
         for (i, child) in children.iter().enumerate() {
             if completed.contains(&i) {
                 continue;
             }
-            if let Ok(Some(run)) = state.agent_mgr.get_run(&child.child_run_id) {
+            if let Some(run) = run_map.get(&child.child_run_id) {
                 match run.status {
                     AgentRunStatus::Completed
                     | AgentRunStatus::Failed
