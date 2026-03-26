@@ -114,7 +114,9 @@ pub(super) fn ensure_base_up_to_date(repo_path: &str, base_branch: &str) -> Resu
         }
     } else {
         // Need to checkout base branch first (handles detached HEAD too)
-        let checkout = git_in(repo_path).args(["checkout", base_branch]).output();
+        let checkout = git_in(repo_path)
+            .args(["switch", "--", base_branch])
+            .output();
         match checkout {
             Ok(o) if o.status.success() => {
                 let merge = git_in(repo_path)
