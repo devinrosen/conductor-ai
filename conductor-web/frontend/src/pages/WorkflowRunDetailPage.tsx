@@ -20,13 +20,14 @@ export function WorkflowRunDetailPage() {
   const [run, setRun] = useState<WorkflowRun | null>(null);
   const [steps, setSteps] = useState<WorkflowRunStep[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const [gateModalOpen, setGateModalOpen] = useState(false);
   const [gateStep, setGateStep] = useState<WorkflowRunStep | null>(null);
   const [gateFeedback, setGateFeedback] = useState("");
   const [gateSubmitting, setGateSubmitting] = useState(false);
   const [gateError, setGateError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
-  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -38,8 +39,9 @@ export function WorkflowRunDetailPage() {
       ]);
       setRun(runData);
       setSteps(stepsData.slice().sort((a, b) => a.position - b.position));
-    } catch {
-      // silently fail
+      setFetchError(null);
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : "Failed to load workflow run");
     } finally {
       setLoading(false);
     }
@@ -60,11 +62,12 @@ export function WorkflowRunDetailPage() {
   async function handleCancel() {
     if (!runId) return;
     setCancelling(true);
+    setCancelError(null);
     try {
       await api.cancelWorkflow(runId);
       await fetchData();
-    } catch {
-      // ignore
+    } catch (err) {
+      setCancelError(err instanceof Error ? err.message : "Cancel failed — try again");
     } finally {
       setCancelling(false);
     }
@@ -111,7 +114,36 @@ export function WorkflowRunDetailPage() {
     setGateModalOpen(true);
   }
 
+  function handleStepKeyDown(e: React.KeyboardEvent, stepId: string) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setSelectedStepId(selectedStepId === stepId ? null : stepId);
+    }
+  }
+
   if (loading) return <LoadingSpinner />;
+
+  if (fetchError && !run) {
+    return (
+      <div className="text-center py-12 space-y-3">
+        <p className="text-red-500 text-sm">{fetchError}</p>
+        <button
+          onClick={fetchData}
+          className="px-4 py-2 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
+        >
+          Retry
+        </button>
+        <div>
+          <Link
+            to={`/repos/${repoId}/worktrees/${worktreeId}`}
+            className="text-indigo-600 hover:underline text-sm"
+          >
+            Back to worktree
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   if (!run) {
     return (
@@ -166,6 +198,12 @@ export function WorkflowRunDetailPage() {
         )}
       </div>
 
+      {cancelError && (
+        <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+          {cancelError}
+        </div>
+      )}
+
       <div className="text-sm text-gray-500">
         Started <TimeAgo date={run.started_at} />
         {run.ended_at && (
@@ -198,9 +236,6 @@ export function WorkflowRunDetailPage() {
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
             <div className="divide-y divide-gray-100">
               {steps.map((step) => {
-                const hasDetail = !!(step.result_text || step.markers_out || step.context_out || step.gate_feedback);
-                const isExpanded = expandedSteps.has(step.id);
-                const showResultAlways = step.status === "failed" && step.result_text;
                 const parsedMarkers: string[] = (() => {
                   if (!step.markers_out) return [];
                   try { return JSON.parse(step.markers_out); } catch { return []; }
@@ -209,8 +244,11 @@ export function WorkflowRunDetailPage() {
                 return (
                 <div
                   key={step.id}
-                  className={`px-4 py-3 cursor-pointer transition-colors ${selectedStepId === step.id ? "bg-indigo-50" : "hover:bg-gray-50"}`}
+                  role="button"
+                  tabIndex={0}
+                  className={`px-4 py-3 cursor-pointer transition-colors outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-inset ${selectedStepId === step.id ? "bg-indigo-50" : "hover:bg-gray-50"}`}
                   onClick={() => setSelectedStepId(selectedStepId === step.id ? null : step.id)}
+                  onKeyDown={(e) => handleStepKeyDown(e, step.id)}
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                     <div className="flex items-center gap-3 flex-wrap">
@@ -241,19 +279,6 @@ export function WorkflowRunDetailPage() {
                           {m}
                         </span>
                       ))}
-                      {hasDetail && !showResultAlways && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setExpandedSteps((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(step.id)) next.delete(step.id); else next.add(step.id);
-                            return next;
-                          }); }}
-                          className="text-gray-400 hover:text-gray-600 text-xs"
-                          title={isExpanded ? "Collapse" : "Expand details"}
-                        >
-                          {isExpanded ? "▾" : "▸"}
-                        </button>
-                      )}
                     </div>
                     <div className="flex items-center gap-3 ml-9 sm:ml-0">
                       {step.started_at && (
@@ -269,7 +294,7 @@ export function WorkflowRunDetailPage() {
                       {step.gate_type && step.status === "waiting" && (
                         <button
                           onClick={(e) => { e.stopPropagation(); openGateModal(step); }}
-                          className="px-3 py-1.5 text-xs rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
+                          className="px-3 py-1.5 text-xs rounded-md bg-indigo-600 text-white hover:bg-indigo-700 focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
                         >
                           Review Gate
                         </button>
@@ -277,36 +302,17 @@ export function WorkflowRunDetailPage() {
                     </div>
                   </div>
 
-                  {/* Failed step result — always visible */}
-                  {showResultAlways && (
+                  {/* Failed step result — always visible inline */}
+                  {step.status === "failed" && step.result_text && (
                     <div className="ml-9 mt-2 px-3 py-2 text-xs bg-red-50 border border-red-200 rounded-md text-red-700 whitespace-pre-wrap font-mono">
                       {step.result_text}
                     </div>
                   )}
 
-                  {/* Gate feedback — always visible */}
+                  {/* Gate feedback — always visible inline */}
                   {step.gate_feedback && (
                     <div className="ml-9 mt-2 px-3 py-2 text-xs bg-amber-50 border border-amber-200 rounded-md text-amber-700">
                       <span className="font-medium">Gate feedback:</span> {step.gate_feedback}
-                    </div>
-                  )}
-
-                  {/* Expandable detail for non-failed steps */}
-                  {isExpanded && !showResultAlways && (
-                    <div className="ml-9 mt-2 space-y-2">
-                      {step.result_text && (
-                        <div className="px-3 py-2 text-xs bg-gray-50 border border-gray-200 rounded-md text-gray-700 whitespace-pre-wrap font-mono">
-                          {step.result_text}
-                        </div>
-                      )}
-                      {step.context_out && (
-                        <details className="text-xs">
-                          <summary className="text-gray-500 cursor-pointer hover:text-gray-700 select-none">Context output</summary>
-                          <pre className="mt-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-md text-gray-600 overflow-x-auto whitespace-pre-wrap">
-                            {step.context_out}
-                          </pre>
-                        </details>
-                      )}
                     </div>
                   )}
                 </div>
@@ -399,21 +405,21 @@ export function WorkflowRunDetailPage() {
                   setGateStep(null);
                 }}
                 disabled={gateSubmitting}
-                className="px-4 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                className="px-4 py-2 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
               >
                 Cancel
               </button>
               <button
                 onClick={handleReject}
                 disabled={gateSubmitting}
-                className="px-4 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-50"
+                className="px-4 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
               >
-                {gateSubmitting ? "..." : "Reject"}
+                {gateSubmitting ? "Rejecting..." : "Reject"}
               </button>
               <button
                 onClick={handleApprove}
                 disabled={gateSubmitting}
-                className="px-4 py-2 text-sm rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+                className="px-4 py-2 text-sm rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-green-500 focus-visible:ring-offset-2"
               >
                 {gateSubmitting ? "Approving..." : "Approve"}
               </button>

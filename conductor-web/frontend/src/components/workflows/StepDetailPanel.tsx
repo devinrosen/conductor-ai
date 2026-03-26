@@ -34,7 +34,8 @@ export function StepDetailPanel({ step, worktreeId, onClose }: StepDetailPanelPr
         </div>
         <button
           onClick={onClose}
-          className="text-gray-400 hover:text-gray-600 text-sm shrink-0 ml-2"
+          aria-label="Close panel"
+          className="text-gray-400 hover:text-gray-600 text-sm shrink-0 ml-2 focus-visible:ring-2 focus-visible:ring-indigo-500 rounded"
         >
           &times;
         </button>
