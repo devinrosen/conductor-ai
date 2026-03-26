@@ -375,7 +375,10 @@ impl App {
                                 return Ok(Vec::new());
                             }
                             let stale_threshold = config.defaults.stale_feature_days;
-                            let features_with_stale: Vec<(conductor_core::feature::FeatureRow, Option<u64>)> = features
+                            let features_with_stale: Vec<(
+                                conductor_core::feature::FeatureRow,
+                                Option<u64>,
+                            )> = features
                                 .into_iter()
                                 .map(|f| {
                                     let sd = if FeatureManager::is_stale(&f, stale_threshold) {
@@ -388,7 +391,8 @@ impl App {
                                 .collect();
                             Ok::<Vec<BranchPickerItem>, String>(
                                 BranchPickerItem::from_features_and_orphans_with_stale(
-                                    &features_with_stale, &orphans,
+                                    &features_with_stale,
+                                    &orphans,
                                 ),
                             )
                         })();
@@ -851,7 +855,10 @@ impl App {
                         .map_err(|e| format!("Failed to list unregistered branches: {e}"))?;
 
                     let stale_threshold = config.defaults.stale_feature_days;
-                    let features_with_stale: Vec<(conductor_core::feature::FeatureRow, Option<u64>)> = features
+                    let features_with_stale: Vec<(
+                        conductor_core::feature::FeatureRow,
+                        Option<u64>,
+                    )> = features
                         .into_iter()
                         .map(|f| {
                             let sd = if FeatureManager::is_stale(&f, stale_threshold) {
@@ -864,7 +871,8 @@ impl App {
                         .collect();
                     Ok::<Vec<BranchPickerItem>, String>(
                         BranchPickerItem::from_features_and_orphans_with_stale(
-                            &features_with_stale, &orphans,
+                            &features_with_stale,
+                            &orphans,
                         ),
                     )
                 })();
