@@ -749,7 +749,10 @@ fn test_parse_pr_view_output_fork_headrepository_owner_null() {
 
     // Replicate what fetch_pr_branch does to extract the fork owner.
     let fork_owner = head_repo.split('/').next().unwrap_or(&head_repo);
-    assert_eq!(fork_owner, "", "broken jq output yields an empty fork owner");
+    assert_eq!(
+        fork_owner, "",
+        "broken jq output yields an empty fork owner"
+    );
 
     let err = git_helpers::validate_remote_name(fork_owner).unwrap_err();
     assert!(
