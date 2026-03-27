@@ -47,28 +47,27 @@ export function WorkflowsPage() {
     if (repos.length === 0) { setLoading(false); return; }
 
     const fetchAll = async () => {
-      const repoWorktrees = await Promise.all(
-        repos.map((r) => api.listWorktrees(r.id).then((wts) => ({ repo: r, wts }))),
-      );
+      const [allWorktrees, allRunsList] = await Promise.all([
+        api.listAllWorktrees(),
+        api.listAllWorkflowRuns(),
+      ]);
 
+      const repoMap = new Map(repos.map((r) => [r.id, r]));
       const ctxMap = new Map<string, WorktreeContext>();
-      for (const { repo, wts } of repoWorktrees) {
-        for (const wt of wts) {
-          if (wt.status === "active") {
-            ctxMap.set(wt.id, { repoId: repo.id, repoSlug: repo.slug, branch: wt.branch, worktreeId: wt.id });
-          }
+      for (const wt of allWorktrees) {
+        if (wt.status !== "active") continue;
+        const repo = repoMap.get(wt.repo_id);
+        if (repo) {
+          ctxMap.set(wt.id, { repoId: wt.repo_id, repoSlug: repo.slug, branch: wt.branch, worktreeId: wt.id });
         }
       }
 
-      const activeWorktreeIds = Array.from(ctxMap.keys());
-      const runArrays = await Promise.all(
-        activeWorktreeIds.map((wtId) => api.listWorkflowRuns(wtId).catch(() => [] as WorkflowRun[])),
-      );
-
       const allRuns: { run: WorkflowRun; ctx: WorktreeContext }[] = [];
-      for (let i = 0; i < activeWorktreeIds.length; i++) {
-        const ctx = ctxMap.get(activeWorktreeIds[i])!;
-        for (const run of runArrays[i]) allRuns.push({ run, ctx });
+      for (const run of allRunsList) {
+        if (run.worktree_id) {
+          const ctx = ctxMap.get(run.worktree_id);
+          if (ctx) allRuns.push({ run, ctx });
+        }
       }
       allRuns.sort((a, b) => new Date(b.run.started_at).getTime() - new Date(a.run.started_at).getTime());
 
