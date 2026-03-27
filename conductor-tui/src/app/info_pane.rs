@@ -54,9 +54,7 @@ impl App {
                     info_row::PR => {
                         let url = self
                             .state
-                            .detail_prs
-                            .iter()
-                            .find(|pr| pr.head_ref_name == wt.branch)
+                            .find_pr_for_worktree(&wt.branch)
                             .map(|pr| pr.url.clone())
                             .unwrap_or_default();
                         if url.is_empty() {
@@ -83,13 +81,7 @@ impl App {
         let row = self.state.worktree_detail_selected_row;
         match row {
             info_row::PATH => {
-                let Some(path) = self
-                    .state
-                    .selected_worktree_id
-                    .as_ref()
-                    .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
-                    .map(|wt| wt.path.clone())
-                else {
+                let Some(path) = self.state.selected_worktree().map(|wt| wt.path.clone()) else {
                     return;
                 };
                 self.open_terminal_at_path(&path);
@@ -97,9 +89,7 @@ impl App {
             info_row::TICKET => {
                 let url = self
                     .state
-                    .selected_worktree_id
-                    .as_ref()
-                    .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
+                    .selected_worktree()
                     .and_then(|wt| wt.ticket_id.as_ref())
                     .and_then(|tid| self.state.data.ticket_map.get(tid))
                     .map(|t| t.url.clone());
@@ -115,17 +105,14 @@ impl App {
                 }
             }
             info_row::PR => {
+                let branch = self
+                    .state
+                    .selected_worktree()
+                    .map(|wt| wt.branch.clone())
+                    .unwrap_or_default();
                 let url = self
                     .state
-                    .selected_worktree_id
-                    .as_ref()
-                    .and_then(|id| self.state.data.worktrees.iter().find(|w| &w.id == id))
-                    .and_then(|wt| {
-                        self.state
-                            .detail_prs
-                            .iter()
-                            .find(|pr| pr.head_ref_name == wt.branch)
-                    })
+                    .find_pr_for_worktree(&branch)
                     .map(|pr| pr.url.clone());
                 match url {
                     Some(ref u) if !u.is_empty() => {

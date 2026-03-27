@@ -257,6 +257,18 @@ impl AppState {
         self.filter.active || self.detail_ticket_filter.active || self.label_filter.active
     }
 
+    /// Returns the currently selected worktree, if any.
+    pub fn selected_worktree(&self) -> Option<&Worktree> {
+        self.selected_worktree_id
+            .as_ref()
+            .and_then(|id| self.data.worktrees.iter().find(|w| &w.id == id))
+    }
+
+    /// Returns the PR in `detail_prs` whose head branch matches `branch`, if any.
+    pub fn find_pr_for_worktree(&self, branch: &str) -> Option<&GithubPr> {
+        self.detail_prs.iter().find(|pr| pr.head_ref_name == branch)
+    }
+
     /// Rebuild `detail_worktrees` and `detail_wt_tree_positions` from the current
     /// data cache for the given repo.  Must be called whenever the selected repo
     /// changes or the worktree list is refreshed.

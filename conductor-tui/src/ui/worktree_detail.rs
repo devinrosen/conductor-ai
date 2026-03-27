@@ -140,11 +140,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
     ];
 
     // PR row — index 9, only present when a PR exists for this branch
-    if let Some(pr) = state
-        .detail_prs
-        .iter()
-        .find(|pr| pr.head_ref_name == wt.branch)
-    {
+    if let Some(pr) = state.find_pr_for_worktree(&wt.branch) {
         let pr_state_color = match pr.state.as_str() {
             "OPEN" => state.theme.status_completed,
             "MERGED" => state.theme.label_info,
