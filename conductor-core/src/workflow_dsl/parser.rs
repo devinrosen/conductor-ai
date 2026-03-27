@@ -7,8 +7,8 @@ use crate::error::{ConductorError, Result};
 use super::lexer::{Lexer, Token};
 use super::types::{
     AgentRef, AlwaysNode, CallNode, CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode,
-    GateType, IfNode, InputDecl, InputType, OnFailAction, OnMaxIter, OnTimeout, ParallelNode,
-    QualityGateConfig, ScriptNode, UnlessNode, WhileNode, WorkflowDef, WorkflowNode,
+    GateOptions, GateType, IfNode, InputDecl, InputType, OnFailAction, OnMaxIter, OnTimeout,
+    ParallelNode, QualityGateConfig, ScriptNode, UnlessNode, WhileNode, WorkflowDef, WorkflowNode,
     WorkflowTrigger,
 };
 
@@ -795,6 +795,7 @@ impl Parser {
                     threshold,
                     on_fail_action,
                 }),
+                options: None,
             });
         }
 
@@ -833,6 +834,36 @@ impl Parser {
 
         let bot_name = kvs.get("as").map(|v| v.as_str().to_string());
 
+        // Parse optional `options` key — only valid on human_approval / human_review.
+        let options = match kvs.get("options") {
+            None => None,
+            Some(v) => {
+                match gate_type {
+                    GateType::HumanApproval | GateType::HumanReview => {}
+                    _ => {
+                        return Err(format!(
+                            "`options` is only valid on human_approval / human_review gates, not '{gate_type}'"
+                        ));
+                    }
+                }
+                let parsed = match v {
+                    KvValue::Array(items) => GateOptions::Static(items.clone()),
+                    KvValue::Bare(s) | KvValue::Quoted(s) if s.contains('.') => {
+                        GateOptions::StepRef(s.clone())
+                    }
+                    KvValue::Bare(s) | KvValue::Quoted(s) => {
+                        return Err(format!(
+                            "Invalid `options` value '{s}': expected an array [\"...\"] or a step field reference like 'step.field'"
+                        ));
+                    }
+                    KvValue::Map(_) => {
+                        return Err("`options` must be an array or step field reference, not a map".to_string());
+                    }
+                };
+                Some(parsed)
+            }
+        };
+
         Ok(GateNode {
             name,
             gate_type,
@@ -843,6 +874,7 @@ impl Parser {
             on_timeout,
             bot_name,
             quality_gate: None,
+            options,
         })
     }
 

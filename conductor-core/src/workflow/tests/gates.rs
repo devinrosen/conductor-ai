@@ -28,7 +28,7 @@ fn test_gate_approve() {
     assert_eq!(waiting.unwrap().id, step_id);
 
     // Approve
-    mgr.approve_gate(&step_id, "user", Some("Looks good!"))
+    mgr.approve_gate(&step_id, "user", Some("Looks good!"), None)
         .unwrap();
 
     // Verify
@@ -132,7 +132,7 @@ fn test_gate_pr_approval_approve() {
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
-    mgr.approve_gate(&step_id, "reviewer-bot", Some("PR approved"))
+    mgr.approve_gate(&step_id, "reviewer-bot", Some("PR approved"), None)
         .unwrap();
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();
@@ -191,7 +191,7 @@ fn test_gate_pr_checks_approve() {
         .unwrap();
     set_step_status(&mgr, &step_id, WorkflowStepStatus::Waiting);
 
-    mgr.approve_gate(&step_id, "ci-bot", Some("All checks passed"))
+    mgr.approve_gate(&step_id, "ci-bot", Some("All checks passed"), None)
         .unwrap();
 
     let step = mgr.get_step_by_id(&step_id).unwrap().unwrap();

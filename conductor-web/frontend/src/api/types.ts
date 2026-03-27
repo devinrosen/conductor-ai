@@ -234,6 +234,8 @@ export interface WorkflowRunStep {
   gate_prompt: string | null;
   gate_approved_by: string | null;
   gate_feedback: string | null;
+  gate_options: string | null;
+  gate_selections: string | null;
 }
 
 export interface RunWorkflowRequest {

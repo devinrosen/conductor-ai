@@ -142,6 +142,7 @@ fn test_do_while_iterates_body_multiple_times() {
             on_timeout: OnTimeout::Fail,
             bot_name: None,
             quality_gate: None,
+            options: None,
         })],
     };
 
@@ -470,6 +471,7 @@ fn test_find_max_completed_while_iteration_with_parallel_and_gate() {
                 on_timeout: crate::workflow_dsl::OnTimeout::Fail,
                 bot_name: None,
                 quality_gate: None,
+                options: None,
             }),
         ],
     };

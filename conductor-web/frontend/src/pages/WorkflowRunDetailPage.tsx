@@ -8,6 +8,22 @@ import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { TrainProgress } from "../components/shared/TrainProgress";
 import { TransitBreadcrumb } from "../components/shared/TransitBreadcrumb";
 
+interface GateOption {
+  value: string;
+  label: string;
+}
+
+function parseGateOptions(json: string | null): GateOption[] {
+  if (!json) return [];
+  try {
+    const arr = JSON.parse(json);
+    if (Array.isArray(arr)) return arr as GateOption[];
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
 export function WorkflowRunDetailPage() {
   const { repoId, worktreeId, runId } = useParams<{
     repoId: string;
@@ -21,6 +37,7 @@ export function WorkflowRunDetailPage() {
   const [gateModalOpen, setGateModalOpen] = useState(false);
   const [gateStep, setGateStep] = useState<WorkflowRunStep | null>(null);
   const [gateFeedback, setGateFeedback] = useState("");
+  const [gateSelections, setGateSelections] = useState<Set<string>>(new Set());
   const [gateSubmitting, setGateSubmitting] = useState(false);
   const [gateError, setGateError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
@@ -71,10 +88,14 @@ export function WorkflowRunDetailPage() {
     setGateSubmitting(true);
     setGateError(null);
     try {
-      await api.approveGate(runId, gateFeedback || undefined);
+      const gateOptions = parseGateOptions(gateStep?.gate_options ?? null);
+      const selections =
+        gateOptions.length > 0 ? Array.from(gateSelections) : undefined;
+      await api.approveGate(runId, gateFeedback || undefined, selections);
       setGateModalOpen(false);
       setGateStep(null);
       setGateFeedback("");
+      setGateSelections(new Set());
       await fetchData();
     } catch (err) {
       setGateError(err instanceof Error ? err.message : "Failed to approve");
@@ -92,6 +113,7 @@ export function WorkflowRunDetailPage() {
       setGateModalOpen(false);
       setGateStep(null);
       setGateFeedback("");
+      setGateSelections(new Set());
       await fetchData();
     } catch (err) {
       setGateError(err instanceof Error ? err.message : "Failed to reject");
@@ -103,8 +125,18 @@ export function WorkflowRunDetailPage() {
   function openGateModal(step: WorkflowRunStep) {
     setGateStep(step);
     setGateFeedback("");
+    setGateSelections(new Set());
     setGateError(null);
     setGateModalOpen(true);
+  }
+
+  function toggleSelection(value: string) {
+    setGateSelections((prev) => {
+      const next = new Set(prev);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      return next;
+    });
   }
 
   if (loading) return <LoadingSpinner />;
@@ -124,6 +156,7 @@ export function WorkflowRunDetailPage() {
   }
 
   const isActive = run.status === "running" || run.status === "waiting";
+  const gateOptions = parseGateOptions(gateStep?.gate_options ?? null);
 
   return (
     <div className="space-y-6">
@@ -269,18 +302,45 @@ export function WorkflowRunDetailPage() {
                 </div>
               )}
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Feedback (optional)
-                </label>
-                <textarea
-                  value={gateFeedback}
-                  onChange={(e) => setGateFeedback(e.target.value)}
-                  placeholder="Add optional feedback..."
-                  rows={3}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
-                />
-              </div>
+              {gateOptions.length > 0 ? (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Select items to act on
+                  </label>
+                  <div className="space-y-2 max-h-48 overflow-y-auto border border-gray-200 rounded-md p-2">
+                    {gateOptions.map((opt) => (
+                      <label
+                        key={opt.value}
+                        className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 px-2 py-1 rounded"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={gateSelections.has(opt.value)}
+                          onChange={() => toggleSelection(opt.value)}
+                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="text-sm text-gray-800">{opt.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {gateSelections.size} of {gateOptions.length} selected — submit with no selections to skip
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Feedback (optional)
+                  </label>
+                  <textarea
+                    value={gateFeedback}
+                    onChange={(e) => setGateFeedback(e.target.value)}
+                    placeholder="Add optional feedback..."
+                    rows={3}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
+                  />
+                </div>
+              )}
 
               {gateError && (
                 <div className="px-3 py-2 text-sm text-red-700 bg-red-50 rounded-md border border-red-200">
@@ -300,19 +360,25 @@ export function WorkflowRunDetailPage() {
               >
                 Cancel
               </button>
-              <button
-                onClick={handleReject}
-                disabled={gateSubmitting}
-                className="px-4 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-50"
-              >
-                {gateSubmitting ? "..." : "Reject"}
-              </button>
+              {gateOptions.length === 0 && (
+                <button
+                  onClick={handleReject}
+                  disabled={gateSubmitting}
+                  className="px-4 py-2 text-sm rounded-md border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-50"
+                >
+                  {gateSubmitting ? "..." : "Reject"}
+                </button>
+              )}
               <button
                 onClick={handleApprove}
                 disabled={gateSubmitting}
                 className="px-4 py-2 text-sm rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
               >
-                {gateSubmitting ? "Approving..." : "Approve"}
+                {gateSubmitting
+                  ? "Submitting..."
+                  : gateOptions.length > 0
+                  ? `Submit (${gateSelections.size} selected)`
+                  : "Approve"}
               </button>
             </div>
           </div>

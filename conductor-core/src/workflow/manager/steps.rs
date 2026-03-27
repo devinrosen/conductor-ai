@@ -151,18 +151,41 @@ impl<'a> WorkflowManager<'a> {
         Ok(())
     }
 
-    /// Approve a gate: set gate_approved_at, gate_approved_by, and optional feedback.
+    /// Store the resolved gate options JSON on a step (called at gate start).
+    pub fn set_step_gate_options(&self, step_id: &str, options_json: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE workflow_run_steps SET gate_options = ?1 WHERE id = ?2",
+            params![options_json, step_id],
+        )?;
+        Ok(())
+    }
+
+    /// Approve a gate: set gate_approved_at, gate_approved_by, optional feedback, and optional selections.
     pub fn approve_gate(
         &self,
         step_id: &str,
         approved_by: &str,
         feedback: Option<&str>,
+        selections: Option<&[String]>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
+        let selections_json = selections
+            .map(|s| serde_json::to_string(s).unwrap_or_default());
+
+        // Build a context_out snippet when selections are present.
+        let context_out = selections.filter(|s| !s.is_empty()).map(|items| {
+            let mut out = String::from("User selected the following items:\n");
+            for item in items {
+                out.push_str(&format!("- {item}\n"));
+            }
+            out
+        });
+
         self.conn.execute(
             "UPDATE workflow_run_steps SET gate_approved_at = ?1, gate_approved_by = ?2, \
-             gate_feedback = ?3, status = 'completed', ended_at = ?1 WHERE id = ?4",
-            params![now, approved_by, feedback, step_id],
+             gate_feedback = ?3, gate_selections = ?4, context_out = COALESCE(?5, context_out), \
+             status = 'completed', ended_at = ?1 WHERE id = ?6",
+            params![now, approved_by, feedback, selections_json, context_out, step_id],
         )?;
         Ok(())
     }

@@ -78,6 +78,7 @@ fn make_gate_node_wf(name: &str) -> WorkflowNode {
         on_timeout: OnTimeout::Fail,
         bot_name: None,
         quality_gate: None,
+        options: None,
     })
 }
 

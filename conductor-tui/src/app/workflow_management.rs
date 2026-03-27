@@ -1481,6 +1481,8 @@ impl App {
         if let Modal::GateAction {
             ref step_id,
             ref feedback,
+            ref options,
+            ref selected,
             ..
         } = self.state.modal
         {
@@ -1490,7 +1492,19 @@ impl App {
             } else {
                 Some(feedback.as_str())
             };
-            match wf_mgr.approve_gate(step_id, "tui-user", fb) {
+            // Collect checked selections (only when options are present).
+            let selections: Option<Vec<String>> = if options.is_empty() {
+                None
+            } else {
+                Some(
+                    options
+                        .iter()
+                        .zip(selected.iter())
+                        .filter_map(|(opt, &checked)| if checked { Some(opt.clone()) } else { None })
+                        .collect(),
+                )
+            };
+            match wf_mgr.approve_gate(step_id, "tui-user", fb, selections.as_deref()) {
                 Ok(()) => {
                     self.state.status_message = Some("Gate approved".to_string());
                 }
@@ -1507,11 +1521,33 @@ impl App {
         if let Some(ref run_id) = self.state.selected_workflow_run_id {
             let wf_mgr = WorkflowManager::new(&self.conn);
             if let Ok(Some(step)) = wf_mgr.find_waiting_gate(run_id) {
+                // Deserialize gate_options if present.
+                let options: Vec<String> = step
+                    .gate_options
+                    .as_deref()
+                    .and_then(|json| {
+                        serde_json::from_str::<Vec<serde_json::Value>>(json)
+                            .ok()
+                            .map(|arr| {
+                                arr.into_iter()
+                                    .filter_map(|v| {
+                                        v.get("value")
+                                            .and_then(|s| s.as_str())
+                                            .map(String::from)
+                                    })
+                                    .collect()
+                            })
+                    })
+                    .unwrap_or_default();
+                let n = options.len();
                 self.state.modal = Modal::GateAction {
                     run_id: run_id.clone(),
                     step_id: step.id.clone(),
                     gate_prompt: step.gate_prompt.unwrap_or_default(),
                     feedback: String::new(),
+                    selected: vec![false; n],
+                    focused_option: 0,
+                    options,
                 };
             } else {
                 self.state.status_message = Some("No waiting gate found".to_string());

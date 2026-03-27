@@ -37,9 +37,9 @@ mod validation;
 // Re-export everything that is currently public
 pub use types::{
     collect_agent_names, collect_workflow_refs, AgentRef, AlwaysNode, ApprovalMode, CallNode,
-    CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode, GateType, IfNode, InputDecl,
-    InputType, OnFailAction, OnMaxIter, OnTimeout, ParallelNode, ScriptNode, UnlessNode, WhileNode,
-    WorkflowDef, WorkflowNode, WorkflowTrigger, WorkflowWarning,
+    CallWorkflowNode, Condition, DoNode, DoWhileNode, GateNode, GateOptions, GateType, IfNode,
+    InputDecl, InputType, OnFailAction, OnMaxIter, OnTimeout, ParallelNode, ScriptNode,
+    UnlessNode, WhileNode, WorkflowDef, WorkflowNode, WorkflowTrigger, WorkflowWarning,
 };
 // QualityGateConfig is a field type on the public GateNode struct and must be
 // part of the public API so callers can name the type. It is only constructed

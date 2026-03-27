@@ -520,6 +520,7 @@ fn test_default_bot_name_persists_through_suspend_and_resume() {
             &BlockedOn::HumanApproval {
                 gate_name: "deploy-gate".to_string(),
                 prompt: None,
+                options: vec![],
             },
         )
         .unwrap();

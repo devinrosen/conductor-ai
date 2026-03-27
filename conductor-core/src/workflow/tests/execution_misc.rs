@@ -30,6 +30,8 @@ fn test_metadata_fields_basic() {
         gate_feedback: None,
         structured_output: None,
         output_file: None,
+        gate_options: None,
+        gate_selections: None,
     };
     let entries = step.metadata_fields();
     assert_eq!(entries.len(), 6); // 4 always-present + Started + Ended
@@ -110,6 +112,8 @@ fn test_metadata_fields_optional_sections() {
         gate_feedback: Some("Looks good".into()),
         structured_output: None,
         output_file: None,
+        gate_options: None,
+        gate_selections: None,
     };
     let entries = step.metadata_fields();
     assert!(entries.contains(&MetadataEntry::Field {

@@ -349,6 +349,8 @@ fn snap_workflow_run_detail_with_steps() {
             gate_feedback: None,
             structured_output: None,
             output_file: None,
+            gate_options: None,
+            gate_selections: None,
         },
         WorkflowRunStep {
             id: "step2".into(),
@@ -377,6 +379,8 @@ fn snap_workflow_run_detail_with_steps() {
             gate_feedback: None,
             structured_output: None,
             output_file: None,
+            gate_options: None,
+            gate_selections: None,
         },
     ];
 
@@ -556,6 +560,9 @@ fn snap_modal_gate_action() {
         step_id: "step1".into(),
         gate_prompt: "Review the changes and approve if they look correct.".into(),
         feedback: String::new(),
+        options: vec![],
+        selected: vec![],
+        focused_option: 0,
     };
     insta::assert_snapshot!(render_to_string(&state));
 }

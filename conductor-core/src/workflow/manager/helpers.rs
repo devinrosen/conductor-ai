@@ -134,5 +134,7 @@ pub(in crate::workflow) fn row_to_workflow_step(
         gate_feedback: row.get("gate_feedback")?,
         structured_output: row.get("structured_output")?,
         output_file: row.get("output_file")?,
+        gate_options: row.get("gate_options")?,
+        gate_selections: row.get("gate_selections")?,
     })
 }

@@ -1511,12 +1511,16 @@ pub fn render_gate_action(
     area: Rect,
     gate_prompt: &str,
     feedback: &str,
+    options: &[String],
+    selected: &[bool],
+    focused_option: usize,
     theme: &Theme,
 ) {
-    let popup = centered_rect(60, 40, area);
+    let height = if options.is_empty() { 40 } else { 60 };
+    let popup = centered_rect(60, height, area);
     frame.render_widget(Clear, popup);
 
-    let content = Paragraph::new(vec![
+    let mut lines = vec![
         Line::from(""),
         Line::from(Span::styled(
             "Gate Prompt:",
@@ -1526,20 +1530,24 @@ pub fn render_gate_action(
         )),
         Line::from(Span::raw(gate_prompt)),
         Line::from(""),
-        Line::from(Span::styled(
+    ];
+
+    if options.is_empty() {
+        // Binary approve/reject mode — same as before.
+        lines.push(Line::from(Span::styled(
             "Feedback (optional):",
             Style::default().fg(theme.label_secondary),
-        )),
-        Line::from(vec![
+        )));
+        lines.push(Line::from(vec![
             Span::styled("> ", Style::default().fg(theme.border_focused)),
             Span::styled(
                 feedback,
                 Style::default().add_modifier(Modifier::UNDERLINED),
             ),
             Span::styled("_", Style::default().fg(theme.border_focused)),
-        ]),
-        Line::from(""),
-        Line::from(vec![
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
             Span::styled(
                 "  y",
                 Style::default()
@@ -1556,14 +1564,63 @@ pub fn render_gate_action(
             Span::raw(" = reject    "),
             Span::styled("Esc", Style::default().fg(theme.label_secondary)),
             Span::raw(" = cancel"),
-        ]),
-    ])
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.label_warning))
-            .title(" Gate Action "),
-    );
+        ]));
+    } else {
+        // Checklist mode.
+        lines.push(Line::from(Span::styled(
+            "Select items (Space to toggle):",
+            Style::default().fg(theme.label_secondary),
+        )));
+        lines.push(Line::from(""));
+        for (i, (opt, &chk)) in options.iter().zip(selected.iter()).enumerate() {
+            let is_focused = i == focused_option;
+            let checkbox = if chk { "[x] " } else { "[ ] " };
+            let row_style = if is_focused {
+                Style::default()
+                    .fg(theme.border_focused)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  {checkbox}{opt}"),
+                row_style,
+            )));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "  j/k",
+                Style::default().fg(theme.label_secondary),
+            ),
+            Span::raw(" = move  "),
+            Span::styled("Space", Style::default().fg(theme.label_secondary)),
+            Span::raw(" = toggle  "),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(theme.status_completed)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" = submit  "),
+            Span::styled(
+                "n",
+                Style::default().fg(theme.status_failed),
+            ),
+            Span::raw(" = skip  "),
+            Span::styled("Esc", Style::default().fg(theme.label_secondary)),
+            Span::raw(" = cancel"),
+        ]));
+    }
+
+    let content = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.label_warning))
+                .title(" Gate Action "),
+        )
+        .wrap(ratatui::widgets::Wrap { trim: false });
 
     frame.render_widget(content, popup);
 }

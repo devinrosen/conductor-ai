@@ -1057,6 +1057,7 @@ fn test_cancel_run_waiting_status() {
         &BlockedOn::HumanApproval {
             gate_name: "human-gate".to_string(),
             prompt: None,
+            options: vec![],
         },
     )
     .unwrap();
@@ -1800,6 +1801,7 @@ fn test_set_waiting_blocked_on_atomically_sets_status_and_blocked_on() {
     let blocked = BlockedOn::HumanApproval {
         gate_name: "deploy-gate".to_string(),
         prompt: Some("Approve deploy?".to_string()),
+        options: vec![],
     };
 
     mgr.set_waiting_blocked_on(&run.id, &blocked).unwrap();

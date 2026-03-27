@@ -712,6 +712,7 @@ fn make_quality_gate_node(
         on_timeout: OnTimeout::Fail,
         bot_name: None,
         quality_gate,
+        options: None,
     }
 }
 
