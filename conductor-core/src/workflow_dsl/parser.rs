@@ -155,7 +155,16 @@ impl Parser {
         match self.advance() {
             Token::StringLit(s) => Ok(KvValue::Quoted(s)),
             Token::Int(n) => Ok(KvValue::Bare(n.to_string())),
-            Token::Ident(s) => Ok(KvValue::Bare(s)),
+            Token::Ident(s) => {
+                // Consume an optional `.field` suffix to support `step.field` references.
+                if self.peek() == &Token::Dot {
+                    self.advance(); // consume dot
+                    let field = self.expect_ident()?;
+                    Ok(KvValue::Bare(format!("{s}.{field}")))
+                } else {
+                    Ok(KvValue::Bare(s))
+                }
+            }
             // Allow keyword tokens as values
             Token::Required => Ok(KvValue::Bare("required".to_string())),
             Token::Default => Ok(KvValue::Bare("default".to_string())),
